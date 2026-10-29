@@ -293,6 +293,17 @@ pub(super) struct Keywords<'a> {
     pub vocabularies: Vocabularies,
 }
 impl<'a> Keywords<'a> {
+    pub(super) fn get_governed(
+        &self,
+        keyword: &str,
+        governor: &mut Governor,
+    ) -> Result<Option<&'a Node>, StopReason> {
+        if !super::compile::applies(self.vocabularies, self.node, keyword, governor)? {
+            return Ok(None);
+        }
+        super::compile::member(self.node, keyword, governor)
+    }
+
     pub(super) fn get(&self, keyword: &str) -> Option<&'a Node> {
         self.vocabularies
             .applies(self.node, keyword)

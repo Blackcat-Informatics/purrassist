@@ -13,53 +13,39 @@
 //! self- or mutually-recursive schema either makes progress (the path
 //! deepens) or is reported as [`Attempt::Exhausted`] rather than looping.
 use super::super::Schema;
-use super::Refutation;
+use super::super::reference;
+use super::Attempt;
 use super::canon::{self, Canon, NumKind, PatternRef};
 use super::merge::Requirements;
+use super::storage::{self, CopyIn, push};
 use crate::contract::saturating_size as size;
-use crate::contract::{Evidence, Governor, Resource, StopReason};
-use crate::json::{Member, Node, Value, pointer_segment};
+use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{ScratchString, ScratchVec, format_scratch_governed};
+use crate::json::{Member, Node, Value};
 use crate::pattern::{Engine, GenerateOptions, GenerateOutcome, Pattern};
-use std::collections::BTreeSet;
 
 /// Every `items` occurrence in `req` that applies at array index `index` —
 /// i.e. every `(id, own_prefix_len)` pair whose own `prefixItems` (if any)
 /// does not already cover `index`. See [`super::canon::Facet::Items`]'s doc
 /// comment for why this is a per-occurrence test, not a single shared
 /// prefix length computed across every `prefixItems` in `req`.
-fn applicable_items(req: &Requirements, index: usize) -> Vec<usize> {
+fn applicable_items<'r>(
+    req: &'r Requirements<'_>,
+    index: usize,
+) -> impl Iterator<Item = usize> + 'r {
     req.items
         .iter()
-        .filter(|&&(_, own_len)| index >= own_len)
+        .filter(move |&&(_, own_len)| index >= own_len)
         .map(|&(id, _)| id)
-        .collect()
-}
-
-pub(super) enum Attempt {
-    Witness(Node),
-    Unsatisfiable(Refutation),
-    Exhausted,
 }
 
 /// Outcome of [`Gen::try_simple_merge`]: either the merge succeeded (with
 /// the updated [`Requirements`]), proved a direct contradiction, or the
 /// canon contained a choice point too complex for a merge-only pass.
-enum SimpleMerge {
-    Merged(Box<Requirements>),
+enum SimpleMerge<'a> {
+    Merged(ScratchVec<Requirements<'a>>),
     Contradiction,
     TooComplex,
-}
-
-fn refute(reason: &str) -> Refutation {
-    Refutation {
-        reason: reason.to_string(),
-        evidence: vec![Evidence {
-            rule: "schema.algebra.unsatisfiable-v1".into(),
-            explanation: reason.to_string(),
-            span: None,
-            destination: String::new(),
-        }],
-    }
 }
 
 pub(super) fn run(
@@ -68,11 +54,13 @@ pub(super) fn run(
     governor: &mut Governor,
 ) -> Result<Attempt, StopReason> {
     let scope = crate::ScratchVec::new(governor);
+    let active = ScratchVec::new(governor);
     let mut driver = Gen {
         schema,
         governor,
         scope,
-        active: BTreeSet::new(),
+        active,
+        preparation_depth: 0,
     };
     driver.attempt(id, "", 0)
 }
@@ -81,7 +69,8 @@ struct Gen<'s, 'g> {
     schema: &'s Schema,
     governor: &'g mut Governor,
     scope: crate::ScratchVec<usize>,
-    active: BTreeSet<(usize, String, bool)>,
+    active: ScratchVec<(usize, ScratchString, bool)>,
+    preparation_depth: u32,
 }
 
 impl<'s> Gen<'s, '_> {
@@ -89,37 +78,50 @@ impl<'s> Gen<'s, '_> {
     /// dynamic-scope stack, build its [`Canon`], and search it.
     fn attempt(&mut self, id: usize, path: &str, depth: u32) -> Result<Attempt, StopReason> {
         self.enter(id, path, depth, false, |driver, canon, depth| {
-            driver.attempt_and(&[canon], Requirements::default(), path, depth)
+            driver.attempt_and(&[canon], Requirements::new(driver.governor), path, depth)
         })
     }
     /// Shared guard/scope/build wrapper for entering schema location `id`
     /// (positively or, when `negated`, via `build_negated`) at `path`.
-    fn enter(
+    fn enter<'a>(
         &mut self,
         id: usize,
         path: &str,
         depth: u32,
         negated: bool,
-        body: impl FnOnce(&mut Self, Canon, u32) -> Result<Attempt, StopReason>,
-    ) -> Result<Attempt, StopReason> {
+        body: impl FnOnce(&mut Self, Canon<'a>, u32) -> Result<Attempt, StopReason>,
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         self.governor.charge(Resource::Work, 1)?;
         self.governor.charge(Resource::Depth, u64::from(depth))?;
-        let key = (id, path.to_string(), negated);
-        if !self.active.insert(key.clone()) {
-            return Ok(Attempt::Exhausted);
+        for (active_id, active_path, active_negated) in &self.active {
+            reference::work(
+                self.governor,
+                path.len().min(active_path.len()).saturating_add(1),
+            )?;
+            if *active_id == id && active_path.as_str() == path && *active_negated == negated {
+                return Ok(Attempt::Exhausted);
+            }
         }
-        let entered =
-            super::super::index::enter_scope(self.schema, id, &mut self.scope, self.governor)?;
-        let canon = if negated {
-            canon::build_negated(self.schema, id, self.governor)
-        } else {
-            canon::build(self.schema, id, self.governor)
-        };
-        let result = canon.and_then(|canon| body(self, canon, depth + 1));
-        if entered {
-            self.scope.pop();
-        }
-        self.active.remove(&key);
+        let path_key = reference::copy(path, self.governor)?;
+        push(&mut self.active, (id, path_key, negated), self.governor)?;
+        let result = (|| {
+            let entered =
+                super::super::index::enter_scope(self.schema, id, &mut self.scope, self.governor)?;
+            let canon = if negated {
+                canon::build_negated(self.schema, id, self.governor)
+            } else {
+                canon::build(self.schema, id, self.governor)
+            };
+            let result = canon.and_then(|canon| body(self, canon, depth + 1));
+            if entered {
+                self.scope.pop();
+            }
+            result
+        })();
+        self.active.pop();
         result
     }
     /// Fold every id in `ids` into one merged conjunction at the same
@@ -147,98 +149,147 @@ impl<'s> Gen<'s, '_> {
         path: &str,
         depth: u32,
     ) -> Result<Attempt, StopReason> {
-        let items: Vec<Canon> = ids.iter().copied().map(Canon::Ref).collect();
-        let mut req = Requirements::default();
-        req.excluded.extend(excluded.iter().cloned());
+        let mut items = ScratchVec::new(self.governor);
+        for &id in ids {
+            push(&mut items, Canon::Ref(id), self.governor)?;
+        }
+        let mut req = Requirements::new(self.governor);
+        for value in excluded {
+            push(&mut req.excluded, value, self.governor)?;
+        }
         self.attempt_and(&items, req, path, depth)
     }
-    fn attempt_and(
+    /// Continuations can nest across sibling scoped branches even when the
+    /// canonical tree itself is shallow. Admit their live native frames too.
+    fn attempt_and<'a>(
         &mut self,
-        items: &[Canon],
-        mut req: Requirements,
+        items: &[Canon<'a>],
+        req: Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
-        self.governor.check()?;
-        self.governor.charge(Resource::Work, 1)?;
-        let Some((first, rest)) = items.split_first() else {
-            return self.finish(&req, path, depth);
-        };
-        match first {
-            Canon::True => self.attempt_and(rest, req, path, depth),
-            Canon::False => Ok(Attempt::Unsatisfiable(refute("boolean false schema"))),
-            Canon::Local(facet) => {
-                req.apply(facet, self.governor)?;
-                if req.is_contradictory() {
-                    return Ok(Attempt::Unsatisfiable(refute(
-                        req.contradiction.unwrap_or("contradiction"),
-                    )));
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
+        let next = self.preparation_depth.saturating_add(1);
+        storage::depth(self.governor, next)?;
+        self.preparation_depth = next;
+        let result = self.attempt_and_inner(items, req, path, depth);
+        self.preparation_depth -= 1;
+        result
+    }
+    fn attempt_and_inner<'a>(
+        &mut self,
+        mut items: &[Canon<'a>],
+        mut req: Requirements<'a>,
+        path: &str,
+        depth: u32,
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
+        loop {
+            self.governor.check()?;
+            self.governor.charge(Resource::Work, 1)?;
+            let Some((first, rest)) = items.split_first() else {
+                return self.finish(&req, path, depth);
+            };
+            match first {
+                Canon::True => {
+                    items = rest;
+                    continue;
                 }
-                self.attempt_and(rest, req, path, depth)
-            }
-            Canon::OpaqueNot(id) => {
-                req.opaque_nots.push(*id);
-                self.attempt_and(rest, req, path, depth)
-            }
-            Canon::And(inner) => {
-                let mut combined = inner.clone();
-                combined.extend_from_slice(rest);
-                self.attempt_and(&combined, req, path, depth)
-            }
-            Canon::Or(branches) => self.attempt_or(branches, rest, &req, path, depth),
-            Canon::OneOf(ids) => self.attempt_one_of(ids, rest, &req, path, depth),
-            Canon::IfThenElse {
-                cond,
-                then,
-                otherwise,
-            } => self.attempt_if(*cond, *then, *otherwise, rest, req, path, depth),
-            Canon::Scoped(id, inner) => {
-                let entered = super::super::index::enter_scope(
-                    self.schema,
-                    *id,
-                    &mut self.scope,
-                    self.governor,
-                )?;
-                let mut combined = vec![(**inner).clone()];
-                combined.extend_from_slice(rest);
-                let result = self.attempt_and(&combined, req, path, depth);
-                if entered {
-                    self.scope.pop();
+                Canon::Local(facet) => {
+                    req.apply(facet, self.governor)?;
+                    if req.is_contradictory() {
+                        return Ok(Attempt::Unsatisfiable(
+                            req.contradiction.unwrap_or("contradiction"),
+                        ));
+                    }
+                    items = rest;
+                    continue;
                 }
-                result
+                Canon::OpaqueNot(id) => {
+                    push(&mut req.opaque_nots, *id, self.governor)?;
+                    items = rest;
+                    continue;
+                }
+                _ => {}
             }
-            Canon::Ref(target) => self.attempt_ref(*target, false, rest, req, path, depth),
-            Canon::NegatedRef(target) => self.attempt_ref(*target, true, rest, req, path, depth),
-            Canon::DynamicRef(id) => {
-                let target = self.resolve_dynamic(*id)?;
-                self.attempt_ref(target, false, rest, req, path, depth)
-            }
-            Canon::NegatedDynamicRef(id) => {
-                let target = self.resolve_dynamic(*id)?;
-                self.attempt_ref(target, true, rest, req, path, depth)
-            }
+            return match first {
+                Canon::True | Canon::Local(_) | Canon::OpaqueNot(_) => {
+                    unreachable!("linear facets advanced above")
+                }
+                Canon::False => Ok(Attempt::Unsatisfiable("boolean false schema")),
+                Canon::And(inner) => {
+                    let mut combined = storage::copy(inner, self.governor)?;
+                    storage::extend(&mut combined, rest, self.governor)?;
+                    self.attempt_and(&combined, req, path, depth)
+                }
+                Canon::Or(branches) => self.attempt_or(branches, rest, &req, path, depth),
+                Canon::OneOf(ids) => self.attempt_one_of(ids, rest, &req, path, depth),
+                Canon::IfThenElse {
+                    cond,
+                    then,
+                    otherwise,
+                } => self.attempt_if(*cond, *then, *otherwise, rest, req, path, depth),
+                Canon::Scoped(id, inner) => {
+                    let entered = super::super::index::enter_scope(
+                        self.schema,
+                        *id,
+                        &mut self.scope,
+                        self.governor,
+                    )?;
+                    let result = (|| {
+                        let mut combined =
+                            storage::singleton(inner[0].copy_in(self.governor)?, self.governor)?;
+                        storage::extend(&mut combined, rest, self.governor)?;
+                        self.attempt_and(&combined, req, path, depth)
+                    })();
+                    if entered {
+                        self.scope.pop();
+                    }
+                    result
+                }
+                Canon::Ref(target) => self.attempt_ref(*target, false, rest, req, path, depth),
+                Canon::NegatedRef(target) => {
+                    self.attempt_ref(*target, true, rest, req, path, depth)
+                }
+                Canon::DynamicRef(id) => {
+                    let target = self.resolve_dynamic(*id)?;
+                    self.attempt_ref(target, false, rest, req, path, depth)
+                }
+                Canon::NegatedDynamicRef(id) => {
+                    let target = self.resolve_dynamic(*id)?;
+                    self.attempt_ref(target, true, rest, req, path, depth)
+                }
+            };
         }
     }
-    fn attempt_ref(
+    fn attempt_ref<'a>(
         &mut self,
         target: usize,
         negated: bool,
-        rest: &[Canon],
-        req: Requirements,
+        rest: &[Canon<'a>],
+        req: Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         self.enter(target, path, depth, negated, |driver, canon, depth| {
-            let mut combined = vec![canon];
-            combined.extend_from_slice(rest);
+            let mut combined = storage::singleton(canon, driver.governor)?;
+            storage::extend(&mut combined, rest, driver.governor)?;
             driver.attempt_and(&combined, req, path, depth)
         })
     }
     fn resolve_dynamic(&mut self, id: usize) -> Result<usize, StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let reference = schema
             .keywords(id)
-            .get("$dynamicRef")
+            .get_governed("$dynamicRef", self.governor)?
             .and_then(Node::as_str)
             .expect("dynamic canonical edge retains its originating schema location");
         let target = super::super::reference::resolve(
@@ -258,23 +309,27 @@ impl<'s> Gen<'s, '_> {
         )
     }
 
-    fn attempt_or(
+    fn attempt_or<'a>(
         &mut self,
-        branches: &[Canon],
-        rest: &[Canon],
-        req: &Requirements,
+        branches: &[Canon<'a>],
+        rest: &[Canon<'a>],
+        req: &Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         if branches.is_empty() {
-            return Ok(Attempt::Unsatisfiable(refute("empty disjunction")));
+            return Ok(Attempt::Unsatisfiable("empty disjunction"));
         }
         let mut any_exhausted = false;
         for branch in branches {
             self.governor.check()?;
-            let mut combined = vec![branch.clone()];
-            combined.extend_from_slice(rest);
-            match self.attempt_and(&combined, req.clone(), path, depth)? {
+            let mut combined = storage::singleton(branch.copy_in(self.governor)?, self.governor)?;
+            storage::extend(&mut combined, rest, self.governor)?;
+            let branch_req = req.copy_in(self.governor)?;
+            match self.attempt_and(&combined, branch_req, path, depth)? {
                 Attempt::Witness(node) => return Ok(Attempt::Witness(node)),
                 Attempt::Unsatisfiable(_) => {}
                 Attempt::Exhausted => any_exhausted = true,
@@ -283,32 +338,34 @@ impl<'s> Gen<'s, '_> {
         if any_exhausted {
             Ok(Attempt::Exhausted)
         } else {
-            Ok(Attempt::Unsatisfiable(refute(
-                "every disjunct is unsatisfiable",
-            )))
+            Ok(Attempt::Unsatisfiable("every disjunct is unsatisfiable"))
         }
     }
     #[allow(clippy::too_many_arguments)]
-    fn attempt_if(
+    fn attempt_if<'a>(
         &mut self,
         cond: usize,
         then: Option<usize>,
         otherwise: Option<usize>,
-        rest: &[Canon],
-        req: Requirements,
+        rest: &[Canon<'a>],
+        req: Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
-        let branch_a = self.if_branch(cond, false, then, rest, req.clone(), path, depth)?;
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
+        let branch_req = req.copy_in(self.governor)?;
+        let branch_a = self.if_branch(cond, false, then, rest, branch_req, path, depth)?;
         if let Attempt::Witness(node) = branch_a {
             return Ok(Attempt::Witness(node));
         }
         let branch_b = self.if_branch(cond, true, otherwise, rest, req, path, depth)?;
         Ok(match (branch_a, branch_b) {
             (Attempt::Witness(node), _) | (_, Attempt::Witness(node)) => Attempt::Witness(node),
-            (Attempt::Unsatisfiable(_), Attempt::Unsatisfiable(_)) => Attempt::Unsatisfiable(
-                refute("if/then and its else-complement are both unsatisfiable"),
-            ),
+            (Attempt::Unsatisfiable(_), Attempt::Unsatisfiable(_)) => {
+                Attempt::Unsatisfiable("if/then and its else-complement are both unsatisfiable")
+            }
             _ => Attempt::Exhausted,
         })
     }
@@ -337,46 +394,64 @@ impl<'s> Gen<'s, '_> {
     /// correct whenever the branch never resolves a `$dynamicRef` against a
     /// scope that should already have been left.
     #[allow(clippy::too_many_arguments)]
-    fn if_branch(
+    fn if_branch<'a>(
         &mut self,
         cond: usize,
         negate_cond: bool,
         then_or_else: Option<usize>,
-        rest: &[Canon],
-        req: Requirements,
+        rest: &[Canon<'a>],
+        req: Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         let cond_canon = self.scoped_build(cond, negate_cond)?;
-        match self.try_simple_merge(&cond_canon, req.clone())? {
-            SimpleMerge::Contradiction => Ok(Attempt::Unsatisfiable(refute(
+        let condition_req = req.copy_in(self.governor)?;
+        match self.try_simple_merge(&cond_canon, condition_req)? {
+            SimpleMerge::Contradiction => Ok(Attempt::Unsatisfiable(
                 "if-condition branch is unsatisfiable",
-            ))),
-            SimpleMerge::Merged(merged_req) => match then_or_else {
+            )),
+            SimpleMerge::Merged(mut merged_req) => match then_or_else {
                 Some(id) => {
                     let branch_canon = self.scoped_build(id, false)?;
-                    match self.try_simple_merge(&branch_canon, (*merged_req).clone())? {
+                    let branch_req = merged_req[0].copy_in(self.governor)?;
+                    match self.try_simple_merge(&branch_canon, branch_req)? {
                         SimpleMerge::Contradiction => {
-                            Ok(Attempt::Unsatisfiable(refute("if-branch is unsatisfiable")))
+                            Ok(Attempt::Unsatisfiable("if-branch is unsatisfiable"))
                         }
-                        SimpleMerge::Merged(final_req) => {
-                            self.attempt_and(rest, *final_req, path, depth)
-                        }
+                        SimpleMerge::Merged(mut final_req) => self.attempt_and(
+                            rest,
+                            final_req.pop().expect("one merged requirement"),
+                            path,
+                            depth,
+                        ),
                         SimpleMerge::TooComplex => {
-                            let mut combined = vec![branch_canon];
-                            combined.extend_from_slice(rest);
-                            self.attempt_and(&combined, *merged_req, path, depth)
+                            let mut combined = storage::singleton(branch_canon, self.governor)?;
+                            storage::extend(&mut combined, rest, self.governor)?;
+                            self.attempt_and(
+                                &combined,
+                                merged_req.pop().expect("one merged requirement"),
+                                path,
+                                depth,
+                            )
                         }
                     }
                 }
-                None => self.attempt_and(rest, *merged_req, path, depth),
+                None => self.attempt_and(
+                    rest,
+                    merged_req.pop().expect("one merged requirement"),
+                    path,
+                    depth,
+                ),
             },
             SimpleMerge::TooComplex => {
-                let mut combined = vec![cond_canon];
+                let mut combined = storage::singleton(cond_canon, self.governor)?;
                 if let Some(id) = then_or_else {
-                    combined.push(self.scoped_build(id, false)?);
+                    push(&mut combined, self.scoped_build(id, false)?, self.governor)?;
                 }
-                combined.extend_from_slice(rest);
+                storage::extend(&mut combined, rest, self.governor)?;
                 self.attempt_and(&combined, req, path, depth)
             }
         }
@@ -391,34 +466,39 @@ impl<'s> Gen<'s, '_> {
     /// backtracking search to resolve (trying one branch can depend on what
     /// happens afterward), so those report [`SimpleMerge::TooComplex`]
     /// rather than guessing.
-    fn try_simple_merge(
+    fn try_simple_merge<'a>(
         &mut self,
-        canon: &Canon,
-        mut req: Requirements,
-    ) -> Result<SimpleMerge, StopReason> {
+        canon: &Canon<'a>,
+        mut req: Requirements<'a>,
+    ) -> Result<SimpleMerge<'a>, StopReason>
+    where
+        's: 'a,
+    {
         Ok(match canon {
-            Canon::True => SimpleMerge::Merged(Box::new(req)),
+            Canon::True => SimpleMerge::Merged(storage::singleton(req, self.governor)?),
             Canon::False => SimpleMerge::Contradiction,
             Canon::Local(facet) => {
                 req.apply(facet, self.governor)?;
                 if req.is_contradictory() {
                     SimpleMerge::Contradiction
                 } else {
-                    SimpleMerge::Merged(Box::new(req))
+                    SimpleMerge::Merged(storage::singleton(req, self.governor)?)
                 }
             }
             Canon::OpaqueNot(id) => {
-                req.opaque_nots.push(*id);
-                SimpleMerge::Merged(Box::new(req))
+                push(&mut req.opaque_nots, *id, self.governor)?;
+                SimpleMerge::Merged(storage::singleton(req, self.governor)?)
             }
             Canon::And(items) => {
                 for item in items {
                     match self.try_simple_merge(item, req)? {
-                        SimpleMerge::Merged(updated) => req = *updated,
+                        SimpleMerge::Merged(mut updated) => {
+                            req = updated.pop().expect("one merged requirement");
+                        }
                         other => return Ok(other),
                     }
                 }
-                SimpleMerge::Merged(Box::new(req))
+                SimpleMerge::Merged(storage::singleton(req, self.governor)?)
             }
             Canon::Scoped(id, inner) => {
                 let entered = super::super::index::enter_scope(
@@ -427,7 +507,7 @@ impl<'s> Gen<'s, '_> {
                     &mut self.scope,
                     self.governor,
                 )?;
-                let result = self.try_simple_merge(inner, req);
+                let result = self.try_simple_merge(&inner[0], req);
                 if entered {
                     self.scope.pop();
                 }
@@ -445,13 +525,8 @@ impl<'s> Gen<'s, '_> {
     /// Build `id`'s (positive, or negated) canon and wrap it in
     /// `Canon::Scoped(id, ..)`, for a branch (`if`/`then`/`else`) canon
     /// itself builds eagerly rather than deferring to [`Canon::Ref`].
-    fn scoped_build(&mut self, id: usize, negated: bool) -> Result<Canon, StopReason> {
-        let inner = if negated {
-            canon::build_negated(self.schema, id, self.governor)?
-        } else {
-            canon::build(self.schema, id, self.governor)?
-        };
-        Ok(Canon::Scoped(id, Box::new(inner)))
+    fn scoped_build(&mut self, id: usize, negated: bool) -> Result<Canon<'s>, StopReason> {
+        canon::build_scoped(self.schema, id, negated, self.governor)
     }
     /// `oneOf`'s exactly-one semantics: try each branch `i` in turn as the
     /// one that must hold, adding every *other* branch as a
@@ -463,29 +538,33 @@ impl<'s> Gen<'s, '_> {
     /// an `OpaqueNot` branch can never itself prove that, so this can never
     /// falsely claim `oneOf` is unsatisfiable merely because the exclusion
     /// search was inconclusive.
-    fn attempt_one_of(
+    fn attempt_one_of<'a>(
         &mut self,
         ids: &[usize],
-        rest: &[Canon],
-        req: &Requirements,
+        rest: &[Canon<'a>],
+        req: &Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         if ids.is_empty() {
-            return Ok(Attempt::Unsatisfiable(refute("empty disjunction")));
+            return Ok(Attempt::Unsatisfiable("empty disjunction"));
         }
         let mut any_exhausted = false;
         for (position, &id) in ids.iter().enumerate() {
             self.governor.check()?;
             let branch_canon = self.scoped_build(id, false)?;
-            let mut combined = vec![branch_canon];
+            let mut combined = storage::singleton(branch_canon, self.governor)?;
             for (other_position, &other_id) in ids.iter().enumerate() {
                 if other_position != position {
-                    combined.push(Canon::OpaqueNot(other_id));
+                    push(&mut combined, Canon::OpaqueNot(other_id), self.governor)?;
                 }
             }
-            combined.extend_from_slice(rest);
-            match self.attempt_and(&combined, req.clone(), path, depth)? {
+            storage::extend(&mut combined, rest, self.governor)?;
+            let branch_req = req.copy_in(self.governor)?;
+            match self.attempt_and(&combined, branch_req, path, depth)? {
                 Attempt::Witness(node) => return Ok(Attempt::Witness(node)),
                 Attempt::Unsatisfiable(_) => {}
                 Attempt::Exhausted => any_exhausted = true,
@@ -494,31 +573,34 @@ impl<'s> Gen<'s, '_> {
         if any_exhausted {
             Ok(Attempt::Exhausted)
         } else {
-            Ok(Attempt::Unsatisfiable(refute(
+            Ok(Attempt::Unsatisfiable(
                 "every oneOf branch, tried exclusively, is unsatisfiable",
-            )))
+            ))
         }
     }
 
     // ---- stage 5: generation from a merged `Requirements` ----
 
-    fn finish(
+    fn finish<'a>(
         &mut self,
-        req: &Requirements,
+        req: &Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         self.governor.charge(Resource::Work, 1)?;
-        if let Some(value) = req.const_value.clone() {
-            let outcome = self.check(&value, req)?;
-            return Ok(outcome.map_or(Attempt::Witness(value), |reason| {
-                Attempt::Unsatisfiable(refute(reason))
-            }));
+        if let Some(value) = req.const_value {
+            let outcome = self.check(value, req)?;
+            return Ok(
+                outcome.map_or_else(|| Attempt::Witness(value.clone()), Attempt::Unsatisfiable)
+            );
         }
-        if let Some(values) = req.enum_values.clone() {
+        if let Some(values) = &req.enum_values {
             let mut any_checked = false;
-            for value in &values {
-                if crate::json::equivalent_any(&req.excluded, value, self.governor)? {
+            for &value in values {
+                if storage::equivalent_any(&req.excluded, value, self.governor)? {
                     continue;
                 }
                 any_checked = true;
@@ -527,12 +609,13 @@ impl<'s> Gen<'s, '_> {
                 }
             }
             return Ok(if any_checked {
-                Attempt::Unsatisfiable(refute("no enum member satisfies the merged constraints"))
+                Attempt::Unsatisfiable("no enum member satisfies the merged constraints")
             } else {
-                Attempt::Unsatisfiable(refute("every enum member is excluded"))
+                Attempt::Unsatisfiable("every enum member is excluded")
             });
         }
         let mut any_exhausted = false;
+        reference::work(self.governor, 12)?;
         for kind in type_preference(req) {
             match self.build_kind(kind, req, path, depth)? {
                 Attempt::Witness(node) => return Ok(Attempt::Witness(node)),
@@ -541,23 +624,24 @@ impl<'s> Gen<'s, '_> {
             }
         }
         if req.types.is_empty() {
-            return Ok(Attempt::Unsatisfiable(refute("no admitted type")));
+            return Ok(Attempt::Unsatisfiable("no admitted type"));
         }
         Ok(if any_exhausted {
             Attempt::Exhausted
         } else {
-            Attempt::Unsatisfiable(refute(
-                "no admitted type can satisfy the merged constraints",
-            ))
+            Attempt::Unsatisfiable("no admitted type can satisfy the merged constraints")
         })
     }
-    fn build_kind(
+    fn build_kind<'a>(
         &mut self,
         kind: Kind,
-        req: &Requirements,
+        req: &Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         match kind {
             Kind::Null => self.finalize(Node::new(Value::Null), req),
             Kind::Boolean => {
@@ -574,13 +658,19 @@ impl<'s> Gen<'s, '_> {
             Kind::Object => self.build_object(req, path, depth),
         }
     }
-    fn finalize(&mut self, node: Node, req: &Requirements) -> Result<Attempt, StopReason> {
+    fn finalize<'a>(&mut self, node: Node, req: &Requirements<'a>) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         Ok(match self.check(&node, req)? {
             None => Attempt::Witness(node),
             Some(_) => Attempt::Exhausted,
         })
     }
-    fn build_string(&mut self, req: &Requirements) -> Result<Attempt, StopReason> {
+    fn build_string<'a>(&mut self, req: &Requirements<'a>) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         // Any witness for this facet set needs at least `min_length` bytes;
         // charge that before attempting any construction, so an
         // unrepresentably large `minLength` (clamped to `u64::MAX` by
@@ -597,12 +687,12 @@ impl<'s> Gen<'s, '_> {
                 }
             }
         } else {
-            let primary = req.patterns[0].clone();
-            let pattern = self.pattern_of(&primary);
+            let primary = req.patterns[0];
+            let pattern = self.pattern_of(&primary)?;
             let mut avoid = crate::contract::ScratchVec::new(self.governor);
             for reference in &req.avoid_patterns {
-                self.governor.charge(Resource::Work, 1)?;
-                avoid.push(self.pattern_of(reference))?;
+                let pattern = self.pattern_of(reference)?;
+                push(&mut avoid, pattern, self.governor)?;
             }
             let min_len = usize::try_from(req.min_length).unwrap_or(usize::MAX);
             let max_len = req
@@ -638,9 +728,9 @@ impl<'s> Gen<'s, '_> {
                             },
                         )?;
                         if matches!(unbounded, GenerateOutcome::NoCandidate(_)) {
-                            return Ok(Attempt::Unsatisfiable(refute(
+                            return Ok(Attempt::Unsatisfiable(
                                 "pattern intersected with its avoided patterns is empty",
-                            )));
+                            ));
                         }
                     }
                     return Ok(Attempt::Exhausted);
@@ -658,10 +748,16 @@ impl<'s> Gen<'s, '_> {
         }
         Ok(Attempt::Exhausted)
     }
-    fn pattern_of(&self, reference: &PatternRef) -> &'s Pattern {
-        &self.schema.index.locations[reference.owner].patterns[&reference.keyword]
+    fn pattern_of(&mut self, reference: &PatternRef<'_>) -> Result<&'s Pattern, StopReason> {
+        Ok(self.schema.index.locations[reference.owner]
+            .patterns
+            .get_governed(reference.keyword, self.governor)?
+            .expect("prepared pattern exists"))
     }
-    fn build_number(&mut self, req: &Requirements) -> Result<Attempt, StopReason> {
+    fn build_number<'a>(&mut self, req: &Requirements<'a>) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         let want_integer = matches!(req.types.num, NumKind::IntOnly);
         let want_fraction_only = matches!(req.types.num, NumKind::FracOnly);
         let mut candidates: Vec<crate::json::Number> = Vec::new();
@@ -672,7 +768,7 @@ impl<'s> Gen<'s, '_> {
             }
         }
         if let Some((bound, _)) = &req.minimum {
-            candidates.push(bound.clone());
+            candidates.push((*bound).clone());
             if let Some(text) = step_integer(bound.as_str(), 1)
                 && let Ok(value) = text.parse()
             {
@@ -680,7 +776,7 @@ impl<'s> Gen<'s, '_> {
             }
         }
         if let Some((bound, _)) = &req.maximum {
-            candidates.push(bound.clone());
+            candidates.push((*bound).clone());
             if let Some(text) = step_integer(bound.as_str(), -1)
                 && let Ok(value) = text.parse()
             {
@@ -731,12 +827,15 @@ impl<'s> Gen<'s, '_> {
         }
         Ok(Attempt::Exhausted)
     }
-    fn build_array(
+    fn build_array<'a>(
         &mut self,
-        req: &Requirements,
+        req: &Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         let mut items: Vec<Node> = Vec::new();
         let minimum = req.min_items.max(if req.require_duplicate { 2 } else { 0 });
         // Preserve the established preference for materializing a usable
@@ -744,14 +843,22 @@ impl<'s> Gen<'s, '_> {
         // position cannot be constructed. Contains construction already
         // selects its needed positions and must not add gratuitous matches.
         let preferred = if req.contains.is_empty() {
-            size(req.prefix_items.iter().map(Vec::len).max().unwrap_or(0))
-                .min(req.max_items.unwrap_or(u64::MAX))
+            reference::work(self.governor, req.prefix_items.len())?;
+            size(
+                req.prefix_items
+                    .iter()
+                    .map(ScratchVec::len)
+                    .max()
+                    .unwrap_or(0),
+            )
+            .min(req.max_items.unwrap_or(u64::MAX))
         } else {
             0
         };
         // Each contains occurrence has its own minimum; one value can
         // satisfy several occurrences. This sum is a construction bound,
         // not a claim that an array needs disjoint matching elements.
+        reference::work(self.governor, req.contains.len())?;
         let construction_bound = req
             .contains
             .iter()
@@ -775,24 +882,20 @@ impl<'s> Gen<'s, '_> {
                 return Ok(Attempt::Exhausted);
             }
             let index = items.len();
-            let child_path = format!("{path}/{index}");
-            let mut applicable: Vec<usize> = req
-                .prefix_items
-                .iter()
-                .filter_map(|occurrence| occurrence.get(index).copied())
-                .collect();
-            applicable.extend(applicable_items(req, index));
-            let exclusions: Vec<Node> = if req.unique_items {
-                items.clone()
+            let child_path =
+                format_scratch_governed(format_args!("{path}/{index}"), self.governor)?;
+            let mut applicable = self.array_obligations(req, index)?;
+            let exclusions = if req.unique_items {
+                items.as_slice()
             } else {
-                Vec::new()
+                &[]
             };
             let mut selected = None;
-            for id in deficient {
-                let mut ids = applicable.clone();
-                ids.push(id);
+            for &id in &deficient {
+                let mut ids = storage::copy(&applicable, self.governor)?;
+                push(&mut ids, id, self.governor)?;
                 if let Attempt::Witness(node) =
-                    self.attempt_many_excluding(&ids, &exclusions, &child_path, depth + 1)?
+                    self.attempt_many_excluding(&ids, exclusions, &child_path, depth + 1)?
                 {
                     selected = Some(node);
                     break;
@@ -802,7 +905,7 @@ impl<'s> Gen<'s, '_> {
                 node
             } else if size(items.len()) < minimum || optional {
                 if applicable.is_empty() {
-                    applicable.extend_from_slice(&req.unevaluated_items);
+                    storage::extend(&mut applicable, &req.unevaluated_items, self.governor)?;
                 }
                 if applicable.is_empty() {
                     if req.require_duplicate && !items.is_empty() {
@@ -813,7 +916,7 @@ impl<'s> Gen<'s, '_> {
                 } else {
                     match self.attempt_many_excluding(
                         &applicable,
-                        &exclusions,
+                        exclusions,
                         &child_path,
                         depth + 1,
                     )? {
@@ -834,7 +937,34 @@ impl<'s> Gen<'s, '_> {
             };
             items.push(value);
         }
-        if req.require_duplicate {
+        self.append_required_duplicate(&mut items, req.require_duplicate)?;
+        self.finalize(Node::new(Value::Array(items)), req)
+    }
+    /// Preserve the ordered prefix/items obligations for this position.
+    fn array_obligations(
+        &mut self,
+        req: &Requirements<'_>,
+        index: usize,
+    ) -> Result<ScratchVec<usize>, StopReason> {
+        let mut applicable = ScratchVec::new(self.governor);
+        for occurrence in &req.prefix_items {
+            reference::work(self.governor, 1)?;
+            if let Some(&id) = occurrence.get(index) {
+                push(&mut applicable, id, self.governor)?;
+            }
+        }
+        reference::work(self.governor, req.items.len())?;
+        for id in applicable_items(req, index) {
+            push(&mut applicable, id, self.governor)?;
+        }
+        Ok(applicable)
+    }
+    fn append_required_duplicate(
+        &mut self,
+        items: &mut Vec<Node>,
+        required: bool,
+    ) -> Result<(), StopReason> {
+        if required {
             if items.len() < 2 {
                 items.push(
                     items
@@ -842,47 +972,55 @@ impl<'s> Gen<'s, '_> {
                         .cloned()
                         .unwrap_or_else(|| Node::new(Value::Null)),
                 );
-            } else if !has_duplicate(&items, self.governor)? {
+            } else if !has_duplicate(items, self.governor)? {
                 items.push(items[0].clone());
             }
         }
-        self.finalize(Node::new(Value::Array(items)), req)
+        Ok(())
     }
     /// Which contains occurrences still need matches in the construction
     /// so far. These evaluations guide candidate generation; final
     /// whole-schema validation establishes the returned witness.
-    fn deficient_contains(
+    fn deficient_contains<'a>(
         &mut self,
-        req: &Requirements,
+        req: &Requirements<'a>,
         items: &[Node],
-    ) -> Result<Vec<usize>, StopReason> {
-        let mut deficient = Vec::new();
+    ) -> Result<ScratchVec<usize>, StopReason>
+    where
+        's: 'a,
+    {
+        let mut deficient = ScratchVec::new(self.governor);
         for &(id, minimum, _) in &req.contains {
+            reference::work(self.governor, 1)?;
             let mut count = 0_u64;
             for item in items {
                 let report = super::super::evaluate::run(self.schema, id, item, self.governor)?;
                 count += u64::from(report.violations.is_empty());
             }
             if count < minimum {
-                deficient.push(id);
+                push(&mut deficient, id, self.governor)?;
             }
         }
         Ok(deficient)
     }
-    fn build_object(
+    fn build_object<'a>(
         &mut self,
-        req: &Requirements,
+        req: &Requirements<'a>,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
-        let mut required: Vec<String> = req.required.clone();
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
+        let mut required: ScratchVec<&str> = req.required.copy_in(self.governor)?;
         loop {
             let mut added = false;
             for (trigger, deps) in &req.dependent_required {
-                if required.contains(trigger) {
+                reference::work(self.governor, 1)?;
+                if contains_name(&required, trigger, self.governor)? {
                     for dep in deps {
-                        if !required.contains(dep) {
-                            required.push(dep.clone());
+                        if !contains_name(&required, dep, self.governor)? {
+                            push(&mut required, *dep, self.governor)?;
                             added = true;
                         }
                     }
@@ -892,25 +1030,27 @@ impl<'s> Gen<'s, '_> {
                 break;
             }
         }
-        let mut req = req.clone();
-        for (trigger, id) in &req.dependent_schemas.clone() {
-            if required.contains(trigger) {
-                req.positive_musts.push(*id);
+        let mut req = req.copy_in(self.governor)?;
+        for (trigger, id) in &req.dependent_schemas {
+            reference::work(self.governor, 1)?;
+            if contains_name(&required, trigger, self.governor)? {
+                push(&mut req.positive_musts, *id, self.governor)?;
             }
         }
         let mut members: Vec<Member> = Vec::new();
         for name in &required {
-            let child_path = format!("{path}/{}", pointer_segment(name));
-            let mut ids: Vec<usize> = req
-                .properties
-                .iter()
-                .filter(|(key, _)| key == name)
-                .map(|(_, id)| *id)
-                .collect();
+            let child_path = super::super::index::pointer(path, name, self.governor)?;
+            let mut ids = ScratchVec::new(self.governor);
+            for (key, id) in &req.properties {
+                reference::work(self.governor, key.len().min(name.len()).saturating_add(1))?;
+                if key == name {
+                    push(&mut ids, *id, self.governor)?;
+                }
+            }
             for (pattern, id) in &req.pattern_properties {
-                let compiled = self.pattern_of(pattern);
+                let compiled = self.pattern_of(pattern)?;
                 if compiled.is_match(name, self.governor)? {
-                    ids.push(*id);
+                    push(&mut ids, *id, self.governor)?;
                 }
             }
             let value = match self.attempt_many(&ids, &child_path, depth + 1)? {
@@ -918,7 +1058,7 @@ impl<'s> Gen<'s, '_> {
                 other => return Ok(other),
             };
             members.push(Member {
-                key: name.clone(),
+                key: (*name).to_string(),
                 key_span: None,
                 value,
             });
@@ -955,9 +1095,10 @@ impl<'s> Gen<'s, '_> {
                     continue;
                 }
             }
-            let mut ids = req.additional_properties.clone();
-            ids.extend(req.unevaluated_properties.iter().copied());
-            let value = match self.attempt_many(&ids, &format!("{path}/{name}"), depth + 1)? {
+            let mut ids = req.additional_properties.copy_in(self.governor)?;
+            storage::extend(&mut ids, &req.unevaluated_properties, self.governor)?;
+            let child_path = super::super::index::pointer(path, &name, self.governor)?;
+            let value = match self.attempt_many(&ids, &child_path, depth + 1)? {
                 Attempt::Witness(node) => node,
                 other => return Ok(other),
             };
@@ -985,14 +1126,17 @@ impl<'s> Gen<'s, '_> {
     /// own. Retry once with one extra, synthetic property (bounded —
     /// soundness comes from re-`finalize`-ing, which rejects the retry too
     /// if it still fails).
-    fn retry_object_with_extra_member(
+    fn retry_object_with_extra_member<'a>(
         &mut self,
-        req: &Requirements,
+        req: &Requirements<'a>,
         mut members: Vec<Member>,
         required_len: usize,
         path: &str,
         depth: u32,
-    ) -> Result<Attempt, StopReason> {
+    ) -> Result<Attempt, StopReason>
+    where
+        's: 'a,
+    {
         let mut counter = required_len;
         let name = loop {
             let candidate = format!("extra{counter}");
@@ -1011,9 +1155,10 @@ impl<'s> Gen<'s, '_> {
                 }
             }
         }
-        let mut ids = req.additional_properties.clone();
-        ids.extend(req.unevaluated_properties.iter().copied());
-        let value = match self.attempt_many(&ids, &format!("{path}/{name}"), depth + 1)? {
+        let mut ids = req.additional_properties.copy_in(self.governor)?;
+        storage::extend(&mut ids, &req.unevaluated_properties, self.governor)?;
+        let child_path = super::super::index::pointer(path, &name, self.governor)?;
+        let value = match self.attempt_many(&ids, &child_path, depth + 1)? {
             Attempt::Witness(node) => node,
             other => return Ok(other),
         };
@@ -1030,13 +1175,16 @@ impl<'s> Gen<'s, '_> {
     /// obligation, checked with the real evaluator rather than decided
     /// symbolically. This is also stage 5's whole treatment of a literal
     /// `const`/`enum` candidate.
-    fn check(
+    fn check<'a>(
         &mut self,
         node: &Node,
-        req: &Requirements,
-    ) -> Result<Option<&'static str>, StopReason> {
+        req: &Requirements<'a>,
+    ) -> Result<Option<&'static str>, StopReason>
+    where
+        's: 'a,
+    {
         self.governor.charge(Resource::Work, 1)?;
-        if crate::json::equivalent_any(&req.excluded, node, self.governor)? {
+        if storage::equivalent_any(&req.excluded, node, self.governor)? {
             return Ok(Some("candidate equals an excluded value"));
         }
         if let Some(reason) = match &node.value {
@@ -1067,11 +1215,14 @@ impl<'s> Gen<'s, '_> {
         }
         Ok(None)
     }
-    fn check_number(
+    fn check_number<'a>(
         &mut self,
         number: &crate::json::Number,
-        req: &Requirements,
-    ) -> Result<Option<&'static str>, StopReason> {
+        req: &Requirements<'a>,
+    ) -> Result<Option<&'static str>, StopReason>
+    where
+        's: 'a,
+    {
         let integer = number.is_integer();
         let admitted = match req.types.num {
             NumKind::None => false,
@@ -1106,11 +1257,14 @@ impl<'s> Gen<'s, '_> {
         }
         Ok(None)
     }
-    fn check_string(
+    fn check_string<'a>(
         &mut self,
         text: &str,
-        req: &Requirements,
-    ) -> Result<Option<&'static str>, StopReason> {
+        req: &Requirements<'a>,
+    ) -> Result<Option<&'static str>, StopReason>
+    where
+        's: 'a,
+    {
         if !req.types.string {
             return Ok(Some("string is not an admitted type"));
         }
@@ -1122,13 +1276,13 @@ impl<'s> Gen<'s, '_> {
             return Ok(Some("longer than maxLength"));
         }
         for reference in &req.patterns {
-            let compiled = self.pattern_of(reference);
+            let compiled = self.pattern_of(reference)?;
             if !compiled.is_match(text, self.governor)? {
                 return Ok(Some("does not match pattern"));
             }
         }
         for reference in &req.avoid_patterns {
-            let compiled = self.pattern_of(reference);
+            let compiled = self.pattern_of(reference)?;
             if compiled.is_match(text, self.governor)? {
                 return Ok(Some("matches an avoided pattern"));
             }
@@ -1151,11 +1305,14 @@ impl<'s> Gen<'s, '_> {
         }
         Ok(None)
     }
-    fn check_array(
+    fn check_array<'a>(
         &mut self,
         items: &[Node],
-        req: &Requirements,
-    ) -> Result<Option<&'static str>, StopReason> {
+        req: &Requirements<'a>,
+    ) -> Result<Option<&'static str>, StopReason>
+    where
+        's: 'a,
+    {
         if !req.types.array {
             return Ok(Some("array is not an admitted type"));
         }
@@ -1182,7 +1339,7 @@ impl<'s> Gen<'s, '_> {
         Ok(None)
     }
 }
-fn check_object(members: &[Member], req: &Requirements) -> Option<&'static str> {
+fn check_object(members: &[Member], req: &Requirements<'_>) -> Option<&'static str> {
     if !req.types.object {
         return Some("object is not an admitted type");
     }
@@ -1194,7 +1351,7 @@ fn check_object(members: &[Member], req: &Requirements) -> Option<&'static str> 
         return Some("more than maxProperties");
     }
     for name in &req.required {
-        if !members.iter().any(|member| &member.key == name) {
+        if !members.iter().any(|member| member.key.as_str() == *name) {
             return Some("missing required member");
         }
     }
@@ -1210,7 +1367,7 @@ enum Kind {
     Array,
     Object,
 }
-fn type_preference(req: &Requirements) -> Vec<Kind> {
+fn type_preference(req: &Requirements<'_>) -> impl Iterator<Item = Kind> {
     let object_hint = !req.properties.is_empty()
         || !req.pattern_properties.is_empty()
         || !req.additional_properties.is_empty()
@@ -1239,27 +1396,23 @@ fn type_preference(req: &Requirements) -> Vec<Kind> {
         || req.maximum.is_some()
         || !req.multiples_of.is_empty()
         || !req.not_multiples_of.is_empty();
-    let mut order: Vec<(Kind, bool)> = Vec::new();
-    if req.types.object {
-        order.push((Kind::Object, object_hint));
-    }
-    if req.types.array {
-        order.push((Kind::Array, array_hint));
-    }
-    if req.types.string {
-        order.push((Kind::String, string_hint));
-    }
-    if !matches!(req.types.num, NumKind::None) {
-        order.push((Kind::Number, number_hint));
-    }
-    if req.types.boolean {
-        order.push((Kind::Boolean, false));
-    }
-    if req.types.null {
-        order.push((Kind::Null, false));
-    }
-    order.sort_by_key(|(_, hinted)| !hinted);
-    order.into_iter().map(|(kind, _)| kind).collect()
+    let choices = [
+        (Kind::Object, req.types.object, object_hint),
+        (Kind::Array, req.types.array, array_hint),
+        (Kind::String, req.types.string, string_hint),
+        (
+            Kind::Number,
+            !matches!(req.types.num, NumKind::None),
+            number_hint,
+        ),
+        (Kind::Boolean, req.types.boolean, false),
+        (Kind::Null, req.types.null, false),
+    ];
+    [true, false].into_iter().flat_map(move |hint| {
+        choices
+            .into_iter()
+            .filter_map(move |(kind, enabled, hinted)| (enabled && hinted == hint).then_some(kind))
+    })
 }
 
 fn int_number(value: i64) -> crate::json::Number {
@@ -1361,5 +1514,19 @@ fn has_duplicate(items: &[Node], governor: &mut Governor) -> Result<bool, StopRe
         }
     }
     governor.check()?;
+    Ok(false)
+}
+
+fn contains_name(
+    names: &[&str],
+    wanted: &str,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    for name in names {
+        reference::work(governor, name.len().min(wanted.len()).saturating_add(1))?;
+        if *name == wanted {
+            return Ok(true);
+        }
+    }
     Ok(false)
 }

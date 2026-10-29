@@ -609,9 +609,9 @@ pub(super) fn pointer(
     Ok(result)
 }
 
-pub(super) fn push_route(
-    route: &mut ScratchVec<usize>,
-    position: usize,
+pub(super) fn push<T: ScratchCharge>(
+    route: &mut ScratchVec<T>,
+    position: T,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     work(governor, 1)?;
@@ -634,7 +634,7 @@ pub(super) fn enter_scope(
             return Ok(false);
         }
     }
-    push_route(scope, id, governor)?;
+    push(scope, id, governor)?;
     Ok(true)
 }
 

@@ -591,7 +591,7 @@ scratch_charge!(u8, 1);
 scratch_charge!(u32, 4);
 scratch_charge!(u64, 8);
 scratch_charge!(usize, 8);
-scratch_charge!(&'static str, 16); // a `&str` is a two-word (ptr, len) fat pointer.
+scratch_charge!(&str, 16); // a `&str` is a two-word (ptr, len) fat pointer.
 scratch_charge!(String, 24); // `Vec<u8>`'s (ptr, len, cap) layout.
 scratch_charge!(crate::json::Node, 56);
 scratch_charge!(crate::json::Member, 104);
@@ -599,6 +599,7 @@ scratch_charge!(crate::provenance::NodeId, 4);
 scratch_charge!(crate::pattern::derive::Term, 32); // largest variant: `Repeat(u32, u64, u64, bool)`.
 scratch_charge!(crate::provenance::ProvenanceNode, 160);
 scratch_charge!(crate::schema::Violation, 96); // four `String`s.
+scratch_charge!(Evidence, 160); // Same portable evidence bound used by schema evaluation.
 scratch_charge!(Validation, 80); // two `String`s, a `bool`, and a `Vec<String>`.
 
 /// Round `bytes` up to the next 8-byte word, the same rounding an

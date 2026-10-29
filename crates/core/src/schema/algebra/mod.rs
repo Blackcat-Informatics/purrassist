@@ -39,9 +39,12 @@
 mod canon;
 mod generate;
 mod merge;
+mod storage;
+#[cfg(test)]
+mod tests;
 
 use super::Schema;
-use crate::contract::{Evidence, Governor, StopReason};
+use crate::contract::{Evidence, Governor, Resource, ScratchVec, StopReason};
 use crate::json::Node;
 
 /// Closed-form refutation evidence for [`WitnessOutcome::Unsatisfiable`].
@@ -65,25 +68,66 @@ pub enum WitnessOutcome {
     Exhausted,
 }
 
+/// Internal results carry no public refutation storage. Recovery consumes
+/// these directly; only the public witness boundary materializes evidence.
+pub(super) enum Attempt {
+    Witness(Node),
+    Unsatisfiable(&'static str),
+    Exhausted,
+}
+
+impl Refutation {
+    /// Keep every reservation releasable until all copying and admission finish.
+    fn publish(reason: &'static str, governor: &mut Governor) -> Result<Self, StopReason> {
+        governor.charge(Resource::EvidenceEntries, 1)?;
+        let reason = super::reference::copy(reason, governor)?;
+        let rule = super::reference::copy("schema.algebra.unsatisfiable-v1", governor)?;
+        let explanation = super::reference::copy(&reason, governor)?;
+        let (reason, reason_lease) = reason.into_owned_parts();
+        let (rule, rule_lease) = rule.into_owned_parts();
+        let (explanation, explanation_lease) = explanation.into_owned_parts();
+        let mut evidence = ScratchVec::new(governor);
+        storage::push(
+            &mut evidence,
+            Evidence {
+                rule,
+                explanation,
+                span: None,
+                destination: String::new(),
+            },
+            governor,
+        )?;
+        governor.check()?;
+        reason_lease.retain();
+        rule_lease.retain();
+        explanation_lease.retain();
+        Ok(Self {
+            reason,
+            evidence: evidence.into_vec(),
+        })
+    }
+}
+
 /// Generate a witness for `schema`'s compiled location `id` (an internal
 /// index, not part of the public API — external callers use
 /// [`Schema::generate_witness`], always rooted; `crate::schema::recovery`
 /// uses this directly for sub-schema locations, e.g. one `required`
-/// property's own schema).
+/// property's own schema). This preserves witness revalidation without
+/// materializing public evidence for refutations that recovery discards.
 pub(super) fn generate(
     schema: &Schema,
     id: usize,
     governor: &mut Governor,
-) -> Result<WitnessOutcome, StopReason> {
+) -> Result<Attempt, StopReason> {
     Ok(match generate::run(schema, id, governor)? {
-        generate::Attempt::Unsatisfiable(refutation) => WitnessOutcome::Unsatisfiable(refutation),
-        generate::Attempt::Exhausted => WitnessOutcome::Exhausted,
-        generate::Attempt::Witness(node) => {
+        Attempt::Unsatisfiable(refutation) => Attempt::Unsatisfiable(refutation),
+        Attempt::Exhausted => Attempt::Exhausted,
+        Attempt::Witness(node) => {
             let checked = super::evaluate::run(schema, id, &node, governor)?;
             if checked.violations.is_empty() {
-                WitnessOutcome::Witness(node)
+                Attempt::Witness(node)
             } else {
-                WitnessOutcome::Exhausted
+                Attempt::Exhausted
             }
         }
     })
@@ -107,7 +151,10 @@ impl Schema {
 
     /// Generate a witness instance for this complete schema under a
     /// caller-owned governor, distinguishing resource exhaustion from every
-    /// [`WitnessOutcome`].
+    /// [`WitnessOutcome`]. Final refutations admit one evidence entry, copying
+    /// work and owned output buffers. Only complete public refutations retain
+    /// their storage admission; discarded internal branches publish nothing.
+    /// Dropping ordinary public output does not release that retained admission.
     ///
     /// ```
     /// use purrassist_core::{Budget, Governor, schema::{Schema, algebra::WitnessOutcome}};
@@ -126,6 +173,14 @@ impl Schema {
         &self,
         governor: &mut Governor,
     ) -> Result<WitnessOutcome, StopReason> {
-        generate(self, self.root, governor)
+        let attempt = generate(self, self.root, governor)?;
+        governor.check()?;
+        Ok(match attempt {
+            Attempt::Witness(node) => WitnessOutcome::Witness(node),
+            Attempt::Unsatisfiable(reason) => {
+                WitnessOutcome::Unsatisfiable(Refutation::publish(reason, governor)?)
+            }
+            Attempt::Exhausted => WitnessOutcome::Exhausted,
+        })
     }
 }

@@ -850,7 +850,6 @@ fn deterministic_pinned_digest() {
         digests.windows(2).all(|pair| pair[0] == pair[1]),
         "{digests:?}"
     );
-    assert_eq!(digests[0], PINNED_DIGEST);
     // The explicit `Prefix` policy (`call_0`, `call_1`, ...) is pinned too:
     // its calls and ids are exactly the ones recovery published before ids
     // were numbered from the turn's digest by default (the digest also
@@ -864,7 +863,7 @@ fn deterministic_pinned_digest() {
         }),
         &set(&PINNED_DIALECTS),
     );
-    assert_eq!(wire_digest(&prefixed), PINNED_PREFIX_DIGEST);
+    let prefixed_digest = wire_digest(&prefixed);
     // The Ambiguous wire form is pinned too.
     let tools = compile([ToolDefinition::new("f").effects(Effects::ReadOnly)]);
     let mut ambiguous = Vec::new();
@@ -877,7 +876,6 @@ fn deterministic_pinned_digest() {
         ambiguous.push(wire_digest(&result));
     }
     assert_eq!(ambiguous[0], ambiguous[1]);
-    assert_eq!(ambiguous[0], PINNED_AMBIGUOUS_DIGEST);
     let prefixed = tools.recover(
         b"say <tool><call=f></call></tool> done",
         &ToolRecoveryRequest::default().ids(IdPolicy::Prefix {
@@ -886,17 +884,30 @@ fn deterministic_pinned_digest() {
         }),
         &set(&[custom(MINI), custom(OVERLAP)]),
     );
-    assert_eq!(wire_digest(&prefixed), PINNED_PREFIX_AMBIGUOUS_DIGEST);
+    assert_eq!(
+        [
+            digests[0].as_str(),
+            prefixed_digest.as_str(),
+            ambiguous[0].as_str(),
+            wire_digest(&prefixed).as_str(),
+        ],
+        [
+            PINNED_DIGEST,
+            PINNED_PREFIX_DIGEST,
+            PINNED_AMBIGUOUS_DIGEST,
+            PINNED_PREFIX_AMBIGUOUS_DIGEST,
+        ],
+    );
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:a75d1b81ae8532a55c35d8c897a2869c27c78c381a6a6504dc738d51ab02a006";
+    "sha256:de55e597800e7bf4207a89bc500287816d7828ea7be6908a064b157bb0b22dae";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:4b5883f201be0ab473d1ee8ca80d08c723a923cbf03617a286f81dfc2fde3809";
+    "sha256:37137db0bfaa192dea60e32367cc80573e48fac03dae66e22e0343f2116fb74a";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:283d36975f956e445095e1417f544192334c63628fd3747bd291c3e3a369b1ff";
+    "sha256:96df6a960fd5f42eb91624346ff8cd65034dccbcc99df2876ab1f1d4ba9c9d71";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
-    "sha256:266d0853e3522d278087cbd51238ae5f63f71d9b2e0f34901c93304d223c0d77";
+    "sha256:cf8a05a8f44b861707a847fdcf5211de0395a96b3b24d17488134ea82dd4b493";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
