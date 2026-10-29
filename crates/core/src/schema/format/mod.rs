@@ -16,6 +16,21 @@ mod uuid;
 
 use crate::contract::{Governor, StopReason};
 
+/// Admit a parser's documented full-input passes and fixed operations.
+fn admit_scans(
+    text: &str,
+    passes: u64,
+    fixed: u64,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(
+        crate::contract::Resource::Work,
+        crate::contract::saturating_size(text.len())
+            .saturating_mul(passes)
+            .saturating_add(fixed),
+    )
+}
+
 /// Consume the two ASCII hex digits after an already consumed percent sign.
 /// An invalid first digit leaves the second untouched; a valid first digit
 /// always consumes the second, including a non-hex digit.
@@ -63,6 +78,7 @@ pub(super) fn evaluate(
     value: &str,
     governor: &mut Governor,
 ) -> Result<Outcome, StopReason> {
+    governor.check()?;
     let pass = match name {
         "date-time" => datetime::is_date_time(value, governor)?,
         "date" => datetime::is_date(value, governor)?,
@@ -83,8 +99,12 @@ pub(super) fn evaluate(
         "json-pointer" => pointer::is_json_pointer(value, governor)?,
         "relative-json-pointer" => pointer::is_relative_json_pointer(value, governor)?,
         "regex" => regexp::is_regex(value, governor)?,
-        _ => return Ok(Outcome::Unknown),
+        _ => {
+            governor.check()?;
+            return Ok(Outcome::Unknown);
+        }
     };
+    governor.check()?;
     Ok(if pass { Outcome::Pass } else { Outcome::Fail })
 }
 
@@ -150,6 +170,53 @@ mod tests {
             let mut chars = source.chars().peekable();
             assert_eq!(pct_encoded(&mut chars), expected, "{source:?}");
             assert_eq!(chars.collect::<String>(), remaining, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn assertion_scans_refuse_work_and_discard_regex_diagnostics() {
+        use crate::{Budget, Governor, StopReason, contract::Resource};
+        let long = "1".repeat(4096);
+        for (name, source) in [
+            ("uri", format!("https://example.com/{long}?q=x#y")),
+            ("iri-reference", format!("/{long}/é")),
+            ("date-time", format!("2026-01-01T00:00:00.{long}Z")),
+            ("duration", format!("P{long}Y")),
+            ("uuid", "00000000-0000-0000-0000-000000000000".into()),
+            ("json-pointer", format!("/{long}/~0~1")),
+            ("relative-json-pointer", format!("{long}/x")),
+            ("uri-template", format!("/{long}/{{+path}}")),
+            ("regex", "[".into()),
+        ] {
+            let mut governor = Governor::new(Budget::default());
+            let outcome = super::evaluate(name, &source, &mut governor).unwrap();
+            assert_eq!(
+                matches!(outcome, super::Outcome::Pass),
+                name != "regex",
+                "{name}"
+            );
+            // In particular, rejected regex diagnostics are temporary, not output.
+            assert_eq!(governor.scratch_meter().live(), 0, "{name}");
+            let mut refused = Governor::new(Budget {
+                work: governor.usage().work - 1,
+                ..Budget::default()
+            });
+            assert!(
+                matches!(
+                    super::evaluate(name, &source, &mut refused),
+                    Err(StopReason::BudgetExceeded(Resource::Work))
+                ),
+                "{name}"
+            );
+            assert_eq!(refused.scratch_meter().live(), 0, "{name}");
+        }
+        for name in ["date", "regex", "unknown-format"] {
+            let mut governor = Governor::new(Budget::default());
+            governor.cancel();
+            assert!(matches!(
+                super::evaluate(name, "", &mut governor),
+                Err(StopReason::Cancelled)
+            ));
         }
     }
 

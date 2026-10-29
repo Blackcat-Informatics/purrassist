@@ -125,6 +125,8 @@ fn is_template(text: &str) -> bool {
 }
 
 pub(super) fn is_uri_template(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    // Template, expression and variable parsing share one forward cursor.
+    // Percent digits use that cursor too; cached peeks never rescan input.
     governor.charge(
         Resource::Work,
         u64::try_from(text.len()).unwrap_or(u64::MAX),

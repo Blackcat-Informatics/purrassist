@@ -4,16 +4,7 @@
 //! Byte-level, allocation-free parsing: every format here rejects any
 //! non-ASCII-digit input (including other decimal digit scripts) and any
 //! trailing content, matching the official test suite exactly.
-use crate::contract::{Governor, Resource, StopReason};
-
-/// Charge one `Work` unit per scanned byte, like every other format
-/// validator in this module, before any parsing.
-fn charge(text: &str, governor: &mut Governor) -> Result<(), StopReason> {
-    governor.charge(
-        Resource::Work,
-        u64::try_from(text.len()).unwrap_or(u64::MAX),
-    )
-}
+use crate::contract::{Governor, StopReason};
 
 /// One parsed RFC 3339 full-date, kept so callers (recovery's normalization
 /// repair) can re-render it with corrected separators/padding.
@@ -142,13 +133,19 @@ pub(super) fn parse_time(text: &str) -> Option<Time> {
     })
 }
 
+// Bound the shared borrowed parsers before entering them. Date/time digit
+// fields contain at most 18 digits, scanned twice across date and offset time;
+// the arbitrary fractional run scans once. Duration scans disjoint runs,
+// except the first run retried after the week alternative, hence at most 2n.
+// The extra 64 units cover fixed separators, range checks and run terminators
+// (at most seven digit-run probes). Repairs retain their separate contract.
 pub(super) fn is_date(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-    charge(text, governor)?;
+    super::admit_scans(text, 2, 64, governor)?;
     Ok(parse_date(text).is_some())
 }
 
 pub(super) fn is_time(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-    charge(text, governor)?;
+    super::admit_scans(text, 2, 64, governor)?;
     Ok(parse_time(text).is_some())
 }
 
@@ -161,7 +158,7 @@ fn date_time_ok(text: &str) -> bool {
 }
 
 pub(super) fn is_date_time(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-    charge(text, governor)?;
+    super::admit_scans(text, 2, 64, governor)?;
     Ok(date_time_ok(text))
 }
 
@@ -223,7 +220,7 @@ fn dur_time(bytes: &[u8], start: usize) -> bool {
 /// Every digit run must be plain ASCII digits; no sign, no fraction, no
 /// trailing content survives.
 pub(super) fn is_duration(text: &str, governor: &mut Governor) -> Result<bool, StopReason> {
-    charge(text, governor)?;
+    super::admit_scans(text, 2, 64, governor)?;
     Ok(duration_ok(text))
 }
 

@@ -407,8 +407,9 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
-        if let Some(expected) = body.get("type") {
+        if let Some(expected) = body.get_governed("type", self.governor)? {
             let valid = match &expected.value {
                 Value::String(kind) => matches_type(instance, kind, self.governor)?,
                 Value::Array(kinds) => {
@@ -434,7 +435,7 @@ impl Evaluator<'_, '_> {
                 )?;
             }
         }
-        if let Some(expected) = body.get("const")
+        if let Some(expected) = body.get_governed("const", self.governor)?
             && !instance.equivalent_governed(expected, self.governor)?
         {
             self.violation(
@@ -448,7 +449,7 @@ impl Evaluator<'_, '_> {
         if let Some(Node {
             value: Value::Array(values),
             ..
-        }) = body.get("enum")
+        }) = body.get_governed("enum", self.governor)?
         {
             self.governor.charge(
                 Resource::Work,
@@ -474,6 +475,7 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
         match &instance.value {
             Value::Number(number) => {
@@ -481,7 +483,7 @@ impl Evaluator<'_, '_> {
                     if let Some(Node {
                         value: Value::Number(bound),
                         ..
-                    }) = body.get(keyword)
+                    }) = body.get_governed(keyword, self.governor)?
                     {
                         let comparison = number.compare_governed(bound, self.governor)?;
                         let valid = match keyword {
@@ -504,7 +506,7 @@ impl Evaluator<'_, '_> {
                 if let Some(Node {
                     value: Value::Number(divisor),
                     ..
-                }) = body.get("multipleOf")
+                }) = body.get_governed("multipleOf", self.governor)?
                     && !number.is_multiple_of(divisor, self.governor)?
                 {
                     self.violation(
@@ -520,12 +522,18 @@ impl Evaluator<'_, '_> {
                 self.bounds(
                     id,
                     path,
-                    text.chars().count(),
+                    |governor| {
+                        reference::work(governor, text.len())?;
+                        Ok(text.chars().count())
+                    },
                     "minLength",
                     "maxLength",
                     result,
                 )?;
-                if let Some(pattern) = schema.index.locations[id].patterns.get("pattern") {
+                if let Some(pattern) = schema.index.locations[id]
+                    .patterns
+                    .get_governed("pattern", self.governor)?
+                {
                     result.pattern(id, "pattern", self.governor)?;
                     if !pattern.is_match(text, self.governor)? {
                         self.violation(
@@ -537,7 +545,10 @@ impl Evaluator<'_, '_> {
                         )?;
                     }
                 }
-                if let Some(name) = body.get("format").and_then(Node::as_str) {
+                if let Some(name) = body
+                    .get_governed("format", self.governor)?
+                    .and_then(Node::as_str)
+                {
                     self.format(id, path, name, text, result)?;
                 }
             }
@@ -582,7 +593,7 @@ impl Evaluator<'_, '_> {
             diagnostics.push(Owned::string(line), self.governor)?;
         }
         let constraint = reference::copy(path, self.governor)?;
-        let assert = !passed && self.schema.keywords(id).vocabularies.format_assert;
+        let assert = !passed && self.schema.index.locations[id].vocabularies.format_assert;
         result.format_evidence.push(
             Owned::validation(validator, constraint, passed, diagnostics),
             self.governor,
@@ -602,17 +613,29 @@ impl Evaluator<'_, '_> {
         &mut self,
         id: usize,
         path: &str,
-        count: usize,
+        mut measure: impl FnMut(&mut Governor) -> Result<usize, StopReason>,
         minimum: &str,
         maximum: &str,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
+        let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
+        let body = schema.keywords(id);
+        let mut measured = None;
         for (keyword, is_minimum) in [(minimum, true), (maximum, false)] {
             if let Some(Node {
                 value: Value::Number(bound),
                 ..
-            }) = self.schema.keywords(id).get(keyword)
+            }) = body.get_governed(keyword, self.governor)?
             {
+                // Count only when an applicable bound needs it, at most once.
+                let count = if let Some(count) = measured {
+                    count
+                } else {
+                    let count = measure(self.governor)?;
+                    measured = Some(count);
+                    count
+                };
                 let comparison = bound.compare_count_governed(count, self.governor)?;
                 if (is_minimum && comparison.is_gt()) || (!is_minimum && comparison.is_lt()) {
                     self.violation(
@@ -742,11 +765,12 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
+        reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
         self.bounds(
             id,
             path,
-            members.len(),
+            |_| Ok(members.len()),
             "minProperties",
             "maxProperties",
             result,
@@ -787,7 +811,7 @@ impl Evaluator<'_, '_> {
         if let Some(Node {
             value: Value::Array(required),
             ..
-        }) = body.get("required")
+        }) = body.get_governed("required", self.governor)?
         {
             for key in required.iter().filter_map(Node::as_str) {
                 if !has(key, self.governor)? {
@@ -918,9 +942,16 @@ impl Evaluator<'_, '_> {
         let schema = self.schema;
         reference::work(self.governor, schema.index.locations[id].route.len())?;
         let body = schema.keywords(id);
-        self.bounds(id, path, items.len(), "minItems", "maxItems", result)?;
+        self.bounds(
+            id,
+            path,
+            |_| Ok(items.len()),
+            "minItems",
+            "maxItems",
+            result,
+        )?;
         if body
-            .get("uniqueItems")
+            .get_governed("uniqueItems", self.governor)?
             .is_some_and(|node| node.value == Value::Bool(true))
         {
             for (position, item) in items.iter().enumerate() {
@@ -961,7 +992,7 @@ impl Evaluator<'_, '_> {
                 }
                 result.merge_evidence(&mut branch, self.governor)?;
             }
-            if body.get("minContains").is_none() && matched.is_empty() {
+            if body.get_governed("minContains", self.governor)?.is_none() && matched.is_empty() {
                 self.violation(
                     result,
                     id,
@@ -973,7 +1004,7 @@ impl Evaluator<'_, '_> {
             self.bounds(
                 id,
                 path,
-                matched.len(),
+                |_| Ok(matched.len()),
                 "minContains",
                 "maxContains",
                 result,
@@ -1144,6 +1175,26 @@ mod tests {
     use crate::{
         Budget, Governor, ScratchVec, StopReason, contract::Resource, json, schema::Schema,
     };
+
+    #[test]
+    fn string_length_scan_requires_work_before_counting() {
+        let schema = Schema::compile(r#"{"minLength":1,"maxLength":4096}"#).unwrap();
+        let instance = json::Node::new(json::Value::String("é".repeat(4096)));
+        let mut governor = Governor::new(Budget::default());
+        let result = run(&schema, schema.root, &instance, &mut governor).unwrap();
+        assert!(result.violations.is_empty());
+        drop(result);
+        assert_eq!(governor.scratch_meter().live(), 0);
+        let mut refused = Governor::new(Budget {
+            work: 4096,
+            ..Budget::default()
+        });
+        assert!(matches!(
+            run(&schema, schema.root, &instance, &mut refused),
+            Err(StopReason::BudgetExceeded(Resource::Work))
+        ));
+        assert_eq!(refused.scratch_meter().live(), 0);
+    }
 
     #[test]
     fn report_owners_release_rejected_branches_and_refused_publication() {

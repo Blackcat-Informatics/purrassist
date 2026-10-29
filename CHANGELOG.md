@@ -11,6 +11,12 @@ crates share one version.
 
 ### Added
 
+- Schema assertions admit keyword, route, scalar-length and witness member-name
+  scans. Remaining format parsers admit documented scan bounds, regex format
+  diagnostics release without publication, and every format outcome checks
+  cancellation. Results and witness ordering are unchanged; resource usage
+  includes the newly admitted work. Recovery ownership remains separate.
+
 - Qwen3-Coder XML recovery reads a function body element named after a
   declared parameter, written without its `<parameter=NAME>` wrapper
   (`<function=set_note><note>v</note></function>`), as that parameter. Such
