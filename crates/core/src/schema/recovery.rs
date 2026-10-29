@@ -155,6 +155,24 @@ impl Schema {
     /// Effort still selects allowed recovery rules. Cancellation and exhaustion
     /// return `Unresolved` with cumulative usage and an explicit termination reason.
     ///
+    /// # Complexity guarantee
+    /// For valid JSON with guesses disabled, recovery is polynomial in input and
+    /// compiled-schema size when it certifies a unique minimum-cost repaired value using
+    /// mandatory array wraps in independent object/array/string products with static
+    /// references, including recursive references. The schema vocabulary is
+    /// restricted to `type`, `properties`, `required`, `items`, `$ref`, `$schema`,
+    /// `$id`, `$defs` and `definitions`; reference nodes have no sibling assertions.
+    /// Certification also excludes competing unwraps/coercions, duplicate-key,
+    /// rename/relocation and decoded-string interactions. This covers arbitrarily
+    /// deep recursive trees and arbitrarily many independent mandatory wraps,
+    /// subject to the caller's resource limits.
+    ///
+    /// Other inputs and schemas retain exact governed search, without a polynomial
+    /// guarantee. Model dialect names such as Qwen or Hermes do not determine
+    /// whether an argument schema meets this contract. Accepted answers and their
+    /// transformation provenance are preserved; exploration diagnostics, usage
+    /// counters and finite-budget exhaustion points can differ.
+    ///
     /// ```
     /// use purrassist_core::{Budget, Governor, Outcome, schema::{Schema, recovery::RecoveryRequest}};
     /// let mut governor = Governor::new(Budget::default());
