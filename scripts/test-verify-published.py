@@ -451,11 +451,10 @@ class EndToEndTests(unittest.TestCase):
 class CommittedFixtureFreshnessTests(unittest.TestCase):
     """The check-mode counterpart to `--capture`: builds the *real* current
     workspace CLI (not the throwaway fixture one) and replays the committed
-    `scripts/data/verify-published` transcripts against it. Wired into
-    `make hygiene` (this script is), so a tool-registry change that makes the
-    committed fixtures stale (e.g. Task 10's registry replacement, or a new
-    tool such as `generate_json_witness`) fails the gate instead of being
-    committed silently.
+    `scripts/data/verify-published` transcripts against it. The hosted native
+    jobs and `make release-gate` run this script separately from `make check`.
+    Changes to tool output, including resource usage, must update these fixtures
+    to pass that freshness check.
     """
 
     @classmethod

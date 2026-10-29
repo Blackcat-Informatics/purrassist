@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+use super::reference::{copy, lookup_work, work};
 use super::{CompilationError, DIALECT, DRAFT_07, SchemaError, build::Context};
+use crate::contract::format_scratch_governed;
 use crate::json::{Node, Value};
+use crate::{Governor, ScratchString, ScratchVec, StopReason};
 
 /// A JSON Schema dialect this engine implements natively.
 ///
@@ -106,30 +109,50 @@ impl Vocabularies {
     pub(super) fn load(
         dialect: &str,
         context: &mut Context<'_>,
-    ) -> Result<(Self, Vec<String>), CompilationError> {
-        let uri = dialect.trim_end_matches('#');
+    ) -> Result<(Self, ScratchVec<ScratchString>), CompilationError> {
+        let mut end = dialect.len();
+        while end > 0 {
+            work(context.governor, 1)?;
+            if dialect.as_bytes()[end - 1] != b'#' {
+                break;
+            }
+            end -= 1;
+        }
+        let uri = &dialect[..end];
+        work(
+            context.governor,
+            uri.len().min(DIALECT.len()).saturating_add(1),
+        )?;
         if uri == DIALECT {
-            return Ok((Self::default(), Vec::new()));
+            return Ok((Self::default(), ScratchVec::new(context.governor)));
         }
+        work(
+            context.governor,
+            uri.len().min(DRAFT_07.len()).saturating_add(1),
+        )?;
         if uri == DRAFT_07 {
-            return Ok((Self::draft07(), Vec::new()));
+            return Ok((Self::draft07(), ScratchVec::new(context.governor)));
         }
-        let error = |message: String| {
-            CompilationError::InvalidSchema(SchemaError {
-                location: uri.into(),
-                message,
-            })
+        lookup_work(context.resources.len(), uri.len(), context.governor)?;
+        let Some(source) = context.resources.get(uri) else {
+            return Err(vocabulary_error(
+                uri,
+                format_args!("unresolved dialect; supply its meta-schema explicitly"),
+                context.governor,
+            ));
         };
-        let source = context
-            .resources
-            .get(uri)
-            .ok_or_else(|| error("unresolved dialect; supply its meta-schema explicitly".into()))?;
+        // DOM parsing and its syntax diagnostics retain their separate admission.
         let meta = context.parse(source, uri)?;
-        let Some(declaration) = meta.get("$vocabulary") else {
-            return Ok((Self::default(), Vec::new()));
+        let Some(declaration) = super::compile::member(&meta, "$vocabulary", context.governor)?
+        else {
+            return Ok((Self::default(), ScratchVec::new(context.governor)));
         };
         let Value::Object(entries) = &declaration.value else {
-            return Err(error("$vocabulary must be an object".into()));
+            return Err(vocabulary_error(
+                uri,
+                format_args!("$vocabulary must be an object"),
+                context.governor,
+            ));
         };
         let mut result = Self {
             validation: false,
@@ -139,10 +162,19 @@ impl Vocabularies {
             format_assert: false,
             dialect: Dialect::Draft202012,
         };
-        let mut unsupported = Vec::new();
+        let mut unsupported = ScratchVec::new(context.governor);
         for entry in entries {
+            // Bound the eight fixed URI alternatives and entry classification.
+            work(
+                context.governor,
+                entry.key.len().saturating_add(1).saturating_mul(9),
+            )?;
             let Value::Bool(required) = entry.value.value else {
-                return Err(error("vocabulary requirement must be boolean".into()));
+                return Err(vocabulary_error(
+                    uri,
+                    format_args!("vocabulary requirement must be boolean"),
+                    context.governor,
+                ));
             };
             match entry.key.as_str() {
                 "https://json-schema.org/draft/2020-12/vocab/core"
@@ -162,9 +194,19 @@ impl Vocabularies {
                     result.format_assert = true;
                 }
                 unknown if required => {
-                    return Err(error(format!("unsupported required vocabulary: {unknown}")));
+                    return Err(vocabulary_error(
+                        uri,
+                        format_args!("unsupported required vocabulary: {unknown}"),
+                        context.governor,
+                    ));
                 }
-                unknown => unsupported.push(unknown.to_string()),
+                unknown => {
+                    super::reference::work(context.governor, 1)?;
+                    if unsupported.len() == unsupported.capacity() {
+                        super::reference::work(context.governor, unsupported.len())?;
+                    }
+                    unsupported.push(super::reference::copy(unknown, context.governor)?)?;
+                }
             }
         }
         Ok((result, unsupported))
@@ -261,5 +303,25 @@ impl core::ops::Deref for Keywords<'_> {
     type Target = Node;
     fn deref(&self) -> &Node {
         self.node
+    }
+}
+
+fn vocabulary_error(
+    uri: &str,
+    message: core::fmt::Arguments<'_>,
+    governor: &mut Governor,
+) -> CompilationError {
+    let result = (|| {
+        let location = copy(uri, governor)?;
+        let message = format_scratch_governed(message, governor)?;
+        governor.check()?;
+        Ok::<_, StopReason>(SchemaError {
+            location: location.into_string(),
+            message: message.into_string(),
+        })
+    })();
+    match result {
+        Ok(error) => CompilationError::InvalidSchema(error),
+        Err(reason) => CompilationError::Resource(reason),
     }
 }

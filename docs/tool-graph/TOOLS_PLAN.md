@@ -2,6 +2,20 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Tool graph delivery plan
 
+Compiled schema index ownership now covers retained metadata and construction
+snapshots through a private fallible AVL arena, including the actual reference,
+validation, witness and recovery consumers. Stable locations, ordered vocabulary
+metadata and prepared pattern ownership are preserved. Keyword and vocabulary
+validation use admitted lookups, temporary sets, numeric scans and diagnostics.
+DOM ownership, complete upstream preparation and graph integration remain under
+#33 and #36.
+
+Complete first-party schema reference resolution now shares caller governance across
+URI and identity preparation, pointer linkage, validation, dynamic witness edges
+and recovery. Temporary target ownership and diagnostics are admitted; native
+resource failures remain distinct from malformed linkage. General schema DOM ownership and full compiler preparation remain separate prerequisites. #33 and #36
+remain open for their source, graph, bridge and backend integration acceptance.
+
 Status: **pipeline specified; caller-input foundations implemented**. This document and [TOOLS.md](TOOLS.md)
 are the Phase 2 deliverable completed in #32. Implementation and necessary
 dependency adoption are authorized, without a separate blocking review step.

@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Task 7 requirement 5: explicit unsupported-`$vocabulary` behavior.
 use purrassist_core::{
+    Budget, Governor, StopReason,
+    contract::Resource,
     json,
-    schema::{Schema, recovery::RecoveryRequest},
+    schema::{CompilationError, Schema, recovery::RecoveryRequest},
 };
 use std::collections::BTreeMap;
 
@@ -48,6 +50,19 @@ fn required_unknown_vocabulary_fails_to_compile() {
         "unexpected message: {error}"
     );
     assert!(error.message.contains(UNKNOWN_URI));
+    let mut measured = Governor::new(Budget::default());
+    assert_eq!(
+        Schema::with_resources_governed(&source, &resources(), &mut measured).unwrap_err(),
+        CompilationError::InvalidSchema(error)
+    );
+    let mut limited = Governor::new(Budget {
+        work: measured.usage().work - 1,
+        ..Budget::default()
+    });
+    assert_eq!(
+        Schema::with_resources_governed(&source, &resources(), &mut limited).unwrap_err(),
+        CompilationError::Resource(StopReason::BudgetExceeded(Resource::Work))
+    );
 }
 
 /// Acceptance: the same URI with `false` compiles, recovery of an invalid

@@ -30,6 +30,21 @@ crates share one version.
 
 ### Fixed
 
+- Schema compilation retains fallible, release-owned indexes and location
+  metadata. Balanced indexes admit actual lookup and insertion paths; initial
+  ordered routes and child tables are assembled directly. Temporary buffers
+  release after construction, and completed index storage releases with its
+  schema. Parsed JSON storage remains a separate resource contract.
+
+- Compiler linkage, validation, witness generation and recovery share governed
+  URI and reference resolution, including pointer decoding and dynamic scopes.
+  Native resource refusals remain distinct from malformed references. Work and
+  scratch counters, and therefore finite-budget refusal points, change to
+  reflect the admitted operations and retained owners. Compiler keyword and
+  vocabulary checks now admit lookups, temporary duplicate sets, exact numeric
+  classification and diagnostics instead of a blanket Work allowance. Buffer
+  growth admits relocation, and decoding reserves known bounds before writing.
+
 - Remove artifact-size measurement, reporting and qualification limits. Resource
   qualification retains runtime, memory, correctness and build-time checks.
 

@@ -89,6 +89,7 @@ impl SearchState for Repair {
             recovery.factor_pending = false;
             recovery.factored = factor::prepare(recovery.schema, &self.0, governor)?;
         }
+        let mut scope = crate::ScratchVec::new(governor);
         let mut walk = Walk {
             schema: recovery.schema,
             request: recovery.request,
@@ -119,7 +120,7 @@ impl SearchState for Repair {
             (&[], ""),
             0,
             &mut BTreeSet::new(),
-            &mut Vec::new(),
+            &mut scope,
         )
     }
 }
@@ -243,24 +244,34 @@ impl Recovery<'_> {
         &mut self,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        for unsupported in self.schema.unsupported_vocabularies() {
+        let mut entries = self.schema.index.unsupported.iter_governed(governor)?;
+        while let Some((uri, keywords)) = entries.next_governed(governor)? {
             governor.charge(Resource::EvidenceEntries, 1)?;
-            let explanation = format!(
-                "vocabulary {} is not supported; keywords left unevaluated: {}",
-                unsupported.uri,
-                unsupported.keywords.join(", ")
-            );
-            governor.charge(
-                Resource::ScratchBytes,
-                size(unsupported.uri.len())
-                    .saturating_add(size(explanation.len()))
-                    .saturating_add(64),
+            let mut explanation = super::reference::copy("vocabulary ", governor)?;
+            super::reference::append(&mut explanation, uri, governor)?;
+            super::reference::append(
+                &mut explanation,
+                " is not supported; keywords left unevaluated: ",
+                governor,
             )?;
+            let mut names = keywords.iter_governed(governor)?;
+            let mut first = true;
+            while let Some((name, ())) = names.next_governed(governor)? {
+                if !first {
+                    super::reference::append(&mut explanation, ", ", governor)?;
+                }
+                first = false;
+                super::reference::append(&mut explanation, name, governor)?;
+            }
+            let destination = super::reference::copy(uri, governor)?;
+            let rule = super::reference::copy("schema.vocabulary.unsupported-v1", governor)?;
+            // Evidence collection ownership remains its existing separate contract.
+            governor.charge(Resource::ScratchBytes, 64)?;
             self.receipt.evidence.push(Evidence {
-                rule: "schema.vocabulary.unsupported-v1".into(),
-                explanation,
+                rule: rule.into_string(),
+                explanation: explanation.into_string(),
                 span: None,
-                destination: unsupported.uri,
+                destination: destination.into_string(),
             });
         }
         Ok(())

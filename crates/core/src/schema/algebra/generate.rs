@@ -15,7 +15,6 @@
 use super::super::Schema;
 use super::Refutation;
 use super::canon::{self, Canon, NumKind, PatternRef};
-use super::invalid;
 use super::merge::Requirements;
 use crate::contract::saturating_size as size;
 use crate::contract::{Evidence, Governor, Resource, StopReason};
@@ -68,10 +67,11 @@ pub(super) fn run(
     id: usize,
     governor: &mut Governor,
 ) -> Result<Attempt, StopReason> {
+    let scope = crate::ScratchVec::new(governor);
     let mut driver = Gen {
         schema,
         governor,
-        scope: Vec::new(),
+        scope,
         active: BTreeSet::new(),
     };
     driver.attempt(id, "", 0)
@@ -80,7 +80,7 @@ pub(super) fn run(
 struct Gen<'s, 'g> {
     schema: &'s Schema,
     governor: &'g mut Governor,
-    scope: Vec<String>,
+    scope: crate::ScratchVec<usize>,
     active: BTreeSet<(usize, String, bool)>,
 }
 
@@ -108,11 +108,8 @@ impl<'s> Gen<'s, '_> {
         if !self.active.insert(key.clone()) {
             return Ok(Attempt::Exhausted);
         }
-        let base = self.schema.index.locations[id].base.clone();
-        let entered = self.scope.last() != Some(&base);
-        if entered {
-            self.scope.push(base);
-        }
+        let entered =
+            super::super::index::enter_scope(self.schema, id, &mut self.scope, self.governor)?;
         let canon = if negated {
             canon::build_negated(self.schema, id, self.governor)
         } else {
@@ -196,11 +193,12 @@ impl<'s> Gen<'s, '_> {
                 otherwise,
             } => self.attempt_if(*cond, *then, *otherwise, rest, req, path, depth),
             Canon::Scoped(id, inner) => {
-                let base = self.schema.index.locations[*id].base.clone();
-                let entered = self.scope.last() != Some(&base);
-                if entered {
-                    self.scope.push(base);
-                }
+                let entered = super::super::index::enter_scope(
+                    self.schema,
+                    *id,
+                    &mut self.scope,
+                    self.governor,
+                )?;
                 let mut combined = vec![(**inner).clone()];
                 combined.extend_from_slice(rest);
                 let result = self.attempt_and(&combined, req, path, depth);
@@ -211,12 +209,12 @@ impl<'s> Gen<'s, '_> {
             }
             Canon::Ref(target) => self.attempt_ref(*target, false, rest, req, path, depth),
             Canon::NegatedRef(target) => self.attempt_ref(*target, true, rest, req, path, depth),
-            Canon::DynamicRef(reference, base) => {
-                let target = self.resolve_dynamic(reference, base)?;
+            Canon::DynamicRef(id) => {
+                let target = self.resolve_dynamic(*id)?;
                 self.attempt_ref(target, false, rest, req, path, depth)
             }
-            Canon::NegatedDynamicRef(reference, base) => {
-                let target = self.resolve_dynamic(reference, base)?;
+            Canon::NegatedDynamicRef(id) => {
+                let target = self.resolve_dynamic(*id)?;
                 self.attempt_ref(target, true, rest, req, path, depth)
             }
         }
@@ -236,34 +234,30 @@ impl<'s> Gen<'s, '_> {
             driver.attempt_and(&combined, req, path, depth)
         })
     }
-    fn resolve_dynamic(&self, reference: &str, base: &str) -> Result<usize, StopReason> {
-        let mut target = self
-            .schema
-            .resolve(base, reference)
-            .map_err(|error| invalid(&error))?;
-        if reference
-            .split_once('#')
-            .is_some_and(|(_, fragment)| !fragment.is_empty() && !fragment.starts_with('/'))
-            && let Some(name) = &self.schema.index.locations[target].dynamic_anchor
-        {
-            for scope_base in &self.scope {
-                if let Some(&candidate) = self
-                    .schema
-                    .index
-                    .anchors
-                    .get(&format!("{scope_base}#{name}"))
-                    && self.schema.index.locations[candidate]
-                        .dynamic_anchor
-                        .as_ref()
-                        == Some(name)
-                {
-                    target = candidate;
-                    break;
-                }
-            }
-        }
-        Ok(target)
+    fn resolve_dynamic(&mut self, id: usize) -> Result<usize, StopReason> {
+        let schema = self.schema;
+        let reference = schema
+            .keywords(id)
+            .get("$dynamicRef")
+            .and_then(Node::as_str)
+            .expect("dynamic canonical edge retains its originating schema location");
+        let target = super::super::reference::resolve(
+            schema,
+            &schema.index.locations[id].base,
+            reference,
+            self.governor,
+        )?;
+        super::super::reference::dynamic(
+            schema,
+            target,
+            reference,
+            self.scope
+                .iter()
+                .map(|&id| schema.index.locations[id].base.as_str()),
+            self.governor,
+        )
     }
+
     fn attempt_or(
         &mut self,
         branches: &[Canon],
@@ -427,11 +421,12 @@ impl<'s> Gen<'s, '_> {
                 SimpleMerge::Merged(Box::new(req))
             }
             Canon::Scoped(id, inner) => {
-                let base = self.schema.index.locations[*id].base.clone();
-                let entered = self.scope.last() != Some(&base);
-                if entered {
-                    self.scope.push(base);
-                }
+                let entered = super::super::index::enter_scope(
+                    self.schema,
+                    *id,
+                    &mut self.scope,
+                    self.governor,
+                )?;
                 let result = self.try_simple_merge(inner, req);
                 if entered {
                     self.scope.pop();
@@ -443,8 +438,8 @@ impl<'s> Gen<'s, '_> {
             | Canon::IfThenElse { .. }
             | Canon::Ref(_)
             | Canon::NegatedRef(_)
-            | Canon::DynamicRef(_, _)
-            | Canon::NegatedDynamicRef(_, _) => SimpleMerge::TooComplex,
+            | Canon::DynamicRef(_)
+            | Canon::NegatedDynamicRef(_) => SimpleMerge::TooComplex,
         })
     }
     /// Build `id`'s (positive, or negated) canon and wrap it in

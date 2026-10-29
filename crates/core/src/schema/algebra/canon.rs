@@ -24,7 +24,6 @@
 //! [`Canon::Or`].
 use super::super::Schema;
 use super::super::layout::Dependency;
-use super::invalid;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, StopReason};
 use crate::json::{Node, Value};
@@ -260,9 +259,9 @@ pub(super) enum Canon {
         otherwise: Option<usize>,
     },
     Ref(usize),
-    DynamicRef(String, String),
+    DynamicRef(usize),
     NegatedRef(usize),
-    NegatedDynamicRef(String, String),
+    NegatedDynamicRef(usize),
     /// `id`'s own base must be on the live dynamic-scope stack for exactly
     /// the duration of searching `inner`: every combinator branch
     /// (`allOf`/`anyOf`/`oneOf`/`not`, and `if`/`then`/`else` in
@@ -344,16 +343,16 @@ pub(super) fn build(
         });
     }
     if let Some(reference) = body.get("$ref").and_then(Node::as_str) {
-        let target = schema
-            .resolve(&schema.index.locations[id].base, reference)
-            .map_err(|error| invalid(&error))?;
+        let target = super::super::reference::resolve(
+            schema,
+            &schema.index.locations[id].base,
+            reference,
+            governor,
+        )?;
         parts.push(Canon::Ref(target));
     }
-    if let Some(reference) = body.get("$dynamicRef").and_then(Node::as_str) {
-        parts.push(Canon::DynamicRef(
-            reference.to_string(),
-            schema.index.locations[id].base.clone(),
-        ));
+    if body.get("$dynamicRef").and_then(Node::as_str).is_some() {
+        parts.push(Canon::DynamicRef(id));
     }
     Ok(Canon::And(parts))
 }
@@ -442,16 +441,16 @@ pub(super) fn build_negated(
         ]));
     }
     if let Some(reference) = body.get("$ref").and_then(Node::as_str) {
-        let target = schema
-            .resolve(&schema.index.locations[id].base, reference)
-            .map_err(|error| invalid(&error))?;
+        let target = super::super::reference::resolve(
+            schema,
+            &schema.index.locations[id].base,
+            reference,
+            governor,
+        )?;
         branches.push(Canon::NegatedRef(target));
     }
-    if let Some(reference) = body.get("$dynamicRef").and_then(Node::as_str) {
-        branches.push(Canon::NegatedDynamicRef(
-            reference.to_string(),
-            schema.index.locations[id].base.clone(),
-        ));
+    if body.get("$dynamicRef").and_then(Node::as_str).is_some() {
+        branches.push(Canon::NegatedDynamicRef(id));
     }
     if needs_fallback {
         branches.push(Canon::OpaqueNot(id));
