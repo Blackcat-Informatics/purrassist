@@ -211,6 +211,146 @@ impl ContextTracker {
         blocks
     }
 
+    /// Fences for grammars whose examples are content. A call that started
+    /// inside a fence cannot hide its closing line; rejected spans never enter
+    /// `calls`. Sorted ranges and fence lines are advanced once each.
+    pub(crate) fn strict_fenced(
+        &self,
+        calls: &[Range<usize>],
+        end: usize,
+        governor: &mut Governor,
+    ) -> Result<Vec<Range<usize>>, StopReason> {
+        governor.charge(
+            Resource::Work,
+            crate::contract::saturating_size(calls.len() + self.fences.len()),
+        )?;
+        let mut blocks = Vec::new();
+        let mut open: Option<&FenceLine> = None;
+        let mut next = 0;
+        let mut protected_end = 0;
+        for line in &self.fences {
+            while let Some(call) = calls.get(next).filter(|call| call.start <= line.start) {
+                if open.is_none_or(|fence| call.start < fence.start) {
+                    protected_end = protected_end.max(call.end);
+                }
+                next += 1;
+            }
+            if line.start < protected_end {
+                continue;
+            }
+            match open {
+                None if line.opening => open = Some(line),
+                Some(start)
+                    if line.fence == start.fence && line.length >= start.length && line.closing =>
+                {
+                    governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+                    blocks.push(start.start..line.end);
+                    open = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(start) = open {
+            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+            blocks.push(start.start..end);
+        }
+        Ok(blocks)
+    }
+
+    /// Paired inline backtick spans. Literal text of calls that began outside
+    /// an inline span cannot open or close that span.
+    pub(crate) fn strict_inline(
+        &self,
+        calls: &[Range<usize>],
+        fenced: &[Range<usize>],
+        governor: &mut Governor,
+    ) -> Result<Vec<Range<usize>>, StopReason> {
+        governor.charge(
+            Resource::Work,
+            crate::contract::saturating_size(
+                calls.len() + self.ticks.len() + fenced.len() * 2 + self.quotes.len(),
+            ),
+        )?;
+        let mut blocks = Vec::new();
+        let mut open: Option<&Range<usize>> = None;
+        let (mut next, mut fence, mut call_fence, mut quote, mut protected_end) = (0, 0, 0, 0, 0);
+        for run in &self.ticks {
+            while fenced
+                .get(fence)
+                .is_some_and(|block| block.end <= run.start)
+            {
+                fence += 1;
+            }
+            if fenced
+                .get(fence)
+                .is_some_and(|block| block.contains(&run.start))
+            {
+                open = None;
+                continue;
+            }
+            while let Some(call) = calls.get(next).filter(|call| call.start <= run.start) {
+                while fenced
+                    .get(call_fence)
+                    .is_some_and(|block| block.end <= call.start)
+                {
+                    call_fence += 1;
+                }
+                while self
+                    .quotes
+                    .get(quote)
+                    .is_some_and(|block| block.end <= call.start)
+                {
+                    quote += 1;
+                }
+                let example = fenced
+                    .get(call_fence)
+                    .is_some_and(|block| block.contains(&call.start))
+                    || self
+                        .quotes
+                        .get(quote)
+                        .is_some_and(|block| block.contains(&call.start));
+                if !example && open.is_none_or(|opening| call.start < opening.start) {
+                    protected_end = protected_end.max(call.end);
+                }
+                next += 1;
+            }
+            if run.start < protected_end {
+                continue;
+            }
+            match open {
+                None => open = Some(run),
+                Some(opening) if opening.len() == run.len() => {
+                    governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+                    blocks.push(opening.start..run.end);
+                    open = None;
+                }
+                _ => {}
+            }
+        }
+        Ok(blocks)
+    }
+
+    /// Context membership against already computed enclosing ranges.
+    pub(crate) fn strict_example(
+        &self,
+        call: &Range<usize>,
+        fenced: &[Range<usize>],
+        inline: &[Range<usize>],
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        let depth = fenced
+            .len()
+            .max(self.quotes.len())
+            .max(inline.len())
+            .max(1)
+            .ilog2()
+            + 1;
+        governor.charge(Resource::Work, u64::from(depth).saturating_mul(3))?;
+        Ok(inside(fenced, call.start)
+            || inside(&self.quotes, call.start)
+            || inside(inline, call.start))
+    }
+
     /// For each call span of `calls`, the context range that makes it a
     /// possible example, if any. `excluded` lists every call and tool-result
     /// span of the turn's selected reading, sorted by start; `end` is the

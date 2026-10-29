@@ -986,6 +986,7 @@ fn arguments_text(
         CodecKind::Json | CodecKind::JsonArgs => Ok(guard_json(json, delimiters)),
         CodecKind::XmlParams => xml_body(arguments, json, delimiters, shape, governor),
         CodecKind::KvPairs => kv_body(arguments, delimiters, tool, governor),
+        CodecKind::Pythonic => crate::grammar::codec::print_pythonic(arguments, governor),
         CodecKind::Raw => Err(unsupported("a raw slot cannot carry an arguments object")),
     }
 }
@@ -1620,6 +1621,21 @@ fn splice_call(
     let grammar = call.dialect.grammar();
     let printer = Printer::new(grammar, governor);
     let slot = printer.arguments_slot(grammar.call(), governor)?;
+    if slot.is_some_and(|(codec, _)| codec == CodecKind::Pythonic) {
+        if identical(&call.arguments, arguments) {
+            return Ok(());
+        }
+        let span = call
+            .arguments
+            .span
+            .clone()
+            .ok_or_else(|| EmitError::Unrepresentable {
+                text: arguments.to_json(),
+            })?;
+        let text = crate::grammar::codec::print_pythonic(arguments, governor)?;
+        splices.push((span, SpliceText::Prepared(text)));
+        return Ok(());
+    }
     let xml =
         slot.is_some_and(|(codec, _)| matches!(codec, CodecKind::XmlParams | CodecKind::KvPairs));
     let mut risky: Vec<&[u8]> = slot

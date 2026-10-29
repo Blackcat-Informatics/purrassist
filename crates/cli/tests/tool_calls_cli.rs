@@ -917,18 +917,18 @@ fn bare_json_recovers_and_emits_via_cli() {
 }
 
 /// Call markup no allowed dialect reads is reported, never silent content:
-/// a Pythonic list (not built in yet) and `[TOOL_CALLS]` under a
-/// Hermes-only allow-list are rejected attempts with reason
+/// a Pythonic list and `[TOOL_CALLS]` under a Hermes-only allow-list
+/// are rejected attempts with reason
 /// `unsupported_dialect`, the bytes stay content, and the finish is
 /// `unresolved`.
 #[test]
 fn unparsed_markup_is_reported_via_cli() {
     for (args, turn, family, built_in) in [
         (
-            &[][..],
+            &["--dialect", "hermes.v1"][..],
             &br#"[list_dir(path="src")]"#[..],
             "pythonic.v1",
-            false,
+            true,
         ),
         (
             &["--dialect", "hermes.v1"][..],
@@ -1062,8 +1062,15 @@ fn exit_code_reflects_what_is_usable() {
             "unresolved",
         ),
         (
-            "unparsed markup only",
+            "Pythonic calls",
             &[][..],
+            "[list_dir(path=\"src\")]",
+            0,
+            "calls",
+        ),
+        (
+            "unparsed markup only",
+            &["--dialect", "hermes.v1"][..],
             "[list_dir(path=\"src\")]",
             4,
             "unresolved",

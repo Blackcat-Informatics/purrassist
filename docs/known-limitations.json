@@ -1,6 +1,6 @@
 {
   "observed": "2026-10-26",
-  "observation": "remaining limitations from the 0.1.0 release; issue 6 repaired in the unreleased source",
+  "observation": "remaining limitations from the 0.1.0 release; issues 6 and 12 repaired in the unreleased source",
   "limitations": [
     {
       "issue": 7,
@@ -22,12 +22,6 @@
       "fuzz_stop_targets": [
         "tool-call-ref"
       ]
-    },
-    {
-      "issue": 12,
-      "title": "Tool-call recovery: add the pythonic.v1 dialect and pythonic codec",
-      "impact": "`pythonic.v1` is not built in, so its call markup is not recovered as a tool call.",
-      "blocks_release": false
     },
     {
       "issue": 14,

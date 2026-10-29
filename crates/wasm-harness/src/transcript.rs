@@ -239,7 +239,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 13] = [
+const DIALECT_CASES: [DialectCase; 14] = [
     DialectCase {
         dialect: DialectId::AnthropicToolUse,
         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
@@ -335,6 +335,14 @@ const DIALECT_CASES: [DialectCase; 13] = [
         repair: "[{\"id\": \"call_9\", \"type\": \"function\", \"function\": {\"name\": \"list_dri\", \"arguments\": \"{\\\"path\\\": \\\"src\\\"}\"}}]",
         repair_status: "best_guess",
         repair_digest: "sha256:206148a554d9576b8d4d22226de181a2c38077d9220b8ab8fec32b99ee363a48",
+    },
+    DialectCase {
+        dialect: DialectId::Pythonic,
+        anchor: "[get_weather(city='Paris', unit='celsius'), read_file(path='notes.txt', limit=10)]",
+        anchor_digest: "sha256:d74e96ceb0c261584c640bb0dfc6e7527f4433ce0a4476756cc063f6a60095ea",
+        repair: "[get_weather(city='Oslo', unit='celsius')",
+        repair_status: "resolved",
+        repair_digest: "sha256:69095e5adec08a09df27a6cb06cb988c0cd687b98339a4b098ba654e7cb79047",
     },
     DialectCase {
         dialect: DialectId::Qwen3CoderXml,

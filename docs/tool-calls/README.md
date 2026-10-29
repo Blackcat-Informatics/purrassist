@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Thirteen dialects are built in:
+Fourteen dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -27,6 +27,7 @@ Thirteen dialects are built in:
 | `anthropic-tool-use.v1` | `tool_use` content blocks `{"type": "tool_use", "id": ID, "name": NAME, "input": {...}}`, standalone or in a message or response | [dialect](dialects/anthropic-tool-use.v1.md) |
 | `harmony.v1` | gpt-oss messages `<\|channel\|>commentary to=functions.NAME <\|constrain\|>json<\|message\|>{...}<\|call\|>`, the analysis channel as reasoning | [dialect](dialects/harmony.v1.md) |
 | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}` (`[CALL_ID]` optional), repeated per call | [dialect](dialects/mistral-v11.v1.md) |
+| `pythonic.v1` | `[NAME(keyword=VALUE), ...]` at line start or after an explicit marker | [dialect](dialects/pythonic.v1.md) |
 | `bare-json.v1` | an unwrapped `{"name": NAME, "arguments": {...}}` object: the whole turn, in prose, in a code fence, or an array element; never a declaration-shaped object | [dialect](dialects/bare-json.v1.md) |
 
 Callers add their own dialects with the grammar DSL
@@ -34,8 +35,7 @@ Callers add their own dialects with the grammar DSL
 derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
 `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
 `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
-[README](../../crates/derive/README.md)). Still tracked: the `pythonic.v1`
-(#12) and `gemma3-tool-code.v1` (#14) dialects, the
+[README](../../crates/derive/README.md)). Still tracked: the `gemma3-tool-code.v1` (#14) dialects, the
 `*-stripped` variants (#18), streaming recognition (#16), and provider
 streaming events (#17).
 
@@ -344,8 +344,7 @@ finish.
 Call markup that no dialect of the allow-list reads is never silent
 content. A linear detector (`detect_unparsed`) scans the turn's content for
 the distinctive openers and shapes of the families no built-in dialect
-parses yet (`pythonic.v1` call lists `[f(a=1)]` at the start of the turn or
-a line or after `<|python_start|>`, `gemma3-tool-code.v1` `` ```tool_code ``
+parses yet (`gemma3-tool-code.v1` `` ```tool_code ``
 blocks, and the stripped
 renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
 `deepseek-v3-stripped.v1` and `name-arguments-stripped.v1`), and for the built-in dialects the
@@ -429,7 +428,7 @@ are in [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 - [dialects/](dialects/): public sources, accepted forms, printing, and
   deliberate exclusions of each built-in dialect.
 - [MATCHING-QUALITY.md](../MATCHING-QUALITY.md#tool-call-recovery-evaluation):
-  the 18,184-case correction evaluation, per rule and per dialect.
+  the 18,202-case correction evaluation, per rule and per dialect.
 - [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound): the cost
   bound, budgets for large outputs, and throughput.
 

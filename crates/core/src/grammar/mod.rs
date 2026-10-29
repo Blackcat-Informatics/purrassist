@@ -26,6 +26,8 @@
 //! | `confusable "CANONICAL" "VARIANT";` | `VARIANT` is a confusable spelling of `CANONICAL` inside any literal. |
 //! | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. |
 //! | `layout NAME "TEXT";` | Printing only: the class production `NAME` is printed as `TEXT` (a member of the class) wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
+//! | `line-start "OPEN";` | Restrict matching initial call-opener literals to turn or line start after horizontal whitespace; explicit alternative openers remain unguarded. |
+//! | `examples-content;` | Treat calls inside fenced, inline-code, and blockquote examples as content, including rejected attempts. |
 //! | `NAME = EXPR;` | A production. |
 //!
 //! Expressions:
@@ -784,6 +786,7 @@ pub struct CompiledGrammar {
     pub(crate) call: ProductionId,
     pub(crate) call_ids: bool,
     pub(crate) declaration_content: bool,
+    pub(crate) examples: ExamplePolicy,
     pub(crate) json_envelope: bool,
     pub(crate) result: ProductionId,
     pub(crate) declaration: ProductionId,
@@ -806,6 +809,15 @@ pub struct CompiledGrammar {
     pub(crate) layouts: crate::contract::ScratchVec<Option<crate::contract::ScratchVec<u8>>>,
 }
 
+/// How recognized markup inside Markdown examples is handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExamplePolicy {
+    /// Preserve the existing recovery policy and its example guess flag.
+    Recover,
+    /// Keep examples as assistant content.
+    Content,
+}
+
 // Compiled grammars are shared across threads (`DialectId::Custom` holds an
 // `Arc`). Retained source owners are Send + Sync; their shared scratch meter
 // accounts for lifetime and does not participate in semantic reads.
@@ -815,6 +827,10 @@ const _: fn() = || {
 };
 
 impl CompiledGrammar {
+    pub(crate) const fn examples_content(&self) -> bool {
+        matches!(self.examples, ExamplePolicy::Content)
+    }
+
     /// The grammar's declared id.
     ///
     /// See [`Grammar::compile_governed`]'s module example.

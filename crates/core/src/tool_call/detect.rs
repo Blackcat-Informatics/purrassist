@@ -12,8 +12,7 @@
 //! [`Rejection::UnsupportedDialect`](super::Rejection::UnsupportedDialect),
 //! and the bytes stay content). Two kinds of family are detected:
 //!
-//! - families no built-in dialect parses yet: Pythonic call lists
-//!   (`[get_weather(city="Paris")]`), Gemma 3 `` ```tool_code `` blocks,
+//! - families no built-in dialect parses yet: Gemma 3 `` ```tool_code `` blocks,
 //!   and the *stripped* renderings of
 //!   built-in dialects whose special tokens a detokenizer removed and which
 //!   no built-in grammar reads (Kimi-K2 `functions.NAME:IDX{...}`, Harmony
@@ -59,7 +58,7 @@ use core::ops::Range;
 /// ```
 /// use purrassist_core::tool_call::{DialectId, MarkupFamily};
 /// assert_eq!(MarkupFamily::Pythonic.id(), "pythonic.v1");
-/// assert!(!MarkupFamily::Pythonic.built_in());
+/// assert!(MarkupFamily::Pythonic.built_in());
 /// assert_eq!(MarkupFamily::MistralV3.dialect(), Some(DialectId::MistralV3));
 /// assert!(MarkupFamily::MistralV3.built_in());
 /// ```
@@ -167,8 +166,8 @@ impl MarkupFamily {
             Self::MistralV3 => DialectId::MistralV3,
             Self::OpenAiToolCalls => DialectId::OpenAiToolCalls,
             Self::Qwen3CoderXml => DialectId::Qwen3CoderXml,
-            Self::Pythonic
-            | Self::Gemma3ToolCode
+            Self::Pythonic => DialectId::Pythonic,
+            Self::Gemma3ToolCode
             | Self::KimiK2Stripped
             | Self::HarmonyStripped
             | Self::DeepSeekV3Stripped
@@ -184,8 +183,7 @@ impl MarkupFamily {
     pub const fn built_in(self) -> bool {
         !matches!(
             self,
-            Self::Pythonic
-                | Self::Gemma3ToolCode
+            Self::Gemma3ToolCode
                 | Self::KimiK2Stripped
                 | Self::HarmonyStripped
                 | Self::DeepSeekV3Stripped
@@ -581,7 +579,9 @@ impl Scan<'_> {
             if self.lit(at, tag) {
                 let body = self.ws(at + tag.len());
                 if let Some(end) = self.pythonic(body) {
-                    return Some((MarkupFamily::Pythonic, at..end));
+                    return self
+                        .reported(MarkupFamily::Pythonic)
+                        .then_some((MarkupFamily::Pythonic, at..end));
                 }
                 if tag == b"<|python_tag|>" && self.reported(MarkupFamily::Llama3Json) {
                     let end = self.arguments_end(body);
@@ -648,7 +648,8 @@ impl Scan<'_> {
             };
         }
         // At the start of the turn or of a line only.
-        if at != self.turn_start && !self.line_start(at) {
+        if !self.reported(MarkupFamily::Pythonic) || (at != self.turn_start && !self.line_start(at))
+        {
             return None;
         }
         let end = self.pythonic(at)?;

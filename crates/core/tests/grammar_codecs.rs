@@ -123,7 +123,7 @@ fn codecs_are_registered_in_the_dsl() {
         Some(CodecKind::XmlParams)
     );
     assert_eq!(CodecKind::from_name("json-args"), Some(CodecKind::JsonArgs));
-    assert_eq!(CodecKind::ALL.len(), 5);
+    assert_eq!(CodecKind::ALL.len(), 6);
     for kind in CodecKind::ALL {
         assert_eq!(CodecKind::from_name(kind.name()), Some(kind));
     }

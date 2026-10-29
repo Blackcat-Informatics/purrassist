@@ -776,6 +776,13 @@ impl Fill for Seeded<'_> {
             }
             (Some(CaptureKind::Arguments), CodecKind::XmlParams) => self.tagged_parameters(false),
             (Some(CaptureKind::Arguments), CodecKind::KvPairs) => self.tagged_parameters(true),
+            (Some(CaptureKind::Arguments), CodecKind::Pythonic) => {
+                let arguments = self.plan().expected(Carrier {
+                    codec: Some(CodecKind::Pythonic),
+                    pairs: false,
+                });
+                super::codec::print_pythonic(&arguments, governor)
+            }
             (Some(CaptureKind::ParamValue), CodecKind::Raw) => {
                 let (parameter, occurrence) = self.current()?;
                 let value = occurrence_value(parameter, occurrence);

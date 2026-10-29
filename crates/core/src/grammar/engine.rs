@@ -3514,6 +3514,9 @@ const fn rejection(fault: CodecFault) -> Rejection {
     match fault {
         CodecFault::InvalidUtf8 { at } => Rejection::InvalidUtf8 { at },
         CodecFault::Malformed { at } => Rejection::Malformed { at },
+        CodecFault::PythonicPositionalRejected { at } => {
+            Rejection::PythonicPositionalRejected { at }
+        }
     }
 }
 
@@ -4100,6 +4103,8 @@ pub(crate) struct Engine<'s> {
     buffer: ScratchVec<u8>,
     base: usize,
     fed: usize,
+    /// Whitespace-only prefix of the current source line, independent of buffering.
+    line_blank: bool,
     arena: Arena,
     next_attempt: u64,
     stack: ScratchVec<Thread>,
@@ -4191,6 +4196,7 @@ impl<'s> Engine<'s> {
             buffer: ScratchVec::new(governor),
             base: 0,
             fed: 0,
+            line_blank: true,
             arena: Arena::new(governor)?,
             next_attempt: 0,
             stack: ScratchVec::new(governor),
@@ -4264,6 +4270,11 @@ impl<'s> Engine<'s> {
         for table in 0..self.tables.len() {
             self.step_table(table, byte, at, governor)?;
         }
+        self.line_blank = match byte {
+            b'\r' | b'\n' => true,
+            b' ' | b'\t' => self.line_blank,
+            _ => false,
+        };
         self.collect(governor)
     }
 
@@ -4276,7 +4287,31 @@ impl<'s> Engine<'s> {
     ) -> Result<(), StopReason> {
         let program = self.tables[table].program;
         let mut spawned = None;
-        if program.starts_with(byte) {
+        let line_blank = self.line_blank;
+        let grammar = self.grammars[self.tables[table].grammar].grammar;
+        let opener_allowed = |pc: &u32| {
+            if !line_blank && program.line_start_openers.contains(pc) {
+                return false;
+            }
+            let Inst::Lit { lit, .. } = program.insts[*pc as usize] else {
+                return false;
+            };
+            let repairs = &grammar.literal_tables[lit as usize];
+            grammar.literals[lit as usize].bytes.first() == Some(&byte)
+                || repairs
+                    .variants
+                    .trie
+                    .first_bytes()
+                    .chain(repairs.confusables.trie.first_bytes())
+                    .chain(
+                        repairs
+                            .json
+                            .iter()
+                            .flat_map(|table| table.trie.first_bytes()),
+                    )
+                    .any(|first| first == byte)
+        };
+        if program.starts_with(byte) && program.openers.iter().any(opener_allowed) {
             let id = self.next_attempt;
             self.next_attempt += 1;
             self.tables[table].attempts.push(Attempt {
@@ -4311,7 +4346,9 @@ impl<'s> Engine<'s> {
                 spawned = Some(thread);
             } else {
                 for &pc in &program.openers {
-                    self.tables[table].threads.push(Thread { pc, ..thread })?;
+                    if opener_allowed(&pc) {
+                        self.tables[table].threads.push(Thread { pc, ..thread })?;
+                    }
                 }
             }
         }
@@ -5351,7 +5388,13 @@ impl<'s> Engine<'s> {
                     at: end,
                     completed: record.completed,
                     reason: tail_reason.unwrap_or_else(|| match (eof, record.failure) {
-                        (_, Some(reason @ Rejection::InvalidUtf8 { .. }))
+                        (
+                            _,
+                            Some(
+                                reason @ (Rejection::InvalidUtf8 { .. }
+                                | Rejection::PythonicPositionalRejected { .. }),
+                            ),
+                        )
                         | (None, Some(reason)) => reason,
                         (Some(_), Some(reason @ Rejection::Malformed { .. }))
                             if !record.completed && record.failure_end.at_failure() =>
@@ -6639,7 +6682,10 @@ impl<'s> Engine<'s> {
                     at: self.fed,
                     completed: live.completed,
                     reason: match live.failure {
-                        Some(reason @ Rejection::InvalidUtf8 { .. }) => reason,
+                        Some(
+                            reason @ (Rejection::InvalidUtf8 { .. }
+                            | Rejection::PythonicPositionalRejected { .. }),
+                        ) => reason,
                         _ => Rejection::Unterminated,
                     },
                     // A length stop keeps the cut-off reading instead.

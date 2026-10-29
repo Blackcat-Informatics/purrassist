@@ -19,7 +19,7 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The thirteen built-in dialects are written in this DSL:
+The fourteen built-in dialects are written in this DSL:
 [`glm-4.5.v1`](../../crates/core/src/tool_call/dialects/glm-4.5.v1.grammar),
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
@@ -31,7 +31,8 @@ The thirteen built-in dialects are written in this DSL:
 [`deepseek-v3.v1`](../../crates/core/src/tool_call/dialects/deepseek-v3.v1.grammar),
 [`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar),
 [`anthropic-tool-use.v1`](../../crates/core/src/tool_call/dialects/anthropic-tool-use.v1.grammar),
-[`harmony.v1`](../../crates/core/src/tool_call/dialects/harmony.v1.grammar), and
+[`harmony.v1`](../../crates/core/src/tool_call/dialects/harmony.v1.grammar),
+[`pythonic.v1`](../../crates/core/src/tool_call/dialects/pythonic.v1.grammar), and
 [`bare-json.v1`](../../crates/core/src/tool_call/dialects/bare-json.v1.grammar).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
@@ -44,7 +45,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
   share one namespace. The keywords `grammar`, `optional-id`,
   `declaration-content`, `json-envelope`, `reasoning`, `confusable`,
-  `closer`, `layout`, `until`, `slot`, `commit`, `next`, and `insert` cannot
+  `closer`, `layout`, `line-start`, `examples-content`, `until`, `slot`, `commit`, `next`, and `insert` cannot
   name a production or a closer.
 - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
@@ -65,6 +66,8 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | `declaration-content;` | A call whose source begins with its JSON object (`{`, no opener token before it) and whose arguments as written have the shape of a tool declaration's parameters schema (an object whose `"type"` is `"object"` and whose `"properties"` is an object) is content, not a call, unless the named tool is declared and resolves those arguments with no guess and no loss (`CallOutcome::Resolved`): a JSON Schema or tool declaration pasted as an answer is not a call to the tool it describes (`CompiledGrammar::declaration_content`). The built-in Llama 3 JSON and bare JSON dialects declare it; after Llama 3's `<\|python_tag\|>` the object is always a call. A second statement is `DuplicateName`. |
 | `json-envelope;` | The call's envelope is JSON, and its literals tolerate the JSON syntax slips the `json` codec repairs inside arguments, under the same rule ids, costs and policy admission (`CompiledGrammar::json_envelope`): a single-quoted spelling of a literal holding `"`, and raw control characters before a string's closing `"` or right after its opening `"`, deleted (`json.syntax.string`); a member key without its quotes (`json.syntax.bare-key`; a key is a literal followed by a `:` literal, optional class runs between, and a literal also used otherwise gets its own key copy); a missing `:` or `,` literal, inserted, and a colonless spelling of a literal spanning `"key": "value"` (`json.syntax.missing-colon`, `json.syntax.missing-comma`); a `,` before a closing `}` or `]` literal (`json.syntax.trailing-comma`); and a `/* */` or `//` comment before a literal, or at a token boundary inside one, with the whitespace around it (`json.syntax.comment`). Each is a non-guess single-reading repair, so it changes a call's outcome exactly as the same slip inside its arguments does: never a demotion to `BestGuess`, on a `Mutating` tool too. Literal case (`True`, `None`) is the codec's alone: an envelope's literals are keys and fixed strings, never literal values. The spellings add trie nodes, and so configurations, to `configuration_bound`. Before a `commit` the repairs only let an attempt reach its commit point: a repaired object that never reaches it stays content. The built-in Hermes, Llama 3 JSON, Mistral v3, Anthropic, `OpenAI` and bare JSON dialects declare it; Mistral v11, DeepSeek, Kimi-K2 and Harmony carry no JSON envelope (only their arguments are JSON, read by the codec). A second statement is `DuplicateName`. |
 | `layout NAME "TEXT";` | Printing only: the class production `NAME` prints as `TEXT` wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
+| `line-start "OPEN";` | Admit the matching initial call opener only at turn or line start after spaces or tabs. Other opener alternatives are unaffected. The literal must be an initial opener without preceding effects or captures. |
+| `examples-content;` | Keep fenced, inline-code and blockquote call examples as content, including rejected attempts and embedded reasoning examples. |
 | `NAME = EXPR;` | A production. |
 
 ## Expressions
@@ -304,6 +307,7 @@ Under `ReasoningPolicy::AsContent` the markers are plain content.
 | `json` | One JSON value read by the push-based tolerant JSON parser: exact number spellings, each repair recorded with its `json.syntax.*` rule. Self-delimiting. A whole arguments value that is a JSON string holding JSON is decoded as stringified arguments and flagged (`tool_call.arguments.decode-string`). Under a length stop, a value that is already complete at the cut (only whitespace after it) ends there, as at a delimiter, when the production completes from the slot with no further input: a call that ends with its arguments value is then complete, not cut off. |
 | `json-args` | The `json` codec for an arguments value: the value must be an object, or a string that is empty or whose text begins with `{` after spaces (stringified arguments). Any other value (a number, an array, `null`, prose in a string) faults at its first byte, rejecting a committed attempt and leaving an uncommitted one as content, so a grammar whose only call evidence is the object itself (`bare-json.v1`) never reads `{"name": "pi", "arguments": 3}` as a call. |
 | `kv-pairs` | Alternating `<arg_key>KEY</arg_key><arg_value>VALUE</arg_value>` elements: strings verbatim, other declared values inline JSON, repeated keys preserved. See [GLM](dialects/glm-4.5.v1.md). |
+| `pythonic` | Keyword arguments with native Python literals; stops before an unmatched `)`, shielding nested containers and quoted text. See [the Pythonic dialect](dialects/pythonic.v1.md) for supported literals and refusals. |
 | `xml-params` | A sequence of `<parameter=NAME>value</parameter>` elements, typed by the declared tool the call names: verbatim strings with one framing newline consumed on each side, typed values parsed as JSON, nested parameter elements for object parameters, a whole-JSON body, and the `</parameters>` variant. See [the Qwen3-Coder XML dialect](dialects/qwen3-coder-xml.v1.md) for every reading. |
 
 Every codec reads bytes that are not well-formed UTF-8 as U+FFFD, one per
@@ -368,7 +372,7 @@ offset in the grammar source (`GrammarError::offset`).
 | `UnknownName` | A reference to an undefined production or closer. |
 | `Recursive` | A production that refers to itself, directly or indirectly. |
 | `UnknownCapture` | A capture kind that is not one of the eight above. |
-| `UnknownCodec` | A slot naming a codec other than `raw`, `json`, `json-args`, `kv-pairs`, or `xml-params`. |
+| `UnknownCodec` | A slot naming a codec other than `raw`, `json`, `json-args`, `kv-pairs`, `pythonic`, or `xml-params`. |
 | `InvalidClass` | A class pattern that is malformed, needs backtracking, or matches the empty string. |
 | `MissingProduction` | `call`, `result`, or `declaration` is missing. |
 | `InvalidOpener` | `call` or `result` does not begin with a literal opener, or matches the empty string. |

@@ -54,6 +54,9 @@ pub enum ArgOrigin {
     /// the whole enclosing string when the escape decoding could not be
     /// mapped exactly).
     StringifiedJson,
+    /// A native Python literal: raw bytes retain its original quote, escape
+    /// and numeric spelling rather than a JSON representation.
+    Pythonic,
 }
 
 /// Why an argument value could not be decoded. The value is absent from
@@ -616,6 +619,11 @@ pub struct CallSegment {
 /// Why a call attempt was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rejection {
+    /// Pythonic syntax contained a positional argument instead of `name=value`.
+    PythonicPositionalRejected {
+        /// Original source offset of the positional argument.
+        at: usize,
+    },
     /// No configuration could consume the byte at `at`, and no repair
     /// within the search budget applied.
     Malformed {

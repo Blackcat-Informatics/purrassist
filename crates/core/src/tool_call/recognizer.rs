@@ -71,7 +71,7 @@
 //! it may be an example rather than a call. Fences are decided over the
 //! fence lines outside every recognized call and tool result, so a fence
 //! inside an argument value never affects other calls.
-use super::context::ContextTracker;
+use super::context::{ContextTracker, RECORD_BYTES};
 use super::dialect::{DialectId, DialectSet};
 use super::ir::{
     ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
@@ -681,6 +681,227 @@ fn segment_bytes(segment: &Segment) -> u64 {
             .saturating_add(128),
         Segment::Content(_) | Segment::Rejected { .. } => 96,
     }
+}
+
+// Portable admission for one temporary Piece, Segment or CallSegment record.
+// This covers their inline fields on supported 32-bit and 64-bit targets;
+// pointed-to payloads retain their existing separate admissions.
+const EXAMPLE_RECORD_BYTES: u64 = 256;
+
+/// Compare only local normalized readings, admitting their actual metadata.
+/// Numeric equality uses the same exact semantics as derived equality, through
+/// the governed comparator so its temporary decimal storage is retained.
+fn same_example_reading(
+    left: &[Segment],
+    right: &[Segment],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        governor.charge(Resource::Work, 96)?;
+        let same = match (left, right) {
+            (Segment::Call(left), Segment::Call(right))
+            | (Segment::Result(left), Segment::Result(right)) => {
+                same_example_call(left, right, governor)?
+            }
+            (Segment::Reasoning(left), Segment::Reasoning(right)) => {
+                admit_example_edits(&left.edits, governor)?;
+                admit_example_edits(&right.edits, governor)?;
+                if left.span != right.span
+                    || left.text != right.text
+                    || left.closure != right.closure
+                    || left.edits != right.edits
+                    || left.embedded.len() != right.embedded.len()
+                {
+                    return Ok(false);
+                }
+                for (left, right) in left.embedded.iter().zip(&right.embedded) {
+                    if !same_example_call(left, right, governor)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            (
+                Segment::Rejected {
+                    dialect: left_dialect,
+                    ..
+                },
+                Segment::Rejected {
+                    dialect: right_dialect,
+                    ..
+                },
+            ) => {
+                governor.charge(
+                    Resource::Work,
+                    size(left_dialect.name().len().min(right_dialect.name().len())),
+                )?;
+                left == right
+            }
+            (Segment::Content(left), Segment::Content(right)) => left == right,
+            _ => false,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_example_call(
+    left: &CallSegment,
+    right: &CallSegment,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, 96)?;
+    if left.span != right.span || left.readings.len() != right.readings.len() {
+        return Ok(false);
+    }
+    for derivation in &left.derivations {
+        governor.charge(
+            Resource::Work,
+            size(derivation.nodes().len())
+                .saturating_mul(8)
+                .saturating_add(64),
+        )?;
+    }
+    if left.derivations != right.derivations {
+        return Ok(false);
+    }
+    for (left, right) in left.readings.iter().zip(&right.readings) {
+        admit_example_call_metadata(left, governor)?;
+        admit_example_call_metadata(right, governor)?;
+        if left.span != right.span
+            || left.dialect != right.dialect
+            || left.kind != right.kind
+            || left.order != right.order
+            || left.name != right.name
+            || left.id != right.id
+            || left.captures != right.captures
+            || left.closure != right.closure
+            || left.edits != right.edits
+            || left.cost != right.cost
+            || left.bare != right.bare
+        {
+            return Ok(false);
+        }
+        let (left, right) = (&left.arguments, &right.arguments);
+        if left.leaves != right.leaves
+            || left.unresolved != right.unresolved
+            || left.arguments_were_stringified != right.arguments_were_stringified
+            || left.tool != right.tool
+            || left.collected != right.collected
+            || !same_example_node(&left.root, &right.root, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn admit_example_call_metadata(
+    reading: &RawCall,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 256)?;
+    for text in [
+        Some(reading.dialect.name()),
+        reading.name.as_ref().map(|name| name.value.as_str()),
+        reading.id.as_ref().map(|id| id.value.as_str()),
+        reading.arguments.tool.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        governor.charge(Resource::Work, size(text.len()).saturating_add(1))?;
+    }
+    governor.charge(
+        Resource::Work,
+        size(reading.captures.len()).saturating_mul(32),
+    )?;
+    let arguments = &reading.arguments;
+    for pointer in arguments
+        .leaves
+        .iter()
+        .map(|leaf| leaf.pointer.as_str())
+        .chain(
+            arguments
+                .unresolved
+                .iter()
+                .map(|value| value.pointer.as_str()),
+        )
+        .chain(
+            arguments
+                .collected
+                .iter()
+                .map(|value| value.pointer.as_str()),
+        )
+    {
+        governor.charge(Resource::Work, size(pointer.len()).saturating_add(64))?;
+    }
+    admit_example_edits(&reading.edits, governor)
+}
+
+fn admit_example_edits(edits: &[MarkupEdit], governor: &mut Governor) -> Result<(), StopReason> {
+    for edit in edits {
+        governor.charge(Resource::Work, edit.estimated_bytes())?;
+    }
+    Ok(())
+}
+
+fn same_example_node(
+    left: &crate::json::Node,
+    right: &crate::json::Node,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    use crate::json::Value;
+    governor.charge(Resource::Work, 64)?;
+    if left.span != right.span {
+        return Ok(false);
+    }
+    Ok(match (&left.value, &right.value) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(left), Value::Bool(right)) => left == right,
+        (Value::Number(left), Value::Number(right)) => {
+            left.compare_governed(right, governor)?.is_eq()
+        }
+        (Value::String(left), Value::String(right)) => {
+            governor.charge(Resource::Work, size(left.len().min(right.len())))?;
+            left == right
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            if left.len() != right.len() {
+                return Ok(false);
+            }
+            for (left, right) in left.iter().zip(right) {
+                if !same_example_node(left, right, governor)? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
+        (Value::Object(left), Value::Object(right)) => {
+            if left.len() != right.len() {
+                return Ok(false);
+            }
+            for (left, right) in left.iter().zip(right) {
+                governor.charge(
+                    Resource::Work,
+                    size(left.key.len().min(right.key.len())).saturating_add(32),
+                )?;
+                if left.key != right.key
+                    || left.key_span != right.key_span
+                    || !same_example_node(&left.value, &right.value, governor)?
+                {
+                    return Ok(false);
+                }
+            }
+            true
+        }
+        _ => false,
+    })
 }
 
 /// A push-based recognizer of one model turn over a [`DialectSet`].
@@ -1497,6 +1718,9 @@ impl<'s> Recognizer<'s> {
         let (marker, pair) = opener;
         let reason = match ended.reason {
             Rejection::Malformed { at } => Rejection::Malformed { at: at.min(marker) },
+            Rejection::PythonicPositionalRejected { at } => {
+                Rejection::PythonicPositionalRejected { at: at.min(marker) }
+            }
             Rejection::InvalidUtf8 { at } => Rejection::InvalidUtf8 { at: at.min(marker) },
             Rejection::Overlapped { at } => Rejection::Overlapped { at: at.min(marker) },
             other => other,
@@ -1506,6 +1730,7 @@ impl<'s> Recognizer<'s> {
         // only over demonstrated markup before the reasoning boundary.
         let end = match reason {
             Rejection::Malformed { at }
+            | Rejection::PythonicPositionalRejected { at }
             | Rejection::InvalidUtf8 { at }
             | Rejection::Overlapped { at } => at.clamp(ended.start, marker),
             _ => marker,
@@ -1818,9 +2043,14 @@ impl<'s> Recognizer<'s> {
             context: &self.context,
             len: end,
             output,
+            example_regions: None,
         };
         let pieces = builder.pieces(last, governor)?;
-        let Builder { forest, .. } = builder;
+        let Builder {
+            forest,
+            example_regions,
+            ..
+        } = builder;
         let unused = self.turn.unused_bytes(last, governor)?;
         governor.release_scratch(unused)?;
         // Every dialect whose attempt at an offset was rejected, in any
@@ -1829,6 +2059,13 @@ impl<'s> Recognizer<'s> {
         for segment in &self.turn.store {
             governor.charge(Resource::Work, 1)?;
             if let Segment::Rejected { span, dialect, .. } = segment
+                && !(dialect.grammar().examples_content()
+                    && match &example_regions {
+                        Some((fenced, inline)) => self
+                            .context
+                            .strict_example(span, fenced, inline, governor)?,
+                        None => false,
+                    })
                 && !attempted
                     .iter()
                     .any(|(start, known)| *start == span.start && known == dialect)
@@ -1851,6 +2088,9 @@ impl<'s> Recognizer<'s> {
     }
 }
 
+/// The fenced and inline regions shared by normalization and attempt reporting.
+type ExampleRegions = (Vec<Range<usize>>, Vec<Range<usize>>);
+
 /// Builds the factorized pieces and their derivations.
 struct Builder<'t> {
     turn: &'t Turn,
@@ -1860,6 +2100,7 @@ struct Builder<'t> {
     len: usize,
     /// The whole output, when the caller holds it.
     output: Option<&'t [u8]>,
+    example_regions: Option<ExampleRegions>,
 }
 
 impl Builder<'_> {
@@ -1976,9 +2217,173 @@ impl Builder<'_> {
                 (_, piece) => pieces.push(piece),
             }
         }
+        self.suppress_examples(&mut pieces, governor)?;
         self.mark_examples(&mut pieces, governor)?;
         self.annotate(&mut pieces, governor)?;
         Ok(pieces)
+    }
+
+    /// Normalize every segmentation of an examples-as-content grammar before
+    /// deriving outcomes. Rejected markup never hides a Markdown fence closer.
+    fn suppress_examples(
+        &mut self,
+        pieces: &mut Vec<Piece>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut spans = Vec::new();
+        let mut applicable = false;
+        for piece in pieces.iter() {
+            match piece {
+                Piece::Segment(segment) => {
+                    example_spans(segment, &mut spans, &mut applicable, governor)?;
+                }
+                Piece::Choice(choice) => {
+                    for reading in &choice.readings {
+                        for segment in reading {
+                            example_spans(segment, &mut spans, &mut applicable, governor)?;
+                        }
+                    }
+                }
+            }
+        }
+        governor.charge(Resource::Work, size(self.turn.store.len()))?;
+        applicable |= self.turn.store.iter().any(|segment| {
+            matches!(segment,
+            Segment::Rejected { dialect, .. } if dialect.grammar().examples_content())
+        });
+        if !applicable {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, size(spans.len()).saturating_mul(64))?;
+        spans.sort_by_key(|span: &Range<usize>| (span.start, span.end));
+        spans.dedup();
+        let fenced = self.context.strict_fenced(&spans, self.len, governor)?;
+        let inline = self.context.strict_inline(&spans, &fenced, governor)?;
+        governor.charge(
+            Resource::ScratchBytes,
+            size(pieces.len()).saturating_mul(EXAMPLE_RECORD_BYTES),
+        )?;
+        let mut normalized = Vec::new();
+        for piece in core::mem::take(pieces) {
+            match piece {
+                Piece::Segment(mut segment) => {
+                    self.suppress_segment(&mut segment, &fenced, &inline, governor)?;
+                    normalized.push(Piece::Segment(segment));
+                }
+                Piece::Choice(mut choice) => {
+                    let segment_count: usize = choice.readings.iter().map(Vec::len).sum();
+                    governor.charge(
+                        Resource::ScratchBytes,
+                        size(segment_count)
+                            .saturating_mul(EXAMPLE_RECORD_BYTES.saturating_mul(2))
+                            .saturating_add(size(choice.readings.len()).saturating_mul(64)),
+                    )?;
+                    let mut readings: Vec<Vec<Segment>> = Vec::new();
+                    let mut derivations = Vec::new();
+                    for (reading, derivation) in choice.readings.into_iter().zip(choice.derivations)
+                    {
+                        let mut segments = Vec::new();
+                        for mut segment in reading {
+                            self.suppress_segment(&mut segment, &fenced, &inline, governor)?;
+                            push_merged(&mut segments, segment);
+                        }
+                        let mut duplicate = false;
+                        for previous in &readings {
+                            if same_example_reading(&segments, previous, governor)? {
+                                duplicate = true;
+                                break;
+                            }
+                        }
+                        if !duplicate {
+                            readings.push(segments);
+                            derivations.push(derivation);
+                        }
+                    }
+                    if readings.len() == 1 {
+                        normalized.extend(
+                            readings
+                                .pop()
+                                .expect("one reading")
+                                .into_iter()
+                                .map(Piece::Segment),
+                        );
+                    } else {
+                        choice.readings = readings;
+                        choice.derivations = derivations;
+                        normalized.push(Piece::Choice(choice));
+                    }
+                }
+            }
+        }
+        for piece in normalized {
+            if let (
+                Some(Piece::Segment(Segment::Content(before))),
+                Piece::Segment(Segment::Content(after)),
+            ) = (pieces.last_mut(), &piece)
+                && before.end == after.start
+            {
+                before.end = after.end;
+            } else {
+                pieces.push(piece);
+            }
+        }
+        self.example_regions = Some((fenced, inline));
+        governor.check()
+    }
+
+    fn suppress_segment(
+        &self,
+        segment: &mut Segment,
+        fenced: &[Range<usize>],
+        inline: &[Range<usize>],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if let Segment::Reasoning(reasoning) = segment {
+            governor.charge(
+                Resource::ScratchBytes,
+                size(reasoning.embedded.len()).saturating_mul(EXAMPLE_RECORD_BYTES),
+            )?;
+            let mut embedded = Vec::new();
+            for call in core::mem::take(&mut reasoning.embedded) {
+                let mut candidate = Segment::Call(call);
+                self.suppress_segment(&mut candidate, fenced, inline, governor)?;
+                if let Segment::Call(call) = candidate {
+                    embedded.push(call);
+                }
+            }
+            reasoning.embedded = embedded;
+            return Ok(());
+        }
+        let span = segment.span();
+        if !self
+            .context
+            .strict_example(&span, fenced, inline, governor)?
+        {
+            return Ok(());
+        }
+        match segment {
+            Segment::Call(call) | Segment::Result(call) => {
+                let mut index = 0;
+                call.readings.retain(|reading| {
+                    let keep = !reading.dialect.grammar().examples_content();
+                    if !keep && index < call.derivations.len() {
+                        call.derivations.remove(index);
+                    }
+                    if keep {
+                        index += 1;
+                    }
+                    keep
+                });
+                if call.readings.is_empty() {
+                    *segment = Segment::Content(span);
+                }
+            }
+            Segment::Rejected { dialect, .. } if dialect.grammar().examples_content() => {
+                *segment = Segment::Content(span);
+            }
+            Segment::Content(_) | Segment::Reasoning(_) | Segment::Rejected { .. } => {}
+        }
+        Ok(())
     }
 
     /// Flag every call recognized inside fenced code, an inline code span or
@@ -2260,6 +2665,41 @@ pub(super) fn edit_entries(
         value: escaped(&edit.replacement),
     });
     (evidence, loss, inference)
+}
+
+/// Complete calls protect their literal text; rejected spans protect nothing.
+fn example_spans(
+    segment: &Segment,
+    spans: &mut Vec<Range<usize>>,
+    applicable: &mut bool,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    match segment {
+        Segment::Call(call) | Segment::Result(call) => {
+            governor.charge(Resource::Work, size(call.readings.len()))?;
+            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+            spans.push(call.span.clone());
+            *applicable |= call
+                .readings
+                .iter()
+                .any(|reading| reading.dialect.grammar().examples_content());
+        }
+        Segment::Rejected { dialect, .. } => *applicable |= dialect.grammar().examples_content(),
+        Segment::Reasoning(reasoning) => {
+            for call in &reasoning.embedded {
+                governor.charge(Resource::Work, size(call.readings.len()))?;
+                governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+                spans.push(call.span.clone());
+                *applicable |= call
+                    .readings
+                    .iter()
+                    .any(|reading| reading.dialect.grammar().examples_content());
+            }
+        }
+        Segment::Content(_) => {}
+    }
+    Ok(())
 }
 
 fn push_merged(segments: &mut Vec<Segment>, segment: Segment) {
@@ -2823,7 +3263,7 @@ impl DataIndex {
             .iter()
             .filter(|leaf| match leaf.origin {
                 ArgOrigin::Raw | ArgOrigin::XmlText => true,
-                ArgOrigin::Json | ArgOrigin::StringifiedJson => strings
+                ArgOrigin::Json | ArgOrigin::StringifiedJson | ArgOrigin::Pythonic => strings
                     .binary_search(&(leaf.raw.start, leaf.raw.end))
                     .is_ok(),
             })

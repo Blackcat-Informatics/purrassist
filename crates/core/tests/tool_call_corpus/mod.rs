@@ -777,13 +777,14 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
         DialectId::MistralV3 => "mistral3",
         DialectId::MistralV11 => "mistral11",
         DialectId::OpenAiToolCalls => "openai",
+        DialectId::Pythonic => "pythonic",
         DialectId::Qwen3CoderXml => "qwen",
         DialectId::Custom(_) => "custom",
     }
 }
 
-/// Dialects using the shared mutation driver, in corpus order.
-/// GLM uses native key/value cases in `glm_cases` instead of XML mutations.
+/// The dialects sharing JSON/XML mutations, in corpus order. Native literal
+/// codecs add their own cases.
 const DIALECTS: [DialectId; 12] = [
     DialectId::Qwen3CoderXml,
     DialectId::Hermes,
@@ -3520,7 +3521,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases
@@ -3718,7 +3719,66 @@ pub fn generate() -> Vec<Case> {
     deepseek_mixed_cases(&bases, &mut cases);
     adapter_cases(&mut cases);
     glm_cases(&mut cases);
+    pythonic_cases(&mut cases);
     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
     assert_eq!(identities.len(), cases.len(), "case identities are unique");
     cases
+}
+
+/// Native Python literals exercise the production codec independently of JSON mutations.
+fn pythonic_cases(cases: &mut Vec<Case>) {
+    for (variant, input, truth) in [
+        (
+            "single",
+            "[search_index(query='cats', limit=5)]",
+            Some(r#"{"query":"cats","limit":5}"#),
+        ),
+        (
+            "triple",
+            "[search_index(query=\"\"\"cats\"\"\", limit=0x5)]",
+            Some(r#"{"query":"cats","limit":5}"#),
+        ),
+        (
+            "named-escape",
+            r"[search_index(query='\N{LATIN SMALL LETTER C}ats')]",
+            Some(r#"{"query":"cats"}"#),
+        ),
+        (
+            "nullable",
+            "[search_index(query='cats', limit=None)]",
+            Some(r#"{"query":"cats","limit":null}"#),
+        ),
+        (
+            "missing-list-closer",
+            "[search_index(query='cats')",
+            Some(r#"{"query":"cats"}"#),
+        ),
+        ("positional", "[search_index('cats')]", None),
+        ("expression", "[search_index(query=run())]", None),
+        ("prose", "Example: [search_index(query='cats')]", None),
+        (
+            "fenced",
+            "```python\n[search_index(query='cats')]\n```",
+            None,
+        ),
+    ] {
+        for (label, dialect) in [("pythonic", "pythonic.v1"), ("all", ALL_DIALECTS)] {
+            cases.push(Case {
+                tool_set: Some("adapter"),
+                invalid: None,
+                id: format!("adapter/search_index/{label}/canonical/{variant}"),
+                category: "canonical".to_owned(),
+                dialect: dialect.to_owned(),
+                policy: Policy::PerTool,
+                stop: Ending::Stop,
+                input: input.to_owned(),
+                truth: truth.map(|arguments| {
+                    vec![Call {
+                        name: "search_index".to_owned(),
+                        arguments: json::parse(arguments).expect("truth"),
+                    }]
+                }),
+            });
+        }
+    }
 }

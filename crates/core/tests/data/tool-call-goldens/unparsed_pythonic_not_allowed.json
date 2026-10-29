@@ -1,5 +1,5 @@
 {
-  "description": "A Pythonic call list as the whole turn (pythonic.v1, not built in yet): one rejected attempt with reason unsupported_dialect naming the family, the bytes still content, and the turn finishes unresolved, never content_only.",
+  "description": "A Pythonic call list with the dialect explicitly excluded is reported as unsupported.",
   "tools_openai": [
     {
       "type": "function",
@@ -28,6 +28,51 @@
   ],
   "stop": "stop",
   "input": "[get_weather(city=\"Paris\"), get_weather(city=\"Oslo\", unit=\"celsius\")]",
+  "dialects": [
+    "hermes.v1"
+  ],
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "calls",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 2,
+      "accepting_guesses": 2
+    },
+    "calls": [
+      {
+        "tool": "get_weather",
+        "arguments": {
+          "city": "Paris"
+        },
+        "candidate_dialects": [
+          "pythonic.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      },
+      {
+        "tool": "get_weather",
+        "arguments": {
+          "city": "Oslo",
+          "unit": "celsius"
+        },
+        "candidate_dialects": [
+          "pythonic.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
@@ -44,7 +89,7 @@
         0,
         69
       ],
-      "dialect": null,
+      "dialect": "pythonic.v1",
       "candidate_dialects": [],
       "reason": "UnsupportedDialect { family: Pythonic }",
       "raw": "[get_weather(city=\"Paris\"), get_weather(city=\"Oslo\", unit=\"celsius\")]"

@@ -1948,6 +1948,7 @@ pub(super) fn rejected_end(
     // Where the grammar stopped reading the attempt's own syntax.
     let read = match reason {
         Rejection::Malformed { at }
+        | Rejection::PythonicPositionalRejected { at }
         | Rejection::InvalidUtf8 { at }
         | Rejection::Overlapped { at } => at.clamp(span.start, span.end),
         Rejection::Unterminated | Rejection::UnsupportedDialect { .. } => span.end,
@@ -2747,6 +2748,7 @@ fn precise(reason: Rejection, output: &[u8]) -> Rejection {
 fn rejection_node(reason: Rejection) -> Node {
     let (code, at) = match reason {
         Rejection::Malformed { at } => ("malformed", Some(at)),
+        Rejection::PythonicPositionalRejected { at } => ("pythonic_positional_rejected", Some(at)),
         Rejection::InvalidUtf8 { at } => ("invalid_utf8", Some(at)),
         Rejection::Unterminated => ("unterminated", None),
         Rejection::Overlapped { at } => ("overlapped", Some(at)),
@@ -5063,6 +5065,7 @@ fn evidence<'a>(rejected: impl Iterator<Item = (usize, &'a DialectId, &'a [u8])>
 const fn reach_of(span: &Range<usize>, reason: Rejection) -> usize {
     let end = match reason {
         Rejection::Malformed { at }
+        | Rejection::PythonicPositionalRejected { at }
         | Rejection::InvalidUtf8 { at }
         | Rejection::Overlapped { at } => at,
         Rejection::Unterminated | Rejection::UnsupportedDialect { .. } => span.end,
