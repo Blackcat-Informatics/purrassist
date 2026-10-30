@@ -566,7 +566,11 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     )?;
                 }
                 if !respell && context.opened && literal.closer.is_some() {
-                    let replacement = literal.bytes.as_slice().to_vec();
+                    let protocol = program.protocol.is_some_and(|fence| fence.closer == lit);
+                    let mut replacement = literal.bytes.as_slice().to_vec();
+                    if protocol {
+                        replacement.push(b'\n');
+                    }
                     // A closer missing mid-message: the wrapper's when it
                     // ends the production, an inner element's otherwise.
                     let wrapper = completes(program, next, governor)?;
@@ -580,7 +584,18 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     // that closer behind as content: a repeated or stray
                     // closer belongs to the call, so only the deletion
                     // (`tool_call.markup.stray-closer`) reads it.
-                    let complete = !(wrapper && grammar.stray.admits(pending));
+                    let mut stray = grammar.stray.admits(pending);
+                    if protocol && pending.starts_with(&literal.bytes) {
+                        governor.charge(
+                            Resource::Work,
+                            crate::contract::saturating_size(pending.len()),
+                        )?;
+                        stray = super::fence::complete(
+                            &pending[literal.bytes.len()..],
+                            context.eof.is_some(),
+                        );
+                    }
+                    let complete = !(wrapper && stray);
                     self.insert(
                         context,
                         proposals,

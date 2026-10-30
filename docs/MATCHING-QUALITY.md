@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 18202 | 12645 | 0 | 5557 | 69.5% | 0.0% | 0.024% | 1% |
+| Tool-call recovery | 18218 | 12651 | 0 | 5567 | 69.4% | 0.0% | 0.024% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -207,7 +207,11 @@ small oracle exhaustively proves the Unicode tables.
 
 ## Tool-call recovery evaluation
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,202 model
+The `gemma3-tool-code.v1` native corpus witnesses cover canonical and missing-fence
+calls, positional/expression refusal, ordinary code examples and tool results.
+The 16 new dialect/all-selector witnesses produce six correct recoveries and ten required abstentions, with zero incorrect corrections.
+
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,218 model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -360,7 +364,7 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 5425 of 5425 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 5435 of 5435 truth-`Unresolved` cases abstained (100.0%).
 
 The 132 other abstentions are coverage gaps, not errors: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
@@ -378,7 +382,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 
 | Rule | Cases | Correct | Incorrect | Abstained | Truth `Unresolved` |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `canonical` | 1687 | 1679 | 0 | 8 | 8 |
+| `canonical` | 1703 | 1685 | 0 | 18 | 18 |
 | `json.enum.match` | 168 | 84 | 0 | 84 | 84 |
 | `json.key.match` | 420 | 180 | 0 | 240 | 240 |
 | `json.key.relocate` | 352 | 0 | 0 | 352 | 220 |
@@ -447,7 +451,7 @@ and by dialect allow-list:
 
 | Dialect | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `adapter` | 55 | 42 | 0 | 13 |
+| `adapter` | 71 | 48 | 0 | 23 |
 | `anthropic` | 1446 | 991 | 0 | 455 |
 | `bare` | 1266 | 811 | 0 | 455 |
 | `deepseek3` | 1894 | 1423 | 0 | 471 |
@@ -466,11 +470,12 @@ and by dialect allow-list:
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `anthropic-tool-use.v1` | 666 | 459 | 0 | 207 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1` | 9747 | 6716 | 0 | 3031 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1` | 9755 | 6719 | 0 | 3036 |
 | `bare-json.v1` | 576 | 369 | 0 | 207 |
 | `deepseek-v3.1.v1` | 764 | 557 | 0 | 207 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 36 | 36 | 0 | 0 |
 | `deepseek-v3.v1` | 890 | 675 | 0 | 215 |
+| `gemma3-tool-code.v1` | 8 | 3 | 0 | 5 |
 | `glm-4.5.v1` | 4 | 3 | 0 | 1 |
 | `harmony.v1` | 797 | 579 | 0 | 218 |
 | `hermes.v1` | 720 | 481 | 0 | 239 |

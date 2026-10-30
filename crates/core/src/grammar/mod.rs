@@ -27,6 +27,7 @@
 //! | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. |
 //! | `layout NAME "TEXT";` | Printing only: the class production `NAME` is printed as `TEXT` (a member of the class) wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
 //! | `line-start "OPEN";` | Restrict matching initial call-opener literals to turn or line start after horizontal whitespace; explicit alternative openers remain unguarded. |
+//! | `protocol-fences;` | Keep enclosing Markdown examples as content; validate grammar-owned fence headers and full closing lines, retaining standalone malformed protocol rejections. |
 //! | `examples-content;` | Treat calls inside fenced, inline-code, and blockquote examples as content, including rejected attempts. |
 //! | `NAME = EXPR;` | A production. |
 //!
@@ -143,6 +144,7 @@ mod compile;
 pub mod cost;
 pub mod edit;
 pub(crate) mod engine;
+pub(crate) mod fence;
 pub(crate) mod misspelling;
 pub mod print;
 mod repair;
@@ -816,6 +818,8 @@ pub(crate) enum ExamplePolicy {
     Recover,
     /// Keep examples as assistant content.
     Content,
+    /// Grammar-owned protocol fence lines are markup, including rejected calls.
+    ProtocolFences,
 }
 
 // Compiled grammars are shared across threads (`DialectId::Custom` holds an
@@ -827,8 +831,15 @@ const _: fn() = || {
 };
 
 impl CompiledGrammar {
+    pub(crate) const fn protocol_fences(&self) -> bool {
+        matches!(self.examples, ExamplePolicy::ProtocolFences)
+    }
+
     pub(crate) const fn examples_content(&self) -> bool {
-        matches!(self.examples, ExamplePolicy::Content)
+        matches!(
+            self.examples,
+            ExamplePolicy::Content | ExamplePolicy::ProtocolFences
+        )
     }
 
     /// The grammar's declared id.

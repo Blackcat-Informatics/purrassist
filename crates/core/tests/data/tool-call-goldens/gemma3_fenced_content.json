@@ -1,0 +1,52 @@
+{
+  "description": "A tool_code example inside an ordinary code fence stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "````python\n```tool_code\nget_weather(city='Paris')\n```\n````",
+  "dialects": [
+    "gemma3-tool-code.v1"
+  ],
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "````python\n```tool_code\nget_weather(city='Paris')\n```\n````"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

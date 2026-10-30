@@ -433,16 +433,16 @@ class DialectIds(Case):
         self.assertFails(tree.errors(), 'dialect-ids', 'crates/core/README.md', "missing ['mistral-v3.v1']")
 
     def test_wrong_count_fails(self):
-        for name, old, new in (('README.md', 'Fourteen dialects ship', 'Eleven dialects ship'),
-                               ('docs/tool-calls/GRAMMAR.md', 'fourteen built-in dialects', 'ten built-in dialects'),
-                               ('docs/RESOURCES.md', 'all fourteen built-in dialects', 'all ten built-in dialects'),
-                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all fourteen dialects', 'all ten dialects'),
-                               ('docs/IMPLEMENTATION.md', 'fourteen ship', 'ten ship'),
-                               ('crates/host/README.md', 'over fourteen built-in', 'over ten built-in')):
+        for name, old, new in (('README.md', 'Fifteen dialects ship', 'Eleven dialects ship'),
+                               ('docs/tool-calls/GRAMMAR.md', 'fifteen built-in dialects', 'ten built-in dialects'),
+                               ('docs/RESOURCES.md', 'all fifteen built-in dialects', 'all ten built-in dialects'),
+                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all fifteen dialects', 'all ten dialects'),
+                               ('docs/IMPLEMENTATION.md', 'fifteen ship', 'ten ship'),
+                               ('crates/host/README.md', 'over fifteen built-in', 'over ten built-in')):
             with self.subTest(name=name):
                 tree = self.tree()
                 tree.replace(name, old, new)
-                self.assertFails(tree.errors(), 'dialect-count', name, 'has 14')
+                self.assertFails(tree.errors(), 'dialect-count', name, 'has 15')
 
     def test_a_subset_count_is_not_a_dialect_count(self):
         tree = self.tree()
@@ -451,7 +451,7 @@ class DialectIds(Case):
 
     def test_a_missing_count_sentence_is_not_found(self):
         tree = self.tree()
-        tree.replace('crates/purrassist/README.md', 'Fourteen dialects ship:', 'These dialects exist:')
+        tree.replace('crates/purrassist/README.md', 'Fifteen dialects ship:', 'These dialects exist:')
         self.assertFails(tree.errors(), 'dialect-count', 'crates/purrassist/README.md', NOT_FOUND)
 
 
@@ -673,7 +673,7 @@ class KnownLimitationsSource(Case):
 
     def test_the_real_set_is_the_agreed_one(self):
         data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
-        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 14, 16, 17, 18])
+        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 16, 17, 18])
 
 
 class KnownLimitationsSection(Case):
@@ -1853,7 +1853,7 @@ ABSENT = (
     ('fuzz-targets', 'Makefile', r'across all ten targets', 'across the targets'),
     ('receipt-version', 'docs/QUALIFICATION.md', r'receipt wire v3', 'receipt wire format'),
     ('receipt-version', 'crates/core/src/contract.rs', r'RECEIPT_VERSION: u32 = 3;', 'RECEIPT_REVISION: u32 = 3;'),
-    ('dialect-count', 'README.md', r'Fourteen dialects ship', 'These dialects ship'),
+    ('dialect-count', 'README.md', r'Fifteen dialects ship', 'These dialects ship'),
     ('fuzz-baseline-table', 'docs/FUZZING.md', r'### Recorded 10,000-mutation baselines', '### Baselines'),
     ('fuzz-row-limits', 'docs/QUALIFICATION.md', r'`make fuzz`', '`make  fuzz`'),
 )

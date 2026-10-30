@@ -143,6 +143,9 @@ pub(crate) enum Statement {
     ExamplesContent {
         at: usize,
     },
+    ProtocolFences {
+        at: usize,
+    },
     OptionalId {
         at: usize,
     },
@@ -169,10 +172,11 @@ pub(crate) struct Document {
     pub(crate) statements: ScratchVec<Statement>,
 }
 
-pub(crate) const KEYWORDS: [&str; 15] = [
+pub(crate) const KEYWORDS: [&str; 16] = [
     "grammar",
     "line-start",
     "examples-content",
+    "protocol-fences",
     "optional-id",
     "declaration-content",
     "json-envelope",
@@ -623,6 +627,7 @@ impl Parser<'_, '_> {
                 at,
             },
             "examples-content" => Statement::ExamplesContent { at },
+            "protocol-fences" => Statement::ProtocolFences { at },
             "optional-id" => Statement::OptionalId { at },
             "declaration-content" => Statement::DeclarationContent { at },
             "json-envelope" => Statement::JsonEnvelope { at },

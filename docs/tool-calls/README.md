@@ -11,11 +11,12 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Fourteen dialects are built in:
+Fifteen dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
 | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>`, or the bare `<function=NAME>` element | [dialect](dialects/qwen3-coder-xml.v1.md) |
+| `gemma3-tool-code.v1` | A direct keyword call in a `tool_code` fence; `tool_output` fences are results | [dialect](dialects/gemma3-tool-code.v1.md) |
 | `glm-4.5.v1` | `<tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value></tool_call>` | [dialect](dialects/glm-4.5.v1.md) |
 | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
 | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
@@ -35,7 +36,7 @@ Callers add their own dialects with the grammar DSL
 derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
 `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
 `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
-[README](../../crates/derive/README.md)). Still tracked: the `gemma3-tool-code.v1` (#14) dialects, the
+[README](../../crates/derive/README.md)). Still tracked: the
 `*-stripped` variants (#18), streaming recognition (#16), and provider
 streaming events (#17).
 
@@ -59,7 +60,7 @@ streaming events (#17).
   included, resynchronizes past it and keeps every call it reads whole
   (`tool_call.markup.group-split`). The least-cost
   repairs are kept and every applied operator is itemized. Argument codecs
-  (`json`, `json-args`, `xml-params`, `raw`) read argument bodies with their own recorded
+  (`json`, `json-args`, `xml-params`, `kv-pairs`, `pythonic`, `raw`) read argument bodies with their own recorded
   repairs.
 - **Factorized ambiguity.** The turn is a least-cost segmentation into
   content, reasoning, calls, tool results, and rejected attempts (each
@@ -344,9 +345,7 @@ finish.
 Call markup that no dialect of the allow-list reads is never silent
 content. A linear detector (`detect_unparsed`) scans the turn's content for
 the distinctive openers and shapes of the families no built-in dialect
-parses yet (`gemma3-tool-code.v1` `` ```tool_code ``
-blocks, and the stripped
-renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
+parses yet (the stripped renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
 `deepseek-v3-stripped.v1` and `name-arguments-stripped.v1`), and for the built-in dialects the
 allow-list leaves out. Each hit is a `RejectedCall` with
 `Rejection::UnsupportedDialect { family }` (its `dialect` is the family's

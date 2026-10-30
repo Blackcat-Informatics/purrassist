@@ -239,7 +239,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 14] = [
+const DIALECT_CASES: [DialectCase; 15] = [
     DialectCase {
         dialect: DialectId::AnthropicToolUse,
         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
@@ -271,6 +271,14 @@ const DIALECT_CASES: [DialectCase; 14] = [
         repair: "<|tool_calls_begin|><|tool_call_begin|>function<|tool_sep|>read_file\n```\n{\"path\": \"src/lib.rs\", \"limit\": 40}\n<|tool_call_begin|>function<|tool_sep|>get_weather\n{\"city\": \"Oslo\", \"unit\": \"celsius\"}\n```<|tool_call_end|>",
         repair_status: "resolved",
         repair_digest: "sha256:8b47b741e93bd652782fbc8bb4b2a4f43d5277482a8a41558b187f060d1731e6",
+    },
+    DialectCase {
+        dialect: DialectId::Gemma3ToolCode,
+        anchor: "```tool_code\nget_weather(city='Paris', unit='celsius')\n```\n```tool_code\nread_file(path='notes.txt', limit=10)\n```",
+        anchor_digest: "sha256:9901a961772b323c8cbb03797bb41f0f948e43cdb26f7f14fff35d3cb1823f65",
+        repair: "```tool_code\nget_weather(city='Oslo', unit='celsius')\n",
+        repair_status: "resolved",
+        repair_digest: "sha256:d3a464d94219c219592a5f6e7e1523f8afe4673f508b73b49f968dbb71bf9dca",
     },
     DialectCase {
         dialect: DialectId::Glm45,

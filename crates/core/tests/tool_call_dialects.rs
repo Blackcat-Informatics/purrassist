@@ -233,6 +233,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
             "bare-json.v1",
             "deepseek-v3.1.v1",
             "deepseek-v3.v1",
+            "gemma3-tool-code.v1",
             "glm-4.5.v1",
             "harmony.v1",
             "hermes.v1",
@@ -598,6 +599,9 @@ fn ir_spans_slice_back_to_source() {
                         "{}: {raw:?}",
                         fixture.file
                     );
+                } else if dialect == DialectId::Gemma3ToolCode {
+                    assert!(raw.starts_with("```tool_code"), "{}: {raw:?}", fixture.file);
+                    assert!(raw.ends_with("```"), "{}: {raw:?}", fixture.file);
                 } else {
                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
                     assert!(raw.ends_with("</tool_call>"), "{}: {raw:?}", fixture.file);

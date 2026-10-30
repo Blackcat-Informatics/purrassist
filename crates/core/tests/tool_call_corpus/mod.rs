@@ -406,7 +406,7 @@ fn adapter_cases(cases: &mut Vec<Case>) {
     }
 }
 
-/// A first-party xorshift64 generator (Marsaglia 2003), for the few choices
+/// A first-party `xorshift64` generator (Marsaglia 2003), for the few choices
 /// a mutation makes beyond the witness seed.
 struct XorShift(u64);
 
@@ -771,6 +771,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
         DialectId::DeepSeekV3 => "deepseek3",
         DialectId::Harmony => "harmony",
         DialectId::Glm45 => "glm45",
+        DialectId::Gemma3ToolCode => "gemma3",
         DialectId::Hermes => "hermes",
         DialectId::KimiK2 => "kimi",
         DialectId::Llama3Json => "llama3",
@@ -3521,7 +3522,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases
@@ -3720,6 +3721,7 @@ pub fn generate() -> Vec<Case> {
     adapter_cases(&mut cases);
     glm_cases(&mut cases);
     pythonic_cases(&mut cases);
+    gemma3_cases(&mut cases);
     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
     assert_eq!(identities.len(), cases.len(), "case identities are unique");
     cases
@@ -3763,6 +3765,73 @@ fn pythonic_cases(cases: &mut Vec<Case>) {
         ),
     ] {
         for (label, dialect) in [("pythonic", "pythonic.v1"), ("all", ALL_DIALECTS)] {
+            cases.push(Case {
+                tool_set: Some("adapter"),
+                invalid: None,
+                id: format!("adapter/search_index/{label}/canonical/{variant}"),
+                category: "canonical".to_owned(),
+                dialect: dialect.to_owned(),
+                policy: Policy::PerTool,
+                stop: Ending::Stop,
+                input: input.to_owned(),
+                truth: truth.map(|arguments| {
+                    vec![Call {
+                        name: "search_index".to_owned(),
+                        arguments: json::parse(arguments).expect("truth"),
+                    }]
+                }),
+            });
+        }
+    }
+}
+
+fn gemma3_cases(cases: &mut Vec<Case>) {
+    for (variant, input, truth) in [
+        (
+            "single",
+            "```tool_code\nsearch_index(query='cats', limit=5)\n```",
+            Some(r#"{"query":"cats","limit":5}"#),
+        ),
+        (
+            "nullable",
+            "```tool_code\nsearch_index(query='cats', limit=None)\n```",
+            Some(r#"{"query":"cats","limit":null}"#),
+        ),
+        (
+            "missing-fence",
+            "```tool_code\nsearch_index(query='cats')\n",
+            Some(r#"{"query":"cats"}"#),
+        ),
+        (
+            "positional",
+            "```tool_code\nsearch_index('cats')\n```",
+            None,
+        ),
+        (
+            "expression",
+            "```tool_code\nsearch_index(query=run())\n```",
+            None,
+        ),
+        (
+            "python-example",
+            "````python\n```tool_code\nsearch_index(query='cats')\n```\n````",
+            None,
+        ),
+        (
+            "inline-prose",
+            "Example: ```tool_code\nsearch_index(query='cats')\n```",
+            None,
+        ),
+        (
+            "tool-output",
+            "```tool_output\nsearch_index(query='cats')\n```",
+            None,
+        ),
+    ] {
+        for (label, dialect) in [
+            ("gemma3", "gemma3-tool-code.v1"),
+            ("gemma3-all", ALL_DIALECTS),
+        ] {
             cases.push(Case {
                 tool_set: Some("adapter"),
                 invalid: None,

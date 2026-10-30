@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# First-party grammar for the prompted Gemma 3 cookbook convention.
+grammar "gemma3-tool-code.v1";
+line-start "```tool_code";
+protocol-fences;
+closer call-end = ")";
+closer fence-end = "```";
+name = /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/;
+hws = /[ \t]+/;
+ws = /[ \t\r\n]+/;
+nl = /\r?\n/;
+layout nl "\n";
+call = "```tool_code" hws? nl ws? name:name hws? "(" commit
+       arguments:slot(pythonic, "\x00") call-end hws? nl ws? fence-end;
+result = "```tool_output" hws? nl content:until("\r\n```", "\n```") nl fence-end;
+json-string = /"([^"\\\x00-\x1F]|\\["\\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"/;
+declaration = "{" ws? "\"name\"" ws? ":" ws? "\"" name:name "\""
+              (ws? "," ws? "\"description\"" ws? ":" content:json-string)?
+              (ws? "," ws? "\"parameters\"" ws? ":" arguments:slot(json, "\x00"))?
+              ws? "}";
