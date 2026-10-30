@@ -255,18 +255,6 @@ fn invalid_roots_bindings_and_representations_are_native_typed_refusals() {
             "sh:datatype xsd:anyURI;",
             ToolRepresentationError::Constraint("sh:datatype"),
         ),
-        (
-            "sh:datatype xsd:decimal;",
-            ToolRepresentationError::Constraint("sh:datatype"),
-        ),
-        (
-            "sh:datatype xsd:double;",
-            ToolRepresentationError::Constraint("sh:datatype"),
-        ),
-        (
-            "sh:datatype xsd:float;",
-            ToolRepresentationError::Constraint("sh:datatype"),
-        ),
         ("", ToolRepresentationError::MissingDomain),
     ] {
         let body = format!(
@@ -329,4 +317,172 @@ fn legacy_jsonld_schema_and_openapi_goldens_from_previous_pin_are_unchanged() {
     let compiled = compile_schema(&request).expect("original public JSON-LD compiler");
     assert_eq!(compiled.compiled.schema_json, legacy::SCHEMA);
     assert_eq!(compiled.compiled.openapi_json, legacy::OPENAPI);
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "the consumer exercises the original public compiler error and native cause"
+)]
+fn numeric_schema(
+    datatype: &str,
+    constraints: &str,
+) -> Result<purrdf_shapes::json_schema::CompiledSchema, ToolSchemaError> {
+    let body = format!(
+        "{PREFIXES}ex:Args a sh:NodeShape; sh:targetClass ex:Call; sh:closed true; \
+         sh:property [sh:path ex:number; sh:datatype xsd:{datatype}; \
+         sh:minCount 1; sh:maxCount 1; {constraints}]."
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&body, None).expect("numeric source shapes");
+    compile_tool_arguments(
+        &shapes,
+        &namespaces().unwrap(),
+        &profile("Args", "Call", &["number"]),
+        &LIMITS,
+    )
+}
+
+#[test]
+fn plain_decimal_boundaries_enumerations_and_constants_keep_full_precision() {
+    let low = "9007199254740993.0000000000000001";
+    let middle = "9007199254740993.0000000000000002";
+    let high = "9007199254740993.0000000000000003";
+    let below = "9007199254740993.0000000000000000";
+    let above = "9007199254740993.0000000000000004";
+    for (constraints, valid, invalid) in [
+        (
+            format!(
+                "sh:minInclusive \"{low}\"^^xsd:decimal; sh:maxInclusive \"{high}\"^^xsd:decimal;"
+            ),
+            vec![low, middle, high],
+            vec![below, above],
+        ),
+        (
+            format!("sh:in (\"{low}\"^^xsd:decimal \"{high}\"^^xsd:decimal);"),
+            vec![low, high],
+            vec![middle],
+        ),
+        (
+            format!("sh:hasValue \"{middle}\"^^xsd:decimal;"),
+            vec![middle],
+            vec![low, high],
+        ),
+    ] {
+        let compiled = numeric_schema("decimal", &constraints).expect("exact decimal schema");
+        assert_eq!(compiled.losses.entries(), []);
+        let validator = schema(&compiled.schema_json);
+        for number in valid {
+            assert!(
+                accepts(&validator, &format!("{{\"number\":{number}}}")),
+                "{constraints}: {number}"
+            );
+        }
+        for number in invalid {
+            assert!(
+                !accepts(&validator, &format!("{{\"number\":{number}}}")),
+                "{constraints}: {number}"
+            );
+        }
+    }
+}
+
+#[test]
+fn exact_decimal_logic_preserves_exclusive_alternatives_and_negation() {
+    let compiled = numeric_schema(
+        "decimal",
+        r"sh:xone (
+             [sh:datatype xsd:decimal; sh:minInclusive 1.1; sh:maxInclusive 3.3]
+             [sh:datatype xsd:decimal; sh:minInclusive 3.3; sh:maxInclusive 5.5]
+           );
+           sh:not [sh:datatype xsd:decimal; sh:in (2.2)];
+           sh:someValue [sh:datatype xsd:decimal; sh:minInclusive 1.5];",
+    )
+    .expect("same-domain decimal logic");
+    assert_eq!(compiled.losses.entries(), []);
+    let validator = schema(&compiled.schema_json);
+    for (number, valid) in [
+        ("1.5", true),
+        ("4.4", true),
+        ("1.1", false),
+        ("2.2", false),
+        ("3.3", false),
+        ("6", false),
+    ] {
+        assert_eq!(
+            accepts(&validator, &format!("{{\"number\":{number}}}")),
+            valid,
+            "{number}"
+        );
+    }
+}
+
+#[test]
+fn ieee_domain_residuals_are_registered_and_keep_the_source() {
+    for datatype in ["double", "float"] {
+        let compiled = numeric_schema(datatype, "sh:minInclusive 1.0;")
+            .expect("finite numeric carrier with explicit residual");
+        purrdf_core::loss::check_ledger_sound(&compiled.losses, "shacl", "json-schema")
+            .expect("every residual has a registered native meaning");
+        assert!(
+            compiled.losses.entries().iter().any(|entry| {
+                entry.code == "plain:ieee-representability"
+                    && entry.location.as_deref().is_some_and(|location| {
+                        location.subject.as_deref() == Some("<https://example.org/tools/Args>")
+                    })
+            }),
+            "{datatype}: {:?}",
+            compiled.losses
+        );
+        let validator = schema(&compiled.schema_json);
+        assert!(accepts(&validator, r#"{"number":1.5}"#));
+        assert!(!accepts(&validator, r#"{"number":0.5}"#));
+        assert!(!accepts(&validator, r#"{"number":"1.5"}"#));
+    }
+}
+
+#[test]
+fn unsupported_numeric_encodings_keep_typed_causes_and_valid_neighbors() {
+    for (datatype, invalid, reason, valid) in [
+        (
+            "double",
+            r#"sh:hasValue "INF"^^xsd:double;"#,
+            ToolRepresentationError::NumericConstant,
+            r#"sh:hasValue "1.5E0"^^xsd:double;"#,
+        ),
+        (
+            "float",
+            r#"sh:hasValue "NaN"^^xsd:float;"#,
+            ToolRepresentationError::NumericConstant,
+            r#"sh:hasValue "1.5E0"^^xsd:float;"#,
+        ),
+        (
+            "double",
+            r#"sh:hasValue "-0.0E0"^^xsd:double;"#,
+            ToolRepresentationError::SignedZero,
+            r#"sh:hasValue "0.0E0"^^xsd:double;"#,
+        ),
+        (
+            "decimal",
+            r#"sh:hasValue "+01.50"^^xsd:decimal;"#,
+            ToolRepresentationError::NumericIdentity,
+            r#"sh:hasValue "1.5"^^xsd:decimal;"#,
+        ),
+    ] {
+        assert!(
+            matches!(
+                numeric_schema(datatype, invalid),
+                Err(ToolSchemaError::UnsupportedConstruct { location, predicate, reason: actual })
+                    if location.contains("number")
+                        && predicate.as_deref() == Some("https://example.org/tools/number")
+                        && actual == reason
+            ),
+            "{datatype}: {invalid}"
+        );
+        let compiled = numeric_schema(datatype, valid).expect("canonical finite neighbor");
+        assert_eq!(compiled.losses.entries(), []);
+        let number = if valid.contains("0.0E0") { "0" } else { "1.5" };
+        assert!(accepts(
+            &schema(&compiled.schema_json),
+            &format!("{{\"number\":{number}}}")
+        ));
+    }
 }

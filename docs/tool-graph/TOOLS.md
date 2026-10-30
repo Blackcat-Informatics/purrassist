@@ -769,18 +769,21 @@ no random, filesystem or process access. `aa-exec` must select the exact profile
 refuse an unconfined result, close unadmitted descriptors and return typed launch,
 label or mediation failures. Neither mode can silently fall back to the other.
 
-**G7 supported profile adopted in #70; plain numbers and loader integration remain open:** upstream
-PurRDF issue #788 closed through PR #806, adopted at exact revision
-`8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77`. The public
+**G7 compiler prerequisite delivered in #70 and #43; loader integration remains open:**
+upstream PurRDF issue #788 closed through PR #806, and numeric prerequisite #885
+closed through PR #888, adopted at exact revision
+`742bbbfbe2240e1fc6f178badd049420753ef358`. The public
 `purrdf_shapes::json_schema::compile_tool_arguments` accepts caller-owned
 root-shape/class identities and parent-scoped FnO predicate/member bindings.
-It uses the shared constraint compiler for bare string/integer/boolean, object
-and array schemas, requiredness, cardinality and closedness. Unsupported RDF
-representations and invalid bindings return typed errors. The original plain
-number requirement is unresolved: this revision refuses `xsd:decimal`,
-`xsd:double` and `xsd:float` as native `sh:datatype` representation errors with
-the original predicate and bound member. #43 remains open until exact number
-semantics are available upstream and qualified downstream. Complete losses keep
+It uses the shared constraint compiler for bare string/integer/number/boolean,
+object and array schemas, requiredness, cardinality and closedness. Decimal
+constraints retain arbitrary precision. Finite IEEE constants use exact decimal
+values; unrestricted float/double domains record the source-located
+`plain:ieee-representability` obligation for original SHACL checking. Finite
+admitted enums or scalar constants discharge it. Logical constraints and
+reference caches preserve residual exactness boundaries. Unsupported RDF
+representations, invalid bindings and identity-losing numeric constants return
+typed errors with the original predicate and bound member. Complete losses keep
 their original source; original SHACL checking remains mandatory where the
 projection loses semantics. The original `compile` API retains JSON-LD output.
 

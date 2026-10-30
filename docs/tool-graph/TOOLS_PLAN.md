@@ -450,8 +450,10 @@ caller-owned document table, never fetched from the network.
 
 The supported plain profile is adopted in #70, a subdivision of #43. Upstream issue
 [PurRDF #788](https://github.com/Blackcat-Informatics/purrdf/issues/788) closed
-through [PR #806](https://github.com/Blackcat-Informatics/purrdf/pull/806), pinned
-here at `8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77`. The existing
+through [PR #806](https://github.com/Blackcat-Informatics/purrdf/pull/806).
+Numeric projection from [PurRDF #885](https://github.com/Blackcat-Informatics/purrdf/issues/885)
+is merged through [PR #888](https://github.com/Blackcat-Informatics/purrdf/pull/888),
+pinned here at `742bbbfbe2240e1fc6f178badd049420753ef358`. The existing
 `json_schema::compile` retains its JSON-LD surface; the public
 `purrdf_shapes::json_schema::compile_tool_arguments` uses the shared constraint
 compiler with an explicit caller-owned `ToolArgumentProfile`.
@@ -463,14 +465,17 @@ used transitive binding closure, including shared nested shapes. Missing,
 duplicate, colliding, reserved and unused bindings are native typed refusals.
 The same predicate can have different member names under different parents.
 
-The upstream compiler emits bare strings, integers, booleans, objects and
-arrays, with exact constraints, requiredness, cardinality and closedness.
-The original G7 contract also requires plain JSON numbers. This revision
-refuses `xsd:decimal`, `xsd:double` and `xsd:float` with native
-`UnsupportedConstruct` / `ToolRepresentationError::Constraint("sh:datatype")`,
-retaining the bound member and original predicate. That numeric requirement
-remains open under #43 and #33; supported-profile adoption does not complete G7.
-Other unsupported RDF representations are likewise explicit refusals.
+The upstream compiler emits bare strings, integers, numbers, booleans, objects
+and arrays, with exact constraints, requiredness, cardinality and closedness.
+Decimal bounds, enums and constants preserve arbitrary precision. Finite float
+and double constants use their exact mathematical decimal values. Unrestricted
+IEEE domains record the registered, source-located
+`plain:ieee-representability` loss and require the original SHACL datatype check;
+an admitted finite enum or scalar constant discharges that obligation. Residual
+checks cannot become exact negated or exclusive alternatives through references.
+Invalid, nonfinite, negative IEEE zero, noncanonical constant spellings and
+unsupported numeric domains retain typed causes, bound members and original
+predicates. Other unsupported RDF representations are explicit refusals.
 `CompiledSchema` retains schema/OpenAPI text and the complete source-located
 loss ledger. Constraints beyond JSON Schema still require checks against the
 retained original SHACL graph. There is no local compiler, JSON-LD rewriting
@@ -491,8 +496,10 @@ for the four worked tools and validate them with the full first-party core
 schema engine. The upstream compiler's decoded QueryInput regular expression is
 `^customer\u{2d}(?:[0-9])+$`; the proposed manifest bytes remain #33 acceptance. Focused downstream
 cases also cover nested input/output objects and arrays, scoped bindings,
-required/optional members, closedness, exact integer `xone`/`not`/`someValue`,
-loss source subjects, typed refusals and tiny logical ceilings. The legacy
+required/optional members, closedness, exact integer and decimal
+`xone`/`not`/`someValue`, decimal boundaries beyond binary floating-point
+precision, numeric enums/constants, registered IEEE losses, loss source subjects,
+typed refusals with valid neighbors and tiny logical ceilings. The legacy
 JSON-LD schema/OpenAPI goldens are retained from the previous pin; compiling
 plain profiles also preserves the neighboring original JSON-LD schema and
 OpenAPI artifacts.
@@ -506,10 +513,9 @@ parsing and schema index/reference ownership have since gained their own admitte
 owners. Algebra preparation and graph/compiler integration remain required under
 #33 and #36.
 
-This adopts the supported upstream profile only. Full G7 qualification still
-requires exact plain-number semantics upstream and downstream executable
-evidence; no local compiler or schema rewriting can satisfy that requirement.
-#43 stays open. #33 still owns the actual loader and bidirectional MCP codec, retained source and occurrence spans,
+This completes the G7 shared-compiler prerequisite, including plain-number
+semantics and the focused downstream consumer. #33 still owns the actual loader
+and bidirectional MCP codec, retained source and occurrence spans,
 FnO mappings, original-SHACL and policy checking, exact core validation,
 facade/host wiring and registry-resolvable packaging. Its complete original
 contract stays open until those behaviors are delivered.
@@ -1448,4 +1454,4 @@ a mismatch fails explicitly. Native parsing/checking allocations are separate.
 This does not complete the policy gate or authenticate the configuration source.
 Declared edges still need native verification; protected heads, governed native
 preparation/evaluation, actual execution and result release remain required.
-All remaining #33/#34/#35/#36/#37/#39/#43/#47 tracking contracts stay open.
+All remaining #33/#34/#35/#36/#37/#39/#47 tracking contracts stay open.
