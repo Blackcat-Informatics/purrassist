@@ -1,0 +1,189 @@
+{
+  "description": "Issue #6, m397meud: after a broken id string, the rejected call body is read fresh from the failure and its name member. The malformed second call spans 108..178, while get_weather is recovered.",
+  "tools": [
+    {
+      "name": "read_file",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "aliases": [
+            "file"
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "name": "list_dir",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "current_time",
+      "effects": "read_only",
+      "params": {
+        "zone": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "get_weather",
+      "effects": "read_only",
+      "params": {
+        "city": {
+          "type": "string",
+          "required": true
+        },
+        "unit": {
+          "type": "enum",
+          "values": [
+            "celsius",
+            "fahrenheit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "write_file",
+      "effects": "mutating",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "required": true
+        },
+        "mode": {
+          "type": "enum",
+          "values": [
+            "create",
+            "overwrite"
+          ]
+        },
+        "ratio": {
+          "type": "number"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "object",
+          "params": {
+            "backup": {
+              "type": "boolean"
+            },
+            "retries": {
+              "type": "integer"
+            },
+            "owner": {
+              "type": "object",
+              "params": {
+                "name": {
+                  "type": "string"
+                },
+                "uid": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "delete_path",
+      "effects": "mutating",
+      "aliases": [
+        "rm"
+      ],
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "repeatable": true
+        }
+      }
+    }
+  ],
+  "policy": "per_tool",
+  "stop": "tool_calls",
+  "reasoning": "starts_open",
+  "tool_choice": "none",
+  "effort": "quick",
+  "ambiguity": "reject",
+  "input": {
+    "hex": "914c6574206d6520636865636b20626f74682e0a5b544f4f4c5f43414c4c535d5b7b226e616d65223a20226765745f77656174686572222c2022617267756d656e7473223a207b2263697479223a20224f736c6f227d2c20226964223a20225771376b5032785a72227d2c207b226964223a20226d344e383a207b2270617468223a20226e6f7465732e747874222c20226c696d6974223a2031307d2c20226e616d65223a2022726561645f66696c65227d5d5d"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Oslo"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "unresolved: tool_choice_none: the request's tool choice `none` forbids every call",
+      "rules": [
+        "tool_call.markup.group-split",
+        "tool_call.reasoning.unclosed"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        108,
+        178
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 121 }",
+      "raw": "{\"id\": \"m4N8: {\"path\": \"notes.txt\", \"limit\": 10}, \"name\": \"read_file\"}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "]]"
+  ],
+  "reasoning_text": [
+    "[145, 76, 101, 116, 32, 109, 101, 32, 99, 104, 101, 99, 107, 32, 98, 111, 116, 104, 46, 10]"
+  ],
+  "failed_validations": [
+    "tool_choice=none"
+  ],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.reasoning.unclosed",
+    "tool_call.markup.group-split"
+  ]
+}

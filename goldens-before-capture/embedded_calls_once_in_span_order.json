@@ -1,0 +1,122 @@
+{
+  "description": "T1/F5: a Mistral v11 attempt reading several calls begins inside a starts_open block and ends after [/THINK]; the attempt the second [TOOL_CALLS] began reads the same call. Each call inside the block is embedded once, in span order (t, then s), and the call after the closer is a call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "t",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "s",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "y": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "g",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "t": "read_only",
+    "s": "read_only",
+    "g": "read_only"
+  },
+  "reasoning": "starts_open",
+  "input": "[TOOL_CALLS]t[TOOL_CALLS]s[/THINK][TOOL_CALLS]g",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "g",
+      "arguments": null,
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "unresolved: arguments_not_object: the arguments are not a JSON object",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "json.syntax.missing-value",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [
+    {
+      "tool": "t",
+      "arguments": null,
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "unresolved: arguments_not_object: the arguments are not a JSON object",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "json.syntax.missing-value",
+        "tool_call.reasoning.embedded-call"
+      ]
+    },
+    {
+      "tool": "s",
+      "arguments": {},
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "unresolved: invalid_argument: the arguments value cannot be decoded: JSON that cannot be recovered at byte 26",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.reasoning.marker-cut",
+        "tool_call.reasoning.embedded-call"
+      ]
+    }
+  ],
+  "content": [],
+  "reasoning_text": [
+    "[TOOL_CALLS]t[TOOL_CALLS]s"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "json.syntax.missing-value",
+    "tool_call.id.dedup",
+    "tool_call.markup.missing-token",
+    "json.syntax.missing-value",
+    "tool_call.reasoning.embedded-call",
+    "tool_call.markup.missing-token",
+    "tool_call.reasoning.marker-cut",
+    "tool_call.reasoning.embedded-call"
+  ]
+}

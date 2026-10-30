@@ -1,0 +1,61 @@
+{
+  "description": "T2: a closer token within edit distance one of exactly one closer of the grammar, still shaped like a tag, is read as that closer (tool_call.markup.closer-misspelled, the original bytes recorded, a markup repair that does not demote); the prose after it stays content. DeepSeek v3.1 <｜tool▁cal▁end｜> for <｜tool▁call▁end｜> (only that closer is one edit away).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁cal▁end｜><｜tool▁calls▁end｜> The answer.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.closer-misspelled"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " The answer."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.closer-misspelled"
+  ]
+}

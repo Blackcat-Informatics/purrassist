@@ -1,0 +1,6 @@
+[
+  "crates/host/README.md",
+  "docs/tool-calls/README.md",
+  "docs/tool-calls/dialects/bare-json.v1.md",
+  "scripts/test-check-docs.py"
+]

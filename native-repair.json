@@ -1,0 +1,4 @@
+{
+  "array": "[{\"id\":\"call_905a2fdc15f6_0\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Oslo\\\",\\\"unit\\\":\\\"celsius\\\"}\"}}]",
+  "digest": "sha256:d3a464d94219c219592a5f6e7e1523f8afe4673f508b73b49f968dbb71bf9dca"
+}

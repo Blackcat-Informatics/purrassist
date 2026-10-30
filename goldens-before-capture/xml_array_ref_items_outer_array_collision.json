@@ -1,0 +1,111 @@
+{
+  "description": "Issue #8 section 1, gap G2 (completion audit F1 repro 2): a $ref note's array member tags shares the name of the outer array parameter tags; each stays in its own scope and the note's text is one item of the note's tags.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "save",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/note"
+              }
+            }
+          },
+          "$defs": {
+            "note": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "text"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=save>\n<parameter=tags>\nwork\n</parameter>\n<parameter=notes>\n<parameter=text>\nbuy milk\n</parameter>\n<parameter=tags>\nhome\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "save",
+      "arguments": {
+        "tags": [
+          "work"
+        ],
+        "notes": [
+          {
+            "text": "buy milk",
+            "tags": [
+              "home"
+            ]
+          }
+        ]
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.array-item",
+        "tool_call.markup.nested-parameter",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.array-item",
+        "tool_call.xml.array-item"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.array-item",
+    "tool_call.markup.nested-parameter",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.array-item",
+    "tool_call.xml.array-item"
+  ]
+}

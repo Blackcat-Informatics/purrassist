@@ -1,0 +1,107 @@
+{
+  "description": "The same output with only DeepSeek-V3.1 allowed: V3.1 reads `function` as the tool name and the rest as guessed JSON; the name resolves to no declared tool and the arguments do not decode, so the call is Unresolved. Nothing is executable.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "stop": "stop",
+  "input": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"src/ma",
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [
+      {
+        "tool": "read_file",
+        "arguments": {
+          "path": "src/ma"
+        },
+        "candidate_dialects": [
+          "deepseek-v3.v1"
+        ],
+        "outcome": "unresolved: malformed: malformed call: the arguments value is incomplete at the end of output",
+        "rules": [
+          "json.syntax.unterminated-string",
+          "json.syntax.close-container",
+          "tool_call.markup.missing-token",
+          "tool_call.markup.missing-closers-at-end",
+          "tool_call.markup.missing-closers-at-end"
+        ]
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "json.syntax.unterminated-string",
+      "json.syntax.close-container",
+      "tool_call.markup.missing-token",
+      "tool_call.markup.missing-closers-at-end",
+      "tool_call.markup.missing-closers-at-end"
+    ]
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": null,
+      "arguments": {},
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "unresolved: invalid_argument: the arguments value cannot be decoded: the stringified arguments do not hold one recoverable JSON object",
+      "rules": [
+        "json.syntax.bare-string",
+        "tool_call.arguments.decode-string",
+        "tool_call.markup.missing-function-close",
+        "tool_call.markup.missing-wrapper-close.before-text"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "```json\n{\"path\": \"src/ma"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.bare-string",
+    "tool_call.arguments.decode-string",
+    "tool_call.markup.missing-function-close",
+    "tool_call.markup.missing-wrapper-close.before-text"
+  ]
+}

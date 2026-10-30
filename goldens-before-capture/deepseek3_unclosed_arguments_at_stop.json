@@ -1,0 +1,64 @@
+{
+  "description": "A DeepSeek-V3 call whose fenced arguments end mid-string at the end of output under a stop, read with every built-in dialect allowed. DeepSeek-V3.1 can also read the section (`function` as a tool name, the rest as guessed JSON), but `function` names no declared tool while the DeepSeek-V3 reading names `read_file`, so the DeepSeek-V3 reading is selected (cost::UNDECLARED_NAME). The string and object are closed (json.syntax.unterminated-string, json.syntax.close-container), the closing fence is read as inserted (tool_call.markup.missing-token) and the closers inserted at the end (tool_call.markup.missing-closers-at-end). A value completed only by end-of-output repairs inside unterminated markup is Unresolved (Malformed), as for every dialect with closers: the call is reported, never run.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{\"path\": \"src/ma",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "src/ma"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.v1"
+      ],
+      "outcome": "unresolved: malformed: malformed call: the arguments value is incomplete at the end of output",
+      "rules": [
+        "json.syntax.unterminated-string",
+        "json.syntax.close-container",
+        "tool_call.markup.missing-token",
+        "tool_call.markup.missing-closers-at-end",
+        "tool_call.markup.missing-closers-at-end"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.unterminated-string",
+    "json.syntax.close-container",
+    "tool_call.markup.missing-token",
+    "tool_call.markup.missing-closers-at-end",
+    "tool_call.markup.missing-closers-at-end"
+  ]
+}

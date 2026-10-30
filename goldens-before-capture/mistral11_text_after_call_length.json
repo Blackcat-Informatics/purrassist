@@ -1,0 +1,68 @@
+{
+  "description": "A Mistral v11 call followed by a word cut off by a length stop: the word never began arguments, so it is not a cut-off call; the call is Resolved, the word is content, and the finish is truncated_with_calls.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "stop": "length",
+  "input": "[TOOL_CALLS]get_weather[ARGS]{\"city\": \"Paris\"}\nDone",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "truncated_with_calls",
+  "openai_finish_reason": "length",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "Done"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.id.dedup"
+  ]
+}

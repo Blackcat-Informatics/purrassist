@@ -1,0 +1,58 @@
+{
+  "description": "T1/F7: the same nested <function= element with newlines between tokens: the rejected span runs through the whole </function> literal.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "pre <function=f>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</function> post",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        4,
+        70
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 17 }",
+      "raw": "<function=f>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</function>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "pre ",
+    " post"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

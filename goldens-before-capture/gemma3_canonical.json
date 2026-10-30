@@ -1,0 +1,65 @@
+{
+  "description": "A Gemma tool_code fence recovers its direct keyword call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "```tool_code\nget_weather(city='Paris', unit='celsius')\n```",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        19,
+        61
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: Gemma3ToolCode }",
+      "raw": "```tool_code\nget_weather(city=\"Paris\")\n```"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ],
+  "dialects": [
+    "gemma3-tool-code.v1"
+  ]
+}

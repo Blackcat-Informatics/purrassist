@@ -1,0 +1,69 @@
+{
+  "description": "A call object cut off by the length limit: it never completed, so it stays content (finish truncated) rather than becoming a call attempt.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "bare-json.v1"
+  ],
+  "stop": "length",
+  "input": "{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Os",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "truncated",
+  "openai_finish_reason": "length",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Os"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

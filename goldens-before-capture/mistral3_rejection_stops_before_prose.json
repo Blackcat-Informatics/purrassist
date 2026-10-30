@@ -1,0 +1,97 @@
+{
+  "description": "T5/F11: a rejected Mistral v3 attempt never runs into prose: a resynchronization at a JSON bracket or separator (bytes prose writes too) extends no rejection, so the attempt ends where it failed and the prose (with its own `{a, b},`) stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "[TOOL_CALLS] [{\"name\": \"read_file\" oops. Sorry, I cannot call tools here. Options were {a, b}, final answer: 42.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          35
+        ],
+        "dialect": "mistral-v3.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 35 }",
+        "raw": "[TOOL_CALLS] [{\"name\": \"read_file\" "
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "oops. Sorry, I cannot call tools here. Options were {a, b}, final answer: 42."
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        35
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 35 }",
+      "raw": "[TOOL_CALLS] [{\"name\": \"read_file\" "
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "oops. Sorry, I cannot call tools here. Options were {a, b}, final answer: 42."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

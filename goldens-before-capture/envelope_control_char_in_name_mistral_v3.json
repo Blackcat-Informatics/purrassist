@@ -1,0 +1,65 @@
+{
+  "description": "F3 envelope tolerance (mistral-v3.v1): a raw tab before the name string's closing quote, deleted from the name (the edit keeps the original bytes). The json-envelope grammar reads it as the JSON codec reads the same slip inside arguments, recording json.syntax.string (a non-guess syntax repair, no demotion): the read-only call is Resolved, as it would be with the slip only inside its arguments.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "follow": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "input": "[TOOL_CALLS] [{\"name\": \"read_file\t\", \"arguments\": {\"path\": \"a\"}, \"id\": \"a1B2c3D4e\"}]",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "json.syntax.string"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "json.syntax.string"
+  ]
+}

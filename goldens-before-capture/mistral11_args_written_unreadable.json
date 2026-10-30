@@ -1,0 +1,93 @@
+{
+  "description": "T3: a Mistral v11 call whose [ARGS] is written and whose arguments no repair reads: the attempt is rejected where the value stopped decoding and runs to the bracket that balances the value it opened, so no markup is left as text and the answer after it stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS]f[ARGS]{\"a\": ::: } The answer.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          33
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 28 }",
+        "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " The answer."
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        33
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 28 }",
+      "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " The answer."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

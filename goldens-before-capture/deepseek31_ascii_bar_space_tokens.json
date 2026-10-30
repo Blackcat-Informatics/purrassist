@@ -1,0 +1,74 @@
+{
+  "description": "A DeepSeek-V3.1 call whose tokens were rendered with an ASCII | and spaces for the word-boundary block: read as the tokens (tool_call.markup.terminal-confusable) and the call is Resolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "stop": "stop",
+  "input": "<|tool calls begin|><|tool call begin|>get_weather<|tool sep|>{\"city\": \"Rome\"}<|tool call end|><|tool calls end|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Rome"
+      },
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.terminal-confusable",
+        "tool_call.markup.terminal-confusable",
+        "tool_call.markup.terminal-confusable",
+        "tool_call.markup.terminal-confusable",
+        "tool_call.markup.terminal-confusable"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.terminal-confusable",
+    "tool_call.markup.terminal-confusable",
+    "tool_call.markup.terminal-confusable",
+    "tool_call.markup.terminal-confusable",
+    "tool_call.markup.terminal-confusable"
+  ]
+}

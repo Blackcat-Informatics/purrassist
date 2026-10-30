@@ -1,0 +1,71 @@
+{
+  "description": "S2: no reading validates (abc for Optional[int]): the verbatim text stays, with its schema_validation diagnosis.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "search": "read_only"
+  },
+  "stop": "stop",
+  "input": "<tool_call>\n<function=search>\n<parameter=limit>\nabc\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "search",
+      "arguments": {
+        "limit": "abc"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "unresolved: schema_validation: the arguments fail the tool's schema",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [
+    "sha256:094793826c8e88290d34be3fb5662bb1c2d21fe1ba00d0156c2cd040fb987f8b",
+    "keyword /properties/limit/anyOf"
+  ],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

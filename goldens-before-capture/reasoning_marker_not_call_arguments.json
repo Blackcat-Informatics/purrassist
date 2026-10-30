@@ -1,0 +1,88 @@
+{
+  "description": "T2: the bytes of a reasoning block's closing marker belong to the block, never to a call in the same reading. Under starts_open, the Mistral v11 call s with no [ARGS] would read [/THINK] as its arguments; it is cut at the marker (tool_call.reasoning.marker-cut), so its arguments are unresolved and it is never usable, while t, which ends before the marker, is unchanged.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "t",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "s",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "t": "read_only",
+    "s": "read_only"
+  },
+  "reasoning": "starts_open",
+  "input": "[TOOL_CALLS]t[TOOL_CALLS]s[/THINK]Answer.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [
+    {
+      "tool": "t",
+      "arguments": null,
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "unresolved: arguments_not_object: the arguments are not a JSON object",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "json.syntax.missing-value",
+        "tool_call.reasoning.embedded-call"
+      ]
+    },
+    {
+      "tool": "s",
+      "arguments": {},
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "unresolved: invalid_argument: the arguments value cannot be decoded: JSON that cannot be recovered at byte 26",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.reasoning.marker-cut",
+        "tool_call.reasoning.embedded-call"
+      ]
+    }
+  ],
+  "content": [
+    "Answer."
+  ],
+  "reasoning_text": [
+    "[TOOL_CALLS]t[TOOL_CALLS]s"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "json.syntax.missing-value",
+    "tool_call.reasoning.embedded-call",
+    "tool_call.markup.missing-token",
+    "tool_call.reasoning.marker-cut",
+    "tool_call.reasoning.embedded-call"
+  ]
+}

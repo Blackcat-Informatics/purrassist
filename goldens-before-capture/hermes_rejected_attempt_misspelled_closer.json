@@ -1,0 +1,94 @@
+{
+  "description": "T4: the mirror of a misspelled closer ending a call: a rejected Hermes attempt's markup runs to its closer written with one slip (</tool_cal>, one edit from </tool_call> and from no other closer), as a call's would, so the slipped closer is not left as content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi <tool_call>{\"name\": \"f\" oops \"arguments\": {\"a\": \"x\"}}</tool_cal> The answer.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          67
+        ],
+        "dialect": "hermes.v1",
+        "candidate_dialects": [
+          "glm-4.5.v1",
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 27 }",
+        "raw": "<tool_call>{\"name\": \"f\" oops \"arguments\": {\"a\": \"x\"}}</tool_cal>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " The answer."
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        67
+      ],
+      "dialect": "hermes.v1",
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "reason": "Malformed { at: 27 }",
+      "raw": "<tool_call>{\"name\": \"f\" oops \"arguments\": {\"a\": \"x\"}}</tool_cal>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " The answer."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -1,0 +1,66 @@
+{
+  "description": "Maintainer decision (adversary pass 6, F14/F19): \"Newlines have zero meaning here.\" F14: the same shape as qwen_same_line_closer_then_text_is_ambiguous in a value not framed by newlines (`<parameter=a>rm -rf build</parameter> ...</parameter>`): the same Ambiguous outcome, whatever the layout.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "set",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            },
+            "b": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "a"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "set": "mutating"
+  },
+  "input": "<tool_call>\n<function=set>\n<parameter=a>rm -rf build</parameter> Then I set b.</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "set",
+      "arguments": {
+        "a": "rm -rf build</parameter> Then I set b."
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.value.closer-in-value",
+        "tool_call.value.text-after-closer"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.value.closer-in-value",
+    "tool_call.value.text-after-closer"
+  ]
+}

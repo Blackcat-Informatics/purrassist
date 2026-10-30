@@ -1,0 +1,45 @@
+{
+  "observed": "2026-10-26",
+  "observation": "remaining limitations from the 0.1.0 release; issues 6 and 12 repaired in the unreleased source",
+  "limitations": [
+    {
+      "issue": 7,
+      "title": "Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits",
+      "impact": "Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.",
+      "blocks_release": false
+    },
+    {
+      "issue": 10,
+      "title": "Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time",
+      "impact": "A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.",
+      "blocks_release": false
+    },
+    {
+      "issue": 11,
+      "title": "Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes)",
+      "impact": "One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.",
+      "blocks_release": false,
+      "fuzz_stop_targets": [
+        "tool-call-ref"
+      ]
+    },
+    {
+      "issue": 16,
+      "title": "Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress)",
+      "impact": "There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.",
+      "blocks_release": false
+    },
+    {
+      "issue": 17,
+      "title": "Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas)",
+      "impact": "Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.",
+      "blocks_release": false
+    },
+    {
+      "issue": 18,
+      "title": "Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1)",
+      "impact": "Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.",
+      "blocks_release": false
+    }
+  ]
+}

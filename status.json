@@ -1,0 +1,140 @@
+{
+  "issue": 14,
+  "pr_number": 158,
+  "branch": "paudley/14-tool-call-recovery-add-the-gemma3-tool",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool",
+  "observed_at": "2026-10-30T21:08:46.956438+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_fail",
+      "message": "CI state is fail"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [
+    {
+      "source": "ci_logs",
+      "reason": "one or more failed-job logs unavailable; see inventory"
+    }
+  ],
+  "next_actions": [
+    "Inspect saved failed-job excerpts",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "0a149c4f0f7c584cc36b1ad04f85d372d008eb15",
+    "headRefName": "paudley/14-tool-call-recovery-add-the-gemma3-tool",
+    "headRefOid": "fcc0e5021c19b6de83fa9aed76286f6d4ba2845b",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 158,
+    "state": "OPEN",
+    "title": "Add Gemma tool-code recovery dialect",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/158"
+  },
+  "checks": {
+    "state": "fail",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115595",
+        "name": "native (ubuntu-24.04)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115723",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115576",
+        "name": "release-gate",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115532",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115486",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115408",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115753",
+        "name": "qualification",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115200",
+        "name": "native (macos-14)",
+        "state": "CANCELLED"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "fcc0e5021c19b6de83fa9aed76286f6d4ba2845b",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "fcc0e5021c19b6de83fa9aed76286f6d4ba2845b",
+    "branch": "paudley/14-tool-call-recovery-add-the-gemma3-tool",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 158,
+    "jobs": [
+      {
+        "name": "native (macos-14)",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115200",
+        "path": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/ci-logs/github-job-124307115200.log",
+        "error": "Log download failed (exit 1): gh: HTTP 404\n"
+      }
+    ],
+    "ok": false,
+    "summary": "# PR #158 failed CI logs\n\n## native (macos-14)\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115200\n\nLOG UNAVAILABLE: Log download failed (exit 1): gh: HTTP 404\n\n\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

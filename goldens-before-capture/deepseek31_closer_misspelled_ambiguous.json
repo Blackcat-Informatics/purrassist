@@ -1,0 +1,93 @@
+{
+  "description": "T2: a closer token one edit away from two closers of the grammar is not respelled: DeepSeek v3.1 <｜tool▁callz▁end｜> is one edit from both <｜tool▁call▁end｜> and <｜tool▁calls▁end｜>, so tool_call.markup.closer-misspelled is not admitted and the attempt is rejected; the prose after it stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁callz▁end｜><｜tool▁calls▁end｜> The answer.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          138
+        ],
+        "dialect": "deepseek-v3.1.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1",
+          "deepseek-v3.v1"
+        ],
+        "reason": "Malformed { at: 101 }",
+        "raw": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁callz▁end｜><｜tool▁calls▁end｜>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " The answer."
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        138
+      ],
+      "dialect": "deepseek-v3.1.v1",
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "reason": "Malformed { at: 101 }",
+      "raw": "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>f<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁callz▁end｜><｜tool▁calls▁end｜>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " The answer."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -1,0 +1,65 @@
+{
+  "description": "A Qwen3-Coder call with a near-miss tool name on a read-only tool: the tool is only known after name resolution, so the integer parameter's XML text is then read by its declared type (tool_call.value.decode-typed); the name guess makes the call BestGuess.",
+  "tools": [
+    {
+      "name": "read_file",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=read_fiel>\n<parameter=path>\na.rs\n</parameter>\n<parameter=limit>\n5\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs",
+        "limit": 5
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.name.match",
+        "tool_call.value.decode-typed"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.name.match",
+    "tool_call.value.decode-typed"
+  ]
+}

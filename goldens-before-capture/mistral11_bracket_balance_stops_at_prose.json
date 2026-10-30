@@ -1,0 +1,97 @@
+{
+  "description": "T5/F11: a rejected attempt runs on to the bracket balancing the value it left open only over bytes JSON reads: prose (a bare word followed by another word or sentence punctuation) stops it, so `}` in the prose is not taken as the value's end and the prose stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"x\" oops. Sorry, my answer: use a mapping like m[k] = v} and done.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          39
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 39 }",
+        "raw": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"x\" "
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "oops. Sorry, my answer: use a mapping like m[k] = v} and done."
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        39
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 39 }",
+      "raw": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"x\" "
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "oops. Sorry, my answer: use a mapping like m[k] = v} and done."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

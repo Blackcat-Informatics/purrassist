@@ -1,0 +1,2259 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a932cfa..c422494 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -11,6 +11,11 @@ crates share one version.
+ 
+ ### Added
+ 
++- Gemma 3 `tool_code` fences recover direct Python keyword calls through
++  `gemma3-tool-code.v1` and the native Pythonic codec. Multiple fenced calls
++  retain order, ordinary code examples remain content, and `tool_output`
++  fences retain their result payloads. Canonical emission uses the same grammar.
++
+ - Schema recovery candidate trees retain fallible owners through construction,
+   queue discard and final publication. Replacements copy only retained nodes;
+   required witnesses and date/time repairs transfer owned values. Shared Search
+@@ -165,7 +170,6 @@ matches its single source, [known-limitations.json](docs/known-limitations.json)
+ - [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+ - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+ - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+-- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+ - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+ - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+ - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+diff --git a/README.md b/README.md
+index 9842e98..2ac911b 100644
+--- a/README.md
++++ b/README.md
+@@ -161,14 +161,14 @@ Current surfaces include:
+   mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
+   array. Call markup of a dialect that is not built in yet, or not in the
+   request's allow-list, is reported as a rejected attempt
+-  (`unsupported_dialect`), never silent content. Fourteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
++  (`unsupported_dialect`), never silent content. Fifteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
+   `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+-  `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`; callers add
++  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`; callers add
+   their own with the grammar DSL. Typed tool definitions derive from Rust
+   structs and enums with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`
+   (the zero-dependency `purrassist-derive` crate, re-exported by the facade;
+-  see the example below). Still tracked: the `gemma3-tool-code.v1` (#14) dialects, the `*-stripped` variants
++  see the example below). Still tracked: the `*-stripped` variants
+   (#18), streaming recognition (#16), and provider streaming events (#17). See
+   [tool-call recovery](docs/tool-calls/README.md).
+ - CLI, stdio MCP, and resumable helper request/response adapters
+diff --git a/crates/core/README.md b/crates/core/README.md
+index bda22c1..e22c000 100644
+--- a/crates/core/README.md
++++ b/crates/core/README.md
+@@ -24,10 +24,10 @@ assert_eq!(result.receipt.sources[0].text(), Some("[[42]]"));
+ definitions or lossless `OpenAI`, MCP, and Anthropic declarations: each call
+ gets its tool, schema-validated arguments, an outcome (`Resolved`,
+ `BestGuess`, `Ambiguous`, `Unresolved`), and its itemized repairs; markup no
+-allowed dialect reads is reported, never dropped. Fourteen dialects ship as
++allowed dialect reads is reported, never dropped. Fifteen dialects ship as
+ weighted, invertible grammars: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+ `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
+-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
++`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
+ 
+ ```rust
+ use purrassist_core::tool_call::{CallOutcome, Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+diff --git a/crates/core/src/grammar/compile.rs b/crates/core/src/grammar/compile.rs
+index d56c97f..4540304 100644
+--- a/crates/core/src/grammar/compile.rs
++++ b/crates/core/src/grammar/compile.rs
+@@ -72,6 +72,13 @@ impl ScratchCharge for Inst {
+     };
+ }
+ 
++/// A validated final fence literal and optional verbatim body delimiter set.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) struct ProtocolFence {
++    pub(crate) closer: u32,
++    pub(crate) body: Option<u32>,
++}
++
+ /// The recognizer program of one production.
+ #[derive(Debug, PartialEq, Eq)]
+ pub(crate) struct Program {
+@@ -82,6 +89,7 @@ pub(crate) struct Program {
+     pub(crate) openers: ScratchVec<u32>,
+     /// Initial opener PCs admitted only at a blank line prefix.
+     pub(crate) line_start_openers: ScratchVec<u32>,
++    pub(crate) protocol: Option<ProtocolFence>,
+     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
+     pub(crate) first: [u64; 4],
+     /// The configuration bound (see `CompiledGrammar::configuration_bound`).
+@@ -1510,6 +1518,7 @@ fn compile_program(
+         start,
+         openers,
+         line_start_openers: ScratchVec::new(governor),
++        protocol: None,
+         first,
+         bound,
+         committed,
+@@ -1733,11 +1742,17 @@ fn declare<'d>(
+                     .push((owned_bytes(opener, builder.governor)?, *at))?;
+             }
+             Statement::ExamplesContent { at } => {
+-                if declared.examples == ExamplePolicy::Content {
++                if declared.examples != ExamplePolicy::Recover {
+                     return Err(duplicate(*at, "examples-content", builder.governor)?);
+                 }
+                 declared.examples = ExamplePolicy::Content;
+             }
++            Statement::ProtocolFences { at } => {
++                if declared.examples != ExamplePolicy::Recover {
++                    return Err(duplicate(*at, "protocol-fences", builder.governor)?);
++                }
++                declared.examples = ExamplePolicy::ProtocolFences;
++            }
+             Statement::OptionalId { at } => {
+                 if declared.optional_id {
+                     return Err(duplicate(*at, "optional-id", builder.governor)?);
+@@ -2144,6 +2159,16 @@ pub(crate) fn compile(
+         programs = source.compile(&literals, &literal_tables, &renames, governor)?;
+     }
+     line_start_openers(&mut programs[0], &line_start, &literals, governor)?;
++    if examples == ExamplePolicy::ProtocolFences {
++        protocol_fences(
++            &mut programs,
++            &literals,
++            &closers,
++            &literal_tables,
++            &delimiters,
++            governor,
++        )?;
++    }
+     let longest = longest_literal(
+         &literals,
+         &literal_tables,
+@@ -2614,6 +2639,225 @@ fn layouts(
+     Ok(layouts)
+ }
+ 
++/// Validate the opt-in fence form and admit its additional finite suffix states.
++fn protocol_fences(
++    programs: &mut [Program; 2],
++    literals: &[Literal],
++    closers: &[CloserClass],
++    repairs: &[LiteralTables],
++    delimiters: &[DelimiterSet],
++    governor: &mut Governor,
++) -> Result<(), GrammarError> {
++    for program in programs {
++        let closer = protocol_closer(program, literals, closers, repairs, governor)?;
++        protocol_headers(program, literals, repairs, closer, governor)?;
++        let (body, extra) = protocol_states(
++            program,
++            &literals[closer as usize].bytes,
++            closer,
++            repairs,
++            delimiters,
++            governor,
++        )?;
++        program.bound = program
++            .bound
++            .checked_add(extra)
++            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
++        program.protocol = Some(ProtocolFence { closer, body });
++    }
++    Ok(())
++}
++
++fn protocol_closer(
++    program: &Program,
++    literals: &[Literal],
++    closers: &[CloserClass],
++    repairs: &[LiteralTables],
++    governor: &mut Governor,
++) -> Result<u32, GrammarError> {
++    let completing = reach_back(
++        &program.insts,
++        |inst| matches!(inst, Inst::Accept),
++        true,
++        governor,
++    )?;
++    if completing[program.start as usize] {
++        return Err(protocol_error(
++            "every path must end in a literal fence",
++            governor,
++        )?);
++    }
++    let mut last = None;
++    for inst in &program.insts {
++        governor.charge(Resource::Work, 1)?;
++        match *inst {
++            Inst::Lit { lit, next } if completing[next as usize] => {
++                if last.is_some_and(|prior| prior != lit) {
++                    return Err(protocol_error(
++                        "one final named fence closer is required",
++                        governor,
++                    )?);
++                }
++                last = Some(lit);
++            }
++            Inst::Class { next, .. } | Inst::Until { next, .. } | Inst::Slot { next, .. }
++                if completing[next as usize] =>
++            {
++                return Err(protocol_error(
++                    "every path must end in a literal fence",
++                    governor,
++                )?);
++            }
++            _ => {}
++        }
++    }
++    let Some(closer) = last else {
++        return Err(protocol_error(
++            "a final named fence closer is required",
++            governor,
++        )?);
++    };
++    let literal = &literals[closer as usize];
++    let bytes = literal.bytes.as_slice();
++    governor.charge(Resource::Work, size(bytes.len()))?;
++    if bytes.len() < 3
++        || !matches!(bytes[0], b'`' | b'~')
++        || bytes.iter().any(|byte| *byte != bytes[0])
++    {
++        return Err(protocol_error(
++            "a closer must be one fence run of at least three markers",
++            governor,
++        )?);
++    }
++    let Some(class) = literal.closer else {
++        return Err(protocol_error(
++            "the final fence must be a named closer",
++            governor,
++        )?);
++    };
++    if closers[class.0 as usize].spellings.len() != 1
++        || !repairs[closer as usize].confusables.list.is_empty()
++    {
++        return Err(protocol_error(
++            "fence closer variants and confusables are not supported",
++            governor,
++        )?);
++    }
++    Ok(closer)
++}
++
++fn protocol_headers(
++    program: &mut Program,
++    literals: &[Literal],
++    repairs: &[LiteralTables],
++    closer: u32,
++    governor: &mut Governor,
++) -> Result<(), GrammarError> {
++    if program.start_closure || program.openers.is_empty() {
++        return Err(protocol_error(
++            "initial literal fence headers are required",
++            governor,
++        )?);
++    }
++    let bytes = literals[closer as usize].bytes.as_slice();
++    for &pc in &program.openers {
++        governor.charge(Resource::Work, 1)?;
++        let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
++            unreachable!("literal opener")
++        };
++        let header = literals[lit as usize].bytes.as_slice();
++        governor.charge(Resource::Work, size(header.len()))?;
++        let info = header.strip_prefix(bytes);
++        if info.is_none_or(|info| {
++            info.is_empty()
++                || info.iter().all(u8::is_ascii_whitespace)
++                || info
++                    .iter()
++                    .any(|byte| matches!(byte, b'\r' | b'\n') || *byte == bytes[0])
++        }) {
++            return Err(protocol_error(
++                "headers must contain one fence run followed by an info string",
++                governor,
++            )?);
++        }
++        if !repairs[lit as usize].variants.list.is_empty()
++            || !repairs[lit as usize].confusables.list.is_empty()
++        {
++            return Err(protocol_error(
++                "fence header variants and confusables are not supported",
++                governor,
++            )?);
++        }
++        if !program.line_start_openers.contains(&pc) {
++            program.line_start_openers.push(pc)?;
++        }
++    }
++    Ok(())
++}
++
++fn protocol_states(
++    program: &Program,
++    bytes: &[u8],
++    closer: u32,
++    repairs: &[LiteralTables],
++    delimiters: &[DelimiterSet],
++    governor: &mut Governor,
++) -> Result<(Option<u32>, u64), GrammarError> {
++    let mut body = None;
++    let mut extra = 0_u64;
++    for inst in &program.insts {
++        governor.charge(Resource::Work, 1)?;
++        let additional = match *inst {
++            Inst::Lit { lit, .. } if lit == closer => {
++                let nodes = repairs[lit as usize].trie_nodes(governor)?;
++                // Each spelling can wait in horizontal-space or CR state.
++                size(bytes.len())
++                    .checked_add(nodes)
++                    .and_then(|base| base.checked_mul(2))
++                    .and_then(|states| states.checked_add(2))
++                    .ok_or_else(|| governor.stop_resource(Resource::Work))?
++            }
++            Inst::Until { set, .. } => {
++                if body.is_some_and(|prior| prior != set) {
++                    return Err(protocol_error(
++                        "one verbatim fence body delimiter set is supported",
++                        governor,
++                    )?);
++                }
++                for delimiter in &delimiters[set as usize].declared {
++                    let delimiter = delimiter.as_slice();
++                    governor.charge(Resource::Work, size(delimiter.len()))?;
++                    let suffix = delimiter
++                        .strip_prefix(b"\r\n")
++                        .or_else(|| delimiter.strip_prefix(b"\n"));
++                    if suffix != Some(bytes) {
++                        return Err(protocol_error(
++                            "verbatim body delimiters must be a newline followed by the final fence",
++                            governor,
++                        )?);
++                    }
++                }
++                body = Some(set);
++                2
++            }
++            // A stray fence may be deleted while any literal is pending.
++            Inst::Lit { .. } => 2,
++            _ => 0,
++        };
++        extra = extra
++            .checked_add(additional)
++            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
++    }
++    Ok((body, extra))
++}
++
++fn protocol_error(reason: &str, governor: &mut Governor) -> Result<GrammarError, GrammarError> {
++    Ok(GrammarError::InvalidOpener {
++        offset: 0,
++        production: diagnostic(reason, governor)?,
++    })
++}
++
+ #[cfg(test)]
+ mod admission_tests {
+     use super::{
+diff --git a/crates/core/src/grammar/engine.rs b/crates/core/src/grammar/engine.rs
+index 1e148c6..ec0fcbb 100644
+--- a/crates/core/src/grammar/engine.rs
++++ b/crates/core/src/grammar/engine.rs
+@@ -63,6 +63,7 @@ use super::codec::{
+ use super::compile::JsonSpelling;
+ use super::cost::{K_CAPTURE, K_CODEC, K_THREAD, STRAY_CLOSER_GAP, UNDECLARED_NAME};
+ use super::edit::{EditOperator, MarkupEdit};
++use super::fence::{LineDecision, LineSuffix};
+ use super::repair::{RepairContext, RepairState, Status};
+ use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
+ use crate::contract::saturating_size as size;
+@@ -141,6 +142,19 @@ pub(crate) enum Sub {
+     /// a JSON string and after a backslash in one) and how many of the
+     /// literal's bytes matched so far.
+     Resync(u32, u32),
++    /// A protocol fence candidate waits for its complete line suffix.
++    Fence {
++        end: usize,
++        suffix: LineSuffix,
++        kind: FenceKind,
++    },
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum FenceKind {
++    Literal,
++    Body,
++    Skip,
+ }
+ 
+ impl Sub {
+@@ -188,6 +202,7 @@ impl Sub {
+             Self::Misspelled(index, _) => (20, *index),
+             Self::Transposed(index, _) => (21, *index),
+             Self::Resync(state, matched) => (22, state.wrapping_mul(64).wrapping_add(*matched)),
++            Self::Fence { suffix, kind, .. } => (23 + *kind as u8, *suffix as u32),
+         }
+     }
+ }
+@@ -762,6 +777,9 @@ impl<'s> Step<'_, 's> {
+         out: &mut Out,
+         governor: &mut Governor,
+     ) -> Result<(), StopReason> {
++        if matches!(thread.sub, Sub::Fence { .. }) {
++            return self.step_fence(thread, byte, stack, out, governor);
++        }
+         let grammar = self.grammar;
+         let canonical = &grammar.literals[lit as usize].bytes;
+         let tables = &grammar.literal_tables[lit as usize];
+@@ -819,7 +837,9 @@ impl<'s> Step<'_, 's> {
+                     thread, lit, next, byte, state, matched, stack, out, governor,
+                 );
+             }
+-            Sub::Class(_) | Sub::Body(..) => unreachable!("literal configurations only"),
++            Sub::Class(_) | Sub::Body(..) | Sub::Fence { .. } => {
++                unreachable!("literal configurations only")
++            }
+         };
+         let Some(child) = trie.step(node, byte) else {
+             return Self::fail(out, thread, pos, Rejection::Malformed { at: pos });
+@@ -836,6 +856,15 @@ impl<'s> Step<'_, 's> {
+             return Ok(());
+         }
+         let deleted = operator == EditOperator::DeleteStrayCloser;
++        if deleted && self.protocol_spelling(thread.entry..pos + 1) {
++            thread.sub = Sub::Fence {
++                end: pos + 1,
++                suffix: LineSuffix::Horizontal,
++                kind: FenceKind::Skip,
++            };
++            thread.pos = pos + 1;
++            return self.queue(thread, stack);
++        }
+         let edit = MarkupEdit {
+             operator,
+             span: thread.entry..pos + 1,
+@@ -1366,6 +1395,9 @@ impl<'s> Step<'_, 's> {
+         out: &mut Out,
+         governor: &mut Governor,
+     ) -> Result<(), StopReason> {
++        if matches!(thread.sub, Sub::Fence { .. }) {
++            return self.step_fence(thread, byte, stack, out, governor);
++        }
+         let Sub::Body(raw, codec) = thread.sub else {
+             unreachable!("body configurations only")
+         };
+@@ -1408,6 +1440,20 @@ impl<'s> Step<'_, 's> {
+         if end.is_none()
+             && let Some((index, _)) = found
+         {
++            if codec.is_none()
++                && self
++                    .program
++                    .protocol
++                    .is_some_and(|fence| fence.body == Some(set))
++            {
++                thread.sub = Sub::Fence {
++                    end: to,
++                    suffix: LineSuffix::Horizontal,
++                    kind: FenceKind::Body,
++                };
++                thread.pos = pos + 1;
++                return self.queue(thread, stack);
++            }
+             if self.repaired_delimiter(&thread, set, index) {
+                 // A delimiter that ends the body only by a repair (a closer
+                 // variant or confusable spelling, or one written inside a
+@@ -1973,6 +2019,111 @@ impl<'s> Step<'_, 's> {
+         Ok(CodecContext { shape, ..markup })
+     }
+ 
++    fn protocol_spelling(&self, range: Range<usize>) -> bool {
++        self.program.protocol.is_some_and(|fence| {
++            self.bytes(range)
++                == self.grammar.literals[fence.closer as usize]
++                    .bytes
++                    .as_slice()
++        })
++    }
++
++    fn step_fence(
++        &mut self,
++        mut thread: Thread,
++        byte: u8,
++        stack: &mut ScratchVec<Thread>,
++        out: &mut Out,
++        governor: &mut Governor,
++    ) -> Result<(), StopReason> {
++        let Sub::Fence {
++            end,
++            mut suffix,
++            kind,
++        } = thread.sub
++        else {
++            unreachable!("fence suffix")
++        };
++        match suffix.step(byte) {
++            LineDecision::More => {
++                thread.sub = Sub::Fence { end, suffix, kind };
++                thread.pos += 1;
++                self.queue(thread, stack)
++            }
++            LineDecision::End => self.finish_fence(thread, thread.pos + 1, stack, out, governor),
++            LineDecision::Invalid if kind == FenceKind::Body => {
++                thread.sub = Sub::Body(super::automaton::ROOT, None);
++                self.queue(thread, stack)
++            }
++            LineDecision::Invalid => {
++                let at = thread.entry;
++                Self::fail(
++                    out,
++                    Thread {
++                        sub: Sub::Lit(0),
++                        pos: at,
++                        ..thread
++                    },
++                    at,
++                    Rejection::Malformed { at },
++                )
++            }
++        }
++    }
++
++    fn finish_fence(
++        &mut self,
++        mut thread: Thread,
++        resume: usize,
++        stack: &mut ScratchVec<Thread>,
++        out: &mut Out,
++        governor: &mut Governor,
++    ) -> Result<(), StopReason> {
++        let Sub::Fence { end, kind, .. } = thread.sub else {
++            unreachable!("fence suffix")
++        };
++        match (kind, self.program.insts[thread.pc as usize]) {
++            (FenceKind::Body, Inst::Until { next, .. }) => {
++                thread.sub = Sub::Body(super::automaton::ROOT, None);
++                // A validated delimiter replays its footer after arbitrary
++                // suffix lookahead. That replay is real forward progress,
++                // not a zero-width cycle below the old high-water mark.
++                thread.reach = end;
++                thread.stall = 0;
++                self.end_body(
++                    thread,
++                    None,
++                    end,
++                    CodecEnd::Delimited,
++                    next,
++                    stack,
++                    out,
++                    governor,
++                )
++            }
++            (FenceKind::Literal, Inst::Lit { next, .. }) => {
++                self.closure(thread, next, end, stack, out, governor)
++            }
++            (FenceKind::Skip, Inst::Lit { .. }) => {
++                thread.hist = self.arena.edit(
++                    thread.hist,
++                    MarkupEdit {
++                        operator: EditOperator::DeleteStrayCloser,
++                        span: thread.entry..resume,
++                        original: self.bytes(thread.entry..resume).to_vec(),
++                        replacement: Vec::new(),
++                    },
++                    governor,
++                )?;
++                thread.sub = Sub::Lit(0);
++                thread.entry = resume;
++                thread.pos = resume;
++                self.queue(thread, stack)
++            }
++            _ => unreachable!("validated protocol fence terminal"),
++        }
++    }
++
+     fn finish_literal(
+         &mut self,
+         mut thread: Thread,
+@@ -1982,6 +2133,20 @@ impl<'s> Step<'_, 's> {
+         out: &mut Out,
+         governor: &mut Governor,
+     ) -> Result<(), StopReason> {
++        if let Inst::Lit { lit, .. } = self.program.insts[thread.pc as usize]
++            && self
++                .program
++                .protocol
++                .is_some_and(|fence| fence.closer == lit)
++        {
++            thread.sub = Sub::Fence {
++                end: at,
++                suffix: LineSuffix::Horizontal,
++                kind: FenceKind::Literal,
++            };
++            thread.pos = at;
++            return self.queue(thread, stack);
++        }
+         if !thread.opened && !self.program.deferred() && self.program.openers.contains(&thread.pc) {
+             thread.opened = true;
+             out.opened.push((thread.attempt, at))?;
+@@ -2114,6 +2279,23 @@ impl<'s> Step<'_, 's> {
+         governor: &mut Governor,
+     ) -> Result<(), StopReason> {
+         let pos = thread.pos;
++        if let Sub::Fence { suffix, kind, .. } = thread.sub {
++            if suffix.at_end() {
++                return self.finish_fence(thread, pos, stack, out, governor);
++            }
++            if kind == FenceKind::Body {
++                return self.end(
++                    Thread {
++                        sub: Sub::Body(super::automaton::ROOT, None),
++                        ..thread
++                    },
++                    stack,
++                    out,
++                    governor,
++                );
++            }
++            return Self::fail(out, thread, pos, Rejection::Unterminated);
++        }
+         match (self.program.insts[thread.pc as usize], thread.sub) {
+             (Inst::Lit { .. }, Sub::Lit(_)) => {
+                 Self::fail(out, thread, pos, Rejection::Unterminated)
+@@ -4053,6 +4235,9 @@ enum HeldBody {
+ /// a closer spelling: within `STRAY_CLOSER_GAP` plus the longest literal
+ /// bytes of its current end, which the recognizer's lookbehind covers
+ /// ([`DialectSet::lookbehind`](crate::tool_call::DialectSet::lookbehind)).
++/// An opt-in protocol fence additionally waits through horizontal whitespace
++/// until LF, CRLF or EOF validates the line. Its attempt retains the input
++/// and its original end holds the settlement frontier during that wait.
+ #[derive(Clone, Copy, Debug)]
+ struct Trail {
+     /// The completed configuration; `pos` is the call's current end.
+@@ -4063,6 +4248,7 @@ struct Trail {
+     at: usize,
+     /// The end of the longest complete spelling matched so far.
+     accepted: Option<usize>,
++    fence: Option<(usize, LineSuffix)>,
+     /// For a completion that inserted the call's wrapper closer
+     /// mid-message, once the stray closers after it are absorbed: the
+     /// lookahead deciding that insertion (see [`Engine::scan_trail`]).
+@@ -4076,6 +4262,17 @@ struct Scan {
+     text: Option<usize>,
+ }
+ 
++impl Scan {
++    /// A later marker decides whether preceding text was inside the wrapper.
++    fn before(self, start: usize, with_text: Verdict) -> Verdict {
++        if self.text.is_some_and(|text| text < start) {
++            with_text
++        } else {
++            Verdict::Report
++        }
++    }
++}
++
+ /// What the bytes after a held completion decided.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ enum Verdict {
+@@ -4105,6 +4302,7 @@ pub(crate) struct Engine<'s> {
+     fed: usize,
+     /// Whitespace-only prefix of the current source line, independent of buffering.
+     line_blank: bool,
++    protocol_fences: bool,
+     arena: Arena,
+     next_attempt: u64,
+     stack: ScratchVec<Thread>,
+@@ -4159,8 +4357,10 @@ impl<'s> Engine<'s> {
+     ) -> Result<Self, StopReason> {
+         let mut grammars = Vec::with_capacity(dialects.len());
+         let mut tables = Vec::with_capacity(dialects.len() * 2);
++        let mut protocol_fences = false;
+         for (index, dialect) in dialects.iter().enumerate() {
+             let grammar = dialect.grammar();
++            protocol_fences |= grammar.protocol_fences();
+             let mut dfas = Vec::with_capacity(grammar.classes.len());
+             for class in &grammar.classes {
+                 dfas.push(class.automaton.dfa(governor)?);
+@@ -4193,6 +4393,7 @@ impl<'s> Engine<'s> {
+         Ok(Self {
+             tables,
+             grammars,
++            protocol_fences,
+             buffer: ScratchVec::new(governor),
+             base: 0,
+             fed: 0,
+@@ -4278,6 +4479,10 @@ impl<'s> Engine<'s> {
+         self.collect(governor)
+     }
+ 
++    pub(crate) const fn protocol_fences(&self) -> bool {
++        self.protocol_fences
++    }
++
+     fn step_table(
+         &mut self,
+         table: usize,
+@@ -5710,6 +5915,7 @@ impl<'s> Engine<'s> {
+                     node: ROOT,
+                     at: group.pos,
+                     accepted: None,
++                    fence: None,
+                     scan: None,
+                 });
+             }
+@@ -5761,6 +5967,18 @@ impl<'s> Engine<'s> {
+         Ok(())
+     }
+ 
++    fn protocol_trail_spelling(&self, table: usize, end: usize) -> bool {
++        let Some(fence) = self.tables[table].program.protocol else {
++            return false;
++        };
++        let grammar = self.grammars[self.tables[table].grammar].grammar;
++        let bytes = grammar.literals[fence.closer as usize].bytes.as_slice();
++        end.checked_sub(bytes.len()).is_some_and(|start| {
++            start >= self.base
++                && self.buffer.as_slice()[start - self.base..end - self.base] == *bytes
++        })
++    }
++
+     /// Step one held completion up to `until`; whether it is decided.
+     fn step_trail(
+         &mut self,
+@@ -5773,6 +5991,30 @@ impl<'s> Engine<'s> {
+         let grammar = self.grammars[self.tables[table].grammar].grammar;
+         let stray = &grammar.stray;
+         loop {
++            if let Some((token_end, mut suffix)) = trail.fence {
++                if trail.at >= until {
++                    if !end {
++                        return Ok(false);
++                    }
++                    if !suffix.at_end() {
++                        return Ok(true);
++                    }
++                } else {
++                    governor.charge(Resource::Work, K_THREAD)?;
++                    match suffix.step(self.buffer.as_slice()[trail.at - self.base]) {
++                        LineDecision::More => {
++                            trail.at += 1;
++                            trail.fence = Some((token_end, suffix));
++                            continue;
++                        }
++                        LineDecision::Invalid => return Ok(true),
++                        LineDecision::End => {}
++                    }
++                }
++                trail.fence = None;
++                self.absorb(trail, token_end, governor)?;
++                continue;
++            }
+             if trail.at >= until {
+                 if !end {
+                     return Ok(false);
+@@ -5798,6 +6040,10 @@ impl<'s> Engine<'s> {
+                 trail.at += 1;
+                 trail.node = child;
+                 if stray.accept(child).is_some() {
++                    if self.protocol_trail_spelling(table, trail.at) {
++                        trail.fence = Some((trail.at, LineSuffix::Horizontal));
++                        continue;
++                    }
+                     trail.accepted = Some(trail.at);
+                 }
+                 if stray.has_children(child) {
+@@ -5877,6 +6123,19 @@ impl<'s> Engine<'s> {
+             let at = trail.at;
+             let byte = self.buffer.as_slice()[at - self.base];
+             trail.at += 1;
++            if let Some((token_end, mut suffix)) = trail.fence {
++                match suffix.step(byte) {
++                    LineDecision::More => {
++                        trail.fence = Some((token_end, suffix));
++                        continue;
++                    }
++                    LineDecision::Invalid => trail.fence = None,
++                    LineDecision::End => {
++                        trail.fence = None;
++                        return Ok(self.fence_verdict(table, token_end, scan));
++                    }
++                }
++            }
+             if scan.text.is_none() && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
+                 scan.text = Some(at);
+             }
+@@ -5890,24 +6149,26 @@ impl<'s> Engine<'s> {
+                 // inserted closer is the only reading when only whitespace
+                 // came between, and text before it is a guess as before.
+                 let start = trail.at - opener.len();
+-                return Ok(if scan.text.is_some_and(|text| text < start) {
+-                    Verdict::Guess
+-                } else {
+-                    Verdict::Report
+-                });
++                return Ok(scan.before(start, Verdict::Guess));
+             }
+             if let Some(closer) = closers.iter().find(|closer| read.ends_with(closer)) {
++                if self.protocol_trail_spelling(table, trail.at) {
++                    trail.fence = Some((trail.at, LineSuffix::Horizontal));
++                    continue;
++                }
+                 // A closer after only whitespace is the wrapper's own,
+                 // beyond the stray-closer gap: the call as it was read.
+                 let start = trail.at - closer.len();
+-                return Ok(if scan.text.is_some_and(|text| text < start) {
+-                    Verdict::Reject
+-                } else {
+-                    Verdict::Report
+-                });
++                return Ok(scan.before(start, Verdict::Reject));
+             }
+         }
+         trail.scan = Some(scan);
++        if end && let Some((token_end, suffix)) = trail.fence {
++            trail.fence = None;
++            if suffix.at_end() {
++                return Ok(self.fence_verdict(table, token_end, scan));
++            }
++        }
+         Ok(match (end, scan.text) {
+             (false, _) => Verdict::Held,
+             (true, None) => Verdict::Report,
+@@ -5915,8 +6176,21 @@ impl<'s> Engine<'s> {
+         })
+     }
+ 
++    fn fence_verdict(&self, table: usize, end: usize, scan: Scan) -> Verdict {
++        let grammar = self.grammars[self.tables[table].grammar].grammar;
++        let fence = self.tables[table]
++            .program
++            .protocol
++            .expect("protocol suffix");
++        scan.before(
++            end - grammar.literals[fence.closer as usize].bytes.len(),
++            Verdict::Reject,
++        )
++    }
++
+     /// The earliest end of a call whose inserted wrapper closer is still
+-    /// being decided ([`Self::scan_trail`]), or start of an attempt of a
++    /// being decided ([`Self::scan_trail`]), a protocol fence awaiting its
++    /// physical line suffix, or start of an attempt of a
+     /// program with `commit` that has not committed yet ([`Self::commit`]):
+     /// the turn layer settles no report at or after it until the decision
+     /// is made or the attempt commits or ends.
+@@ -5925,8 +6199,16 @@ impl<'s> Engine<'s> {
+             .tables
+             .iter()
+             .flat_map(|table| table.trails.iter())
+-            .filter(|trail| trail.scan.is_some())
++            .filter(|trail| trail.scan.is_some() || trail.fence.is_some())
+             .map(|trail| trail.thread.pos);
++        let suffixes = self
++            .tables
++            .iter()
++            .flat_map(|table| table.threads.as_slice().iter())
++            .filter_map(|thread| match thread.sub {
++                Sub::Fence { end, .. } => Some(end),
++                _ => None,
++            });
+         // An uncommitted attempt of a deferred program may still open at
+         // its start: nothing at or after its start is settled until it
+         // commits or ends.
+@@ -5939,7 +6221,12 @@ impl<'s> Engine<'s> {
+             .filter(|record| !record.opened)
+             .map(|record| record.start);
+         let deferred = self.deferred.iter().map(|(_, ended)| ended.at());
+-        trails.chain(held).chain(uncommitted).chain(deferred).min()
++        trails
++            .chain(suffixes)
++            .chain(held)
++            .chain(uncommitted)
++            .chain(deferred)
++            .min()
+     }
+ 
+     /// Record every inserted wrapper closer ending `thread`'s history as
+diff --git a/crates/core/src/grammar/mod.rs b/crates/core/src/grammar/mod.rs
+index 9d64df1..74e5955 100644
+--- a/crates/core/src/grammar/mod.rs
++++ b/crates/core/src/grammar/mod.rs
+@@ -27,6 +27,7 @@
+ //! | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. |
+ //! | `layout NAME "TEXT";` | Printing only: the class production `NAME` is printed as `TEXT` (a member of the class) wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
+ //! | `line-start "OPEN";` | Restrict matching initial call-opener literals to turn or line start after horizontal whitespace; explicit alternative openers remain unguarded. |
++//! | `protocol-fences;` | Keep enclosing Markdown examples as content; validate grammar-owned fence headers and full closing lines, retaining standalone malformed protocol rejections. |
+ //! | `examples-content;` | Treat calls inside fenced, inline-code, and blockquote examples as content, including rejected attempts. |
+ //! | `NAME = EXPR;` | A production. |
+ //!
+@@ -143,6 +144,7 @@ mod compile;
+ pub mod cost;
+ pub mod edit;
+ pub(crate) mod engine;
++pub(crate) mod fence;
+ pub(crate) mod misspelling;
+ pub mod print;
+ mod repair;
+@@ -816,6 +818,8 @@ pub(crate) enum ExamplePolicy {
+     Recover,
+     /// Keep examples as assistant content.
+     Content,
++    /// Grammar-owned protocol fence lines are markup, including rejected calls.
++    ProtocolFences,
+ }
+ 
+ // Compiled grammars are shared across threads (`DialectId::Custom` holds an
+@@ -827,8 +831,15 @@ const _: fn() = || {
+ };
+ 
+ impl CompiledGrammar {
++    pub(crate) const fn protocol_fences(&self) -> bool {
++        matches!(self.examples, ExamplePolicy::ProtocolFences)
++    }
++
+     pub(crate) const fn examples_content(&self) -> bool {
+-        matches!(self.examples, ExamplePolicy::Content)
++        matches!(
++            self.examples,
++            ExamplePolicy::Content | ExamplePolicy::ProtocolFences
++        )
+     }
+ 
+     /// The grammar's declared id.
+diff --git a/crates/core/src/grammar/repair.rs b/crates/core/src/grammar/repair.rs
+index a5b1e01..3f339ab 100644
+--- a/crates/core/src/grammar/repair.rs
++++ b/crates/core/src/grammar/repair.rs
+@@ -566,7 +566,11 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
+                     )?;
+                 }
+                 if !respell && context.opened && literal.closer.is_some() {
+-                    let replacement = literal.bytes.as_slice().to_vec();
++                    let protocol = program.protocol.is_some_and(|fence| fence.closer == lit);
++                    let mut replacement = literal.bytes.as_slice().to_vec();
++                    if protocol {
++                        replacement.push(b'\n');
++                    }
+                     // A closer missing mid-message: the wrapper's when it
+                     // ends the production, an inner element's otherwise.
+                     let wrapper = completes(program, next, governor)?;
+@@ -580,7 +584,18 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
+                     // that closer behind as content: a repeated or stray
+                     // closer belongs to the call, so only the deletion
+                     // (`tool_call.markup.stray-closer`) reads it.
+-                    let complete = !(wrapper && grammar.stray.admits(pending));
++                    let mut stray = grammar.stray.admits(pending);
++                    if protocol && pending.starts_with(&literal.bytes) {
++                        governor.charge(
++                            Resource::Work,
++                            crate::contract::saturating_size(pending.len()),
++                        )?;
++                        stray = super::fence::complete(
++                            &pending[literal.bytes.len()..],
++                            context.eof.is_some(),
++                        );
++                    }
++                    let complete = !(wrapper && stray);
+                     self.insert(
+                         context,
+                         proposals,
+diff --git a/crates/core/src/grammar/syntax.rs b/crates/core/src/grammar/syntax.rs
+index 729e9be..4675060 100644
+--- a/crates/core/src/grammar/syntax.rs
++++ b/crates/core/src/grammar/syntax.rs
+@@ -143,6 +143,9 @@ pub(crate) enum Statement {
+     ExamplesContent {
+         at: usize,
+     },
++    ProtocolFences {
++        at: usize,
++    },
+     OptionalId {
+         at: usize,
+     },
+@@ -169,10 +172,11 @@ pub(crate) struct Document {
+     pub(crate) statements: ScratchVec<Statement>,
+ }
+ 
+-pub(crate) const KEYWORDS: [&str; 15] = [
++pub(crate) const KEYWORDS: [&str; 16] = [
+     "grammar",
+     "line-start",
+     "examples-content",
++    "protocol-fences",
+     "optional-id",
+     "declaration-content",
+     "json-envelope",
+@@ -623,6 +627,7 @@ impl Parser<'_, '_> {
+                 at,
+             },
+             "examples-content" => Statement::ExamplesContent { at },
++            "protocol-fences" => Statement::ProtocolFences { at },
+             "optional-id" => Statement::OptionalId { at },
+             "declaration-content" => Statement::DeclarationContent { at },
+             "json-envelope" => Statement::JsonEnvelope { at },
+diff --git a/crates/core/src/tool_call/context.rs b/crates/core/src/tool_call/context.rs
+index 5b9ec4d..710ecd5 100644
+--- a/crates/core/src/tool_call/context.rs
++++ b/crates/core/src/tool_call/context.rs
+@@ -27,7 +27,8 @@
+ // (https://github.com/rust-lang/rust-clippy/issues/6188); `pub(crate)`
+ // (matching `unreachable_pub`) wins, as in `grammar::engine`.
+ #![allow(clippy::redundant_pub_crate)]
+-use crate::contract::{Governor, Resource, StopReason};
++use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
++use crate::grammar::fence::{LineDecision, LineSuffix};
+ use core::ops::Range;
+ 
+ /// Scratch bytes charged per recorded fence line, quote line or backtick run.
+@@ -53,6 +54,9 @@ enum Line {
+ struct FenceLine {
+     start: usize,
+     end: usize,
++    marker: usize,
++    indent: u8,
++    protocol_closing: bool,
+     fence: u8,
+     length: usize,
+     /// Only whitespace follows the run: the line can close a fence.
+@@ -61,6 +65,21 @@ struct FenceLine {
+     opening: bool,
+ }
+ 
++/// One grammar-owned fence region, with a portable charge for its two offsets.
++pub(crate) struct ProtocolRegion(Range<usize>);
++
++impl ScratchCharge for ProtocolRegion {
++    const CHARGE: usize = {
++        assert!(core::mem::size_of::<Self>() <= 16);
++        16
++    };
++}
++
++pub(crate) struct StrictFences {
++    pub(crate) examples: Vec<Range<usize>>,
++    pub(crate) protocol: ScratchVec<ProtocolRegion>,
++}
++
+ /// The byte-step Markdown context scanner of one turn.
+ #[derive(Clone, Debug)]
+ pub(crate) struct ContextTracker {
+@@ -68,6 +87,9 @@ pub(crate) struct ContextTracker {
+     indent: u8,
+     state: Line,
+     run: (u8, usize),
++    run_start: usize,
++    protocols: bool,
++    suffix: Option<LineSuffix>,
+     rest_blank: bool,
+     rest_tick: bool,
+     tick: Option<usize>,
+@@ -77,12 +99,15 @@ pub(crate) struct ContextTracker {
+ }
+ 
+ impl ContextTracker {
+-    pub(crate) const fn new() -> Self {
++    pub(crate) const fn new(protocols: bool) -> Self {
+         Self {
+             line: 0,
+             indent: 0,
+             state: Line::Start,
+             run: (0, 0),
++            run_start: 0,
++            protocols,
++            suffix: Some(LineSuffix::Horizontal),
+             rest_blank: true,
+             rest_tick: false,
+             tick: None,
+@@ -106,16 +131,18 @@ impl ContextTracker {
+             self.ticks.push(start..at);
+         }
+         if byte == b'\n' {
+-            return self.end_line(at + 1, governor);
++            return self.end_line(at + 1, false, governor);
+         }
+         match self.state {
+             Line::Start => match byte {
+                 b' ' if self.indent < 3 => self.indent += 1,
++                b' ' | b'\t' if self.protocols => self.indent = 4,
+                 b'`' | b'~' => {
+                     self.state = Line::Run;
+                     self.run = (byte, 1);
++                    self.run_start = at;
+                 }
+-                b'>' => self.state = Line::Quote,
++                b'>' if self.indent < 4 => self.state = Line::Quote,
+                 _ => self.state = Line::Other,
+             },
+             Line::Run => {
+@@ -137,11 +164,24 @@ impl ContextTracker {
+     const fn rest(&mut self, byte: u8) {
+         self.rest_blank &= byte.is_ascii_whitespace();
+         self.rest_tick |= byte == b'`';
++        if self.protocols
++            && let Some(mut suffix) = self.suffix
++        {
++            self.suffix = match suffix.step(byte) {
++                LineDecision::Invalid => None,
++                _ => Some(suffix),
++            };
++        }
+     }
+ 
+     /// Finish the current line at `end` (just past its newline, or the end
+     /// of output) and start the next.
+-    fn end_line(&mut self, end: usize, governor: &mut Governor) -> Result<(), StopReason> {
++    fn end_line(
++        &mut self,
++        end: usize,
++        eof: bool,
++        governor: &mut Governor,
++    ) -> Result<(), StopReason> {
+         let fence = match self.state {
+             Line::Run => self.run.1 >= 3,
+             Line::Rest => true,
+@@ -152,6 +192,9 @@ impl ContextTracker {
+             self.fences.push(FenceLine {
+                 start: self.line,
+                 end,
++                marker: self.run_start,
++                indent: self.indent,
++                protocol_closing: self.suffix.is_some_and(|suffix| !eof || suffix.at_end()),
+                 fence: self.run.0,
+                 length: self.run.1,
+                 closing: self.rest_blank,
+@@ -165,6 +208,7 @@ impl ContextTracker {
+         self.indent = 0;
+         self.state = Line::Start;
+         self.run = (0, 0);
++        self.suffix = Some(LineSuffix::Horizontal);
+         self.rest_blank = true;
+         self.rest_tick = false;
+         Ok(())
+@@ -177,7 +221,7 @@ impl ContextTracker {
+             self.ticks.push(start..end);
+         }
+         if self.line < end {
+-            self.end_line(end, governor)?;
++            self.end_line(end, true, governor)?;
+         }
+         Ok(())
+     }
+@@ -189,7 +233,12 @@ impl ContextTracker {
+         let mut blocks = Vec::new();
+         let mut open: Option<&FenceLine> = None;
+         for line in &self.fences {
+-            if inside(excluded, line.start) {
++            let position = if self.protocols {
++                line.marker
++            } else {
++                line.start
++            };
++            if line.indent > 3 || inside(excluded, position) {
+                 continue;
+             }
+             match open {
+@@ -211,50 +260,90 @@ impl ContextTracker {
+         blocks
+     }
+ 
+-    /// Fences for grammars whose examples are content. A call that started
+-    /// inside a fence cannot hide its closing line; rejected spans never enter
+-    /// `calls`. Sorted ranges and fence lines are advanced once each.
++    /// Complete calls protect literal text. Protocol starts identify only a
++    /// header, never an arbitrary rejected span's claimed end.
+     pub(crate) fn strict_fenced(
+         &self,
+         calls: &[Range<usize>],
++        starts: &[usize],
+         end: usize,
+         governor: &mut Governor,
+-    ) -> Result<Vec<Range<usize>>, StopReason> {
++    ) -> Result<StrictFences, StopReason> {
+         governor.charge(
+             Resource::Work,
+-            crate::contract::saturating_size(calls.len() + self.fences.len()),
++            crate::contract::saturating_size(calls.len() + starts.len() + self.fences.len()),
+         )?;
+-        let mut blocks = Vec::new();
++        let mut regions = StrictFences {
++            examples: Vec::new(),
++            protocol: ScratchVec::new(governor),
++        };
+         let mut open: Option<&FenceLine> = None;
+-        let mut next = 0;
+-        let mut protected_end = 0;
++        let mut protocol: Option<&FenceLine> = None;
++        let (mut next, mut hint, mut protected_end) = (0, 0, 0);
+         for line in &self.fences {
+-            while let Some(call) = calls.get(next).filter(|call| call.start <= line.start) {
+-                if open.is_none_or(|fence| call.start < fence.start) {
++            while starts.get(hint).is_some_and(|start| *start < line.marker) {
++                hint += 1;
++            }
++            let header = starts.get(hint).is_some_and(|start| *start == line.marker);
++            if header
++                && line.marker >= protected_end
++                && let Some(prior) = protocol.take()
++            {
++                regions
++                    .protocol
++                    .push(ProtocolRegion(prior.start..line.start))?;
++            }
++            let position = if self.protocols {
++                line.marker
++            } else {
++                line.start
++            };
++            while let Some(call) = calls.get(next).filter(|call| call.start <= position) {
++                if protocol.is_none() && open.is_none_or(|fence| call.start < fence.start) {
+                     protected_end = protected_end.max(call.end);
+                 }
+                 next += 1;
+             }
+-            if line.start < protected_end {
++            if position < protected_end {
++                continue;
++            }
++            if let Some(prior) = protocol {
++                if line.fence == prior.fence && line.length == prior.length && line.protocol_closing
++                {
++                    regions
++                        .protocol
++                        .push(ProtocolRegion(prior.start..line.end))?;
++                    protocol = None;
++                }
++                continue;
++            }
++            if open.is_none() && header {
++                protocol = Some(line);
++                continue;
++            }
++            if line.indent > 3 {
+                 continue;
+             }
+             match open {
+                 None if line.opening => open = Some(line),
+-                Some(start)
+-                    if line.fence == start.fence && line.length >= start.length && line.closing =>
++                Some(prior)
++                    if line.fence == prior.fence && line.length >= prior.length && line.closing =>
+                 {
+                     governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+-                    blocks.push(start.start..line.end);
++                    regions.examples.push(prior.start..line.end);
+                     open = None;
+                 }
+                 _ => {}
+             }
+         }
+-        if let Some(start) = open {
+-            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+-            blocks.push(start.start..end);
++        if let Some(prior) = protocol {
++            regions.protocol.push(ProtocolRegion(prior.start..end))?;
+         }
+-        Ok(blocks)
++        if let Some(prior) = open {
++            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
++            regions.examples.push(prior.start..end);
++        }
++        Ok(regions)
+     }
+ 
+     /// Paired inline backtick spans. Literal text of calls that began outside
+@@ -263,24 +352,38 @@ impl ContextTracker {
+         &self,
+         calls: &[Range<usize>],
+         fenced: &[Range<usize>],
++        protocol: &[ProtocolRegion],
+         governor: &mut Governor,
+     ) -> Result<Vec<Range<usize>>, StopReason> {
+         governor.charge(
+             Resource::Work,
+             crate::contract::saturating_size(
+-                calls.len() + self.ticks.len() + fenced.len() * 2 + self.quotes.len(),
++                calls.len()
++                    + self.ticks.len()
++                    + fenced.len() * 2
++                    + self.quotes.len()
++                    + protocol.len(),
+             ),
+         )?;
+         let mut blocks = Vec::new();
+         let mut open: Option<&Range<usize>> = None;
+         let (mut next, mut fence, mut call_fence, mut quote, mut protected_end) = (0, 0, 0, 0, 0);
++        let mut owned = 0;
+         for run in &self.ticks {
+-            while fenced
+-                .get(fence)
+-                .is_some_and(|block| block.end <= run.start)
++            while protocol
++                .get(owned)
++                .is_some_and(|region| region.0.end <= run.start)
+             {
+-                fence += 1;
++                owned += 1;
+             }
++            if open.is_none()
++                && protocol
++                    .get(owned)
++                    .is_some_and(|region| region.0.contains(&run.start))
++            {
++                continue;
++            }
++            advance_regions(fenced, &mut fence, run.start);
+             if fenced
+                 .get(fence)
+                 .is_some_and(|block| block.contains(&run.start))
+@@ -289,19 +392,8 @@ impl ContextTracker {
+                 continue;
+             }
+             while let Some(call) = calls.get(next).filter(|call| call.start <= run.start) {
+-                while fenced
+-                    .get(call_fence)
+-                    .is_some_and(|block| block.end <= call.start)
+-                {
+-                    call_fence += 1;
+-                }
+-                while self
+-                    .quotes
+-                    .get(quote)
+-                    .is_some_and(|block| block.end <= call.start)
+-                {
+-                    quote += 1;
+-                }
++                advance_regions(fenced, &mut call_fence, call.start);
++                advance_regions(&self.quotes, &mut quote, call.start);
+                 let example = fenced
+                     .get(call_fence)
+                     .is_some_and(|block| block.contains(&call.start))
+@@ -401,6 +493,13 @@ fn inside(ranges: &[Range<usize>], offset: usize) -> bool {
+     index > 0 && offset < ranges[index - 1].end
+ }
+ 
++/// Each cursor advances once per range, covered by the caller's linear scan admission.
++fn advance_regions(regions: &[Range<usize>], cursor: &mut usize, at: usize) {
++    while regions.get(*cursor).is_some_and(|region| region.end <= at) {
++        *cursor += 1;
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::ContextTracker;
+@@ -408,7 +507,7 @@ mod tests {
+ 
+     fn scan(text: &str) -> ContextTracker {
+         let mut governor = Governor::new(Budget::default());
+-        let mut tracker = ContextTracker::new();
++        let mut tracker = ContextTracker::new(false);
+         for (at, &byte) in text.as_bytes().iter().enumerate() {
+             tracker.step(byte, at, &mut governor).expect("step");
+         }
+diff --git a/crates/core/src/tool_call/detect.rs b/crates/core/src/tool_call/detect.rs
+index 9bdd997..481fad6 100644
+--- a/crates/core/src/tool_call/detect.rs
++++ b/crates/core/src/tool_call/detect.rs
+@@ -12,8 +12,7 @@
+ //! [`Rejection::UnsupportedDialect`](super::Rejection::UnsupportedDialect),
+ //! and the bytes stay content). Two kinds of family are detected:
+ //!
+-//! - families no built-in dialect parses yet: Gemma 3 `` ```tool_code `` blocks,
+-//!   and the *stripped* renderings of
++//! - families no built-in dialect parses yet: the *stripped* renderings of
+ //!   built-in dialects whose special tokens a detokenizer removed and which
+ //!   no built-in grammar reads (Kimi-K2 `functions.NAME:IDX{...}`, Harmony
+ //!   `to=functions.NAME` without its tokens, DeepSeek-V3 `functionNAME` with
+@@ -92,10 +91,10 @@ pub enum MarkupFamily {
+     OpenAiToolCalls,
+     /// `qwen3-coder-xml.v1`: `<function=NAME>` in a `<tool_call>`.
+     Qwen3CoderXml,
+-    /// `pythonic.v1` (not built in): a list of Python-style calls with
++    /// `pythonic.v1`: a list of Python-style calls with
+     /// keyword arguments, `[get_weather(city="Paris"), ...]`.
+     Pythonic,
+-    /// `gemma3-tool-code.v1` (not built in): a `` ```tool_code `` fenced
++    /// `gemma3-tool-code.v1`: a `` ```tool_code `` fenced
+     /// block holding a call.
+     Gemma3ToolCode,
+     /// `glm-4.5.v1`: `<arg_key>`/`<arg_value>` pairs in a
+@@ -167,8 +166,8 @@ impl MarkupFamily {
+             Self::OpenAiToolCalls => DialectId::OpenAiToolCalls,
+             Self::Qwen3CoderXml => DialectId::Qwen3CoderXml,
+             Self::Pythonic => DialectId::Pythonic,
+-            Self::Gemma3ToolCode
+-            | Self::KimiK2Stripped
++            Self::Gemma3ToolCode => DialectId::Gemma3ToolCode,
++            Self::KimiK2Stripped
+             | Self::HarmonyStripped
+             | Self::DeepSeekV3Stripped
+             | Self::NameArgumentsStripped => return None,
+@@ -183,8 +182,7 @@ impl MarkupFamily {
+     pub const fn built_in(self) -> bool {
+         !matches!(
+             self,
+-            Self::Gemma3ToolCode
+-                | Self::KimiK2Stripped
++            Self::KimiK2Stripped
+                 | Self::HarmonyStripped
+                 | Self::DeepSeekV3Stripped
+                 | Self::NameArgumentsStripped
+diff --git a/crates/core/src/tool_call/dialect.rs b/crates/core/src/tool_call/dialect.rs
+index 48c5c29..a0947a3 100644
+--- a/crates/core/src/tool_call/dialect.rs
++++ b/crates/core/src/tool_call/dialect.rs
+@@ -86,6 +86,8 @@ pub enum DialectId {
+     /// `deepseek-v3.v1`: DeepSeek-V3 / R1 tool-calls sections with fenced
+     /// JSON arguments.
+     DeepSeekV3,
++    /// `gemma3-tool-code.v1`: a direct Python keyword call in a `tool_code` fence.
++    Gemma3ToolCode,
+     /// `glm-4.5.v1`: GLM alternating key/value tag calls.
+     Glm45,
+     /// `harmony.v1`: `OpenAI` Harmony (gpt-oss) assistant messages with a
+@@ -155,6 +157,10 @@ static DEEPSEEK_V3: BuiltIn = BuiltIn::new(
+     "deepseek-v3.v1",
+     include_str!("dialects/deepseek-v3.v1.grammar"),
+ );
++static GEMMA3_TOOL_CODE: BuiltIn = BuiltIn::new(
++    "gemma3-tool-code.v1",
++    include_str!("dialects/gemma3-tool-code.v1.grammar"),
++);
+ static GLM45: BuiltIn = BuiltIn::new("glm-4.5.v1", include_str!("dialects/glm-4.5.v1.grammar"));
+ static HARMONY: BuiltIn = BuiltIn::new("harmony.v1", include_str!("dialects/harmony.v1.grammar"));
+ static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
+@@ -196,6 +202,7 @@ impl DialectId {
+     ///         "bare-json.v1",
+     ///         "deepseek-v3.1.v1",
+     ///         "deepseek-v3.v1",
++    ///         "gemma3-tool-code.v1",
+     ///         "glm-4.5.v1",
+     ///         "harmony.v1",
+     ///         "hermes.v1",
+@@ -209,11 +216,12 @@ impl DialectId {
+     ///     ]
+     /// );
+     /// ```
+-    pub const BUILT_IN: [Self; 14] = [
++    pub const BUILT_IN: [Self; 15] = [
+         Self::AnthropicToolUse,
+         Self::BareJson,
+         Self::DeepSeekV31,
+         Self::DeepSeekV3,
++        Self::Gemma3ToolCode,
+         Self::Glm45,
+         Self::Harmony,
+         Self::Hermes,
+@@ -241,6 +249,7 @@ impl DialectId {
+             Self::AnthropicToolUse => Some(&ANTHROPIC_TOOL_USE),
+             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
+             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
++            Self::Gemma3ToolCode => Some(&GEMMA3_TOOL_CODE),
+             Self::Glm45 => Some(&GLM45),
+             Self::Harmony => Some(&HARMONY),
+             Self::Hermes => Some(&HERMES),
+@@ -288,6 +297,7 @@ impl DialectId {
+             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.id,
+             Self::DeepSeekV31 => DEEPSEEK_V31.id,
+             Self::DeepSeekV3 => DEEPSEEK_V3.id,
++            Self::Gemma3ToolCode => GEMMA3_TOOL_CODE.id,
+             Self::Glm45 => GLM45.id,
+             Self::Harmony => HARMONY.id,
+             Self::Hermes => HERMES.id,
+@@ -332,6 +342,7 @@ impl DialectId {
+             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.grammar(),
+             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
+             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),
++            Self::Gemma3ToolCode => GEMMA3_TOOL_CODE.grammar(),
+             Self::Glm45 => GLM45.grammar(),
+             Self::Harmony => HARMONY.grammar(),
+             Self::Hermes => HERMES.grammar(),
+diff --git a/crates/core/src/tool_call/recognizer.rs b/crates/core/src/tool_call/recognizer.rs
+index e5ec13a..91af348 100644
+--- a/crates/core/src/tool_call/recognizer.rs
++++ b/crates/core/src/tool_call/recognizer.rs
+@@ -80,8 +80,8 @@ use super::ir::{
+ use super::toolset::ToolSet;
+ use crate::contract::saturating_size as size;
+ use crate::contract::{
+-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, SourceSpan,
+-    StopReason,
++    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, ScratchVec,
++    SourceSpan, StopReason,
+ };
+ use crate::digest::{Digest, DigestBuilder};
+ use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
+@@ -1025,6 +1025,7 @@ impl<'s> Recognizer<'s> {
+         governor: &mut Governor,
+     ) -> Result<Self, StopReason> {
+         let engine = Engine::new(&set.dialects, tools, governor)?;
++        let context = ContextTracker::new(engine.protocol_fences());
+         let starts_open = matches!(policy, ReasoningPolicy::Separate { starts_open: true });
+         let root = TurnNode {
+             prev: 0,
+@@ -1067,7 +1068,7 @@ impl<'s> Recognizer<'s> {
+                 bytes: 0,
+             },
+             turn,
+-            context: ContextTracker::new(),
++            context,
+             failed: None,
+         })
+     }
+@@ -2231,16 +2232,29 @@ impl Builder<'_> {
+         governor: &mut Governor,
+     ) -> Result<(), StopReason> {
+         let mut spans = Vec::new();
++        let mut protocol = ScratchVec::new(governor);
+         let mut applicable = false;
+         for piece in pieces.iter() {
+             match piece {
+                 Piece::Segment(segment) => {
+-                    example_spans(segment, &mut spans, &mut applicable, governor)?;
++                    example_spans(
++                        segment,
++                        &mut spans,
++                        &mut protocol,
++                        &mut applicable,
++                        governor,
++                    )?;
+                 }
+                 Piece::Choice(choice) => {
+                     for reading in &choice.readings {
+                         for segment in reading {
+-                            example_spans(segment, &mut spans, &mut applicable, governor)?;
++                            example_spans(
++                                segment,
++                                &mut spans,
++                                &mut protocol,
++                                &mut applicable,
++                                governor,
++                            )?;
+                         }
+                     }
+                 }
+@@ -2257,8 +2271,15 @@ impl Builder<'_> {
+         governor.charge(Resource::Work, size(spans.len()).saturating_mul(64))?;
+         spans.sort_by_key(|span: &Range<usize>| (span.start, span.end));
+         spans.dedup();
+-        let fenced = self.context.strict_fenced(&spans, self.len, governor)?;
+-        let inline = self.context.strict_inline(&spans, &fenced, governor)?;
++        governor.charge(Resource::Work, size(protocol.len()).saturating_mul(64))?;
++        protocol.as_mut_slice().sort_unstable();
++        let regions =
++            self.context
++                .strict_fenced(&spans, protocol.as_slice(), self.len, governor)?;
++        let fenced = regions.examples;
++        let inline =
++            self.context
++                .strict_inline(&spans, &fenced, regions.protocol.as_slice(), governor)?;
+         governor.charge(
+             Resource::ScratchBytes,
+             size(pieces.len()).saturating_mul(EXAMPLE_RECORD_BYTES),
+@@ -2667,34 +2688,28 @@ pub(super) fn edit_entries(
+     (evidence, loss, inference)
+ }
+ 
+-/// Complete calls protect their literal text; rejected spans protect nothing.
++/// Complete calls protect literal text; rejected protocols contribute only a header.
+ fn example_spans(
+     segment: &Segment,
+     spans: &mut Vec<Range<usize>>,
++    protocol: &mut ScratchVec<usize>,
+     applicable: &mut bool,
+     governor: &mut Governor,
+ ) -> Result<(), StopReason> {
+     governor.charge(Resource::Work, 1)?;
+     match segment {
+         Segment::Call(call) | Segment::Result(call) => {
+-            governor.charge(Resource::Work, size(call.readings.len()))?;
+-            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+-            spans.push(call.span.clone());
+-            *applicable |= call
+-                .readings
+-                .iter()
+-                .any(|reading| reading.dialect.grammar().examples_content());
++            example_call(call, spans, protocol, applicable, governor)?
++        }
++        Segment::Rejected { dialect, span, .. } => {
++            *applicable |= dialect.grammar().examples_content();
++            if dialect.grammar().protocol_fences() {
++                protocol.push(span.start)?;
++            }
+         }
+-        Segment::Rejected { dialect, .. } => *applicable |= dialect.grammar().examples_content(),
+         Segment::Reasoning(reasoning) => {
+             for call in &reasoning.embedded {
+-                governor.charge(Resource::Work, size(call.readings.len()))?;
+-                governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+-                spans.push(call.span.clone());
+-                *applicable |= call
+-                    .readings
+-                    .iter()
+-                    .any(|reading| reading.dialect.grammar().examples_content());
++                example_call(call, spans, protocol, applicable, governor)?;
+             }
+         }
+         Segment::Content(_) => {}
+@@ -2702,6 +2717,28 @@ fn example_spans(
+     Ok(())
+ }
+ 
++fn example_call(
++    call: &CallSegment,
++    spans: &mut Vec<Range<usize>>,
++    protocol: &mut ScratchVec<usize>,
++    applicable: &mut bool,
++    governor: &mut Governor,
++) -> Result<(), StopReason> {
++    governor.charge(Resource::Work, size(call.readings.len()))?;
++    governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
++    spans.push(call.span.clone());
++    let mut own_fence = false;
++    for reading in &call.readings {
++        let grammar = reading.dialect.grammar();
++        *applicable |= grammar.examples_content();
++        own_fence |= grammar.protocol_fences();
++    }
++    if own_fence {
++        protocol.push(call.span.start)?;
++    }
++    Ok(())
++}
++
+ fn push_merged(segments: &mut Vec<Segment>, segment: Segment) {
+     if let (Some(Segment::Content(last)), Segment::Content(next)) = (segments.last_mut(), &segment)
+         && last.end == next.start
+diff --git a/crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code.json b/crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code.json
+deleted file mode 100644
+index 474e05e..0000000
+--- a/crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code.json
++++ /dev/null
+@@ -1,62 +0,0 @@
+-{
+-  "description": "A Gemma 3 ```tool_code block holding a call (gemma3-tool-code.v1, not built in yet): reported, the fenced bytes stay content.",
+-  "tools_openai": [
+-    {
+-      "type": "function",
+-      "function": {
+-        "name": "get_weather",
+-        "parameters": {
+-          "type": "object",
+-          "properties": {
+-            "city": {
+-              "type": "string"
+-            },
+-            "unit": {
+-              "type": "string",
+-              "enum": [
+-                "celsius",
+-                "fahrenheit"
+-              ]
+-            }
+-          },
+-          "required": [
+-            "city"
+-          ]
+-        }
+-      }
+-    }
+-  ],
+-  "stop": "stop",
+-  "input": "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n",
+-  "outcome": "resolved",
+-  "stopped": "completed",
+-  "finish": "unresolved",
+-  "openai_finish_reason": "stop",
+-  "verdict": "nothing_usable",
+-  "usable_calls": {
+-    "strict": 0,
+-    "accepting_guesses": 0
+-  },
+-  "calls": [],
+-  "rejected": [
+-    {
+-      "span": [
+-        19,
+-        61
+-      ],
+-      "dialect": null,
+-      "candidate_dialects": [],
+-      "reason": "UnsupportedDialect { family: Gemma3ToolCode }",
+-      "raw": "```tool_code\nget_weather(city=\"Paris\")\n```"
+-    }
+-  ],
+-  "embedded": [],
+-  "content": [
+-    "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n"
+-  ],
+-  "reasoning_text": [],
+-  "failed_validations": [],
+-  "ledger_rules": [
+-    "tool_call.markup.unparsed-dialect"
+-  ]
+-}
+diff --git a/crates/core/tests/tool_call_corpus/mod.rs b/crates/core/tests/tool_call_corpus/mod.rs
+index bbf037f..3378334 100644
+--- a/crates/core/tests/tool_call_corpus/mod.rs
++++ b/crates/core/tests/tool_call_corpus/mod.rs
+@@ -406,7 +406,7 @@ fn adapter_cases(cases: &mut Vec<Case>) {
+     }
+ }
+ 
+-/// A first-party xorshift64 generator (Marsaglia 2003), for the few choices
++/// A first-party `xorshift64` generator (Marsaglia 2003), for the few choices
+ /// a mutation makes beyond the witness seed.
+ struct XorShift(u64);
+ 
+@@ -771,6 +771,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
+         DialectId::DeepSeekV3 => "deepseek3",
+         DialectId::Harmony => "harmony",
+         DialectId::Glm45 => "glm45",
++        DialectId::Gemma3ToolCode => "gemma3",
+         DialectId::Hermes => "hermes",
+         DialectId::KimiK2 => "kimi",
+         DialectId::Llama3Json => "llama3",
+@@ -3521,7 +3522,7 @@ const fn policy_of(seed: u64) -> Policy {
+     }
+ }
+ 
+-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
++const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
+ 
+ /// The cases of every single-call mutation of `base`, appended to `cases`;
+ /// with `under`, only those of categories with fewer than [`TARGET`] cases
+@@ -3720,6 +3721,7 @@ pub fn generate() -> Vec<Case> {
+     adapter_cases(&mut cases);
+     glm_cases(&mut cases);
+     pythonic_cases(&mut cases);
++    gemma3_cases(&mut cases);
+     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
+     assert_eq!(identities.len(), cases.len(), "case identities are unique");
+     cases
+@@ -3782,3 +3784,67 @@ fn pythonic_cases(cases: &mut Vec<Case>) {
+         }
+     }
+ }
++
++fn gemma3_cases(cases: &mut Vec<Case>) {
++    for (variant, input, truth) in [
++        (
++            "single",
++            "```tool_code\nsearch_index(query='cats', limit=5)\n```",
++            Some(r#"{"query":"cats","limit":5}"#),
++        ),
++        (
++            "nullable",
++            "```tool_code\nsearch_index(query='cats', limit=None)\n```",
++            Some(r#"{"query":"cats","limit":null}"#),
++        ),
++        (
++            "missing-fence",
++            "```tool_code\nsearch_index(query='cats')\n",
++            Some(r#"{"query":"cats"}"#),
++        ),
++        (
++            "positional",
++            "```tool_code\nsearch_index('cats')\n```",
++            None,
++        ),
++        (
++            "expression",
++            "```tool_code\nsearch_index(query=run())\n```",
++            None,
++        ),
++        (
++            "python-example",
++            "````python\n```tool_code\nsearch_index(query='cats')\n```\n````",
++            None,
++        ),
++        (
++            "inline-prose",
++            "Example: ```tool_code\nsearch_index(query='cats')\n```",
++            None,
++        ),
++        (
++            "tool-output",
++            "```tool_output\nsearch_index(query='cats')\n```",
++            None,
++        ),
++    ] {
++        for (label, dialect) in [("gemma3", "gemma3-tool-code.v1"), ("all", ALL_DIALECTS)] {
++            cases.push(Case {
++                tool_set: Some("adapter"),
++                invalid: None,
++                id: format!("adapter/search_index/{label}/canonical/{variant}"),
++                category: "canonical".to_owned(),
++                dialect: dialect.to_owned(),
++                policy: Policy::PerTool,
++                stop: Ending::Stop,
++                input: input.to_owned(),
++                truth: truth.map(|arguments| {
++                    vec![Call {
++                        name: "search_index".to_owned(),
++                        arguments: json::parse(arguments).expect("truth"),
++                    }]
++                }),
++            });
++        }
++    }
++}
+diff --git a/crates/core/tests/tool_call_cost_support/mod.rs b/crates/core/tests/tool_call_cost_support/mod.rs
+index db2e052..1039304 100644
+--- a/crates/core/tests/tool_call_cost_support/mod.rs
++++ b/crates/core/tests/tool_call_cost_support/mod.rs
+@@ -43,6 +43,10 @@ pub fn openai(content: &str) -> String {
+     )
+ }
+ 
++pub fn gemma3(content: &str) -> String {
++    format!("```tool_code\nwrite(content=\"{content}\")\n```\n")
++}
++
+ pub fn pythonic(content: &str) -> String {
+     format!("[write(content=\"{content}\")] ")
+ }
+@@ -153,6 +157,7 @@ pub fn argument_work_bound(small: usize, large: usize) {
+         ("glm45", glm as fn(&str) -> String),
+         ("hermes", hermes),
+         ("pythonic", pythonic),
++        ("gemma3", gemma3),
+         ("llama3", llama3),
+         ("mistral", mistral),
+         ("mistral11", mistral11),
+@@ -218,6 +223,7 @@ pub fn argument_fits_published_budget(size: usize) {
+         ("glm45", glm(&content), true),
+         ("hermes", hermes(&content), true),
+         ("pythonic", pythonic(&content), true),
++        ("gemma3", gemma3(&content), true),
+         ("llama3", llama3(&content), true),
+         ("mistral", mistral(&content), true),
+         ("mistral11", mistral11(&content), true),
+@@ -368,7 +374,14 @@ fn dense_tools() -> ToolSet {
+ /// output that is nothing but one small unit repeated, in every built-in
+ /// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
+ /// units become)`.
+-const DENSE: [(&str, &str, &str, &str, Dense); 19] = [
++const DENSE: [(&str, &str, &str, &str, Dense); 20] = [
++    (
++        "gemma3-calls",
++        "",
++        "```tool_code\nwrite(content='a')\n```\n",
++        "",
++        Dense::Calls,
++    ),
+     (
+         "glm45-calls",
+         "",
+diff --git a/crates/core/tests/tool_call_dialects.rs b/crates/core/tests/tool_call_dialects.rs
+index 2297b47..2bcc6f4 100644
+--- a/crates/core/tests/tool_call_dialects.rs
++++ b/crates/core/tests/tool_call_dialects.rs
+@@ -233,6 +233,7 @@ fn all_registered_dialects_have_anchor_fixtures() {
+             "bare-json.v1",
+             "deepseek-v3.1.v1",
+             "deepseek-v3.v1",
++            "gemma3-tool-code.v1",
+             "glm-4.5.v1",
+             "harmony.v1",
+             "hermes.v1",
+@@ -598,6 +599,9 @@ fn ir_spans_slice_back_to_source() {
+                         "{}: {raw:?}",
+                         fixture.file
+                     );
++                } else if dialect == DialectId::Gemma3ToolCode {
++                    assert!(raw.starts_with("```tool_code"), "{}: {raw:?}", fixture.file);
++                    assert!(raw.ends_with("```"), "{}: {raw:?}", fixture.file);
+                 } else {
+                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
+                     assert!(raw.ends_with("</tool_call>"), "{}: {raw:?}", fixture.file);
+diff --git a/crates/core/tests/tool_call_goldens.rs b/crates/core/tests/tool_call_goldens.rs
+index 04261d5..2dccfbd 100644
+--- a/crates/core/tests/tool_call_goldens.rs
++++ b/crates/core/tests/tool_call_goldens.rs
+@@ -4326,7 +4326,10 @@ fn unparsed_markup_is_reported() {
+     use purrassist_core::tool_call::{MarkupFamily, Rejection};
+     for (name, family) in [
+         ("unparsed_pythonic_not_allowed", MarkupFamily::Pythonic),
+-        ("unparsed_gemma3_tool_code", MarkupFamily::Gemma3ToolCode),
++        (
++            "unparsed_gemma3_tool_code_not_allowed",
++            MarkupFamily::Gemma3ToolCode,
++        ),
+         ("unparsed_glm45_not_allowed", MarkupFamily::Glm45),
+         ("unparsed_kimi_k2_stripped", MarkupFamily::KimiK2Stripped),
+         ("unparsed_harmony_stripped", MarkupFamily::HarmonyStripped),
+diff --git a/crates/host/README.md b/crates/host/README.md
+index d0f25c7..7b7baf0 100644
+--- a/crates/host/README.md
++++ b/crates/host/README.md
+@@ -48,9 +48,9 @@ This adds no graph authorization, confinement or proof-bound release claim.
+ 
+ The `recover_tool_calls` tool (MCP `tools/call`, CLI `purrassist call` and
+ `purrassist recover-tool-calls`) recovers the tool calls of one model turn
+-against caller declarations, over fourteen built-in dialects: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
++against caller declarations, over fifteen built-in dialects: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+ `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
+-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
++`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
+ Its result is the recovery's wire form: per-call outcomes, itemized repairs,
+ rejected and unparsed attempts, the turn's finish, an optional re-emission, and
+ a receipt. It never executes a call.
+diff --git a/crates/purrassist/README.md b/crates/purrassist/README.md
+index cb5103f..e054065 100644
+--- a/crates/purrassist/README.md
++++ b/crates/purrassist/README.md
+@@ -36,9 +36,9 @@ match answer.outcome {
+ `tool_call` recovers the tool calls of one raw model turn against the `OpenAI`,
+ MCP, or Anthropic declarations the model was shown (read byte for byte), with
+ per-call outcomes, itemized repairs, the turn's finish, and a receipt; it never
+-executes a call. Fourteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
++executes a call. Fifteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+ `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
+-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
++`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
+ 
+ ```rust
+ use purrassist::Outcome;
+diff --git a/crates/wasm-harness/src/transcript.rs b/crates/wasm-harness/src/transcript.rs
+index f598e48..ccba64f 100644
+--- a/crates/wasm-harness/src/transcript.rs
++++ b/crates/wasm-harness/src/transcript.rs
+@@ -239,7 +239,7 @@ struct DialectCase {
+ }
+ 
+ /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
+-const DIALECT_CASES: [DialectCase; 14] = [
++const DIALECT_CASES: [DialectCase; 15] = [
+     DialectCase {
+         dialect: DialectId::AnthropicToolUse,
+         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
+@@ -272,6 +272,14 @@ const DIALECT_CASES: [DialectCase; 14] = [
+         repair_status: "resolved",
+         repair_digest: "sha256:8b47b741e93bd652782fbc8bb4b2a4f43d5277482a8a41558b187f060d1731e6",
+     },
++    DialectCase {
++        dialect: DialectId::Gemma3ToolCode,
++        anchor: "```tool_code\nget_weather(city='Paris', unit='celsius')\n```\n```tool_code\nread_file(path='notes.txt', limit=10)\n```",
++        anchor_digest: "pending-gemma3-anchor-capture",
++        repair: "```tool_code\nget_weather(city='Oslo', unit='celsius')\n",
++        repair_status: "resolved",
++        repair_digest: "pending-gemma3-repair-capture",
++    },
+     DialectCase {
+         dialect: DialectId::Glm45,
+         anchor: "<think>Read the notes.</think><tool_call>read_file\n<arg_key>path</arg_key><arg_value>notes.txt</arg_value><arg_key>limit</arg_key><arg_value>10</arg_value></tool_call>",
+diff --git a/docs/FUZZING.md b/docs/FUZZING.md
+index d84d222..85b1f99 100644
+--- a/docs/FUZZING.md
++++ b/docs/FUZZING.md
+@@ -858,7 +858,6 @@ matches its single source, [known-limitations.json](known-limitations.json);
+ - [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+ - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+ - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+-- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+ - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+ - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+ - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+diff --git a/docs/IMPLEMENTATION.md b/docs/IMPLEMENTATION.md
+index 295e50b..437fdf3 100644
+--- a/docs/IMPLEMENTATION.md
++++ b/docs/IMPLEMENTATION.md
+@@ -297,10 +297,10 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
+   definitions or lossless `OpenAI`, MCP, and Anthropic declarations, whose
+   exact parameters schemas are validated under Draft 2020-12 or Draft-07 (the
+   dialect MCP servers commonly declare). Dialects are weighted, invertible
+-  grammars in a first-party DSL; fourteen ship (`qwen3-coder-xml.v1`,
++  grammars in a first-party DSL; fifteen ship (`qwen3-coder-xml.v1`,
+   `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+-  `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`) and callers compile
++  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`) and callers compile
+   their own. A
+   best-first search repairs call markup with named, costed rules; each call
+   is resolved against its tool with a per-call outcome, itemized repairs,
+@@ -313,8 +313,7 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
+   governed quadratic conversion), and exposed through Rust, CLI
+   (`recover-tool-calls`), and MCP (`recover_tool_calls`). Typed tool
+   definitions can be derived from Rust structs and enums (`purrassist-derive`).
+-  Still tracked: the
+-  `gemma3-tool-code.v1` (#14) dialect, the `*-stripped` variants (#18),
++  Still tracked: the `*-stripped` variants (#18),
+   streaming recognition (#16), and provider streaming events (#17).
+   See `tool-calls/README.md`.
+ - Rust facade, CLI, and stdio MCP server using the same operations.
+diff --git a/docs/MATCHING-QUALITY.md b/docs/MATCHING-QUALITY.md
+index c702927..ca7056b 100644
+--- a/docs/MATCHING-QUALITY.md
++++ b/docs/MATCHING-QUALITY.md
+@@ -207,6 +207,10 @@ small oracle exhaustively proves the Unicode tables.
+ 
+ ## Tool-call recovery evaluation
+ 
++The `gemma3-tool-code.v1` native corpus witnesses cover canonical and missing-fence
++calls, positional/expression refusal, ordinary code examples and tool results.
++Their regenerated counts and correctness measurements are pending qualification.
++
+ `crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,202 model
+ turns, each with its `id`, `category` (the rule expected to repair it),
+ `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
+diff --git a/docs/QUALIFICATION.md b/docs/QUALIFICATION.md
+index 41becfe..4fef4cf 100644
+--- a/docs/QUALIFICATION.md
++++ b/docs/QUALIFICATION.md
+@@ -27,7 +27,7 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
+ | Resource boundaries | `resource_accounting`, `schema_budgets`, `allocation_oracle`, syntax `allocation`, host `helpers` | Charge-before-allocation, cancellation, helper admission, measured allocator comparisons including zero-slack pattern compilation and generation, external parser accounts |
+ | Filesystem transaction boundaries | host `files`, `crash_recovery`, `journal_limits`, `orphan_preservation`, `edit_tools` | Eight crash checkpoints; bounded escaped journals, retry/recovery, temporary ownership checks, stale plans, locks, conditional undo and explicit batch outcomes |
+ | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
+-| Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params`/`kv-pairs`/`pythonic` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1` and `pythonic.v1`, all fourteen in one mixed turn; deliberate rejections; unparsed call markup reported |
++| Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params`/`kv-pairs`/`pythonic` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1` and `pythonic.v1`, all fifteen in one mixed turn; deliberate rejections; unparsed call markup reported |
+ | Tool-call resolution and recovery | `tool_definitions`, `tool_adapters`, `tool_call_rules`, `tool_call_goldens`, `tool_call_recover`, `tool_call_roundtrip` | Typed definitions; byte-exact `OpenAI`/MCP/Anthropic render-back including Draft-07 MCP schemas; registry admission, costs and loss kinds; `RULES.md`/`GRAMMAR.md` checked against the code; one captured golden per rule; mutating-guess guards; `Exact` effort; stop-reason semantics; pinned order-independent result digest; print/recognize round trips for every dialect pair; `OpenAI` `tool_calls` shape |
+ | Tool-call cost and quality | `tool_call_cost`, `tool_call_scale`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 18,202 model turns with zero incorrect automatic answers and 100% abstention recall |
+ | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
+@@ -115,12 +115,10 @@ test proving each are mapped in
+ [tool-calls/INTEGRATION.md](tool-calls/INTEGRATION.md); the 18,202-case
+ evaluation is a deterministic generated corpus, so its zero-incorrect result
+ establishes behavior on those cases rather than a production error rate.
+-Fourteen dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
++Fifteen dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
+ `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+ `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+-`anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`). Still tracked: the
+-`gemma3-tool-code.v1` (#14)
+-dialects, the `*-stripped` variants (#18), streaming recognition (#16), and
++`anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`). Still tracked: the `*-stripped` variants (#18), streaming recognition (#16), and
+ provider streaming events (#17).
+ 
+ ## Resource and platform qualification
+@@ -218,7 +216,6 @@ matches its single source, [known-limitations.json](known-limitations.json);
+ - [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+ - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+ - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+-- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+ - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+ - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+ - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+diff --git a/docs/RESOURCES.md b/docs/RESOURCES.md
+index 779a47f..136c78d 100644
+--- a/docs/RESOURCES.md
++++ b/docs/RESOURCES.md
+@@ -1018,8 +1018,10 @@ every value below to equal the code's.
+ | `pythonic.v1` | 129 | 129 |
+ | `qwen3-coder-xml.v1` | 971 | 971 |
+ 
+-The default request allows all fourteen built-in dialects.
+-Its framing bound is `(2 + 1 + 30192)·n + 8·E = 30195·n + 8·E`.
++The default request allows all fifteen built-in dialects.
++The combined bound is pending qualification of the `gemma3-tool-code.v1`
++grammar. The fourteen-dialect Pythonic baseline measured
++`(2 + 1 + 30192)·n + 8·E = 30195·n + 8·E`.
+ 
+ The `kv-pairs` codec scans argument fields forward with a bounded tag
+ comparison at each byte. Typed JSON boundaries use the native JSON cursor,
+@@ -1027,6 +1029,10 @@ then decode the bounded value once. Exact closers take precedence over fuzzy
+ substrings in verbatim text. The shared linear, sized-budget and dense-markup
+ checks include GLM calls.
+ 
++Gemma uses the same finite-state Pythonic framer and native literal conversion.
++Its long-argument, sized-budget and dense-call fixtures are present; the new
++grammar bound and dense measurement are pending qualification.
++
+ ### Budgets for large outputs and busy turns
+ 
+ Fixed effort presets are sized for ordinary turns, so a large output or a
+diff --git a/docs/known-limitations.json b/docs/known-limitations.json
+index 78647ce..9a09591 100644
+--- a/docs/known-limitations.json
++++ b/docs/known-limitations.json
+@@ -23,12 +23,6 @@
+         "tool-call-ref"
+       ]
+     },
+-    {
+-      "issue": 14,
+-      "title": "Tool-call recovery: add the gemma3-tool-code.v1 dialect",
+-      "impact": "`gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.",
+-      "blocks_release": false
+-    },
+     {
+       "issue": 16,
+       "title": "Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress)",
+diff --git a/docs/tool-calls/GRAMMAR.md b/docs/tool-calls/GRAMMAR.md
+index 1d0fad6..83adbea 100644
+--- a/docs/tool-calls/GRAMMAR.md
++++ b/docs/tool-calls/GRAMMAR.md
+@@ -19,7 +19,8 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
+   choices to print well-formed calls for given argument shapes, for tests and
+   corpora.
+ 
+-The fourteen built-in dialects are written in this DSL:
++The fifteen built-in dialects are written in this DSL:
++[`gemma3-tool-code.v1`](../../crates/core/src/tool_call/dialects/gemma3-tool-code.v1.grammar),
+ [`glm-4.5.v1`](../../crates/core/src/tool_call/dialects/glm-4.5.v1.grammar),
+ [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
+ [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
+@@ -45,7 +46,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
+ - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
+   share one namespace. The keywords `grammar`, `optional-id`,
+   `declaration-content`, `json-envelope`, `reasoning`, `confusable`,
+-  `closer`, `layout`, `line-start`, `examples-content`, `until`, `slot`, `commit`, `next`, and `insert` cannot
++  `closer`, `layout`, `line-start`, `examples-content`, `protocol-fences`, `until`, `slot`, `commit`, `next`, and `insert` cannot
+   name a production or a closer.
+ - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
+   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
+@@ -68,6 +69,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
+ | `layout NAME "TEXT";` | Printing only: the class production `NAME` prints as `TEXT` wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
+ | `line-start "OPEN";` | Admit the matching initial call opener only at turn or line start after spaces or tabs. Other opener alternatives are unaffected. The literal must be an initial opener without preceding effects or captures. |
+ | `examples-content;` | Keep fenced, inline-code and blockquote call examples as content, including rejected attempts and embedded reasoning examples. |
++| `protocol-fences;` | Keep enclosing examples as content while treating the call or result's own fence as protocol markup. Both productions must start with literal fence headers and end in one named closer: a run of at least three backticks or tildes with one canonical spelling and no confusables. Headers use the same run followed by a nonblank info string, without marker characters, newlines, variants or confusables. Openers require a line start after spaces or tabs. Closers require only spaces or tabs before LF, CRLF or end of input; a prefix of another header cannot close a block. Verbatim `until` delimiters must be LF or CRLF followed by that closer. This directive and `examples-content` are mutually exclusive. |
+ | `NAME = EXPR;` | A production. |
+ 
+ ## Expressions
+diff --git a/docs/tool-calls/INTEGRATION.md b/docs/tool-calls/INTEGRATION.md
+index 6f182ef..be535f0 100644
+--- a/docs/tool-calls/INTEGRATION.md
++++ b/docs/tool-calls/INTEGRATION.md
+@@ -593,9 +593,7 @@ is reported as certain.
+   and the `fuzz-tool-call` invariant that no call, embedded call or
+   rejected attempt holds bytes of a reasoning range's opener or closer.
+ - **Call markup is never silent content.** Call markup that no dialect of
+-  the allow-list reads (a family not built in yet: Pythonic call lists,
+-  Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the
+-  stripped renderings of built-in dialects no grammar reads; or a built-in
++  the allow-list reads (a family not built in yet: the stripped renderings of built-in dialects no grammar reads; or a built-in
+   dialect the allow-list leaves out, `[TOOL_CALLS]` under a Hermes-only
+   request) is reported as a `RejectedCall` with
+   `Rejection::UnsupportedDialect { family }` (wire `reason.code`
+diff --git a/docs/tool-calls/README.md b/docs/tool-calls/README.md
+index 032c5a3..70c7e57 100644
+--- a/docs/tool-calls/README.md
++++ b/docs/tool-calls/README.md
+@@ -11,11 +11,12 @@ call. The operation is `tool_call.recover.v1`, implemented in
+ `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
+ command.
+ 
+-Fourteen dialects are built in:
++Fifteen dialects are built in:
+ 
+ | Dialect | Shape | Reference |
+ | --- | --- | --- |
+ | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>`, or the bare `<function=NAME>` element | [dialect](dialects/qwen3-coder-xml.v1.md) |
++| `gemma3-tool-code.v1` | A direct keyword call in a `tool_code` fence; `tool_output` fences are results | [dialect](dialects/gemma3-tool-code.v1.md) |
+ | `glm-4.5.v1` | `<tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value></tool_call>` | [dialect](dialects/glm-4.5.v1.md) |
+ | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
+ | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
+@@ -35,7 +36,7 @@ Callers add their own dialects with the grammar DSL
+ derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
+ `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
+ `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
+-[README](../../crates/derive/README.md)). Still tracked: the `gemma3-tool-code.v1` (#14) dialects, the
++[README](../../crates/derive/README.md)). Still tracked: the
+ `*-stripped` variants (#18), streaming recognition (#16), and provider
+ streaming events (#17).
+ 
+@@ -59,7 +60,7 @@ streaming events (#17).
+   included, resynchronizes past it and keeps every call it reads whole
+   (`tool_call.markup.group-split`). The least-cost
+   repairs are kept and every applied operator is itemized. Argument codecs
+-  (`json`, `json-args`, `xml-params`, `raw`) read argument bodies with their own recorded
++  (`json`, `json-args`, `xml-params`, `kv-pairs`, `pythonic`, `raw`) read argument bodies with their own recorded
+   repairs.
+ - **Factorized ambiguity.** The turn is a least-cost segmentation into
+   content, reasoning, calls, tool results, and rejected attempts (each
+@@ -344,9 +345,7 @@ finish.
+ Call markup that no dialect of the allow-list reads is never silent
+ content. A linear detector (`detect_unparsed`) scans the turn's content for
+ the distinctive openers and shapes of the families no built-in dialect
+-parses yet (`gemma3-tool-code.v1` `` ```tool_code ``
+-blocks, and the stripped
+-renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
++parses yet (the stripped renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
+ `deepseek-v3-stripped.v1` and `name-arguments-stripped.v1`), and for the built-in dialects the
+ allow-list leaves out. Each hit is a `RejectedCall` with
+ `Rejection::UnsupportedDialect { family }` (its `dialect` is the family's
+diff --git a/docs/tool-calls/dialects/bare-json.v1.md b/docs/tool-calls/dialects/bare-json.v1.md
+index b74025f..4e8359e 100644
+--- a/docs/tool-calls/dialects/bare-json.v1.md
++++ b/docs/tool-calls/dialects/bare-json.v1.md
+@@ -63,7 +63,7 @@ covers the object, so the wrapped dialect's call wins on evidence and the
+ call's `candidate_dialects` names that dialect alone (the goldens
+ `bare_json_in_hermes_wrapper` and the test
+ `every_canonical_fixture_in_one_mixed_turn`, which recovers the canonical
+-fixture of all fourteen dialects in one turn). A leading `"id"` beginning
++fixture of all fifteen dialects in one turn). A leading `"id"` beginning
+ `toolu_` is not read here: such a block is Anthropic's, whose `"input"` key
+ it may have written as `"arguments"`. A trailing id, which Anthropic
+ evidence cannot precede, may have any spelling.
+diff --git a/scripts/test-check-docs.py b/scripts/test-check-docs.py
+index f4b08e3..13644e1 100644
+--- a/scripts/test-check-docs.py
++++ b/scripts/test-check-docs.py
+@@ -389,11 +389,11 @@ class ReceiptVersion(Case):
+ class DialectIds(Case):
+     def test_a_new_dialect_page_fails_every_list(self):
+         tree = self.tree()
+-        tree.write('docs/tool-calls/dialects/pythonic.v1.md', '# x\n')
++        tree.write('docs/tool-calls/dialects/future.v1.md', '# x\n')
+         errors = tree.errors()
+         for name in ('README.md', 'crates/core/README.md', 'docs/QUALIFICATION.md', 'docs/IMPLEMENTATION.md',
+                      'docs/tool-calls/GRAMMAR.md', 'docs/tool-calls/README.md', 'docs/MATCHING-QUALITY.md'):
+-            self.assertFails(errors, 'dialect-ids', name, "missing ['pythonic.v1']")
++            self.assertFails(errors, 'dialect-ids', name, "missing ['future.v1']")
+ 
+     def test_a_removed_page_fails_with_the_extra_id(self):
+         tree = self.tree()
+@@ -433,16 +433,16 @@ class DialectIds(Case):
+         self.assertFails(tree.errors(), 'dialect-ids', 'crates/core/README.md', "missing ['mistral-v3.v1']")
+ 
+     def test_wrong_count_fails(self):
+-        for name, old, new in (('README.md', 'Fourteen dialects ship', 'Eleven dialects ship'),
+-                               ('docs/tool-calls/GRAMMAR.md', 'fourteen built-in dialects', 'ten built-in dialects'),
+-                               ('docs/RESOURCES.md', 'all fourteen built-in dialects', 'all ten built-in dialects'),
+-                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all fourteen dialects', 'all ten dialects'),
+-                               ('docs/IMPLEMENTATION.md', 'fourteen ship', 'ten ship'),
+-                               ('crates/host/README.md', 'over fourteen built-in', 'over ten built-in')):
++        for name, old, new in (('README.md', 'Fifteen dialects ship', 'Eleven dialects ship'),
++                               ('docs/tool-calls/GRAMMAR.md', 'fifteen built-in dialects', 'ten built-in dialects'),
++                               ('docs/RESOURCES.md', 'all fifteen built-in dialects', 'all ten built-in dialects'),
++                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all fifteen dialects', 'all ten dialects'),
++                               ('docs/IMPLEMENTATION.md', 'fifteen ship', 'ten ship'),
++                               ('crates/host/README.md', 'over fifteen built-in', 'over ten built-in')):
+             with self.subTest(name=name):
+                 tree = self.tree()
+                 tree.replace(name, old, new)
+-                self.assertFails(tree.errors(), 'dialect-count', name, 'has 14')
++                self.assertFails(tree.errors(), 'dialect-count', name, 'has 15')
+ 
+     def test_a_subset_count_is_not_a_dialect_count(self):
+         tree = self.tree()
+@@ -451,7 +451,7 @@ class DialectIds(Case):
+ 
+     def test_a_missing_count_sentence_is_not_found(self):
+         tree = self.tree()
+-        tree.replace('crates/purrassist/README.md', 'Fourteen dialects ship:', 'These dialects exist:')
++        tree.replace('crates/purrassist/README.md', 'Fifteen dialects ship:', 'These dialects exist:')
+         self.assertFails(tree.errors(), 'dialect-count', 'crates/purrassist/README.md', NOT_FOUND)
+ 
+ 
+@@ -673,7 +673,7 @@ class KnownLimitationsSource(Case):
+ 
+     def test_the_real_set_is_the_agreed_one(self):
+         data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
+-        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 14, 16, 17, 18])
++        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 16, 17, 18])
+ 
+ 
+ class KnownLimitationsSection(Case):
+@@ -1853,7 +1853,7 @@ ABSENT = (
+     ('fuzz-targets', 'Makefile', r'across all ten targets', 'across the targets'),
+     ('receipt-version', 'docs/QUALIFICATION.md', r'receipt wire v3', 'receipt wire format'),
+     ('receipt-version', 'crates/core/src/contract.rs', r'RECEIPT_VERSION: u32 = 3;', 'RECEIPT_REVISION: u32 = 3;'),
+-    ('dialect-count', 'README.md', r'Fourteen dialects ship', 'These dialects ship'),
++    ('dialect-count', 'README.md', r'Fifteen dialects ship', 'These dialects ship'),
+     ('fuzz-baseline-table', 'docs/FUZZING.md', r'### Recorded 10,000-mutation baselines', '### Baselines'),
+     ('fuzz-row-limits', 'docs/QUALIFICATION.md', r'`make fuzz`', '`make  fuzz`'),
+ )

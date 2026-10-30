@@ -1,0 +1,1 @@
+{"version":2,"path":"verify.txt","before":"sha256:a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447","after":"sha256:0f48c45cee63eb5d850eeff1067217d83abab311f728fb35714cb75bdba5e501","patch":{"source":"sha256:a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447","edits":[{"start":6,"end":11,"replacement":"earth"}]}}

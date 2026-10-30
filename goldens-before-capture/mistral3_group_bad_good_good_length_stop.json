@@ -1,0 +1,156 @@
+{
+  "description": "T4: a Mistral v3 list under a length stop whose first element is bad: the attempt resynchronizes past it, the second call is recovered as mistral-v3 with the split recorded, and the third, cut off by the stop, is the cut reading it always was.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\", \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\", \"argum",
+  "stop": "length",
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "length",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 1,
+      "accepting_guesses": 1
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "y"
+        },
+        "candidate_dialects": [
+          "mistral-v3.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.markup.group-split",
+          "tool_call.id.dedup"
+        ]
+      },
+      {
+        "tool": "f",
+        "arguments": {},
+        "candidate_dialects": [
+          "mistral-v3.v1"
+        ],
+        "outcome": "unresolved: truncated: the call was cut off by a length stop",
+        "rules": [
+          "tool_call.truncated",
+          "tool_call.id.dedup"
+        ]
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          3,
+          62
+        ],
+        "dialect": "mistral-v3.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 30 }",
+        "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, "
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi "
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.markup.group-split",
+      "tool_call.id.dedup",
+      "tool_call.truncated",
+      "tool_call.id.dedup"
+    ]
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "length",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "y"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.group-split",
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {},
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "unresolved: truncated: the call was cut off by a length stop",
+      "rules": [
+        "tool_call.truncated",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        3,
+        62
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 30 }",
+      "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, "
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi "
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.group-split",
+    "tool_call.id.dedup",
+    "tool_call.truncated",
+    "tool_call.id.dedup"
+  ]
+}

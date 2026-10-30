@@ -1,0 +1,54 @@
+{
+  "description": "A Kimi-K2 id naming `ns:other`, which no tool declares, while a tool `ns` is declared: the name is read whole up to the final :IDX and the call is Unresolved (unknown tool), never coerced to `ns`.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "ns",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "q": {
+              "type": "string"
+            }
+          },
+          "required": []
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "stop": "stop",
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>functions.ns:other:0<|tool_call_argument_begin|>{\"q\": \"x\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "policy": "tolerant",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": null,
+      "arguments": {
+        "q": "x"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `ns:other`",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

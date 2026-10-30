@@ -1,0 +1,62 @@
+{
+  "description": "T5/F12: a section-less Kimi-K2 call whose opener has one slip is read (token-misspelled).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<|tool_call_begn|>functions.f:0<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.markup.token-misspelled",
+        "tool_call.markup.missing-closers-at-end"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.markup.token-misspelled",
+    "tool_call.markup.missing-closers-at-end"
+  ]
+}

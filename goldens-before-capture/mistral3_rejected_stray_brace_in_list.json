@@ -1,0 +1,93 @@
+{
+  "description": "T6: a rejected Mistral v3 list whose markup writes a stray `}` after its broken call: brackets pair by kind, so the stray `}` closes no `[` and the rejected markup runs to the list's own `]` (it ended at the stray `}` before, leaving the `]` as prose).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, \"a\": \"y\"}] done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          72
+        ],
+        "dialect": "mistral-v3.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 30 }",
+        "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, \"a\": \"y\"}]"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " done"
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        72
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 30 }",
+      "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, \"a\": \"y\"}]"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

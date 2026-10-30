@@ -1,0 +1,40 @@
+{
+  "description": "One direct keyword call in a Gemma tool_code fence after prose.",
+  "markup": "Let me check the weather.\n```tool_code\r\nget_weather(city='Paris', unit=\"celsius\")\r\n```",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "get_weather",
+      "arguments": {
+        "city": "Paris",
+        "unit": "celsius"
+      }
+    }
+  ]
+}

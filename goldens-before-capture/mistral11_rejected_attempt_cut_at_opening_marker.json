@@ -1,0 +1,98 @@
+{
+  "description": "T4: a Mistral v11 attempt that ran over an opening reasoning marker and was rejected ends at the marker: the marker's bytes belong to the reasoning block, which is recognized up to [/THINK], and no marker or reasoning text is left as content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "input": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"a\"[THINK]thinking[/THINK]Answer.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          38
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 38 }",
+        "raw": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"a\""
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Answer."
+    ],
+    "reasoning_text": [
+      "thinking"
+    ],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        38
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 38 }",
+      "raw": "[TOOL_CALLS]read_file[ARGS]{\"path\":\"a\""
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Answer."
+  ],
+  "reasoning_text": [
+    "thinking"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

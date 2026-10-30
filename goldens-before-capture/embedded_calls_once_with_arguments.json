@@ -1,0 +1,107 @@
+{
+  "description": "T1/F5: two Mistral v11 calls with arguments inside a starts_open block, then the answer: each is embedded once (s{\"y\":2} is not repeated), in span order, and the answer is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "t",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "s",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "y": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "g",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "t": "read_only",
+    "s": "read_only",
+    "g": "read_only"
+  },
+  "reasoning": "starts_open",
+  "input": "[TOOL_CALLS]t{\"x\":1}[TOOL_CALLS]s{\"y\":2}[/THINK]Answer.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [
+    {
+      "tool": "t",
+      "arguments": {
+        "x": 1
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.reasoning.embedded-call"
+      ]
+    },
+    {
+      "tool": "s",
+      "arguments": {
+        "y": 2
+      },
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.reasoning.embedded-call"
+      ]
+    }
+  ],
+  "content": [
+    "Answer."
+  ],
+  "reasoning_text": [
+    "[TOOL_CALLS]t{\"x\":1}[TOOL_CALLS]s{\"y\":2}"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.reasoning.embedded-call",
+    "tool_call.markup.missing-token",
+    "tool_call.reasoning.embedded-call"
+  ]
+}

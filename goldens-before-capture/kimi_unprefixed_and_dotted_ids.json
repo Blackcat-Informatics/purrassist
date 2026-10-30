@@ -1,0 +1,83 @@
+{
+  "description": "Kimi-K2 ids without the functions. prefix (read_file:1) and with a dotted tool name (functions.mcp.search:0), as the public parsers accept: the name is everything between the optional prefix and the colon, and each whole id is kept as the call's model id.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "mcp.search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "stop": "stop",
+  "input": "<|tool_calls_section_begin|><|tool_call_begin|>functions.mcp.search:0<|tool_call_argument_begin|>{\"query\": \"kimi\"}<|tool_call_end|><|tool_call_begin|>read_file:1<|tool_call_argument_begin|>{\"path\": \"a.rs\"}<|tool_call_end|><|tool_calls_section_end|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "mcp.search",
+      "arguments": {
+        "query": "kimi"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

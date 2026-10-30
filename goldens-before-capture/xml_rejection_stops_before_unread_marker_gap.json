@@ -1,0 +1,171 @@
+{
+  "description": "Issue #6, _zlypfm8: a Qwen attempt fails at the repeated function opener. Unread markup between that failure and the reasoning opener remains content unless the grammar proves its ownership; the reasoning marker never belongs to the attempt.",
+  "tools": [
+    {
+      "name": "read_file",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "aliases": [
+            "file"
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "name": "list_dir",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "current_time",
+      "effects": "read_only",
+      "params": {
+        "zone": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "get_weather",
+      "effects": "read_only",
+      "params": {
+        "city": {
+          "type": "string",
+          "required": true
+        },
+        "unit": {
+          "type": "enum",
+          "values": [
+            "celsius",
+            "fahrenheit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "write_file",
+      "effects": "mutating",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "required": true
+        },
+        "mode": {
+          "type": "enum",
+          "values": [
+            "create",
+            "overwrite"
+          ]
+        },
+        "ratio": {
+          "type": "number"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "object",
+          "params": {
+            "backup": {
+              "type": "boolean"
+            },
+            "retries": {
+              "type": "integer"
+            },
+            "owner": {
+              "type": "object",
+              "params": {
+                "name": {
+                  "type": "string"
+                },
+                "uid": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "delete_path",
+      "effects": "mutating",
+      "aliases": [
+        "rm"
+      ],
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "repeatable": true
+        }
+      }
+    }
+  ],
+  "policy": "per_tool",
+  "stop": "stop",
+  "reasoning": "separate",
+  "tool_choice": "auto",
+  "effort": "standard",
+  "ambiguity": "report",
+  "input": "pre <tool_call><function=read_file><function=read_file><parameter=path<think>ter></function></tool_call> p\"t",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        4,
+        35
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "glm-4.5.v1",
+        "hermes.v1",
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 35 }",
+      "raw": "<tool_call><function=read_file>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "pre ",
+    "<function=read_file><parameter=path"
+  ],
+  "reasoning_text": [
+    "ter></function></tool_call> p\"t"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.reasoning.unterminated"
+  ]
+}

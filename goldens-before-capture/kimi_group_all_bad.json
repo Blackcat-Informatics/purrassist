@@ -1,0 +1,58 @@
+{
+  "description": "T4: every call of a kimi-k2.v1 group is bad: the attempt read no call, so it is one rejected attempt over its whole markup (no rejected part per call, no overlapping rejections) and nothing is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi <|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{\"a\":\"y\"}<|tool_call_end|><|tool_call_begin|>functions.f:2 oops<|tool_call_argument_begin|>{\"a\":\"z\"}<|tool_call_end|><|tool_calls_section_end|> done",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        330
+      ],
+      "dialect": "kimi-k2.v1",
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "reason": "Malformed { at: 64 }",
+      "raw": "<|tool_calls_section_begin|><|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|><|tool_call_begin|>functions.f:1 oops<|tool_call_argument_begin|>{\"a\":\"y\"}<|tool_call_end|><|tool_call_begin|>functions.f:2 oops<|tool_call_argument_begin|>{\"a\":\"z\"}<|tool_call_end|><|tool_calls_section_end|>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

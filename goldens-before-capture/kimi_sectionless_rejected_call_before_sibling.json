@@ -1,0 +1,132 @@
+{
+  "description": "T1/F6, T4: a section-less Kimi-K2 call broken after its name, followed by a well-formed sibling call: the attempt resynchronizes past the broken first call at its own <|tool_call_end|> (its rejected part), and the sibling is recovered by the same attempt, carrying the section opener the model left out (tool_call.markup.missing-token at the attempt's start) and the split (tool_call.markup.group-split); no call token is content. Under the default allow-list the rejection is attributed to kimi-k2, whose attempt read the opener in its canonical spelling (the DeepSeek attempts read it through a confusable spelling and read no further).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{\"a\":\"y\"}<|tool_call_end|> done",
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 1
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "y"
+        },
+        "candidate_dialects": [
+          "kimi-k2.v1"
+        ],
+        "outcome": "best_guess",
+        "rules": [
+          "tool_call.markup.missing-token",
+          "tool_call.markup.group-split",
+          "tool_call.markup.missing-wrapper-close.before-text"
+        ]
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          0,
+          91
+        ],
+        "dialect": "kimi-k2.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1",
+          "deepseek-v3.v1",
+          "kimi-k2.v1"
+        ],
+        "reason": "Malformed { at: 33 }",
+        "raw": "<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "done"
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.markup.missing-token",
+      "tool_call.markup.group-split",
+      "tool_call.markup.missing-wrapper-close.before-text"
+    ]
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "y"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.markup.group-split",
+        "tool_call.markup.missing-wrapper-close.before-text"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        0,
+        91
+      ],
+      "dialect": "kimi-k2.v1",
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "reason": "Malformed { at: 33 }",
+      "raw": "<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "done"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.markup.group-split",
+    "tool_call.markup.missing-wrapper-close.before-text"
+  ]
+}

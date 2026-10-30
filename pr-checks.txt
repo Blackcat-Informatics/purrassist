@@ -1,0 +1,10 @@
+$ stagectl pr-checks 158
+IN_PROGRESS native (ubuntu-24.04) https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115595
+SUCCESS corpus https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115723
+IN_PROGRESS release-gate https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115576
+SUCCESS windows-engines https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115532
+SUCCESS wasm https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115486
+IN_PROGRESS fuzz https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115408
+SUCCESS qualification https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115753
+CANCELLED native (macos-14) https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115200
+state: fail

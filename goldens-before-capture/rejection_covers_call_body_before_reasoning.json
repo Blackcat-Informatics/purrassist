@@ -1,0 +1,105 @@
+{
+  "description": "Stage-3 pass 5 (F16): an attempt rejected at its misspelled opener (`<tool_cal>`), then a JSON call body (`{\"name\": \"f\", \"arguments\": {...`) that a reasoning block (`[THINK]`) cuts. Under the default allow-list the body after the rejection is the attempt's markup: the rejection covers it up to the block, and no call body is left as assistant text. With these three dialects pinned (bare JSON not allowed) the body is reported as unparsed markup (`unsupported_dialect`), whose bytes stay content as documented, never read as a call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1",
+    "hermes.v1",
+    "mistral-v11.v1"
+  ],
+  "input": "<tool_cal>{\"name\": \"f\", \"arguments\": {\"a\":{\"name\": \"f\", \"arguments\": {\"[THINK]a\": \"x\"}}</tool_call>",
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          71
+        ],
+        "dialect": "glm-4.5.v1",
+        "candidate_dialects": [
+          "glm-4.5.v1",
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 10 }",
+        "raw": "<tool_cal>{\"name\": \"f\", \"arguments\": {\"a\":{\"name\": \"f\", \"arguments\": {\""
+      }
+    ],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [
+      "a\": \"x\"}}</tool_call>"
+    ],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.reasoning.unterminated"
+    ]
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        10
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "hermes.v1",
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 10 }",
+      "raw": "<tool_cal>"
+    },
+    {
+      "span": [
+        10,
+        71
+      ],
+      "dialect": "bare-json.v1",
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: BareJson }",
+      "raw": "{\"name\": \"f\", \"arguments\": {\"a\":{\"name\": \"f\", \"arguments\": {\""
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "{\"name\": \"f\", \"arguments\": {\"a\":{\"name\": \"f\", \"arguments\": {\""
+  ],
+  "reasoning_text": [
+    "a\": \"x\"}}</tool_call>"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.reasoning.unterminated",
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

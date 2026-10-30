@@ -1,0 +1,203 @@
+{
+  "description": "Issue #6, mp5p9l8g: cut special-token markup and a broken stringified argument precede another function member. The rejected body is read fresh without consuming unrelated prose.",
+  "tools": [
+    {
+      "name": "read_file",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "aliases": [
+            "file"
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    },
+    {
+      "name": "list_dir",
+      "effects": "read_only",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "current_time",
+      "effects": "read_only",
+      "params": {
+        "zone": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "get_weather",
+      "effects": "read_only",
+      "params": {
+        "city": {
+          "type": "string",
+          "required": true
+        },
+        "unit": {
+          "type": "enum",
+          "values": [
+            "celsius",
+            "fahrenheit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "write_file",
+      "effects": "mutating",
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "content": {
+          "type": "string",
+          "required": true
+        },
+        "mode": {
+          "type": "enum",
+          "values": [
+            "create",
+            "overwrite"
+          ]
+        },
+        "ratio": {
+          "type": "number"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "object",
+          "params": {
+            "backup": {
+              "type": "boolean"
+            },
+            "retries": {
+              "type": "integer"
+            },
+            "owner": {
+              "type": "object",
+              "params": {
+                "name": {
+                  "type": "string"
+                },
+                "uid": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "delete_path",
+      "effects": "mutating",
+      "aliases": [
+        "rm"
+      ],
+      "params": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "repeatable": true
+        }
+      }
+    }
+  ],
+  "policy": "per_tool",
+  "stop": "tool_calls",
+  "reasoning": "starts_open",
+  "tool_choice": "none",
+  "effort": "quick",
+  "ambiguity": "reject",
+  "input": {
+    "hex": "915b0a20207b0a20202020226964223a202263616c6c5f6131222c0a202020202274797065223a202266756e6374696f6e222c0a202020202266756e6374696f6e223a207b0a202020202020226e616d65223a202277726974655f66696c65222c0a20202020202022617267756d656e7473223a20227b5c22706174685c223a205c227372632f6d61696e2e72735c222c205c22636f6e74656e745c223a205c22666e206d61696e2829207b5c5c6e202020207072696e746c6e21285c5c5c2268695c5c5c22293b5c5c6e5c5c6e5c5c746c6574202078203d20313b20205c5c6e7d5c5c6e5c222c205c226d6f64655c223a205c226372656174655c222c205c22726174696f5c223a20322e35305b544f4f4c5f43414c4c535d2c205c22636f756e745c223a203165332c205c22746167735c223a205b5d2c205c226f7074696f6e735c223a207b5c226261636b75705c223a2066616c73652c205c22726574726965735c223a20302c205c226f776e65725c223a207b5c226e616d655c223a205c226f70735c2220202266756e6374696f6e223a207b0a202020202020226e616d65223a20226c6973745f643cefbd9c746f6f6ce2968163616c6c73e29681656e64efbd9c3e20313b20205c5c6e7d5c5c6e5c222c205c226d6f64655c223a205c226372656174655c222c205c22726174696f5c223a20322e35305b544f4f4c5f43414c4c535d2c205c22636f756e745c223a203165332c205c22746167735c223a205b5d2c205c226f7074696f6e735c223a207b5c226261636b75705c223a2066616c73652c205c22726574726965735c223a20302c205c226f776e65725c223a207b5c226e616d655c223a205c226f70735c2220202266756e6374696f6e223a207b0a202020202020226e616d65223a20226c6973745f646972222c0a20202020202022617267756d656e7473223a20227b5c22706174685c223a205c227372635c227d220a202020207d0a20207d0a5d5d"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "list_dir",
+      "arguments": {
+        "path": "src"
+      },
+      "candidate_dialects": [
+        "bare-json.v1"
+      ],
+      "outcome": "unresolved: tool_choice_none: the request's tool choice `none` forbids every call",
+      "rules": [
+        "tool_call.arguments.decode-string",
+        "tool_call.reasoning.unclosed"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        5,
+        508
+      ],
+      "dialect": "openai-tool-calls.v1",
+      "candidate_dialects": [
+        "openai-tool-calls.v1"
+      ],
+      "reason": "Malformed { at: 395 }",
+      "raw": "{\n    \"id\": \"call_a1\",\n    \"type\": \"function\",\n    \"function\": {\n      \"name\": \"write_file\",\n      \"arguments\": \"{\\\"path\\\": \\\"src/main.rs\\\", \\\"content\\\": \\\"fn main() {\\\\n    println!(\\\\\\\"hi\\\\\\\");\\\\n\\\\n\\\\tlet  x = 1;  \\\\n}\\\\n\\\", \\\"mode\\\": \\\"create\\\", \\\"ratio\\\": 2.50[TOOL_CALLS], \\\"count\\\": 1e3, \\\"tags\\\": [], \\\"options\\\": {\\\"backup\\\": false, \\\"retries\\\": 0, \\\"owner\\\": {\\\"name\\\": \\\"ops\\\"  \"function\": {\n      \"name\": \"list_d<｜tool▁calls▁end｜> 1;  \\\\n}\\\\n\\\", \\\"mode\\\": \\\"create\\\", \\\"ratio\\\": 2.50"
+    },
+    {
+      "span": [
+        508,
+        520
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1",
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 520 }",
+      "raw": "[TOOL_CALLS]"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    ", \\\"count\\\": 1e3, \\\"tags\\\": [], \\\"options\\\": {\\\"backup\\\": false, \\\"retries\\\": 0, \\\"owner\\\": {\\\"name\\\": \\\"ops\\\"  \"function\": ",
+    "\n  }\n]]"
+  ],
+  "reasoning_text": [
+    "[145, 91, 10, 32, 32]"
+  ],
+  "failed_validations": [
+    "tool_choice=none"
+  ],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.reasoning.unclosed",
+    "tool_call.arguments.decode-string"
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "description": "Issue #8 section 1 limit: an item scope that itself declares the array's name reads the inner opener as the item's own member (child), not as a sibling item.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "tree",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "children": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "children": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=tree>\n<parameter=children><parameter=name>a</parameter><parameter=children><parameter=name>b</parameter></parameter></parameter></function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "tree",
+      "arguments": {
+        "children": [
+          {
+            "name": "a",
+            "children": [
+              {
+                "name": "b"
+              }
+            ]
+          }
+        ]
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.nested-parameter",
+        "tool_call.markup.nested-parameter",
+        "tool_call.xml.array-item",
+        "tool_call.xml.array-item"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.nested-parameter",
+    "tool_call.markup.nested-parameter",
+    "tool_call.xml.array-item",
+    "tool_call.xml.array-item"
+  ]
+}

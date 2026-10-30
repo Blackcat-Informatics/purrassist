@@ -1,0 +1,58 @@
+{
+  "description": "F4: a broken <function= opener with no closer, followed by the answer in prose: the rejected attempt keeps only the markup its grammar read (to where it failed), and the prose after it, the user's answer, stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Sure, I could call <function=f but actually no tool is needed. The answer to your question is 42.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        19,
+        30
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Malformed { at: 30 }",
+      "raw": "<function=f"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Sure, I could call ",
+    " but actually no tool is needed. The answer to your question is 42."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

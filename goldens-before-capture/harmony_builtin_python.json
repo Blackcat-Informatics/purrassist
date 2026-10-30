@@ -1,0 +1,53 @@
+{
+  "description": "The built-in python recipient, its body Python code (read as raw text): a call to an unknown tool, Unresolved, never silent content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "harmony.v1"
+  ],
+  "stop": "stop",
+  "input": "<|start|>assistant<|channel|>analysis to=python<|message|>print(1 + 1)<|call|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": null,
+      "arguments": "print(1 + 1)",
+      "candidate_dialects": [
+        "harmony.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `python`",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -1,0 +1,66 @@
+{
+  "description": "Maintainer decision (adversary pass 6, F14/F19): \"Newlines have zero meaning here.\" F14: a `</parameter>` mid-line in a newline-framed value, then prose, then the closer that ends the value. The closer is unpaired and text follows it, so the reading holding the text (`tool_call.value.text-after-closer`) and the reading ending the value at that closer and dropping the text (`tool_call.markup.text-between-parameters`) tie: the mutating `set` call is Ambiguous between `rm -rf build</parameter> Then I set b.` and `rm -rf build`, never usable (issue #3: \"Never accept trailing free text as an argument\"). Same outcome class as the closer on a line of its own (qwen_value_holds_text_between_closers).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "set",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            },
+            "b": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "a"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "set": "mutating"
+  },
+  "input": "<tool_call>\n<function=set>\n<parameter=a>\nrm -rf build</parameter> Then I set b.\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "set",
+      "arguments": {
+        "a": "rm -rf build"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.text-between-parameters"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.text-between-parameters"
+  ]
+}

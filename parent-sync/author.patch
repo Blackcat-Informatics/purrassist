@@ -1,0 +1,761 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a932cfa..c422494 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -11,6 +11,11 @@ crates share one version.
+ 
+ ### Added
+ 
++- Gemma 3 `tool_code` fences recover direct Python keyword calls through
++  `gemma3-tool-code.v1` and the native Pythonic codec. Multiple fenced calls
++  retain order, ordinary code examples remain content, and `tool_output`
++  fences retain their result payloads. Canonical emission uses the same grammar.
++
+ - Schema recovery candidate trees retain fallible owners through construction,
+   queue discard and final publication. Replacements copy only retained nodes;
+   required witnesses and date/time repairs transfer owned values. Shared Search
+@@ -165,7 +170,6 @@ matches its single source, [known-limitations.json](docs/known-limitations.json)
+ - [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+ - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+ - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+-- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+ - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+ - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+ - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+diff --git a/README.md b/README.md
+index 9842e98..2ac911b 100644
+--- a/README.md
++++ b/README.md
+@@ -161,14 +161,14 @@ Current surfaces include:
+   mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
+   array. Call markup of a dialect that is not built in yet, or not in the
+   request's allow-list, is reported as a rejected attempt
+-  (`unsupported_dialect`), never silent content. Fourteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
++  (`unsupported_dialect`), never silent content. Fifteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
+   `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+-  `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`; callers add
++  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`; callers add
+   their own with the grammar DSL. Typed tool definitions derive from Rust
+   structs and enums with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`
+   (the zero-dependency `purrassist-derive` crate, re-exported by the facade;
+-  see the example below). Still tracked: the `gemma3-tool-code.v1` (#14) dialects, the `*-stripped` variants
++  see the example below). Still tracked: the `*-stripped` variants
+   (#18), streaming recognition (#16), and provider streaming events (#17). See
+   [tool-call recovery](docs/tool-calls/README.md).
+ - CLI, stdio MCP, and resumable helper request/response adapters
+diff --git a/crates/core/README.md b/crates/core/README.md
+index bda22c1..e22c000 100644
+--- a/crates/core/README.md
++++ b/crates/core/README.md
+@@ -24,10 +24,10 @@ assert_eq!(result.receipt.sources[0].text(), Some("[[42]]"));
+ definitions or lossless `OpenAI`, MCP, and Anthropic declarations: each call
+ gets its tool, schema-validated arguments, an outcome (`Resolved`,
+ `BestGuess`, `Ambiguous`, `Unresolved`), and its itemized repairs; markup no
+-allowed dialect reads is reported, never dropped. Fourteen dialects ship as
++allowed dialect reads is reported, never dropped. Fifteen dialects ship as
+ weighted, invertible grammars: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+ `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
+-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
++`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
+ 
+ ```rust
+ use purrassist_core::tool_call::{CallOutcome, Effects, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+diff --git a/crates/core/src/tool_call/detect.rs b/crates/core/src/tool_call/detect.rs
+index 9bdd997..481fad6 100644
+--- a/crates/core/src/tool_call/detect.rs
++++ b/crates/core/src/tool_call/detect.rs
+@@ -12,8 +12,7 @@
+ //! [`Rejection::UnsupportedDialect`](super::Rejection::UnsupportedDialect),
+ //! and the bytes stay content). Two kinds of family are detected:
+ //!
+-//! - families no built-in dialect parses yet: Gemma 3 `` ```tool_code `` blocks,
+-//!   and the *stripped* renderings of
++//! - families no built-in dialect parses yet: the *stripped* renderings of
+ //!   built-in dialects whose special tokens a detokenizer removed and which
+ //!   no built-in grammar reads (Kimi-K2 `functions.NAME:IDX{...}`, Harmony
+ //!   `to=functions.NAME` without its tokens, DeepSeek-V3 `functionNAME` with
+@@ -92,10 +91,10 @@ pub enum MarkupFamily {
+     OpenAiToolCalls,
+     /// `qwen3-coder-xml.v1`: `<function=NAME>` in a `<tool_call>`.
+     Qwen3CoderXml,
+-    /// `pythonic.v1` (not built in): a list of Python-style calls with
++    /// `pythonic.v1`: a list of Python-style calls with
+     /// keyword arguments, `[get_weather(city="Paris"), ...]`.
+     Pythonic,
+-    /// `gemma3-tool-code.v1` (not built in): a `` ```tool_code `` fenced
++    /// `gemma3-tool-code.v1`: a `` ```tool_code `` fenced
+     /// block holding a call.
+     Gemma3ToolCode,
+     /// `glm-4.5.v1`: `<arg_key>`/`<arg_value>` pairs in a
+@@ -167,8 +166,8 @@ impl MarkupFamily {
+             Self::OpenAiToolCalls => DialectId::OpenAiToolCalls,
+             Self::Qwen3CoderXml => DialectId::Qwen3CoderXml,
+             Self::Pythonic => DialectId::Pythonic,
+-            Self::Gemma3ToolCode
+-            | Self::KimiK2Stripped
++            Self::Gemma3ToolCode => DialectId::Gemma3ToolCode,
++            Self::KimiK2Stripped
+             | Self::HarmonyStripped
+             | Self::DeepSeekV3Stripped
+             | Self::NameArgumentsStripped => return None,
+@@ -183,8 +182,7 @@ impl MarkupFamily {
+     pub const fn built_in(self) -> bool {
+         !matches!(
+             self,
+-            Self::Gemma3ToolCode
+-                | Self::KimiK2Stripped
++            Self::KimiK2Stripped
+                 | Self::HarmonyStripped
+                 | Self::DeepSeekV3Stripped
+                 | Self::NameArgumentsStripped
+diff --git a/crates/core/src/tool_call/dialect.rs b/crates/core/src/tool_call/dialect.rs
+index 48c5c29..a0947a3 100644
+--- a/crates/core/src/tool_call/dialect.rs
++++ b/crates/core/src/tool_call/dialect.rs
+@@ -86,6 +86,8 @@ pub enum DialectId {
+     /// `deepseek-v3.v1`: DeepSeek-V3 / R1 tool-calls sections with fenced
+     /// JSON arguments.
+     DeepSeekV3,
++    /// `gemma3-tool-code.v1`: a direct Python keyword call in a `tool_code` fence.
++    Gemma3ToolCode,
+     /// `glm-4.5.v1`: GLM alternating key/value tag calls.
+     Glm45,
+     /// `harmony.v1`: `OpenAI` Harmony (gpt-oss) assistant messages with a
+@@ -155,6 +157,10 @@ static DEEPSEEK_V3: BuiltIn = BuiltIn::new(
+     "deepseek-v3.v1",
+     include_str!("dialects/deepseek-v3.v1.grammar"),
+ );
++static GEMMA3_TOOL_CODE: BuiltIn = BuiltIn::new(
++    "gemma3-tool-code.v1",
++    include_str!("dialects/gemma3-tool-code.v1.grammar"),
++);
+ static GLM45: BuiltIn = BuiltIn::new("glm-4.5.v1", include_str!("dialects/glm-4.5.v1.grammar"));
+ static HARMONY: BuiltIn = BuiltIn::new("harmony.v1", include_str!("dialects/harmony.v1.grammar"));
+ static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
+@@ -196,6 +202,7 @@ impl DialectId {
+     ///         "bare-json.v1",
+     ///         "deepseek-v3.1.v1",
+     ///         "deepseek-v3.v1",
++    ///         "gemma3-tool-code.v1",
+     ///         "glm-4.5.v1",
+     ///         "harmony.v1",
+     ///         "hermes.v1",
+@@ -209,11 +216,12 @@ impl DialectId {
+     ///     ]
+     /// );
+     /// ```
+-    pub const BUILT_IN: [Self; 14] = [
++    pub const BUILT_IN: [Self; 15] = [
+         Self::AnthropicToolUse,
+         Self::BareJson,
+         Self::DeepSeekV31,
+         Self::DeepSeekV3,
++        Self::Gemma3ToolCode,
+         Self::Glm45,
+         Self::Harmony,
+         Self::Hermes,
+@@ -241,6 +249,7 @@ impl DialectId {
+             Self::AnthropicToolUse => Some(&ANTHROPIC_TOOL_USE),
+             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
+             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
++            Self::Gemma3ToolCode => Some(&GEMMA3_TOOL_CODE),
+             Self::Glm45 => Some(&GLM45),
+             Self::Harmony => Some(&HARMONY),
+             Self::Hermes => Some(&HERMES),
+@@ -288,6 +297,7 @@ impl DialectId {
+             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.id,
+             Self::DeepSeekV31 => DEEPSEEK_V31.id,
+             Self::DeepSeekV3 => DEEPSEEK_V3.id,
++            Self::Gemma3ToolCode => GEMMA3_TOOL_CODE.id,
+             Self::Glm45 => GLM45.id,
+             Self::Harmony => HARMONY.id,
+             Self::Hermes => HERMES.id,
+@@ -332,6 +342,7 @@ impl DialectId {
+             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.grammar(),
+             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
+             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),
++            Self::Gemma3ToolCode => GEMMA3_TOOL_CODE.grammar(),
+             Self::Glm45 => GLM45.grammar(),
+             Self::Harmony => HARMONY.grammar(),
+             Self::Hermes => HERMES.grammar(),
+diff --git a/crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code.json b/crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code.json
+deleted file mode 100644
+index 474e05e..0000000
+--- a/crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code.json
++++ /dev/null
+@@ -1,62 +0,0 @@
+-{
+-  "description": "A Gemma 3 ```tool_code block holding a call (gemma3-tool-code.v1, not built in yet): reported, the fenced bytes stay content.",
+-  "tools_openai": [
+-    {
+-      "type": "function",
+-      "function": {
+-        "name": "get_weather",
+-        "parameters": {
+-          "type": "object",
+-          "properties": {
+-            "city": {
+-              "type": "string"
+-            },
+-            "unit": {
+-              "type": "string",
+-              "enum": [
+-                "celsius",
+-                "fahrenheit"
+-              ]
+-            }
+-          },
+-          "required": [
+-            "city"
+-          ]
+-        }
+-      }
+-    }
+-  ],
+-  "stop": "stop",
+-  "input": "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n",
+-  "outcome": "resolved",
+-  "stopped": "completed",
+-  "finish": "unresolved",
+-  "openai_finish_reason": "stop",
+-  "verdict": "nothing_usable",
+-  "usable_calls": {
+-    "strict": 0,
+-    "accepting_guesses": 0
+-  },
+-  "calls": [],
+-  "rejected": [
+-    {
+-      "span": [
+-        19,
+-        61
+-      ],
+-      "dialect": null,
+-      "candidate_dialects": [],
+-      "reason": "UnsupportedDialect { family: Gemma3ToolCode }",
+-      "raw": "```tool_code\nget_weather(city=\"Paris\")\n```"
+-    }
+-  ],
+-  "embedded": [],
+-  "content": [
+-    "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n"
+-  ],
+-  "reasoning_text": [],
+-  "failed_validations": [],
+-  "ledger_rules": [
+-    "tool_call.markup.unparsed-dialect"
+-  ]
+-}
+diff --git a/crates/core/tests/tool_call_corpus/mod.rs b/crates/core/tests/tool_call_corpus/mod.rs
+index bbf037f..b5be33c 100644
+--- a/crates/core/tests/tool_call_corpus/mod.rs
++++ b/crates/core/tests/tool_call_corpus/mod.rs
+@@ -771,6 +771,7 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
+         DialectId::DeepSeekV3 => "deepseek3",
+         DialectId::Harmony => "harmony",
+         DialectId::Glm45 => "glm45",
++        DialectId::Gemma3ToolCode => "gemma3",
+         DialectId::Hermes => "hermes",
+         DialectId::KimiK2 => "kimi",
+         DialectId::Llama3Json => "llama3",
+@@ -3521,7 +3522,7 @@ const fn policy_of(seed: u64) -> Policy {
+     }
+ }
+ 
+-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
++const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
+ 
+ /// The cases of every single-call mutation of `base`, appended to `cases`;
+ /// with `under`, only those of categories with fewer than [`TARGET`] cases
+@@ -3720,6 +3721,7 @@ pub fn generate() -> Vec<Case> {
+     adapter_cases(&mut cases);
+     glm_cases(&mut cases);
+     pythonic_cases(&mut cases);
++    gemma3_cases(&mut cases);
+     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
+     assert_eq!(identities.len(), cases.len(), "case identities are unique");
+     cases
+@@ -3782,3 +3784,67 @@ fn pythonic_cases(cases: &mut Vec<Case>) {
+         }
+     }
+ }
++
++fn gemma3_cases(cases: &mut Vec<Case>) {
++    for (variant, input, truth) in [
++        (
++            "single",
++            "```tool_code\nsearch_index(query='cats', limit=5)\n```",
++            Some(r#"{"query":"cats","limit":5}"#),
++        ),
++        (
++            "nullable",
++            "```tool_code\nsearch_index(query='cats', limit=None)\n```",
++            Some(r#"{"query":"cats","limit":null}"#),
++        ),
++        (
++            "missing-fence",
++            "```tool_code\nsearch_index(query='cats')\n",
++            Some(r#"{"query":"cats"}"#),
++        ),
++        (
++            "positional",
++            "```tool_code\nsearch_index('cats')\n```",
++            None,
++        ),
++        (
++            "expression",
++            "```tool_code\nsearch_index(query=run())\n```",
++            None,
++        ),
++        (
++            "python-example",
++            "````python\n```tool_code\nsearch_index(query='cats')\n```\n````",
++            None,
++        ),
++        (
++            "inline-prose",
++            "Example: ```tool_code\nsearch_index(query='cats')\n```",
++            None,
++        ),
++        (
++            "tool-output",
++            "```tool_output\nsearch_index(query='cats')\n```",
++            None,
++        ),
++    ] {
++        for (label, dialect) in [("gemma3", "gemma3-tool-code.v1"), ("all", ALL_DIALECTS)] {
++            cases.push(Case {
++                tool_set: Some("adapter"),
++                invalid: None,
++                id: format!("adapter/search_index/{label}/canonical/{variant}"),
++                category: "canonical".to_owned(),
++                dialect: dialect.to_owned(),
++                policy: Policy::PerTool,
++                stop: Ending::Stop,
++                input: input.to_owned(),
++                truth: truth.map(|arguments| {
++                    vec![Call {
++                        name: "search_index".to_owned(),
++                        arguments: json::parse(arguments).expect("truth"),
++                    }]
++                }),
++            });
++        }
++    }
++}
+diff --git a/crates/core/tests/tool_call_cost_support/mod.rs b/crates/core/tests/tool_call_cost_support/mod.rs
+index db2e052..1039304 100644
+--- a/crates/core/tests/tool_call_cost_support/mod.rs
++++ b/crates/core/tests/tool_call_cost_support/mod.rs
+@@ -43,6 +43,10 @@ pub fn openai(content: &str) -> String {
+     )
+ }
+ 
++pub fn gemma3(content: &str) -> String {
++    format!("```tool_code\nwrite(content=\"{content}\")\n```\n")
++}
++
+ pub fn pythonic(content: &str) -> String {
+     format!("[write(content=\"{content}\")] ")
+ }
+@@ -153,6 +157,7 @@ pub fn argument_work_bound(small: usize, large: usize) {
+         ("glm45", glm as fn(&str) -> String),
+         ("hermes", hermes),
+         ("pythonic", pythonic),
++        ("gemma3", gemma3),
+         ("llama3", llama3),
+         ("mistral", mistral),
+         ("mistral11", mistral11),
+@@ -218,6 +223,7 @@ pub fn argument_fits_published_budget(size: usize) {
+         ("glm45", glm(&content), true),
+         ("hermes", hermes(&content), true),
+         ("pythonic", pythonic(&content), true),
++        ("gemma3", gemma3(&content), true),
+         ("llama3", llama3(&content), true),
+         ("mistral", mistral(&content), true),
+         ("mistral11", mistral11(&content), true),
+@@ -368,7 +374,14 @@ fn dense_tools() -> ToolSet {
+ /// output that is nothing but one small unit repeated, in every built-in
+ /// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
+ /// units become)`.
+-const DENSE: [(&str, &str, &str, &str, Dense); 19] = [
++const DENSE: [(&str, &str, &str, &str, Dense); 20] = [
++    (
++        "gemma3-calls",
++        "",
++        "```tool_code\nwrite(content='a')\n```\n",
++        "",
++        Dense::Calls,
++    ),
+     (
+         "glm45-calls",
+         "",
+diff --git a/crates/core/tests/tool_call_goldens.rs b/crates/core/tests/tool_call_goldens.rs
+index 04261d5..2dccfbd 100644
+--- a/crates/core/tests/tool_call_goldens.rs
++++ b/crates/core/tests/tool_call_goldens.rs
+@@ -4326,7 +4326,10 @@ fn unparsed_markup_is_reported() {
+     use purrassist_core::tool_call::{MarkupFamily, Rejection};
+     for (name, family) in [
+         ("unparsed_pythonic_not_allowed", MarkupFamily::Pythonic),
+-        ("unparsed_gemma3_tool_code", MarkupFamily::Gemma3ToolCode),
++        (
++            "unparsed_gemma3_tool_code_not_allowed",
++            MarkupFamily::Gemma3ToolCode,
++        ),
+         ("unparsed_glm45_not_allowed", MarkupFamily::Glm45),
+         ("unparsed_kimi_k2_stripped", MarkupFamily::KimiK2Stripped),
+         ("unparsed_harmony_stripped", MarkupFamily::HarmonyStripped),
+diff --git a/crates/host/README.md b/crates/host/README.md
+index 75a3259..7b7baf0 100644
+--- a/crates/host/README.md
++++ b/crates/host/README.md
+@@ -48,9 +48,9 @@ This adds no graph authorization, confinement or proof-bound release claim.
+ 
+ The `recover_tool_calls` tool (MCP `tools/call`, CLI `purrassist call` and
+ `purrassist recover-tool-calls`) recovers the tool calls of one model turn
+-against caller declarations, over thirteen built-in dialects: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
++against caller declarations, over fifteen built-in dialects: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+ `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
+-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, and `bare-json.v1`.
++`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
+ Its result is the recovery's wire form: per-call outcomes, itemized repairs,
+ rejected and unparsed attempts, the turn's finish, an optional re-emission, and
+ a receipt. It never executes a call.
+diff --git a/crates/purrassist/README.md b/crates/purrassist/README.md
+index cb5103f..e054065 100644
+--- a/crates/purrassist/README.md
++++ b/crates/purrassist/README.md
+@@ -36,9 +36,9 @@ match answer.outcome {
+ `tool_call` recovers the tool calls of one raw model turn against the `OpenAI`,
+ MCP, or Anthropic declarations the model was shown (read byte for byte), with
+ per-call outcomes, itemized repairs, the turn's finish, and a receipt; it never
+-executes a call. Fourteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
++executes a call. Fifteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+ `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
+-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
++`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
+ 
+ ```rust
+ use purrassist::Outcome;
+diff --git a/crates/wasm-harness/src/transcript.rs b/crates/wasm-harness/src/transcript.rs
+index 8d9a8ed..2fa7cff 100644
+--- a/crates/wasm-harness/src/transcript.rs
++++ b/crates/wasm-harness/src/transcript.rs
+@@ -239,7 +239,7 @@ struct DialectCase {
+ }
+ 
+ /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
+-const DIALECT_CASES: [DialectCase; 14] = [
++const DIALECT_CASES: [DialectCase; 15] = [
+     DialectCase {
+         dialect: DialectId::AnthropicToolUse,
+         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
+@@ -272,6 +272,14 @@ const DIALECT_CASES: [DialectCase; 14] = [
+         repair_status: "resolved",
+         repair_digest: "sha256:8b47b741e93bd652782fbc8bb4b2a4f43d5277482a8a41558b187f060d1731e6",
+     },
++    DialectCase {
++        dialect: DialectId::Gemma3ToolCode,
++        anchor: "```tool_code\nget_weather(city='Paris', unit='celsius')\n```\n```tool_code\nread_file(path='notes.txt', limit=10)\n```",
++        anchor_digest: "pending-gemma3-anchor-capture",
++        repair: "```tool_code\nget_weather(city='Oslo', unit='celsius')\n",
++        repair_status: "resolved",
++        repair_digest: "pending-gemma3-repair-capture",
++    },
+     DialectCase {
+         dialect: DialectId::Glm45,
+         anchor: "<think>Read the notes.</think><tool_call>read_file\n<arg_key>path</arg_key><arg_value>notes.txt</arg_value><arg_key>limit</arg_key><arg_value>10</arg_value></tool_call>",
+diff --git a/docs/FUZZING.md b/docs/FUZZING.md
+index d84d222..85b1f99 100644
+--- a/docs/FUZZING.md
++++ b/docs/FUZZING.md
+@@ -858,7 +858,6 @@ matches its single source, [known-limitations.json](known-limitations.json);
+ - [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+ - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+ - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+-- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+ - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+ - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+ - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+diff --git a/docs/IMPLEMENTATION.md b/docs/IMPLEMENTATION.md
+index 295e50b..437fdf3 100644
+--- a/docs/IMPLEMENTATION.md
++++ b/docs/IMPLEMENTATION.md
+@@ -297,10 +297,10 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
+   definitions or lossless `OpenAI`, MCP, and Anthropic declarations, whose
+   exact parameters schemas are validated under Draft 2020-12 or Draft-07 (the
+   dialect MCP servers commonly declare). Dialects are weighted, invertible
+-  grammars in a first-party DSL; fourteen ship (`qwen3-coder-xml.v1`,
++  grammars in a first-party DSL; fifteen ship (`qwen3-coder-xml.v1`,
+   `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+-  `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`) and callers compile
++  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`) and callers compile
+   their own. A
+   best-first search repairs call markup with named, costed rules; each call
+   is resolved against its tool with a per-call outcome, itemized repairs,
+@@ -313,8 +313,7 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
+   governed quadratic conversion), and exposed through Rust, CLI
+   (`recover-tool-calls`), and MCP (`recover_tool_calls`). Typed tool
+   definitions can be derived from Rust structs and enums (`purrassist-derive`).
+-  Still tracked: the
+-  `gemma3-tool-code.v1` (#14) dialect, the `*-stripped` variants (#18),
++  Still tracked: the `*-stripped` variants (#18),
+   streaming recognition (#16), and provider streaming events (#17).
+   See `tool-calls/README.md`.
+ - Rust facade, CLI, and stdio MCP server using the same operations.
+diff --git a/docs/MATCHING-QUALITY.md b/docs/MATCHING-QUALITY.md
+index dc20fd9..ee0c6f3 100644
+--- a/docs/MATCHING-QUALITY.md
++++ b/docs/MATCHING-QUALITY.md
+@@ -207,6 +207,10 @@ small oracle exhaustively proves the Unicode tables.
+ 
+ ## Tool-call recovery evaluation
+ 
++The `gemma3-tool-code.v1` native corpus witnesses cover canonical and missing-fence
++calls, positional/expression refusal, ordinary code examples and tool results.
++Their regenerated counts and correctness measurements are pending qualification.
++
+ `crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,184 model
+ turns, each with its `id`, `category` (the rule expected to repair it),
+ `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
+diff --git a/docs/QUALIFICATION.md b/docs/QUALIFICATION.md
+index a5dd6e0..bd6310a 100644
+--- a/docs/QUALIFICATION.md
++++ b/docs/QUALIFICATION.md
+@@ -27,7 +27,7 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
+ | Resource boundaries | `resource_accounting`, `schema_budgets`, `allocation_oracle`, syntax `allocation`, host `helpers` | Charge-before-allocation, cancellation, helper admission, measured allocator comparisons including zero-slack pattern compilation and generation, external parser accounts |
+ | Filesystem transaction boundaries | host `files`, `crash_recovery`, `journal_limits`, `orphan_preservation`, `edit_tools` | Eight crash checkpoints; bounded escaped journals, retry/recovery, temporary ownership checks, stale plans, locks, conditional undo and explicit batch outcomes |
+ | Shared Rust/CLI/MCP surface | host tests and CLI `protocol` | Single registry; every tool has CLI/MCP equivalence fixtures and schema-checked output |
+-| Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params`/`kv-pairs`/`pythonic` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1` and `pythonic.v1`, all fourteen in one mixed turn; deliberate rejections; unparsed call markup reported |
++| Tool-call grammars and dialects | `grammar_engine`, `grammar_codecs`, `tool_call_dialects`, `tool_call_negative` | DSL compilation and errors; linear fast path; split-invariant push recognition; `commit` points (no rejection before call-shaped evidence); `next` (several calls in one attempt); `insert` (an omitted token read as inserted); `optional-id`, `declaration-content` and `json-envelope` statements (the JSON envelope syntax slips on all six JSON-envelope dialects); factorized ambiguity; `raw`/`json`/`json-args`/`xml-params`/`kv-pairs`/`pythonic` codecs; canonical anchor fixtures for `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1` and `pythonic.v1`, all fifteen in one mixed turn; deliberate rejections; unparsed call markup reported |
+ | Tool-call resolution and recovery | `tool_definitions`, `tool_adapters`, `tool_call_rules`, `tool_call_goldens`, `tool_call_recover`, `tool_call_roundtrip` | Typed definitions; byte-exact `OpenAI`/MCP/Anthropic render-back including Draft-07 MCP schemas; registry admission, costs and loss kinds; `RULES.md`/`GRAMMAR.md` checked against the code; one captured golden per rule; mutating-guess guards; `Exact` effort; stop-reason semantics; pinned order-independent result digest; print/recognize round trips for every dialect pair; `OpenAI` `tool_calls` shape |
+ | Tool-call cost and quality | `tool_call_cost`, `tool_call_scale`, `correction_evaluation` | Published linear work bound and constants; 1 MiB arguments and 64-call busy turns under `ToolRecoveryRequest::sized`; 18,184 model turns with zero incorrect automatic answers and 100% abstention recall |
+ | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
+@@ -115,12 +115,10 @@ test proving each are mapped in
+ [tool-calls/INTEGRATION.md](tool-calls/INTEGRATION.md); the 18,184-case
+ evaluation is a deterministic generated corpus, so its zero-incorrect result
+ establishes behavior on those cases rather than a production error rate.
+-Fourteen dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
++Fifteen dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
+ `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
+ `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
+-`anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`). Still tracked: the
+-`gemma3-tool-code.v1` (#14)
+-dialects, the `*-stripped` variants (#18), streaming recognition (#16), and
++`anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`). Still tracked: the `*-stripped` variants (#18), streaming recognition (#16), and
+ provider streaming events (#17).
+ 
+ ## Resource and platform qualification
+@@ -218,7 +216,6 @@ matches its single source, [known-limitations.json](known-limitations.json);
+ - [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
+ - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
+ - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
+-- [#14](https://github.com/Blackcat-Informatics/purrassist/issues/14) Tool-call recovery: add the gemma3-tool-code.v1 dialect. `gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.
+ - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
+ - [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic SSE `tool_use` and OpenAI `tool_calls` delta streams are not reassembled into a turn.
+ - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+diff --git a/docs/RESOURCES.md b/docs/RESOURCES.md
+index c20a4cb..f0dd526 100644
+--- a/docs/RESOURCES.md
++++ b/docs/RESOURCES.md
+@@ -1017,8 +1017,9 @@ every value below to equal the code's.
+ | `openai-tool-calls.v1` | 6665 | 6665 |
+ | `qwen3-coder-xml.v1` | 971 | 971 |
+ 
+-The default request allows all fourteen built-in dialects.
+-The combined bound is pending qualification of the Pythonic grammar.
++The default request allows all fifteen built-in dialects.
++The combined bound is pending qualification of the Pythonic and
++`gemma3-tool-code.v1` grammars.
+ 
+ The `kv-pairs` codec scans argument fields forward with a bounded tag
+ comparison at each byte. Typed JSON boundaries use the native JSON cursor,
+@@ -1026,6 +1027,10 @@ then decode the bounded value once. Exact closers take precedence over fuzzy
+ substrings in verbatim text. The shared linear, sized-budget and dense-markup
+ checks include GLM calls.
+ 
++Gemma uses the same finite-state Pythonic framer and native literal conversion.
++Its long-argument, sized-budget and dense-call fixtures are present; the new
++grammar bound and dense measurement are pending qualification.
++
+ ### Budgets for large outputs and busy turns
+ 
+ Fixed effort presets are sized for ordinary turns, so a large output or a
+diff --git a/docs/known-limitations.json b/docs/known-limitations.json
+index 78647ce..9a09591 100644
+--- a/docs/known-limitations.json
++++ b/docs/known-limitations.json
+@@ -23,12 +23,6 @@
+         "tool-call-ref"
+       ]
+     },
+-    {
+-      "issue": 14,
+-      "title": "Tool-call recovery: add the gemma3-tool-code.v1 dialect",
+-      "impact": "`gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.",
+-      "blocks_release": false
+-    },
+     {
+       "issue": 16,
+       "title": "Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress)",
+diff --git a/docs/tool-calls/GRAMMAR.md b/docs/tool-calls/GRAMMAR.md
+index 1d0fad6..c74fa35 100644
+--- a/docs/tool-calls/GRAMMAR.md
++++ b/docs/tool-calls/GRAMMAR.md
+@@ -19,7 +19,8 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
+   choices to print well-formed calls for given argument shapes, for tests and
+   corpora.
+ 
+-The fourteen built-in dialects are written in this DSL:
++The fifteen built-in dialects are written in this DSL:
++[`gemma3-tool-code.v1`](../../crates/core/src/tool_call/dialects/gemma3-tool-code.v1.grammar),
+ [`glm-4.5.v1`](../../crates/core/src/tool_call/dialects/glm-4.5.v1.grammar),
+ [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
+ [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
+diff --git a/docs/tool-calls/INTEGRATION.md b/docs/tool-calls/INTEGRATION.md
+index 0b1e21e..cc11709 100644
+--- a/docs/tool-calls/INTEGRATION.md
++++ b/docs/tool-calls/INTEGRATION.md
+@@ -593,9 +593,7 @@ is reported as certain.
+   and the `fuzz-tool-call` invariant that no call, embedded call or
+   rejected attempt holds bytes of a reasoning range's opener or closer.
+ - **Call markup is never silent content.** Call markup that no dialect of
+-  the allow-list reads (a family not built in yet: Pythonic call lists,
+-  Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the
+-  stripped renderings of built-in dialects no grammar reads; or a built-in
++  the allow-list reads (a family not built in yet: the stripped renderings of built-in dialects no grammar reads; or a built-in
+   dialect the allow-list leaves out, `[TOOL_CALLS]` under a Hermes-only
+   request) is reported as a `RejectedCall` with
+   `Rejection::UnsupportedDialect { family }` (wire `reason.code`
+diff --git a/docs/tool-calls/README.md b/docs/tool-calls/README.md
+index 44e6480..4cf96a1 100644
+--- a/docs/tool-calls/README.md
++++ b/docs/tool-calls/README.md
+@@ -11,11 +11,12 @@ call. The operation is `tool_call.recover.v1`, implemented in
+ `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
+ command.
+ 
+-Thirteen dialects are built in:
++Fifteen dialects are built in:
+ 
+ | Dialect | Shape | Reference |
+ | --- | --- | --- |
+ | `qwen3-coder-xml.v1` | `<tool_call><function=NAME><parameter=P>VALUE</parameter></function></tool_call>`, or the bare `<function=NAME>` element | [dialect](dialects/qwen3-coder-xml.v1.md) |
++| `gemma3-tool-code.v1` | A direct keyword call in a `tool_code` fence; `tool_output` fences are results | [dialect](dialects/gemma3-tool-code.v1.md) |
+ | `glm-4.5.v1` | `<tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value></tool_call>` | [dialect](dialects/glm-4.5.v1.md) |
+ | `hermes.v1` | `<tool_call>{"name": NAME, "arguments": {...}}</tool_call>` | [dialect](dialects/hermes.v1.md) |
+ | `openai-tool-calls.v1` | `tool_calls` elements `{"id": ID, "type": "function", "function": {...}}` as text | [dialect](dialects/openai-tool-calls.v1.md) |
+@@ -35,7 +36,7 @@ Callers add their own dialects with the grammar DSL
+ derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
+ `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
+ `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
+-[README](../../crates/derive/README.md)). Still tracked: the `gemma3-tool-code.v1` (#14) dialects, the
++[README](../../crates/derive/README.md)). Still tracked: the
+ `*-stripped` variants (#18), streaming recognition (#16), and provider
+ streaming events (#17).
+ 
+@@ -59,7 +60,7 @@ streaming events (#17).
+   included, resynchronizes past it and keeps every call it reads whole
+   (`tool_call.markup.group-split`). The least-cost
+   repairs are kept and every applied operator is itemized. Argument codecs
+-  (`json`, `json-args`, `xml-params`, `raw`) read argument bodies with their own recorded
++  (`json`, `json-args`, `xml-params`, `kv-pairs`, `pythonic`, `raw`) read argument bodies with their own recorded
+   repairs.
+ - **Factorized ambiguity.** The turn is a least-cost segmentation into
+   content, reasoning, calls, tool results, and rejected attempts (each
+@@ -344,9 +345,7 @@ finish.
+ Call markup that no dialect of the allow-list reads is never silent
+ content. A linear detector (`detect_unparsed`) scans the turn's content for
+ the distinctive openers and shapes of the families no built-in dialect
+-parses yet (`gemma3-tool-code.v1` `` ```tool_code ``
+-blocks, and the stripped
+-renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
++parses yet (the stripped renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
+ `deepseek-v3-stripped.v1` and `name-arguments-stripped.v1`), and for the built-in dialects the
+ allow-list leaves out. Each hit is a `RejectedCall` with
+ `Rejection::UnsupportedDialect { family }` (its `dialect` is the family's
+diff --git a/docs/tool-calls/dialects/bare-json.v1.md b/docs/tool-calls/dialects/bare-json.v1.md
+index 138418c..4e8359e 100644
+--- a/docs/tool-calls/dialects/bare-json.v1.md
++++ b/docs/tool-calls/dialects/bare-json.v1.md
+@@ -63,7 +63,7 @@ covers the object, so the wrapped dialect's call wins on evidence and the
+ call's `candidate_dialects` names that dialect alone (the goldens
+ `bare_json_in_hermes_wrapper` and the test
+ `every_canonical_fixture_in_one_mixed_turn`, which recovers the canonical
+-fixture of all thirteen dialects in one turn). A leading `"id"` beginning
++fixture of all fifteen dialects in one turn). A leading `"id"` beginning
+ `toolu_` is not read here: such a block is Anthropic's, whose `"input"` key
+ it may have written as `"arguments"`. A trailing id, which Anthropic
+ evidence cannot precede, may have any spelling.
+diff --git a/scripts/test-check-docs.py b/scripts/test-check-docs.py
+index b2f84a5..13644e1 100644
+--- a/scripts/test-check-docs.py
++++ b/scripts/test-check-docs.py
+@@ -389,11 +389,11 @@ class ReceiptVersion(Case):
+ class DialectIds(Case):
+     def test_a_new_dialect_page_fails_every_list(self):
+         tree = self.tree()
+-        tree.write('docs/tool-calls/dialects/pythonic.v1.md', '# x\n')
++        tree.write('docs/tool-calls/dialects/future.v1.md', '# x\n')
+         errors = tree.errors()
+         for name in ('README.md', 'crates/core/README.md', 'docs/QUALIFICATION.md', 'docs/IMPLEMENTATION.md',
+                      'docs/tool-calls/GRAMMAR.md', 'docs/tool-calls/README.md', 'docs/MATCHING-QUALITY.md'):
+-            self.assertFails(errors, 'dialect-ids', name, "missing ['pythonic.v1']")
++            self.assertFails(errors, 'dialect-ids', name, "missing ['future.v1']")
+ 
+     def test_a_removed_page_fails_with_the_extra_id(self):
+         tree = self.tree()
+@@ -433,16 +433,16 @@ class DialectIds(Case):
+         self.assertFails(tree.errors(), 'dialect-ids', 'crates/core/README.md', "missing ['mistral-v3.v1']")
+ 
+     def test_wrong_count_fails(self):
+-        for name, old, new in (('README.md', 'Thirteen dialects ship', 'Eleven dialects ship'),
+-                               ('docs/tool-calls/GRAMMAR.md', 'thirteen built-in dialects', 'ten built-in dialects'),
+-                               ('docs/RESOURCES.md', 'all thirteen built-in dialects', 'all ten built-in dialects'),
+-                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all thirteen dialects', 'all ten dialects'),
+-                               ('docs/IMPLEMENTATION.md', 'thirteen ship', 'ten ship'),
+-                               ('crates/host/README.md', 'over thirteen built-in', 'over ten built-in')):
++        for name, old, new in (('README.md', 'Fifteen dialects ship', 'Eleven dialects ship'),
++                               ('docs/tool-calls/GRAMMAR.md', 'fifteen built-in dialects', 'ten built-in dialects'),
++                               ('docs/RESOURCES.md', 'all fifteen built-in dialects', 'all ten built-in dialects'),
++                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all fifteen dialects', 'all ten dialects'),
++                               ('docs/IMPLEMENTATION.md', 'fifteen ship', 'ten ship'),
++                               ('crates/host/README.md', 'over fifteen built-in', 'over ten built-in')):
+             with self.subTest(name=name):
+                 tree = self.tree()
+                 tree.replace(name, old, new)
+-                self.assertFails(tree.errors(), 'dialect-count', name, 'has 13')
++                self.assertFails(tree.errors(), 'dialect-count', name, 'has 15')
+ 
+     def test_a_subset_count_is_not_a_dialect_count(self):
+         tree = self.tree()
+@@ -451,7 +451,7 @@ class DialectIds(Case):
+ 
+     def test_a_missing_count_sentence_is_not_found(self):
+         tree = self.tree()
+-        tree.replace('crates/purrassist/README.md', 'Thirteen dialects ship:', 'These dialects exist:')
++        tree.replace('crates/purrassist/README.md', 'Fifteen dialects ship:', 'These dialects exist:')
+         self.assertFails(tree.errors(), 'dialect-count', 'crates/purrassist/README.md', NOT_FOUND)
+ 
+ 
+@@ -673,7 +673,7 @@ class KnownLimitationsSource(Case):
+ 
+     def test_the_real_set_is_the_agreed_one(self):
+         data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
+-        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 12, 14, 16, 17, 18])
++        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 16, 17, 18])
+ 
+ 
+ class KnownLimitationsSection(Case):
+@@ -1853,7 +1853,7 @@ ABSENT = (
+     ('fuzz-targets', 'Makefile', r'across all ten targets', 'across the targets'),
+     ('receipt-version', 'docs/QUALIFICATION.md', r'receipt wire v3', 'receipt wire format'),
+     ('receipt-version', 'crates/core/src/contract.rs', r'RECEIPT_VERSION: u32 = 3;', 'RECEIPT_REVISION: u32 = 3;'),
+-    ('dialect-count', 'README.md', r'Thirteen dialects ship', 'These dialects ship'),
++    ('dialect-count', 'README.md', r'Fifteen dialects ship', 'These dialects ship'),
+     ('fuzz-baseline-table', 'docs/FUZZING.md', r'### Recorded 10,000-mutation baselines', '### Baselines'),
+     ('fuzz-row-limits', 'docs/QUALIFICATION.md', r'`make fuzz`', '`make  fuzz`'),
+ )

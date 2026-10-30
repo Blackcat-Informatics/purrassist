@@ -1,0 +1,80 @@
+{
+  "description": "Stage-3 pass 5 (F16, a campaign failure: fuzz-tool-call seed 7): an OpenAI call object whose `arguments` string loses its end runs into the next call's `\"function\"` key. The attempt fails after the string (at 107) and its span completes the key literal it began (`\"function\"`, to 116); the object after that key's `:` is the call body the key began (`{\"name\": \"list_dir\", ...}`, unreadable with its repeated `arguments`), so the rejection covers it to the bracket closing it (1..191) and no call body is left as assistant text (it was 1..116, leaving `: {\"name\": \"list_dir\", ...}` as content).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "list_dir": "read_only"
+  },
+  "input": "[{\"id\": \"call_a1\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"a\\\"  \"function\": {\"name\": \"list_dir\", \"arguments\":\"x\", \"arguments\": \"{\\\"path\\\": \\\"src\\\"}\"}}]",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        1,
+        191
+      ],
+      "dialect": "openai-tool-calls.v1",
+      "candidate_dialects": [
+        "openai-tool-calls.v1"
+      ],
+      "reason": "Malformed { at: 107 }",
+      "raw": "{\"id\": \"call_a1\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"a\\\"  \"function\": {\"name\": \"list_dir\", \"arguments\":\"x\", \"arguments\": \"{\\\"path\\\": \\\"src\\\"}\"}"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "[",
+    "}]"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

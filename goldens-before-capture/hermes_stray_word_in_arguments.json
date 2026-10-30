@@ -1,0 +1,88 @@
+{
+  "description": "T5/F10: a stray bare word in an arguments object (no `:` after it) is no key: `{\"a\":\"y\",\"oops\":null}` is never invented; the arguments are unreadable and the attempt is rejected through its closer.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"y\" oops}}</tool_call>",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          66
+        ],
+        "dialect": "hermes.v1",
+        "candidate_dialects": [
+          "glm-4.5.v1",
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 48 }",
+        "raw": "<tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"y\" oops}}</tool_call>"
+      }
+    ],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        66
+      ],
+      "dialect": "hermes.v1",
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "reason": "Malformed { at: 48 }",
+      "raw": "<tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"y\" oops}}</tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

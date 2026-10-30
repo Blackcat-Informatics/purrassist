@@ -1,0 +1,44 @@
+{
+  "description": "An analysis message then a final answer ending with <|return|>: reasoning and content, no call and no rejected attempt.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "<|channel|>analysis<|message|>Simple arithmetic.<|end|><|start|>assistant<|channel|>final<|message|>2 + 2 = 4.<|return|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "<|start|>assistant<|channel|>final<|message|>2 + 2 = 4.<|return|>"
+  ],
+  "reasoning_text": [
+    "Simple arithmetic."
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -1,0 +1,62 @@
+{
+  "description": "A DeepSeek-V3 call with its special tokens removed, functionNAME then a fenced JSON block (deepseek-v3-stripped.v1): reported.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "functionget_weather\n```json\n{\"city\": \"Paris\"}\n```",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        49
+      ],
+      "dialect": null,
+      "candidate_dialects": [],
+      "reason": "UnsupportedDialect { family: DeepSeekV3Stripped }",
+      "raw": "functionget_weather\n```json\n{\"city\": \"Paris\"}\n```"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "functionget_weather\n```json\n{\"city\": \"Paris\"}\n```"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.unparsed-dialect"
+  ]
+}

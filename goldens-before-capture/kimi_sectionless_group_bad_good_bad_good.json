@@ -1,0 +1,178 @@
+{
+  "description": "T4: bad, good, bad, good in one kimi-k2.v1 group: both bad calls are rejected parts of their own, both good calls are recovered as kimi-k2.v1 (the first good call records the split on both sides), and no markup is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "kimi-k2.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|><|tool_call_begin|>functions.f:1<|tool_call_argument_begin|>{\"a\":\"y\"}<|tool_call_end|><|tool_call_begin|>functions.f:2 oops<|tool_call_argument_begin|>{\"a\":\"z\"}<|tool_call_end|><|tool_call_begin|>functions.f:3<|tool_call_argument_begin|>{\"a\":\"w\"}<|tool_call_end|><|tool_calls_section_end|> done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 2,
+      "accepting_guesses": 2
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "y"
+        },
+        "candidate_dialects": [
+          "kimi-k2.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.markup.missing-token",
+          "tool_call.markup.group-split",
+          "tool_call.markup.group-split"
+        ]
+      },
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "w"
+        },
+        "candidate_dialects": [
+          "kimi-k2.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          0,
+          91
+        ],
+        "dialect": "kimi-k2.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1",
+          "deepseek-v3.v1",
+          "kimi-k2.v1"
+        ],
+        "reason": "Malformed { at: 33 }",
+        "raw": "<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|>"
+      },
+      {
+        "span": [
+          177,
+          268
+        ],
+        "dialect": "kimi-k2.v1",
+        "candidate_dialects": [
+          "kimi-k2.v1"
+        ],
+        "reason": "Malformed { at: 210 }",
+        "raw": "<|tool_call_begin|>functions.f:2 oops<|tool_call_argument_begin|>{\"a\":\"z\"}<|tool_call_end|>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      " done"
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.markup.missing-token",
+      "tool_call.markup.group-split",
+      "tool_call.markup.group-split"
+    ]
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "y"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.missing-token",
+        "tool_call.markup.group-split",
+        "tool_call.markup.group-split"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "w"
+      },
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        0,
+        91
+      ],
+      "dialect": "kimi-k2.v1",
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "reason": "Malformed { at: 33 }",
+      "raw": "<|tool_call_begin|>functions.f:0 oops<|tool_call_argument_begin|>{\"a\":\"x\"}<|tool_call_end|>"
+    },
+    {
+      "span": [
+        177,
+        268
+      ],
+      "dialect": "kimi-k2.v1",
+      "candidate_dialects": [
+        "kimi-k2.v1"
+      ],
+      "reason": "Malformed { at: 210 }",
+      "raw": "<|tool_call_begin|>functions.f:2 oops<|tool_call_argument_begin|>{\"a\":\"z\"}<|tool_call_end|>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    " done"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.missing-token",
+    "tool_call.markup.group-split",
+    "tool_call.markup.group-split"
+  ]
+}

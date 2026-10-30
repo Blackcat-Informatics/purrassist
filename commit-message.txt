@@ -1,0 +1,6 @@
+Add Gemma tool-code recovery dialect
+
+Recognize direct keyword calls in protocol fences through the native
+Pythonic codec, retain ordinary examples and tool outputs as content,
+and register canonical emission, fixtures, cost bounds and portable
+transcripts for the built-in dialect.

@@ -1,0 +1,66 @@
+{
+  "description": "T5 guard: a declared closer variant (`</functions>`) that really ends the call, followed by text: the body also reads on past it (a variant is only a fallback), but that speculative reading never keeps the attempt from being stuck nor reports failures of its own, so the variant reading's repairs are proposed: the call is read (closer-variant, then the wrapper closer read as missing before the text) and the text stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<tool_call>\n<function=f>\n<parameter=a>\n1\n</parameter>\n</functions> bye",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "1"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.closer-variant",
+        "tool_call.markup.missing-wrapper-close.before-text"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "bye"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.closer-variant",
+    "tool_call.markup.missing-wrapper-close.before-text"
+  ]
+}

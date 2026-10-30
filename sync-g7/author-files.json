@@ -1,0 +1,220 @@
+{
+  "CHANGELOG.md": {
+    "exists": true,
+    "sha256": "2ea6e2812728109ef29be35d0fcb214b14cba99ec47e3180a7c558f5de2f8d95",
+    "mode": 420
+  },
+  "README.md": {
+    "exists": true,
+    "sha256": "4e119fedf33505c45406da51040f6e71709734ca1319787a93216c357beea124",
+    "mode": 420
+  },
+  "crates/core/README.md": {
+    "exists": true,
+    "sha256": "ff028f052a980d2196a16c1beac50a80f28fa1a2725b3a6316239ab70630d8b1",
+    "mode": 420
+  },
+  "crates/core/src/grammar/compile.rs": {
+    "exists": true,
+    "sha256": "1ab7421993e0b19279c52aca72a604794e4d9e8eae510e5779b8dfef2357caee",
+    "mode": 420
+  },
+  "crates/core/src/grammar/engine.rs": {
+    "exists": true,
+    "sha256": "a59d2a15e489ca741e33899c6f341161f801e1df4906b81f1eb9a1bf60d450ea",
+    "mode": 420
+  },
+  "crates/core/src/grammar/fence.rs": {
+    "exists": true,
+    "sha256": "60e515a8978055d9f391f805c4ccfd42faa4bfab0df83643588fc4f7707a16cc",
+    "mode": 420
+  },
+  "crates/core/src/grammar/mod.rs": {
+    "exists": true,
+    "sha256": "f4e190cc6c7dbfe5327f0db16165cc80d4c8588a646b0683df17b3371676a343",
+    "mode": 420
+  },
+  "crates/core/src/grammar/repair.rs": {
+    "exists": true,
+    "sha256": "7510aaf2b26b025b60af5cb747f0fb6617c7897ad80cbb01d015e6be62fc8d93",
+    "mode": 420
+  },
+  "crates/core/src/grammar/syntax.rs": {
+    "exists": true,
+    "sha256": "d49cd89ea97f16f856397e9e5127993db5c4e2f56cc2f2c694e511af217e2dca",
+    "mode": 420
+  },
+  "crates/core/src/tool_call/context.rs": {
+    "exists": true,
+    "sha256": "3c32cd0e9e69e3eef41d40e65f529930cbf6ca8dba8a33681dd781be888047df",
+    "mode": 420
+  },
+  "crates/core/src/tool_call/detect.rs": {
+    "exists": true,
+    "sha256": "76a15f603acb38884b9f6198174652bb815b6595cb78c2ddacbdaa14801a041d",
+    "mode": 420
+  },
+  "crates/core/src/tool_call/dialect.rs": {
+    "exists": true,
+    "sha256": "c2507170fbfbe0f9d4d5cb6ec8c527f8c15f36c70f7cdcea08432a24f1d8b977",
+    "mode": 420
+  },
+  "crates/core/src/tool_call/dialects/gemma3-tool-code.v1.grammar": {
+    "exists": true,
+    "sha256": "e710b93f76d8312473dbd4d55392f79d4bbd25629fdace619c23a6673e4605f1",
+    "mode": 420
+  },
+  "crates/core/src/tool_call/recognizer.rs": {
+    "exists": true,
+    "sha256": "221224754d9b35d88b6e12f02e186d9b6b1b75a2f1fdb00bdf1d1457284316cb",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-call-goldens/gemma3_canonical.json": {
+    "exists": true,
+    "sha256": "098a891ca6d9fde0240a746de1213c558a36b520f6f294c30997cacfa0e3150f",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-call-goldens/gemma3_fenced_content.json": {
+    "exists": true,
+    "sha256": "1ee5e6e18eb311a0b0d2fe74135e54aeda9b1e15bcafee5048e9ae11abd37117",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-call-goldens/gemma3_missing_fence.json": {
+    "exists": true,
+    "sha256": "a583207d0c4df76f7d8e88a80eb7e95dc04c20af024ef4988534c2cf43ce1291",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-call-goldens/gemma3_positional_rejected.json": {
+    "exists": true,
+    "sha256": "97f8428428b4dda71f0d68071abd778a297b20a694a081be0fc477b2b2ee850f",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-call-goldens/gemma3_tool_output.json": {
+    "exists": true,
+    "sha256": "e61b207df06b5447996b167451d18e33492a4aff7d038f17fce011fed2321220",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code.json": {
+    "exists": false
+  },
+  "crates/core/tests/data/tool-call-goldens/unparsed_gemma3_tool_code_not_allowed.json": {
+    "exists": true,
+    "sha256": "8089fb09c280317807063c11b4ebef772f0eff5e8019881e1b3d7d570139a287",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-calls/conformance/gemma3-tool-code.v1/multiple-calls.json": {
+    "exists": true,
+    "sha256": "1d485702504668bee83b8078e621dc159eb324c271a8f4daf4c133ae852739e0",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-calls/conformance/gemma3-tool-code.v1/nested-typed-arguments.json": {
+    "exists": true,
+    "sha256": "5b162b108fce972d0e231b18bbd488d6fa85422353cacf27e59c789cf6a16f69",
+    "mode": 420
+  },
+  "crates/core/tests/data/tool-calls/conformance/gemma3-tool-code.v1/single-call.json": {
+    "exists": true,
+    "sha256": "bc4ff1bef6867ef3b0f234fe297371f7007834a63647e9acd226e005796d7d27",
+    "mode": 420
+  },
+  "crates/core/tests/tool_call_corpus/mod.rs": {
+    "exists": true,
+    "sha256": "50e7cd0735c9845440fff6737d09c7f19733b5d32de50fd519556ba625f8a5a4",
+    "mode": 420
+  },
+  "crates/core/tests/tool_call_cost_support/mod.rs": {
+    "exists": true,
+    "sha256": "fd3315385dd2a636fb7f4e6d4cd495d4623eb3d401205657aa74e85ae8d7b028",
+    "mode": 420
+  },
+  "crates/core/tests/tool_call_dialects.rs": {
+    "exists": true,
+    "sha256": "125edc20bc1eca0e42b4264e635cf0134853501ec11978b11c4e18a918e66654",
+    "mode": 420
+  },
+  "crates/core/tests/tool_call_gemma3.rs": {
+    "exists": true,
+    "sha256": "3b7e2d03a1d9743e7d0125dfc50b62c616f10bf149cbfc6b70a9c78999159ad7",
+    "mode": 420
+  },
+  "crates/core/tests/tool_call_goldens.rs": {
+    "exists": true,
+    "sha256": "9e05f15882a94d7a9a2e0fd1daf810924ef3425b235ea2287b69399c39ee2da6",
+    "mode": 420
+  },
+  "crates/host/README.md": {
+    "exists": true,
+    "sha256": "e8c0c6b1ab8e3ad7a1d4aba5503fb0b5ab1d09014390f4d8ce9d90d52b0eb403",
+    "mode": 420
+  },
+  "crates/purrassist/README.md": {
+    "exists": true,
+    "sha256": "5f7b989ddc9cfd601cc433d7c3d0184df4aabdbd45b66af583c169e819954621",
+    "mode": 420
+  },
+  "crates/wasm-harness/src/transcript.rs": {
+    "exists": true,
+    "sha256": "bdf302e3d5c1870c6d89f4af6f5479b0456974d7b75e778d70db45db0ed32fee",
+    "mode": 420
+  },
+  "docs/FUZZING.md": {
+    "exists": true,
+    "sha256": "b7c0346c4f52864b5c42d14cd4a67f56e5f7476258eee6959e5c1902598eebfc",
+    "mode": 420
+  },
+  "docs/IMPLEMENTATION.md": {
+    "exists": true,
+    "sha256": "03cd9cecb2def6443d72fb07e9f4fc7ac80cd190da38746d2985edf5d6212619",
+    "mode": 420
+  },
+  "docs/MATCHING-QUALITY.md": {
+    "exists": true,
+    "sha256": "2c455e691359fa3beb522596979440fa4a1c32a6db12b4b073c6b641807fc087",
+    "mode": 420
+  },
+  "docs/QUALIFICATION.md": {
+    "exists": true,
+    "sha256": "c1e73e9086c7cc08705ca8fbe1ab3938f7ef492ccd4cd5d3b414fba8d121e288",
+    "mode": 420
+  },
+  "docs/RESOURCES.md": {
+    "exists": true,
+    "sha256": "900a29d234cd9940d416ddfc0fb559e6b345dc4277a0005d1a2494fbc73e163f",
+    "mode": 420
+  },
+  "docs/known-limitations.json": {
+    "exists": true,
+    "sha256": "e97cc397aff3dcf334fbfd008260379b5e568bf24b388b6306f8c101a35056a7",
+    "mode": 420
+  },
+  "docs/tool-calls/GRAMMAR.md": {
+    "exists": true,
+    "sha256": "538bf7e16cf7aee0054ac69d6d06b2c8b5d5fa01b170d31e2124b60674b62420",
+    "mode": 420
+  },
+  "docs/tool-calls/INTEGRATION.md": {
+    "exists": true,
+    "sha256": "f409458ab0c0a45f99286fea9436119a30dd17341901c3f4e590dfbd4ab36bb4",
+    "mode": 420
+  },
+  "docs/tool-calls/README.md": {
+    "exists": true,
+    "sha256": "34642fef0d90f752f0e28839b34da873ae3879c08b74d1526aa107a3e37a12ae",
+    "mode": 420
+  },
+  "docs/tool-calls/dialects/bare-json.v1.md": {
+    "exists": true,
+    "sha256": "f31cc6bb3592fefaa563762f5693cc56e3092d07e7948be3f280ab693644bf4a",
+    "mode": 420
+  },
+  "docs/tool-calls/dialects/gemma3-tool-code.v1.md": {
+    "exists": true,
+    "sha256": "4f2e251302fd44c2ffdb27216734c9b20eb8c7026881ec1140db1567a8798ca6",
+    "mode": 420
+  },
+  "scripts/test-check-docs.py": {
+    "exists": true,
+    "sha256": "99687b3fdd219c5f7ef4e22c675ea738b49306db46c22848cbbb1c7725e723d0",
+    "mode": 420
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "description": "S1: as_content under the default allow-list: reasoning markers are plain content and every call, inside them or not, is recovered.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "reasoning": "as_content",
+  "input": "<think>plan [TOOL_CALLS] [{\"name\": \"read_file\", \"arguments\": {\"path\": \"x\"}}]</think>\n{\"type\": \"tool_use\", \"id\": \"toolu_01\", \"name\": \"read_file\", \"input\": {\"path\": \"x\"}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "x"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "x"
+      },
+      "candidate_dialects": [
+        "anthropic-tool-use.v1"
+      ],
+      "outcome": "resolved",
+      "rules": []
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "<think>plan ",
+    "</think>\n"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.id.dedup"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "description": "A <think> block never closed and followed by no call: it is reasoning to the end of output (tool_call.reasoning.unterminated, a data loss).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<think>still deciding what to do",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [
+    "still deciding what to do"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.reasoning.unterminated"
+  ]
+}

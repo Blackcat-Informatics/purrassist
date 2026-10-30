@@ -1,0 +1,95 @@
+{
+  "description": "T6: a rejected Hermes call whose JSON string holds `</tool_call>` text. A JSON value is self-delimiting, so its reading past that text is the reading as written: the reason's `at` is the first byte no reading consumed (88, after the string, not the byte after the closer text inside it), and the span runs to the call's own closer, as before T6.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>{\"name\":\"write_file\",\"arguments\":{\"path\":\"a\",\"content\":\"x </tool_call> and y\":1}}</tool_call>",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          104
+        ],
+        "dialect": "hermes.v1",
+        "candidate_dialects": [
+          "glm-4.5.v1",
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 88 }",
+        "raw": "<tool_call>{\"name\":\"write_file\",\"arguments\":{\"path\":\"a\",\"content\":\"x </tool_call> and y\":1}}</tool_call>"
+      }
+    ],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        0,
+        104
+      ],
+      "dialect": "hermes.v1",
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "reason": "Malformed { at: 88 }",
+      "raw": "<tool_call>{\"name\":\"write_file\",\"arguments\":{\"path\":\"a\",\"content\":\"x </tool_call> and y\":1}}</tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

@@ -1,0 +1,10 @@
+{
+  "cases": 18218,
+  "correct": 12651,
+  "incorrect": 0,
+  "abstained": 5567,
+  "unresolved_abstained": 5435,
+  "unresolved_truth": 5435,
+  "table_rows": 95,
+  "new_cases": 16
+}

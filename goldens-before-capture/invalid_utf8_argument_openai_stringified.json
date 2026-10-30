@@ -1,0 +1,69 @@
+{
+  "description": "F4: A byte that is not UTF-8 inside OpenAI stringified arguments: the json codec reads it as U+FFFD in the outer string, decodes the stringified object, and records tool_call.value.invalid-utf8 with the original byte and offset: a BestGuess call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "openai-tool-calls.v1"
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "input": {
+    "hex": "7b2274797065223a202266756e6374696f6e222c202266756e6374696f6e223a207b226e616d65223a2022726561645f66696c65222c2022617267756d656e7473223a20227b5c22706174685c223a205c22636166e92e7478745c227d227d7d"
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "caf�.txt"
+      },
+      "candidate_dialects": [
+        "openai-tool-calls.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.arguments.decode-string",
+        "tool_call.value.invalid-utf8",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.input.invalid-utf8",
+    "tool_call.arguments.decode-string",
+    "tool_call.value.invalid-utf8",
+    "tool_call.id.dedup"
+  ]
+}

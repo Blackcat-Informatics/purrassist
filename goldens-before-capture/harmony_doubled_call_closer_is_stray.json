@@ -1,0 +1,56 @@
+{
+  "description": "Stage-3 pass 5 (F13): Python code followed by `<|call|>` twice. The code read on past the first holds only another closer, no code text, so the second is a stray closer (issue #3 §3), never text of the code.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "harmony.v1"
+  ],
+  "input": "<|start|>assistant<|channel|>analysis to=python<|message|>print(1)<|call|><|call|>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": null,
+      "arguments": "print(1)",
+      "candidate_dialects": [
+        "harmony.v1"
+      ],
+      "outcome": "unresolved: unknown_tool: no declared tool matches `python`",
+      "rules": [
+        "tool_call.markup.stray-closer"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.stray-closer"
+  ]
+}

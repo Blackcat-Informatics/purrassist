@@ -1,0 +1,93 @@
+{
+  "description": "Issue #8 section 1, gap G2: the single $ref object parameter case (pre-existing root cause) takes its member names from the same scope graph; cfg.path stays in cfg.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "one",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "cfg": {
+              "$ref": "#/$defs/cfg"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "$defs": {
+            "cfg": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=one>\n<parameter=path>\n/a\n</parameter>\n<parameter=cfg>\n<parameter=path>\n/b\n</parameter>\n<parameter=mode>\nx\n</parameter>\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "one",
+      "arguments": {
+        "path": "/a",
+        "cfg": {
+          "path": "/b",
+          "mode": "x"
+        }
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.nested-parameter",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.nested-parameter",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

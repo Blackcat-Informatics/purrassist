@@ -1,0 +1,76 @@
+{
+  "description": "T6, Re-blessed for adversary pass 6 (F14/F19), maintainer: \"Newlines have zero meaning here.\" As qwen_value_holds_call_closers, followed by a long text: the value reading on past the closers runs to the end of output, and the completion that holds the closer text is held (with every report after it) until then, so it is reported where the call ends: the call is Ambiguous (its value holds text after unpaired closers), the text after it content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=content>\nEnd with </function></tool_call> then stop.\n</parameter>\n</function>\n</tool_call>\nDone. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. ",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "ambiguous",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "a.md",
+        "content": "End with "
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.value.closer-in-value",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.markup.text-between-parameters"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "\nDone. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. The file is written and nothing else is needed here. "
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.text-between-parameters"
+  ]
+}

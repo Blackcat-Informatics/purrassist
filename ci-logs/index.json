@@ -1,0 +1,12 @@
+{
+  "pr": 158,
+  "jobs": [
+    {
+      "name": "native (macos-14)",
+      "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41126744294/job/124307115200",
+      "path": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/ci-logs/github-job-124307115200.log",
+      "error": "Log download failed (exit 1): gh: HTTP 404\n"
+    }
+  ],
+  "ok": false
+}

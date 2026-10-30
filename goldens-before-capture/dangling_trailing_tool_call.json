@@ -1,0 +1,130 @@
+{
+  "description": "A3p: a complete call followed by a dangling <tool_call> opener at the end of output under a stop: the earlier call is kept and Resolved, the dangling attempt is rejected with a tool_call.markup.dangling-opener data loss.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "input": "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>",
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 1,
+      "accepting_guesses": 1
+    },
+    "calls": [
+      {
+        "tool": "read_file",
+        "arguments": {
+          "path": "a.rs"
+        },
+        "candidate_dialects": [
+          "qwen3-coder-xml.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.xml.framing-newline",
+          "tool_call.xml.framing-newline"
+        ]
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          93,
+          104
+        ],
+        "dialect": "glm-4.5.v1",
+        "candidate_dialects": [
+          "glm-4.5.v1",
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Unterminated",
+        "raw": "<tool_call>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "\n"
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.xml.framing-newline",
+      "tool_call.xml.framing-newline",
+      "tool_call.markup.dangling-opener"
+    ]
+  },
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "a.rs"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        93,
+        104
+      ],
+      "dialect": "qwen3-coder-xml.v1",
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "reason": "Unterminated",
+      "raw": "<tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "\n"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.markup.dangling-opener"
+  ]
+}

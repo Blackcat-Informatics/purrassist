@@ -1,0 +1,64 @@
+{
+  "description": "S1: the adversary's second repro with starts_open: an explicit <think> inside the open block, a bare JSON call, then </think>done: the block ends exactly after </think> (never inside the call at its \\\"}), the call is embedded, and done is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "reasoning": "starts_open",
+  "input": "<think>hmm {\"name\":\"read_file\",\"arguments\":{\"path\":\"x\"}}</think>done",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "x"
+      },
+      "candidate_dialects": [
+        "bare-json.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.reasoning.embedded-call"
+      ]
+    }
+  ],
+  "content": [
+    "done"
+  ],
+  "reasoning_text": [
+    "<think>hmm {\"name\":\"read_file\",\"arguments\":{\"path\":\"x\"}}"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.reasoning.embedded-call"
+  ]
+}

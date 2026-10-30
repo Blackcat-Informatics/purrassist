@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 14,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool",
+  "branch": "paudley/14-tool-call-recovery-add-the-gemma3-tool",
+  "slug": "tool-call-recovery-add-the-gemma3-tool",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "d84c4641451ec99431a688827aef70c71da29af2",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool",
+    "branch:paudley/14-tool-call-recovery-add-the-gemma3-tool",
+    "stage:/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool",
+    "issue:/home/paudley/Active/purrassist/.worktrees/14-tool-call-recovery-add-the-gemma3-tool/.stage/tool-call-recovery-add-the-gemma3-tool/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-29T15:35:22-0600"
+}

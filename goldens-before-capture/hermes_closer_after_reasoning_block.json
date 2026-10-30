@@ -1,0 +1,112 @@
+{
+  "description": "T4: the mirror inside reasoning: a call opened inside a reasoning block runs into the block's closing marker, and its wrapper closer is written right after the block; the closer is call markup (reported as a rejected attempt of the dialect whose opener the block holds unclosed), never content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<think>x <tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}</think></tool_call> done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          66,
+          78
+        ],
+        "dialect": "glm-4.5.v1",
+        "candidate_dialects": [
+          "glm-4.5.v1",
+          "hermes.v1",
+          "qwen3-coder-xml.v1"
+        ],
+        "reason": "Malformed { at: 66 }",
+        "raw": "</tool_call>"
+      }
+    ],
+    "embedded": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "x"
+        },
+        "candidate_dialects": [
+          "bare-json.v1"
+        ],
+        "outcome": "best_guess",
+        "rules": [
+          "tool_call.reasoning.embedded-call"
+        ]
+      }
+    ],
+    "content": [
+      " done"
+    ],
+    "reasoning_text": [
+      "x <tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}"
+    ],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.reasoning.embedded-call"
+    ]
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        66,
+        78
+      ],
+      "dialect": "hermes.v1",
+      "candidate_dialects": [
+        "hermes.v1"
+      ],
+      "reason": "Malformed { at: 66 }",
+      "raw": "</tool_call>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    " done"
+  ],
+  "reasoning_text": [
+    "x <tool_call>{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

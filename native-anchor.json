@@ -1,0 +1,4 @@
+{
+  "array": "[{\"id\":\"call_e9fdac98ea5d_0\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\",\\\"unit\\\":\\\"celsius\\\"}\"}},{\"id\":\"call_e9fdac98ea5d_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"notes.txt\\\",\\\"limit\\\":10}\"}}]",
+  "digest": "sha256:9901a961772b323c8cbb03797bb41f0f948e43cdb26f7f14fff35d3cb1823f65"
+}

@@ -1,0 +1,100 @@
+{
+  "version": 3,
+  "source": "sha256:d5464fd2af972e5f48a7e5a4db880008fbd5daee0a5d0192d926fa5ac549f6b3",
+  "sources": [
+    {
+      "digest": "sha256:d5464fd2af972e5f48a7e5a4db880008fbd5daee0a5d0192d926fa5ac549f6b3",
+      "bytes_hex": "686920fffe207468657265203c746f6f6c5f63616c6c3e0a7b226e616d65223a20226c73222c2022617267756d656e7473223a207b7d7d0a3c2f746f6f6c5f63616c6c3e0ac3"
+    }
+  ],
+  "alternatives": [],
+  "ambiguity": null,
+  "operation": "tool_call.recover.v1",
+  "effort": "standard",
+  "budget": {
+    "work": 1000000,
+    "candidates": 128,
+    "input_bytes": 16777216,
+    "scratch_bytes": 67108864,
+    "depth": 128,
+    "evidence_entries": 65536,
+    "helper_calls": 0
+  },
+  "usage": {
+    "work": 9971,
+    "candidates": 0,
+    "peak_scratch_bytes": 161777,
+    "total_scratch_charged": 543360,
+    "evidence_entries": 10,
+    "helper_calls": 0
+  },
+  "evidence": [
+    {
+      "rule": "tool_call.input.invalid-utf8",
+      "explanation": "bytes 3..5 are not well-formed UTF-8; they are retained exactly in the receipt's source",
+      "destination": "/turn/3..5",
+      "span": {
+        "source": "sha256:d5464fd2af972e5f48a7e5a4db880008fbd5daee0a5d0192d926fa5ac549f6b3",
+        "start": 3,
+        "end": 5
+      }
+    },
+    {
+      "rule": "tool_call.input.invalid-utf8",
+      "explanation": "bytes 69..70 are not well-formed UTF-8; they are retained exactly in the receipt's source",
+      "destination": "/turn/69..70",
+      "span": {
+        "source": "sha256:d5464fd2af972e5f48a7e5a4db880008fbd5daee0a5d0192d926fa5ac549f6b3",
+        "start": 69,
+        "end": 70
+      }
+    }
+  ],
+  "losses": [
+    {
+      "evidence": {
+        "rule": "tool_call.input.invalid-utf8",
+        "explanation": "bytes 3..5 are not well-formed UTF-8; they are retained exactly in the receipt's source",
+        "destination": "/turn/3..5",
+        "span": {
+          "source": "sha256:d5464fd2af972e5f48a7e5a4db880008fbd5daee0a5d0192d926fa5ac549f6b3",
+          "start": 3,
+          "end": 5
+        }
+      },
+      "original": "\\xFF\\xFE"
+    },
+    {
+      "evidence": {
+        "rule": "tool_call.input.invalid-utf8",
+        "explanation": "bytes 69..70 are not well-formed UTF-8; they are retained exactly in the receipt's source",
+        "destination": "/turn/69..70",
+        "span": {
+          "source": "sha256:d5464fd2af972e5f48a7e5a4db880008fbd5daee0a5d0192d926fa5ac549f6b3",
+          "start": 69,
+          "end": 70
+        }
+      },
+      "original": "\\xC3"
+    }
+  ],
+  "inferences": [],
+  "validations": [
+    {
+      "validator": "purrassist.schema.draft2020-12.v1",
+      "constraint": "sha256:bb7dc35ff53e0ba2b3c3c4d668f6f1ad86f54b705b4bd1196d5d74eced58df74",
+      "passed": true,
+      "diagnostics": []
+    },
+    {
+      "validator": "purrassist.tool_call.v1",
+      "constraint": "tool_choice=auto",
+      "passed": true,
+      "diagnostics": []
+    }
+  ],
+  "termination": {
+    "kind": "completed",
+    "detail": "completed"
+  }
+}

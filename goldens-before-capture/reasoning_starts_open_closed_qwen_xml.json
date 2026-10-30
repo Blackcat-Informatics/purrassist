@@ -1,0 +1,68 @@
+{
+  "description": "S1: under the default allow-list, a starts_open block holding a qwen_xml call and ending at </think>: the block ends exactly after its closer, the call is offered as an embedded alternative (tool_call.reasoning.embedded-call), and the text after the closer is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "effects": {
+    "read_file": "read_only"
+  },
+  "stop": "stop",
+  "reasoning": "starts_open",
+  "input": "hmm <tool_call>\n<function=read_file>\n<parameter=path>\nx\n</parameter>\n</function>\n</tool_call> done</think>Answer.",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "x"
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.reasoning.embedded-call"
+      ]
+    }
+  ],
+  "content": [
+    "Answer."
+  ],
+  "reasoning_text": [
+    "hmm <tool_call>\n<function=read_file>\n<parameter=path>\nx\n</parameter>\n</function>\n</tool_call> done"
+  ],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.reasoning.embedded-call"
+  ]
+}

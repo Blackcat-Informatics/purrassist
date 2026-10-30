@@ -1,0 +1,143 @@
+{
+  "description": "T4: every call of a Mistral v11 turn is bad (an arguments value no JSON repair reads): each [TOOL_CALLS] call carries its own opener and no wrapper, so each is its own rejected attempt (as in good-bad-bad), and nothing is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v11.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS]f[ARGS]{\"a\": ::: }[TOOL_CALLS]f[ARGS]{\"a\": ::: }[TOOL_CALLS]f[ARGS]{\"a\": ::: } done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          33
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 28 }",
+        "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+      },
+      {
+        "span": [
+          33,
+          63
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 58 }",
+        "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+      },
+      {
+        "span": [
+          63,
+          93
+        ],
+        "dialect": "mistral-v11.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 88 }",
+        "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " done"
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        33
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 28 }",
+      "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+    },
+    {
+      "span": [
+        33,
+        63
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 58 }",
+      "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+    },
+    {
+      "span": [
+        63,
+        93
+      ],
+      "dialect": "mistral-v11.v1",
+      "candidate_dialects": [
+        "mistral-v11.v1"
+      ],
+      "reason": "Malformed { at: 88 }",
+      "raw": "[TOOL_CALLS]f[ARGS]{\"a\": ::: }"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

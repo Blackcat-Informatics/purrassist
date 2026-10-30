@@ -1,0 +1,46 @@
+{
+  "description": "T4 guard: a closer after a reasoning block that holds no unclosed call opener is not shown to be call markup, and stays content as before.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "hermes.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "<think>talking about </tool_call> tags</think></tool_call> done",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "</tool_call> done"
+  ],
+  "reasoning_text": [
+    "talking about </tool_call> tags"
+  ],
+  "failed_validations": [],
+  "ledger_rules": []
+}

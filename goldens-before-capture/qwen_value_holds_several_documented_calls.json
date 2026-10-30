@@ -1,0 +1,110 @@
+{
+  "description": "T6: a README written by write_file documents a declared read-only tool three times (`<function=list_dir>...</function>` between lines of text). Each documented call ends the value as written only with a repair (the wrapper closer inserted before text), so the value holds them all: one write_file call with the full content, and no list_dir call is read from it (each would run).",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "dir": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "dir"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "qwen3-coder-xml.v1"
+  ],
+  "effects": {
+    "write_file": "mutating",
+    "read_file": "read_only",
+    "list_dir": "read_only"
+  },
+  "input": "<tool_call>\n<function=write_file>\n<parameter=path>\nREADME.md\n</parameter>\n<parameter=content>\nTo list a directory:\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\nor the tests:\n<function=list_dir>\n<parameter=dir>\ntests\n</parameter>\n</function>\nor the docs:\n<function=list_dir>\n<parameter=dir>\ndocs\n</parameter>\n</function>\nThat is all.\n</parameter>\n</function>\n</tool_call>",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "write_file",
+      "arguments": {
+        "path": "README.md",
+        "content": "To list a directory:\n<function=list_dir>\n<parameter=dir>\nsrc\n</parameter>\n</function>\nor the tests:\n<function=list_dir>\n<parameter=dir>\ntests\n</parameter>\n</function>\nor the docs:\n<function=list_dir>\n<parameter=dir>\ndocs\n</parameter>\n</function>\nThat is all."
+      },
+      "candidate_dialects": [
+        "qwen3-coder-xml.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.value.closer-in-value",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline",
+        "tool_call.xml.framing-newline"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.value.closer-in-value",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline",
+    "tool_call.xml.framing-newline"
+  ]
+}

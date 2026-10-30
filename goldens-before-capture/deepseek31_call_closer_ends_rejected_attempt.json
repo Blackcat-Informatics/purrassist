@@ -1,0 +1,93 @@
+{
+  "description": "T1/F6: a DeepSeek v3.1 call broken after its name with no section closer: the attempt runs to the call's own <｜tool▁call▁end｜>, and the answer after it stays content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi <｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁call▁end｜> The answer is 42.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          3,
+          88
+        ],
+        "dialect": "deepseek-v3.1.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1",
+          "deepseek-v3.v1"
+        ],
+        "reason": "Malformed { at: 32 }",
+        "raw": "<｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁call▁end｜>"
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " The answer is 42."
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        3,
+        88
+      ],
+      "dialect": "deepseek-v3.1.v1",
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "reason": "Malformed { at: 32 }",
+      "raw": "<｜tool▁call▁begin｜>f oops<｜tool▁sep｜>{\"a\":\"x\"}<｜tool▁call▁end｜>"
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " The answer is 42."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

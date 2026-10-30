@@ -1,0 +1,101 @@
+{
+  "description": "A section opener a detokenizer rendered with an ASCII | and spaces, followed by prose instead of a call: the confusable spelling still opens the attempt, which is rejected; the bytes are never silently content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "deepseek-v3.1.v1"
+  ],
+  "stop": "stop",
+  "input": "Here: <|tool calls begin|> then nothing.",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          6,
+          27
+        ],
+        "dialect": "deepseek-v3.1.v1",
+        "candidate_dialects": [
+          "deepseek-v3.1.v1",
+          "deepseek-v3.v1"
+        ],
+        "reason": "Malformed { at: 27 }",
+        "raw": "<|tool calls begin|> "
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Here: ",
+      "then nothing."
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "stop",
+  "verdict": "nothing_usable",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [
+    {
+      "span": [
+        6,
+        27
+      ],
+      "dialect": "deepseek-v3.1.v1",
+      "candidate_dialects": [
+        "deepseek-v3.1.v1"
+      ],
+      "reason": "Malformed { at: 27 }",
+      "raw": "<|tool calls begin|> "
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Here: ",
+    "then nothing."
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

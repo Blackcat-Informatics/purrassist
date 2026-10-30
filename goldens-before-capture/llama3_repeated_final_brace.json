@@ -1,0 +1,66 @@
+{
+  "description": "A Llama 3 JSON call followed by one brace too many: the extra brace is absorbed as a stray closer (tool_call.markup.stray-closer, a markup loss) and never leaks into content; the call is Resolved.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "llama3-json.v1"
+  ],
+  "stop": "stop",
+  "input": "{\"name\": \"get_weather\", \"parameters\": {\"city\": \"Lima\"}}}",
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "get_weather",
+      "arguments": {
+        "city": "Lima"
+      },
+      "candidate_dialects": [
+        "llama3-json.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.stray-closer"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.stray-closer"
+  ]
+}

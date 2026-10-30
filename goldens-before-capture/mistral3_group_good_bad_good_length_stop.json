@@ -1,0 +1,90 @@
+{
+  "description": "T2/T3: the same Mistral v3 list cut by a length stop inside its third element: the first call stays usable (group-split), the malformed element is a rejected part, and the cut element is a truncated call; under the default allow-list the Mistral v11 rejection at the shared opener is outread, so the reading is the same.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "stop": "length",
+  "input": "Hi [TOOL_CALLS] [{\"name\": \"f\", \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\", \"argum",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "length",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 1,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "x"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.group-split",
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {},
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "unresolved: truncated: the call was cut off by a length stop",
+      "rules": [
+        "tool_call.truncated",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        57,
+        102
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 70 }",
+      "raw": "{\"name\": \"f\" oops, \"arguments\": {\"a\": \"y\"}}, "
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi "
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.group-split",
+    "tool_call.id.dedup",
+    "tool_call.truncated",
+    "tool_call.id.dedup"
+  ]
+}

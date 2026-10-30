@@ -1,0 +1,157 @@
+{
+  "description": "T4: the first call of a mistral-v3.v1 group is bad and two good calls follow: the attempt resynchronizes past the first call exactly as past a later one (at its call closer), so the rejection covers the bad call only (its part runs from the attempt's start, the group opener included, as the first call's span always does) and both good calls are recovered as mistral-v3.v1, the first of them recording the split (tool_call.markup.group-split); nothing of the markup is content.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "dialects": [
+    "mistral-v3.v1"
+  ],
+  "effects": {
+    "f": "read_only"
+  },
+  "input": "Hi [TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, {\"name\": \"f\", \"arguments\": {\"a\": \"y\"}}, {\"name\": \"f\", \"arguments\": {\"a\": \"z\"}}] done",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 2,
+      "accepting_guesses": 2
+    },
+    "calls": [
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "y"
+        },
+        "candidate_dialects": [
+          "mistral-v3.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.markup.group-split",
+          "tool_call.id.dedup"
+        ]
+      },
+      {
+        "tool": "f",
+        "arguments": {
+          "a": "z"
+        },
+        "candidate_dialects": [
+          "mistral-v3.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.id.dedup"
+        ]
+      }
+    ],
+    "rejected": [
+      {
+        "span": [
+          3,
+          62
+        ],
+        "dialect": "mistral-v3.v1",
+        "candidate_dialects": [
+          "mistral-v11.v1",
+          "mistral-v3.v1"
+        ],
+        "reason": "Malformed { at: 30 }",
+        "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, "
+      }
+    ],
+    "embedded": [],
+    "content": [
+      "Hi ",
+      " done"
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.markup.group-split",
+      "tool_call.id.dedup",
+      "tool_call.id.dedup"
+    ]
+  },
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "unresolved",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 2,
+    "accepting_guesses": 2
+  },
+  "calls": [
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "y"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.markup.group-split",
+        "tool_call.id.dedup"
+      ]
+    },
+    {
+      "tool": "f",
+      "arguments": {
+        "a": "z"
+      },
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "outcome": "resolved",
+      "rules": [
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "span": [
+        3,
+        62
+      ],
+      "dialect": "mistral-v3.v1",
+      "candidate_dialects": [
+        "mistral-v3.v1"
+      ],
+      "reason": "Malformed { at: 30 }",
+      "raw": "[TOOL_CALLS] [{\"name\": \"f\" oops, \"arguments\": {\"a\": \"x\"}}, "
+    }
+  ],
+  "embedded": [],
+  "content": [
+    "Hi ",
+    " done"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.group-split",
+    "tool_call.id.dedup",
+    "tool_call.id.dedup"
+  ]
+}
