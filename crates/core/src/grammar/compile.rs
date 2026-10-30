@@ -1694,6 +1694,21 @@ impl Declared<'_> {
         Ok(())
     }
 
+    fn add_line_start(
+        &mut self,
+        opener: &[u8],
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(), GrammarError> {
+        for (prior, _) in &self.line_start {
+            if equal(prior, opener, governor)? {
+                return Err(duplicate(at, "line-start", governor)?);
+            }
+        }
+        self.line_start.push((owned_bytes(opener, governor)?, at))?;
+        Ok(())
+    }
+
     fn new(governor: &Governor) -> Self {
         Self {
             reasoning: ScratchVec::new(governor),
@@ -1732,14 +1747,7 @@ fn declare<'d>(
                 declared.add_reasoning(open, close, *explicit, *at, builder.governor)?;
             }
             Statement::LineStart { opener, at } => {
-                for (prior, _) in &declared.line_start {
-                    if equal(prior, opener, builder.governor)? {
-                        return Err(duplicate(*at, "line-start", builder.governor)?);
-                    }
-                }
-                declared
-                    .line_start
-                    .push((owned_bytes(opener, builder.governor)?, *at))?;
+                declared.add_line_start(opener, *at, builder.governor)?;
             }
             Statement::ExamplesContent { at } => {
                 if declared.examples != ExamplePolicy::Recover {
@@ -2065,6 +2073,20 @@ fn required_production(
     Err(GrammarError::MissingProduction { name })
 }
 
+/// Check the production graph, resolve its layouts, then its required roots.
+fn checked_entry_points(
+    builder: &mut Builder<'_>,
+    productions: &[Production],
+    declared_layouts: &[Layout<'_>],
+) -> Result<(ScratchVec<Option<Bytes>>, [ProductionId; 3]), GrammarError> {
+    check_acyclic(productions, &builder.production_offsets, builder.governor)?;
+    let layouts = layouts(builder, productions, declared_layouts)?;
+    let call = required_production(productions, "call", builder.governor)?;
+    let result = required_production(productions, "result", builder.governor)?;
+    let declaration = required_production(productions, "declaration", builder.governor)?;
+    Ok((layouts, [call, result, declaration]))
+}
+
 fn line_start_openers(
     program: &mut Program,
     declarations: &[(ScratchVec<u8>, usize)],
@@ -2116,11 +2138,8 @@ pub(crate) fn compile(
         json_envelope,
     } = declare(&mut builder, document.statements.as_slice())?;
     let productions = resolve_productions(&mut builder, bodies)?;
-    check_acyclic(&productions, &builder.production_offsets, builder.governor)?;
-    let layouts = layouts(&mut builder, &productions, &declared_layouts)?;
-    let call = required_production(&productions, "call", builder.governor)?;
-    let result = required_production(&productions, "result", builder.governor)?;
-    let declaration = required_production(&productions, "declaration", builder.governor)?;
+    let (layouts, [call, result, declaration]) =
+        checked_entry_points(&mut builder, &productions, &declared_layouts)?;
     let Builder {
         governor,
         mut literals,

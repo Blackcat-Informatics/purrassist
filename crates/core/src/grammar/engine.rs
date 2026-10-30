@@ -63,9 +63,9 @@ use super::codec::{
 use super::compile::JsonSpelling;
 use super::cost::{K_CAPTURE, K_CODEC, K_THREAD, STRAY_CLOSER_GAP, UNDECLARED_NAME};
 use super::edit::{EditOperator, MarkupEdit};
-use super::fence::{LineDecision, LineSuffix};
 use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
+use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason};
 use crate::digest::Digest;
@@ -855,6 +855,22 @@ impl<'s> Step<'_, 's> {
         if trie.accept(child).is_none() {
             return Ok(());
         }
+        self.finish_literal_repair(thread, (lit, next), operator, stack, out, governor)
+    }
+
+    /// Record an accepted repaired spelling and continue its original literal.
+    fn finish_literal_repair(
+        &mut self,
+        mut thread: Thread,
+        literal: (u32, u32),
+        operator: EditOperator,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let (lit, next) = literal;
+        let canonical = &self.grammar.literals[lit as usize].bytes;
+        let pos = thread.pos;
         let deleted = operator == EditOperator::DeleteStrayCloser;
         if deleted && self.protocol_spelling(thread.entry..pos + 1) {
             thread.sub = Sub::Fence {

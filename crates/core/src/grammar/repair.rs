@@ -287,6 +287,48 @@ impl<'a, 's> RepairState<'a, 's> {
         )
     }
 
+    /// Offer the original stop-sequence and missing-closer insertions.
+    fn insert_at_stop(
+        &self,
+        context: &mut RepairContext<'a, 's>,
+        proposals: &mut Proposals<'_, Self>,
+        lit: u32,
+        next: u32,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let literal = &context.step.grammar.literals[lit as usize];
+        let Sub::Lit(node) = self.thread.sub else {
+            return Ok(());
+        };
+        let suffix = literal.bytes[node as usize..].to_vec();
+        if node == 0
+            && matches!(&context.eof, Some(GenerationStop::StopSequence(sequence)) if sequence.as_slice() == literal.bytes.as_slice())
+        {
+            let replacement = suffix.clone();
+            self.insert(
+                context,
+                proposals,
+                EditOperator::ConsumedCloser,
+                replacement,
+                next,
+                true,
+                governor,
+            )?;
+        }
+        if context.opened && literal.closer.is_some() {
+            self.insert(
+                context,
+                proposals,
+                EditOperator::MissingClosersAtEnd,
+                suffix,
+                next,
+                true,
+                governor,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Insert `replacement` (the expected literal, or its missing suffix)
     /// at this configuration's position, continue at `next`, and propose
     /// every outcome. With `complete == false` an insertion that completes
@@ -584,17 +626,19 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     // that closer behind as content: a repeated or stray
                     // closer belongs to the call, so only the deletion
                     // (`tool_call.markup.stray-closer`) reads it.
-                    let mut stray = grammar.stray.admits(pending);
-                    if protocol && pending.starts_with(&literal.bytes) {
+                    let ordinary_stray = grammar.stray.admits(pending);
+                    let stray = if protocol && pending.starts_with(&literal.bytes) {
                         governor.charge(
                             Resource::Work,
                             crate::contract::saturating_size(pending.len()),
                         )?;
-                        stray = super::fence::complete(
+                        super::LineSuffix::complete(
                             &pending[literal.bytes.len()..],
                             context.eof.is_some(),
-                        );
-                    }
+                        )
+                    } else {
+                        ordinary_stray
+                    };
                     let complete = !(wrapper && stray);
                     self.insert(
                         context,
@@ -612,37 +656,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     }
                 }
             }
-            Status::Stuck => {
-                let Sub::Lit(node) = self.thread.sub else {
-                    return Ok(());
-                };
-                let suffix = literal.bytes[node as usize..].to_vec();
-                if node == 0
-                    && matches!(&context.eof, Some(GenerationStop::StopSequence(sequence)) if sequence.as_slice() == literal.bytes.as_slice())
-                {
-                    let replacement = suffix.clone();
-                    self.insert(
-                        context,
-                        proposals,
-                        EditOperator::ConsumedCloser,
-                        replacement,
-                        next,
-                        true,
-                        governor,
-                    )?;
-                }
-                if context.opened && literal.closer.is_some() {
-                    self.insert(
-                        context,
-                        proposals,
-                        EditOperator::MissingClosersAtEnd,
-                        suffix,
-                        next,
-                        true,
-                        governor,
-                    )?;
-                }
-            }
+            Status::Stuck => self.insert_at_stop(context, proposals, lit, next, governor)?,
             Status::Live | Status::Completed => {}
         }
         Ok(())

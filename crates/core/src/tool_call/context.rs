@@ -28,7 +28,7 @@
 // (matching `unreachable_pub`) wins, as in `grammar::engine`.
 #![allow(clippy::redundant_pub_crate)]
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
-use crate::grammar::fence::{LineDecision, LineSuffix};
+use crate::grammar::{LineDecision, LineSuffix};
 use core::ops::Range;
 
 /// Scratch bytes charged per recorded fence line, quote line or backtick run.

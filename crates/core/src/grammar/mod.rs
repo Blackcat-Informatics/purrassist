@@ -144,7 +144,6 @@ mod compile;
 pub mod cost;
 pub mod edit;
 pub(crate) mod engine;
-pub(crate) mod fence;
 pub(crate) mod misspelling;
 pub mod print;
 mod repair;
@@ -158,6 +157,47 @@ use codec::CodecKind;
 use core::fmt;
 
 pub(crate) use compile::{Inst, LiteralTables, Program};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineSuffix {
+    Horizontal,
+    CarriageReturn,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineDecision {
+    More,
+    End,
+    Invalid,
+}
+impl LineSuffix {
+    pub(crate) const fn step(&mut self, byte: u8) -> LineDecision {
+        match (*self, byte) {
+            (Self::Horizontal, b' ' | b'\t') => LineDecision::More,
+            (Self::Horizontal, b'\r') => {
+                *self = Self::CarriageReturn;
+                LineDecision::More
+            }
+            (_, b'\n') => LineDecision::End,
+            _ => LineDecision::Invalid,
+        }
+    }
+    pub(crate) const fn at_end(self) -> bool {
+        matches!(self, Self::Horizontal)
+    }
+    /// Whether a suffix already proves a complete closing line.
+    /// The caller admits the bounded byte scan before calling this helper.
+    pub(crate) fn complete(bytes: &[u8], eof: bool) -> bool {
+        let mut suffix = Self::Horizontal;
+        for &byte in bytes {
+            match suffix.step(byte) {
+                LineDecision::More => {}
+                LineDecision::End => return true,
+                LineDecision::Invalid => return false,
+            }
+        }
+        eof && suffix.at_end()
+    }
+}
 
 /// A named capture recorded into the recognized IR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

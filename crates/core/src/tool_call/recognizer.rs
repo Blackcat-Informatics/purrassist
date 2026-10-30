@@ -2234,32 +2234,7 @@ impl Builder<'_> {
         let mut spans = Vec::new();
         let mut protocol = ScratchVec::new(governor);
         let mut applicable = false;
-        for piece in pieces.iter() {
-            match piece {
-                Piece::Segment(segment) => {
-                    example_spans(
-                        segment,
-                        &mut spans,
-                        &mut protocol,
-                        &mut applicable,
-                        governor,
-                    )?;
-                }
-                Piece::Choice(choice) => {
-                    for reading in &choice.readings {
-                        for segment in reading {
-                            example_spans(
-                                segment,
-                                &mut spans,
-                                &mut protocol,
-                                &mut applicable,
-                                governor,
-                            )?;
-                        }
-                    }
-                }
-            }
-        }
+        collect_example_spans(pieces, &mut spans, &mut protocol, &mut applicable, governor)?;
         governor.charge(Resource::Work, size(self.turn.store.len()))?;
         applicable |= self.turn.store.iter().any(|segment| {
             matches!(segment,
@@ -2688,6 +2663,31 @@ pub(super) fn edit_entries(
     (evidence, loss, inference)
 }
 
+/// Collect example regions in the original piece, reading and segment order.
+fn collect_example_spans(
+    pieces: &[Piece],
+    spans: &mut Vec<Range<usize>>,
+    protocol: &mut ScratchVec<usize>,
+    applicable: &mut bool,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    for piece in pieces {
+        match piece {
+            Piece::Segment(segment) => {
+                example_spans(segment, spans, protocol, applicable, governor)?;
+            }
+            Piece::Choice(choice) => {
+                for reading in &choice.readings {
+                    for segment in reading {
+                        example_spans(segment, spans, protocol, applicable, governor)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Complete calls protect literal text; rejected protocols contribute only a header.
 fn example_spans(
     segment: &Segment,
@@ -2699,7 +2699,7 @@ fn example_spans(
     governor.charge(Resource::Work, 1)?;
     match segment {
         Segment::Call(call) | Segment::Result(call) => {
-            example_call(call, spans, protocol, applicable, governor)?
+            example_call(call, spans, protocol, applicable, governor)?;
         }
         Segment::Rejected { dialect, span, .. } => {
             *applicable |= dialect.grammar().examples_content();
