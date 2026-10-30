@@ -143,6 +143,7 @@ fn tool_output_is_a_result_with_verbatim_content() {
         );
         let calls = recover(&input);
         assert_eq!(calls.calls, <[ToolCall; 0]>::default());
-        assert_eq!(calls.content, [0..source.len()]);
+        assert_eq!(calls.content.len(), 1);
+        assert_eq!(calls.content[0], 0..source.len());
     }
 }
