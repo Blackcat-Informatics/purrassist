@@ -1,0 +1,757 @@
+diff --git Cargo.lock Cargo.lock
+index 17d08b5..31a6f99 100644
+--- Cargo.lock
++++ Cargo.lock
+@@ -370,7 +370,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-cdt"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-events",
+  "purrdf-hash",
+@@ -382,7 +382,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-core"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "hashbrown",
+  "purrdf-cdt",
+@@ -400,7 +400,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-datalog"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "hashbrown",
+  "purrdf-core",
+@@ -412,7 +412,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-deflate"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-hash",
+ ]
+@@ -420,7 +420,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-ed25519"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-hash",
+  "sha2",
+@@ -429,7 +429,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-events"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-hash",
+ ]
+@@ -437,7 +437,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-geo-kernel"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-core",
+  "purrdf-hash",
+@@ -449,7 +449,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-gts"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "aes-gcm",
+  "fastrand",
+@@ -469,12 +469,12 @@ dependencies = [
+ [[package]]
+ name = "purrdf-hash"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ 
+ [[package]]
+ name = "purrdf-iri"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-hash",
+  "purrdf-lex",
+@@ -483,7 +483,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-lex"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-hash",
+ ]
+@@ -491,7 +491,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-rdf"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "hashbrown",
+  "purrdf-core",
+@@ -512,7 +512,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-shapes"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-core",
+  "purrdf-datalog",
+@@ -533,7 +533,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-slice"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-core",
+  "purrdf-gts",
+@@ -550,7 +550,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-sparql-algebra"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-cdt",
+  "purrdf-hash",
+@@ -562,7 +562,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-sparql-eval"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "getrandom",
+  "hashbrown",
+@@ -584,7 +584,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-sparql-results"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-core",
+  "purrdf-hash",
+@@ -595,7 +595,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-stack"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "libc",
+  "purrdf-hash",
+@@ -605,7 +605,7 @@ dependencies = [
+ [[package]]
+ name = "purrdf-xsd"
+ version = "3.0.1"
+-source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77"
++source = "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358"
+ dependencies = [
+  "purrdf-hash",
+  "purrdf-lex",
+diff --git Cargo.toml Cargo.toml
+index 7f7b946..106a991 100644
+--- Cargo.toml
++++ Cargo.toml
+@@ -21,8 +21,8 @@ purrassist-derive = { path = "crates/derive", version = "0.1.0" }
+ purrassist-syntax = { path = "crates/syntax", version = "0.1.0" }
+ purrassist = { path = "crates/purrassist", version = "0.1.0" }
+ purrassist-host = { path = "crates/host", version = "0.1.0" }
+-purrdf-core = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77" }
+-purrdf-shapes = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77" }
++purrdf-core = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "742bbbfbe2240e1fc6f178badd049420753ef358" }
++purrdf-shapes = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "742bbbfbe2240e1fc6f178badd049420753ef358" }
+ 
+ [workspace.lints.rust]
+ unsafe_code = "deny"
+diff --git crates/toolgraph/README.md crates/toolgraph/README.md
+index 6608cbd..84830f8 100644
+--- crates/toolgraph/README.md
++++ crates/toolgraph/README.md
+@@ -46,18 +46,22 @@ remain the separate `OutputByteLimit` contract.
+ 
+ The direct `plain_tool_schemas` example adopts the supported upstream profile of
+ `purrdf_shapes::json_schema::compile_tool_arguments` at
+-`8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77` (`PurRDF` #788 / PR #806).
++`742bbbfbe2240e1fc6f178badd049420753ef358` (`PurRDF` #788 / PR #806 and
++numeric prerequisite #885 / PR #888).
+ Run `cargo run -p purrassist-toolgraph --example plain_tool_schemas` to compile
+ the four worked input/output schemas and validate bare instances and invalid
+ neighbors with the full first-party core validator. Focused tests cover nested
+ input/output bindings, exact constraints, source-located losses and native typed
+ refusals. Source/profile preparation is caller-owned. Native work/bytes/nodes
+ ceilings are logical bounds; they do not provide complete process heap or
+-cancellation governance. This supported-profile adoption is delivered under #70; #33 still owns production
+-loader/codec wiring and its complete original contract. The original G7 plain
+-number requirement remains open under #43 and #33: the adopted API refuses
+-`xsd:decimal`, `xsd:double` and `xsd:float` with source-bearing native typed
+-errors. This supported-profile consumer does not complete G7.
++cancellation governance. The numeric consumer completes G7 under #43, extending
++the supported-profile adoption from #70. Decimal bounds, enums and constants
++preserve arbitrary precision; finite IEEE constants retain their exact numeric
++values. Unrestricted float/double domains carry the source-located
++`plain:ieee-representability` loss requiring original SHACL validation. Invalid,
++nonfinite, negative IEEE zero and identity-losing constants return typed refusals with
++valid neighboring cases covered. #33 still owns production loader/codec wiring
++and its complete original contract.
+ 
+ `CallableBinding::admit` validates a selected mapping from an already admitted
+ upstream `FnO` catalog. It requires complete unique parameter/return bindings and
+diff --git crates/toolgraph/tests/plain_tool_schemas.rs crates/toolgraph/tests/plain_tool_schemas.rs
+index 614cd17..efe7153 100644
+--- crates/toolgraph/tests/plain_tool_schemas.rs
++++ crates/toolgraph/tests/plain_tool_schemas.rs
+@@ -255,18 +255,6 @@ fn invalid_roots_bindings_and_representations_are_native_typed_refusals() {
+             "sh:datatype xsd:anyURI;",
+             ToolRepresentationError::Constraint("sh:datatype"),
+         ),
+-        (
+-            "sh:datatype xsd:decimal;",
+-            ToolRepresentationError::Constraint("sh:datatype"),
+-        ),
+-        (
+-            "sh:datatype xsd:double;",
+-            ToolRepresentationError::Constraint("sh:datatype"),
+-        ),
+-        (
+-            "sh:datatype xsd:float;",
+-            ToolRepresentationError::Constraint("sh:datatype"),
+-        ),
+         ("", ToolRepresentationError::MissingDomain),
+     ] {
+         let body = format!(
+@@ -330,3 +318,171 @@ fn legacy_jsonld_schema_and_openapi_goldens_from_previous_pin_are_unchanged() {
+     assert_eq!(compiled.compiled.schema_json, legacy::SCHEMA);
+     assert_eq!(compiled.compiled.openapi_json, legacy::OPENAPI);
+ }
++
++#[expect(
++    clippy::result_large_err,
++    reason = "the consumer exercises the original public compiler error and native cause"
++)]
++fn numeric_schema(
++    datatype: &str,
++    constraints: &str,
++) -> Result<purrdf_shapes::json_schema::CompiledSchema, ToolSchemaError> {
++    let body = format!(
++        "{PREFIXES}ex:Args a sh:NodeShape; sh:targetClass ex:Call; sh:closed true; \
++         sh:property [sh:path ex:number; sh:datatype xsd:{datatype}; \
++         sh:minCount 1; sh:maxCount 1; {constraints}]."
++    );
++    let shapes = purrdf_shapes::engine::parse_shapes(&body, None).expect("numeric source shapes");
++    compile_tool_arguments(
++        &shapes,
++        &namespaces().unwrap(),
++        &profile("Args", "Call", &["number"]),
++        &LIMITS,
++    )
++}
++
++#[test]
++fn plain_decimal_boundaries_enumerations_and_constants_keep_full_precision() {
++    let low = "9007199254740993.0000000000000001";
++    let middle = "9007199254740993.0000000000000002";
++    let high = "9007199254740993.0000000000000003";
++    let below = "9007199254740993.0000000000000000";
++    let above = "9007199254740993.0000000000000004";
++    for (constraints, valid, invalid) in [
++        (
++            format!(
++                "sh:minInclusive \"{low}\"^^xsd:decimal; sh:maxInclusive \"{high}\"^^xsd:decimal;"
++            ),
++            vec![low, middle, high],
++            vec![below, above],
++        ),
++        (
++            format!("sh:in (\"{low}\"^^xsd:decimal \"{high}\"^^xsd:decimal);"),
++            vec![low, high],
++            vec![middle],
++        ),
++        (
++            format!("sh:hasValue \"{middle}\"^^xsd:decimal;"),
++            vec![middle],
++            vec![low, high],
++        ),
++    ] {
++        let compiled = numeric_schema("decimal", &constraints).expect("exact decimal schema");
++        assert_eq!(compiled.losses.entries(), []);
++        let validator = schema(&compiled.schema_json);
++        for number in valid {
++            assert!(
++                accepts(&validator, &format!("{{\"number\":{number}}}")),
++                "{constraints}: {number}"
++            );
++        }
++        for number in invalid {
++            assert!(
++                !accepts(&validator, &format!("{{\"number\":{number}}}")),
++                "{constraints}: {number}"
++            );
++        }
++    }
++}
++
++#[test]
++fn exact_decimal_logic_preserves_exclusive_alternatives_and_negation() {
++    let compiled = numeric_schema(
++        "decimal",
++        r"sh:xone (
++             [sh:datatype xsd:decimal; sh:minInclusive 1.1; sh:maxInclusive 3.3]
++             [sh:datatype xsd:decimal; sh:minInclusive 3.3; sh:maxInclusive 5.5]
++           );
++           sh:not [sh:datatype xsd:decimal; sh:in (2.2)];
++           sh:someValue [sh:datatype xsd:decimal; sh:minInclusive 1.5];",
++    )
++    .expect("same-domain decimal logic");
++    assert_eq!(compiled.losses.entries(), []);
++    let validator = schema(&compiled.schema_json);
++    for (number, valid) in [
++        ("1.5", true),
++        ("4.4", true),
++        ("1.1", false),
++        ("2.2", false),
++        ("3.3", false),
++        ("6", false),
++    ] {
++        assert_eq!(
++            accepts(&validator, &format!("{{\"number\":{number}}}")),
++            valid,
++            "{number}"
++        );
++    }
++}
++
++#[test]
++fn ieee_domain_residuals_are_registered_and_keep_the_source() {
++    for datatype in ["double", "float"] {
++        let compiled = numeric_schema(datatype, "sh:minInclusive 1.0;")
++            .expect("finite numeric carrier with explicit residual");
++        purrdf_core::loss::check_ledger_sound(&compiled.losses, "shacl", "json-schema")
++            .expect("every residual has a registered native meaning");
++        assert!(
++            compiled.losses.entries().iter().any(|entry| {
++                entry.code == "plain:ieee-representability"
++                    && entry.location.as_deref().is_some_and(|location| {
++                        location.subject.as_deref() == Some("<https://example.org/tools/Args>")
++                    })
++            }),
++            "{datatype}: {:?}",
++            compiled.losses
++        );
++        let validator = schema(&compiled.schema_json);
++        assert!(accepts(&validator, r#"{"number":1.5}"#));
++        assert!(!accepts(&validator, r#"{"number":0.5}"#));
++        assert!(!accepts(&validator, r#"{"number":"1.5"}"#));
++    }
++}
++
++#[test]
++fn unsupported_numeric_encodings_keep_typed_causes_and_valid_neighbors() {
++    for (datatype, invalid, reason, valid) in [
++        (
++            "double",
++            r#"sh:hasValue "INF"^^xsd:double;"#,
++            ToolRepresentationError::NumericConstant,
++            r#"sh:hasValue "1.5E0"^^xsd:double;"#,
++        ),
++        (
++            "float",
++            r#"sh:hasValue "NaN"^^xsd:float;"#,
++            ToolRepresentationError::NumericConstant,
++            r#"sh:hasValue "1.5E0"^^xsd:float;"#,
++        ),
++        (
++            "double",
++            r#"sh:hasValue "-0.0E0"^^xsd:double;"#,
++            ToolRepresentationError::SignedZero,
++            r#"sh:hasValue "0.0E0"^^xsd:double;"#,
++        ),
++        (
++            "decimal",
++            r#"sh:hasValue "+01.50"^^xsd:decimal;"#,
++            ToolRepresentationError::NumericIdentity,
++            r#"sh:hasValue "1.5"^^xsd:decimal;"#,
++        ),
++    ] {
++        assert!(
++            matches!(
++                numeric_schema(datatype, invalid),
++                Err(ToolSchemaError::UnsupportedConstruct { location, predicate, reason: actual })
++                    if location.contains("number")
++                        && predicate.as_deref() == Some("https://example.org/tools/number")
++                        && actual == reason
++            ),
++            "{datatype}: {invalid}"
++        );
++        let compiled = numeric_schema(datatype, valid).expect("canonical finite neighbor");
++        assert_eq!(compiled.losses.entries(), []);
++        let number = if valid.contains("0.0E0") { "0" } else { "1.5" };
++        assert!(accepts(
++            &schema(&compiled.schema_json),
++            &format!("{{\"number\":{number}}}")
++        ));
++    }
++}
+diff --git docs/DEPENDENCIES.md docs/DEPENDENCIES.md
+index 8b216a0..2fc53e1 100644
+--- docs/DEPENDENCIES.md
++++ docs/DEPENDENCIES.md
+@@ -9,16 +9,21 @@ edit distances, phonetics, recovery search, and receipts are first-party Rust.
+ The unpublished `purrassist-toolgraph` foundation uses `purrdf-core` for native
+ IRI validation and the shared loss registry, and `purrdf-shapes` for its shared
+ namespace table, FnO reader and public plain argument-schema compiler. Both use
+-exact Git revision `8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77` of the public
+-PurRDF repository. This adopts upstream issue #788 through merged PR #806.
++exact Git revision `742bbbfbe2240e1fc6f178badd049420753ef358` of the public
++PurRDF repository. This retains the plain profile from upstream issue #788 / PR
++#806 and adopts numeric projection from upstream issue #885 / merged PR #888.
+ Default and all-feature metadata at adoption contain the same 99 package
+ identities as the previous pin: all 19 PurRDF Git packages change source
+ revision, with no registry package/version or core dependency drift. The
+ registered name/version baseline therefore stays unchanged. License notices
+ remain byte-identical; their existing `purrdf-2ed9845` storage paths are retained,
+ while each package's source registration identifies the adopted revision.
+-The resolved all-target normal/build closure adds 19 PurRDF packages and
+-41 registry packages to this workspace's existing inventory. Every resolved
++The numeric compiler shares upstream's exact XSD arithmetic and records the
++original SHACL representability check for unrestricted IEEE domains; it adds no
++dependency to the core.
++The graph crate's resolved all-target normal/build closure contains 19 PurRDF
++packages, 53 registry packages and the first-party core. This revision update
++adds no package identity to the workspace inventory. Every resolved
+ package and its shortest dependency path is registered in
+ `vendor/dependencies.json` and `scripts/data/dependency-baseline.json`, with
+ byte-preserved license notices under `vendor/licenses/`.
+diff --git docs/IMPLEMENTATION.md docs/IMPLEMENTATION.md
+index 295e50b..040da2b 100644
+--- docs/IMPLEMENTATION.md
++++ docs/IMPLEMENTATION.md
+@@ -457,8 +457,9 @@ Core operations are synchronous and resumable around supplied helper responses.
+   words. Graph loading, full manifests,
+   production schema bridge, authorization and execution remain planned. The direct
+   `plain_tool_schemas` consumer adopts upstream plain FnO schema compilation and
+-  validates exact worked schemas with the core engine (#70). G7's plain-number support
+-  remains open under #43; graph loading and original-SHACL integration remain
++  validates exact worked schemas with the core engine (#70). G7's numeric
++  prerequisite (#43) adopts exact decimals, finite IEEE carriers, registered
++  representability losses and source-bearing typed refusals; graph loading and original-SHACL integration remain
+   #33. Exact upstream Git dependencies
+   keep it outside the publishable facade until registry packaging is qualified.
+ 
+@@ -846,7 +847,7 @@ This completes prepared-contract matching only. It authenticates no host
+ configuration, verifies no native closure or protected-head property in the
+ library, evaluates no rules and grants no dispatch authority. Native governed
+ preparation/evaluation, graph admission, real dispatch and result release remain
+-required under #33/#34/#35/#36/#37/#39/#43/#47.
++required under #33/#34/#35/#36/#37/#39/#47.
+ 
+ 
+ ## Runtime registered host output enforcement
+diff --git docs/tool-graph/TOOLS.md docs/tool-graph/TOOLS.md
+index 6c075cd..0f975ba 100644
+--- docs/tool-graph/TOOLS.md
++++ docs/tool-graph/TOOLS.md
+@@ -769,18 +769,21 @@ no random, filesystem or process access. `aa-exec` must select the exact profile
+ refuse an unconfined result, close unadmitted descriptors and return typed launch,
+ label or mediation failures. Neither mode can silently fall back to the other.
+ 
+-**G7 supported profile adopted in #70; plain numbers and loader integration remain open:** upstream
+-PurRDF issue #788 closed through PR #806, adopted at exact revision
+-`8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77`. The public
++**G7 compiler prerequisite delivered in #70 and #43; loader integration remains open:**
++upstream PurRDF issue #788 closed through PR #806, and numeric prerequisite #885
++closed through PR #888, adopted at exact revision
++`742bbbfbe2240e1fc6f178badd049420753ef358`. The public
+ `purrdf_shapes::json_schema::compile_tool_arguments` accepts caller-owned
+ root-shape/class identities and parent-scoped FnO predicate/member bindings.
+-It uses the shared constraint compiler for bare string/integer/boolean, object
+-and array schemas, requiredness, cardinality and closedness. Unsupported RDF
+-representations and invalid bindings return typed errors. The original plain
+-number requirement is unresolved: this revision refuses `xsd:decimal`,
+-`xsd:double` and `xsd:float` as native `sh:datatype` representation errors with
+-the original predicate and bound member. #43 remains open until exact number
+-semantics are available upstream and qualified downstream. Complete losses keep
++It uses the shared constraint compiler for bare string/integer/number/boolean,
++object and array schemas, requiredness, cardinality and closedness. Decimal
++constraints retain arbitrary precision. Finite IEEE constants use exact decimal
++values; unrestricted float/double domains record the source-located
++`plain:ieee-representability` obligation for original SHACL checking. Finite
++admitted enums or scalar constants discharge it. Logical constraints and
++reference caches preserve residual exactness boundaries. Unsupported RDF
++representations, invalid bindings and identity-losing numeric constants return
++typed errors with the original predicate and bound member. Complete losses keep
+ their original source; original SHACL checking remains mandatory where the
+ projection loses semantics. The original `compile` API retains JSON-LD output.
+ 
+diff --git docs/tool-graph/TOOLS_PLAN.md docs/tool-graph/TOOLS_PLAN.md
+index 5eed2cc..87d547e 100644
+--- docs/tool-graph/TOOLS_PLAN.md
++++ docs/tool-graph/TOOLS_PLAN.md
+@@ -450,8 +450,10 @@ caller-owned document table, never fetched from the network.
+ 
+ The supported plain profile is adopted in #70, a subdivision of #43. Upstream issue
+ [PurRDF #788](https://github.com/Blackcat-Informatics/purrdf/issues/788) closed
+-through [PR #806](https://github.com/Blackcat-Informatics/purrdf/pull/806), pinned
+-here at `8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77`. The existing
++through [PR #806](https://github.com/Blackcat-Informatics/purrdf/pull/806).
++Numeric projection from [PurRDF #885](https://github.com/Blackcat-Informatics/purrdf/issues/885)
++is merged through [PR #888](https://github.com/Blackcat-Informatics/purrdf/pull/888),
++pinned here at `742bbbfbe2240e1fc6f178badd049420753ef358`. The existing
+ `json_schema::compile` retains its JSON-LD surface; the public
+ `purrdf_shapes::json_schema::compile_tool_arguments` uses the shared constraint
+ compiler with an explicit caller-owned `ToolArgumentProfile`.
+@@ -463,14 +465,17 @@ used transitive binding closure, including shared nested shapes. Missing,
+ duplicate, colliding, reserved and unused bindings are native typed refusals.
+ The same predicate can have different member names under different parents.
+ 
+-The upstream compiler emits bare strings, integers, booleans, objects and
+-arrays, with exact constraints, requiredness, cardinality and closedness.
+-The original G7 contract also requires plain JSON numbers. This revision
+-refuses `xsd:decimal`, `xsd:double` and `xsd:float` with native
+-`UnsupportedConstruct` / `ToolRepresentationError::Constraint("sh:datatype")`,
+-retaining the bound member and original predicate. That numeric requirement
+-remains open under #43 and #33; supported-profile adoption does not complete G7.
+-Other unsupported RDF representations are likewise explicit refusals.
++The upstream compiler emits bare strings, integers, numbers, booleans, objects
++and arrays, with exact constraints, requiredness, cardinality and closedness.
++Decimal bounds, enums and constants preserve arbitrary precision. Finite float
++and double constants use their exact mathematical decimal values. Unrestricted
++IEEE domains record the registered, source-located
++`plain:ieee-representability` loss and require the original SHACL datatype check;
++an admitted finite enum or scalar constant discharges that obligation. Residual
++checks cannot become exact negated or exclusive alternatives through references.
++Invalid, nonfinite, negative IEEE zero, noncanonical constant spellings and
++unsupported numeric domains retain typed causes, bound members and original
++predicates. Other unsupported RDF representations are explicit refusals.
+ `CompiledSchema` retains schema/OpenAPI text and the complete source-located
+ loss ledger. Constraints beyond JSON Schema still require checks against the
+ retained original SHACL graph. There is no local compiler, JSON-LD rewriting
+@@ -491,8 +496,10 @@ for the four worked tools and validate them with the full first-party core
+ schema engine. The upstream compiler's decoded QueryInput regular expression is
+ `^customer\u{2d}(?:[0-9])+$`; the proposed manifest bytes remain #33 acceptance. Focused downstream
+ cases also cover nested input/output objects and arrays, scoped bindings,
+-required/optional members, closedness, exact integer `xone`/`not`/`someValue`,
+-loss source subjects, typed refusals and tiny logical ceilings. The legacy
++required/optional members, closedness, exact integer and decimal
++`xone`/`not`/`someValue`, decimal boundaries beyond binary floating-point
++precision, numeric enums/constants, registered IEEE losses, loss source subjects,
++typed refusals with valid neighbors and tiny logical ceilings. The legacy
+ JSON-LD schema/OpenAPI goldens are retained from the previous pin; compiling
+ plain profiles also preserves the neighboring original JSON-LD schema and
+ OpenAPI artifacts.
+@@ -506,10 +513,9 @@ parsing and schema index/reference ownership have since gained their own admitte
+ owners. Algebra preparation and graph/compiler integration remain required under
+ #33 and #36.
+ 
+-This adopts the supported upstream profile only. Full G7 qualification still
+-requires exact plain-number semantics upstream and downstream executable
+-evidence; no local compiler or schema rewriting can satisfy that requirement.
+-#43 stays open. #33 still owns the actual loader and bidirectional MCP codec, retained source and occurrence spans,
++This completes the G7 shared-compiler prerequisite, including plain-number
++semantics and the focused downstream consumer. #33 still owns the actual loader
++and bidirectional MCP codec, retained source and occurrence spans,
+ FnO mappings, original-SHACL and policy checking, exact core validation,
+ facade/host wiring and registry-resolvable packaging. Its complete original
+ contract stays open until those behaviors are delivered.
+@@ -1448,4 +1454,4 @@ a mismatch fails explicitly. Native parsing/checking allocations are separate.
+ This does not complete the policy gate or authenticate the configuration source.
+ Declared edges still need native verification; protected heads, governed native
+ preparation/evaluation, actual execution and result release remain required.
+-All remaining #33/#34/#35/#36/#37/#39/#43/#47 tracking contracts stay open.
++All remaining #33/#34/#35/#36/#37/#39/#47 tracking contracts stay open.
+diff --git vendor/dependencies.json vendor/dependencies.json
+index 76d4067..2257a7c 100644
+--- vendor/dependencies.json
++++ vendor/dependencies.json
+@@ -758,7 +758,7 @@
+       "name": "purrdf-cdt",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -776,7 +776,7 @@
+       "name": "purrdf-core",
+       "version": "3.0.1",
+       "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -796,7 +796,7 @@
+       "name": "purrdf-datalog",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -814,7 +814,7 @@
+       "name": "purrdf-deflate",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -832,7 +832,7 @@
+       "name": "purrdf-ed25519",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -850,7 +850,7 @@
+       "name": "purrdf-events",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -868,7 +868,7 @@
+       "name": "purrdf-geo-kernel",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -886,7 +886,7 @@
+       "name": "purrdf-gts",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -904,7 +904,7 @@
+       "name": "purrdf-hash",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -922,7 +922,7 @@
+       "name": "purrdf-iri",
+       "version": "3.0.1",
+       "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -942,7 +942,7 @@
+       "name": "purrdf-lex",
+       "version": "3.0.1",
+       "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0 AND BSD-3-Clause",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -968,7 +968,7 @@
+       "name": "purrdf-rdf",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -986,7 +986,7 @@
+       "name": "purrdf-shapes",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -1004,7 +1004,7 @@
+       "name": "purrdf-slice",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -1022,7 +1022,7 @@
+       "name": "purrdf-sparql-algebra",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -1040,7 +1040,7 @@
+       "name": "purrdf-sparql-eval",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -1058,7 +1058,7 @@
+       "name": "purrdf-sparql-results",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -1076,7 +1076,7 @@
+       "name": "purrdf-stack",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+@@ -1094,7 +1094,7 @@
+       "name": "purrdf-xsd",
+       "version": "3.0.1",
+       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77#8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77",
++      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+       "repository": "https://github.com/Blackcat-Informatics/purrdf",
+       "notices": [
+         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",

@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "cc6b52963e625823cce9180e5e8f796f94ad809d",
+  "headRefName": "paudley/43-tool-graph-g7-upstream-plain-fno",
+  "headRefOid": "0ad8fe302312af3d3c77aa11f79858d826484174",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 157,
+  "state": "OPEN",
+  "title": "Complete plain numeric FnO schema adoption",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/pull/157"
+}

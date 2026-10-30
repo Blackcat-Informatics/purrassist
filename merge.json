@@ -1,0 +1,1 @@
+{"completed": [], "blocked": [{"code": "merge", "message": "ghprsq exited 1; diagnostics are on stderr"}], "unavailable": [], "publication": "not_attempted", "merge_commit": null, "cleanup": {"remote_branch": "not_started", "local_delivery": "not_started"}, "next_actions": ["Inspect remote PR, base and audit refs before retrying; retain notes and evidence"], "artifacts": {}}

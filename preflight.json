@@ -1,0 +1,163 @@
+{
+  "issue": 43,
+  "pr_number": 157,
+  "branch": "paudley/43-tool-graph-g7-upstream-plain-fno",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/43-tool-graph-g7-upstream-plain-fno/.stage/tool-graph-g7-upstream-plain-fno",
+  "observed_at": "2026-10-30T18:11:15.863086+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/43-tool-graph-g7-upstream-plain-fno/.stage/tool-graph-g7-upstream-plain-fno/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/43-tool-graph-g7-upstream-plain-fno/.stage/tool-graph-g7-upstream-plain-fno/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/43-tool-graph-g7-upstream-plain-fno/.stage/tool-graph-g7-upstream-plain-fno/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/43-tool-graph-g7-upstream-plain-fno/.stage/tool-graph-g7-upstream-plain-fno/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/43-tool-graph-g7-upstream-plain-fno/.stage/tool-graph-g7-upstream-plain-fno/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "cc6b52963e625823cce9180e5e8f796f94ad809d",
+    "headRefName": "paudley/43-tool-graph-g7-upstream-plain-fno",
+    "headRefOid": "0ad8fe302312af3d3c77aa11f79858d826484174",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 157,
+    "state": "OPEN",
+    "title": "Complete plain numeric FnO schema adoption",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/157"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230535501",
+        "name": "native (ubuntu-24.04)",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230534677",
+        "name": "native (macos-14)",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230534684",
+        "name": "release-gate",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230534461",
+        "name": "windows-engines",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230534930",
+        "name": "wasm",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230534478",
+        "name": "corpus",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230534015",
+        "name": "fuzz",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41104564867/job/124230534466",
+        "name": "qualification",
+        "state": "QUEUED"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "0ad8fe302312af3d3c77aa11f79858d826484174",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "0ad8fe302312af3d3c77aa11f79858d826484174",
+    "branch": "paudley/43-tool-graph-g7-upstream-plain-fno",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 157,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #157 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/usr/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 29,
+      "bytes": 1800917,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "cc6b52963e625823cce9180e5e8f796f94ad809d",
+      "head": "0ad8fe302312af3d3c77aa11f79858d826484174",
+      "status": "clean"
+    }
+  }
+}
