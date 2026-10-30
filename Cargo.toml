@@ -21,8 +21,8 @@ purrassist-derive = { path = "crates/derive", version = "0.1.0" }
 purrassist-syntax = { path = "crates/syntax", version = "0.1.0" }
 purrassist = { path = "crates/purrassist", version = "0.1.0" }
 purrassist-host = { path = "crates/host", version = "0.1.0" }
-purrdf-core = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77" }
-purrdf-shapes = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "8d0a1c6d9d094e5642ab8af3e96d4262b84a8d77" }
+purrdf-core = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "742bbbfbe2240e1fc6f178badd049420753ef358" }
+purrdf-shapes = { git = "https://github.com/Blackcat-Informatics/purrdf.git", rev = "742bbbfbe2240e1fc6f178badd049420753ef358" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

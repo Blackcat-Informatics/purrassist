@@ -457,8 +457,9 @@ Core operations are synchronous and resumable around supplied helper responses.
   words. Graph loading, full manifests,
   production schema bridge, authorization and execution remain planned. The direct
   `plain_tool_schemas` consumer adopts upstream plain FnO schema compilation and
-  validates exact worked schemas with the core engine (#70). G7's plain-number support
-  remains open under #43; graph loading and original-SHACL integration remain
+  validates exact worked schemas with the core engine (#70). G7's numeric
+  prerequisite (#43) adopts exact decimals, finite IEEE carriers, registered
+  representability losses and source-bearing typed refusals; graph loading and original-SHACL integration remain
   #33. Exact upstream Git dependencies
   keep it outside the publishable facade until registry packaging is qualified.
 
@@ -846,7 +847,7 @@ This completes prepared-contract matching only. It authenticates no host
 configuration, verifies no native closure or protected-head property in the
 library, evaluates no rules and grants no dispatch authority. Native governed
 preparation/evaluation, graph admission, real dispatch and result release remain
-required under #33/#34/#35/#36/#37/#39/#43/#47.
+required under #33/#34/#35/#36/#37/#39/#47.
 
 
 ## Runtime registered host output enforcement
