@@ -92,8 +92,9 @@
 //! - (F16) no call body is content: the bytes after a rejected attempt
 //!   hold no call member (`"name"`, then `:`) before any prose (a token
 //!   fragment such as `t_begin|>` is no prose), and an attempt may run over
-//!   the call body it began (a call member past the failure, no prose,
-//!   read fresh from the failure and from the member as F16 reads it);
+//!   the call body it began (a call member past the failure, no prose).
+//!   Initial markup retains strings opened before failure; a body after
+//!   that markup ends reads fresh from its debris and from its member;
 //! - (S3/F6) a rejected attempt keeps its own closing markup: when its
 //!   raw text does not end with a literal that ends a call of its dialect
 //!   (any alternative's, a chained call's own, or one with one slip; not
@@ -448,6 +449,40 @@ fn call_body(output: &[u8], start: usize, failed: usize, end: usize) -> bool {
     (0..after.len())
         .find(|&at| member_at(&after[at..]))
         .is_some_and(|member| !prose(&after[..member], 0, &[]) && !prose(&after[member..], 0, &[]))
+}
+
+/// F16's initial markup walk retains a string that began before failure.
+/// Unlike a body after the markup ended, this walk does not restart its
+/// quotes at the failure. A later member must begin outside that original
+/// string, with no prose before it or in the body read fresh from its key.
+fn initial_call_body(output: &[u8], start: usize, failed: usize, end: usize) -> bool {
+    let bytes = &output[start..end];
+    let failed = failed.clamp(start, end) - start;
+    let (mut quoted, mut escaped, mut inside_at_failure) = (false, false, false);
+    for (at, &byte) in bytes.iter().enumerate() {
+        if at == failed {
+            // When the failure is outside a string, call_body already
+            // supplies the fresh reading; this exception adds nothing.
+            inside_at_failure = quoted;
+            if !inside_at_failure {
+                return false;
+            }
+        }
+        if at >= failed && inside_at_failure && !quoted && member_at(&bytes[at..]) {
+            return !prose(&bytes[..at], failed, &[]) && !prose(&bytes[at..], 0, &[]);
+        }
+        if quoted {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => quoted = false,
+                _ => {}
+            }
+        } else if byte == b'"' {
+            quoted = true;
+        }
+    }
+    false
 }
 
 /// Whether `bytes` begin with a call's member: `"name"`, then `:`.
@@ -1158,7 +1193,8 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
             });
         // F16: or over the call body it began (a call's member past the
         // failure, no prose): its markup, however it ends.
-        let body = call_body(output, rejected.span.start, failed, end);
+        let body = call_body(output, rejected.span.start, failed, end)
+            || initial_call_body(output, rejected.span.start, failed, end);
         assert!(
             closed
                 || body
@@ -1836,6 +1872,49 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Initial markup retains the malformed id's string until its real
+    /// closing quote; later call members justify the rejected body, not prose.
+    #[test]
+    fn initial_body_oracle_preserves_pre_failure_strings_without_absorbing_prose() {
+        let seed = b"[\xe6#[TOOL_CALLS][\t{\"id\":\"call_90d71.50ated \\n  block\\n\"}\t\t,\"name\"\t:\"list_t\"},\t\t\"name\"\t:\t\t\"get_weathe<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\x96ed \xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\x96ed \\n  block\\n\"}\t\t,\"name\"\t:\"list_di";
+        let output = &seed[2..];
+        let tools = fixed_tools();
+        let request = request(seed[0], seed[1], None, output);
+        let result = tools.recover(output, &request, DialectSet::built_in());
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+            panic!("the malformed input retains one rejected reading");
+        };
+        let read = read_spans(&tools, output, &request);
+        assert!(read.contains(&(1..39, DialectId::MistralV3)));
+        let rejected = calls
+            .rejected
+            .iter()
+            .find(|part| part.span.start == 1)
+            .expect("the original Mistral attempt is rejected");
+        assert_eq!(rejected.span, 1..179);
+        assert_eq!(rejected.reason, Rejection::Malformed { at: 39 });
+        assert!(!call_body(output, 1, 39, 179));
+        assert!(initial_call_body(output, 1, 39, 179));
+        check_rejected_extension(output, &calls, &read);
+
+        for invalid in [
+            br#"[TOOL_CALLS][{"id":"bad value"} Independent prose. "name":"f"}]"#.as_slice(),
+            br#"[TOOL_CALLS][{"id":"bad value", "name":"f"}] Independent prose."#,
+            br#"[TOOL_CALLS][{"id":"bad "name": "f"}]"#,
+            br#"[TOOL_CALLS][{"id":"bad value"}]"#,
+        ] {
+            let failed = invalid
+                .windows(3)
+                .position(|word| word == b"bad")
+                .expect("each boundary neighbor fails within its id")
+                + 3;
+            assert!(
+                !initial_call_body(invalid, 0, failed, invalid.len()),
+                "the initial-body witness must refuse {invalid:?}"
+            );
+        }
+    }
 
     /// F4 must reject an overlong span even when F16 admits the real body
     /// after a broken string. This injects the span-extension bug into the
