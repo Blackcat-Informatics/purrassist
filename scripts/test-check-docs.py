@@ -424,6 +424,7 @@ class DialectIds(Case):
         tree = self.tree()
         tree.replace('crates/host/README.md', '`llama3-json.v1`', 'llama3-json.v1')
         tree.replace('crates/host/README.md', '`kimi-k2.v1`', 'kimi-k2.v1')
+        tree.replace('crates/host/README.md', '`harmony.v1`', 'harmony.v1')
         self.assertFails(tree.errors(), 'dialect-ids', 'crates/host/README.md', NOT_FOUND)
 
     def test_a_list_wrapped_across_lines_is_still_a_list(self):
