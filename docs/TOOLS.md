@@ -271,7 +271,7 @@ Generated from `Tools::definitions()` by the test `tools_reference_matches_regis
     - `reasoning`: one of "separate", "separate-open", "content"
     - `ambiguity`: one of "report", "reject"
     - `ids`: one of several shapes
-    - `emit`: one of "none", "openai", "anthropic-tool-use.v1", "bare-json.v1", "deepseek-v3.1.v1", "deepseek-v3.v1", "harmony.v1", "hermes.v1", "kimi-k2.v1", "llama3-json.v1", "mistral-v11.v1", "mistral-v3.v1", "openai-tool-calls.v1", "qwen3-coder-xml.v1"
+    - `emit`: one of "none", "openai", "anthropic-tool-use.v1", "bare-json.v1", "deepseek-v3.1.v1", "deepseek-v3.v1", "gemma3-tool-code.v1", "glm-4.5.v1", "harmony.v1", "hermes.v1", "kimi-k2.v1", "llama3-json.v1", "mistral-v11.v1", "mistral-v3.v1", "openai-tool-calls.v1", "pythonic.v1", "qwen3-coder-xml.v1"
     - `effort`: one of "exact", "quick", "standard", "deep", "maximum"
   - Output:
     - `status`: one of "resolved", "best_guess", "ambiguous", "unresolved", required
