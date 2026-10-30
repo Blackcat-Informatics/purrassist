@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Hosted fuzzing for PR #158 fails in the tool-call probe at execution 425. Current main reproduces the same assertion: a rejected attempt spans bytes 1..179 although its reported failure is byte 39, and the probe finds no valid markup-extension justification.\n\nDiagnose the native attempt span, rejection reason, recovery markup extension and independent probe against the documented F16 contract. Correct the responsible implementation, preserve original input and rejected-span provenance, and add a bounded regression with valid neighboring cases. Do not suppress the assertion or absorb prose to make the probe pass.\n\nAcceptance: the retained 181-byte reproducer passes the tool-call probe, existing affected rejection and content-boundary cases pass, independent source review completes, and the mandatory repository gate passes.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-30T22:01:29Z",
+  "labels": [],
+  "milestone": null,
+  "number": 159,
+  "state": "OPEN",
+  "title": "Fix rejected tool-call span boundary found by hosted fuzzing",
+  "updatedAt": "2026-10-30T22:01:29Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/159"
+}

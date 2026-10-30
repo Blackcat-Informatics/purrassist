@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 159,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary",
+  "branch": "paudley/159-fix-rejected-tool-call-span-boundary",
+  "slug": "fix-rejected-tool-call-span-boundary",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "6ec7a756481c1580e4c1fadd07af7ecb400d65a1",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary",
+    "branch:paudley/159-fix-rejected-tool-call-span-boundary",
+    "stage:/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary",
+    "issue:/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-30T16:02:00-0600"
+}

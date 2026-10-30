@@ -1,0 +1,163 @@
+{
+  "issue": 159,
+  "pr_number": 160,
+  "branch": "paudley/159-fix-rejected-tool-call-span-boundary",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary",
+  "observed_at": "2026-10-30T22:26:08.574202+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/159-fix-rejected-tool-call-span-boundary/.stage/fix-rejected-tool-call-span-boundary/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "6ec7a756481c1580e4c1fadd07af7ecb400d65a1",
+    "headRefName": "paudley/159-fix-rejected-tool-call-span-boundary",
+    "headRefOid": "2f774eedd68e8e0867ffce3d1c10a8c7967bf6ac",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 160,
+    "state": "OPEN",
+    "title": "Preserve initial string context in tool-call fuzz oracle",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/160"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993682",
+        "name": "native (ubuntu-24.04)",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993629",
+        "name": "native (macos-14)",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993518",
+        "name": "release-gate",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993473",
+        "name": "windows-engines",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993651",
+        "name": "wasm",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993467",
+        "name": "corpus",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993278",
+        "name": "fuzz",
+        "state": "QUEUED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41137964120/job/124344993472",
+        "name": "qualification",
+        "state": "QUEUED"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "2f774eedd68e8e0867ffce3d1c10a8c7967bf6ac",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "2f774eedd68e8e0867ffce3d1c10a8c7967bf6ac",
+    "branch": "paudley/159-fix-rejected-tool-call-span-boundary",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 160,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #160 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/usr/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 16,
+      "bytes": 10220,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "6ec7a756481c1580e4c1fadd07af7ecb400d65a1",
+      "head": "2f774eedd68e8e0867ffce3d1c10a8c7967bf6ac",
+      "status": "clean"
+    }
+  }
+}
