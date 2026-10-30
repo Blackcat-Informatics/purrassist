@@ -80,8 +80,8 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, SourceSpan,
-    StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, ScratchVec,
+    SourceSpan, StopReason,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
@@ -1025,6 +1025,7 @@ impl<'s> Recognizer<'s> {
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         let engine = Engine::new(&set.dialects, tools, governor)?;
+        let context = ContextTracker::new(engine.protocol_fences());
         let starts_open = matches!(policy, ReasoningPolicy::Separate { starts_open: true });
         let root = TurnNode {
             prev: 0,
@@ -1067,7 +1068,7 @@ impl<'s> Recognizer<'s> {
                 bytes: 0,
             },
             turn,
-            context: ContextTracker::new(),
+            context,
             failed: None,
         })
     }
@@ -2231,21 +2232,9 @@ impl Builder<'_> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mut spans = Vec::new();
+        let mut protocol = ScratchVec::new(governor);
         let mut applicable = false;
-        for piece in pieces.iter() {
-            match piece {
-                Piece::Segment(segment) => {
-                    example_spans(segment, &mut spans, &mut applicable, governor)?;
-                }
-                Piece::Choice(choice) => {
-                    for reading in &choice.readings {
-                        for segment in reading {
-                            example_spans(segment, &mut spans, &mut applicable, governor)?;
-                        }
-                    }
-                }
-            }
-        }
+        collect_example_spans(pieces, &mut spans, &mut protocol, &mut applicable, governor)?;
         governor.charge(Resource::Work, size(self.turn.store.len()))?;
         applicable |= self.turn.store.iter().any(|segment| {
             matches!(segment,
@@ -2257,8 +2246,15 @@ impl Builder<'_> {
         governor.charge(Resource::Work, size(spans.len()).saturating_mul(64))?;
         spans.sort_by_key(|span: &Range<usize>| (span.start, span.end));
         spans.dedup();
-        let fenced = self.context.strict_fenced(&spans, self.len, governor)?;
-        let inline = self.context.strict_inline(&spans, &fenced, governor)?;
+        governor.charge(Resource::Work, size(protocol.len()).saturating_mul(64))?;
+        protocol.as_mut_slice().sort_unstable();
+        let regions =
+            self.context
+                .strict_fenced(&spans, protocol.as_slice(), self.len, governor)?;
+        let fenced = regions.examples;
+        let inline =
+            self.context
+                .strict_inline(&spans, &fenced, regions.protocol.as_slice(), governor)?;
         governor.charge(
             Resource::ScratchBytes,
             size(pieces.len()).saturating_mul(EXAMPLE_RECORD_BYTES),
@@ -2667,37 +2663,78 @@ pub(super) fn edit_entries(
     (evidence, loss, inference)
 }
 
-/// Complete calls protect their literal text; rejected spans protect nothing.
+/// Collect example regions in the original piece, reading and segment order.
+fn collect_example_spans(
+    pieces: &[Piece],
+    spans: &mut Vec<Range<usize>>,
+    protocol: &mut ScratchVec<usize>,
+    applicable: &mut bool,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    for piece in pieces {
+        match piece {
+            Piece::Segment(segment) => {
+                example_spans(segment, spans, protocol, applicable, governor)?;
+            }
+            Piece::Choice(choice) => {
+                for reading in &choice.readings {
+                    for segment in reading {
+                        example_spans(segment, spans, protocol, applicable, governor)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Complete calls protect literal text; rejected protocols contribute only a header.
 fn example_spans(
     segment: &Segment,
     spans: &mut Vec<Range<usize>>,
+    protocol: &mut ScratchVec<usize>,
     applicable: &mut bool,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     governor.charge(Resource::Work, 1)?;
     match segment {
         Segment::Call(call) | Segment::Result(call) => {
-            governor.charge(Resource::Work, size(call.readings.len()))?;
-            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
-            spans.push(call.span.clone());
-            *applicable |= call
-                .readings
-                .iter()
-                .any(|reading| reading.dialect.grammar().examples_content());
+            example_call(call, spans, protocol, applicable, governor)?;
         }
-        Segment::Rejected { dialect, .. } => *applicable |= dialect.grammar().examples_content(),
+        Segment::Rejected { dialect, span, .. } => {
+            *applicable |= dialect.grammar().examples_content();
+            if dialect.grammar().protocol_fences() {
+                protocol.push(span.start)?;
+            }
+        }
         Segment::Reasoning(reasoning) => {
             for call in &reasoning.embedded {
-                governor.charge(Resource::Work, size(call.readings.len()))?;
-                governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
-                spans.push(call.span.clone());
-                *applicable |= call
-                    .readings
-                    .iter()
-                    .any(|reading| reading.dialect.grammar().examples_content());
+                example_call(call, spans, protocol, applicable, governor)?;
             }
         }
         Segment::Content(_) => {}
+    }
+    Ok(())
+}
+
+fn example_call(
+    call: &CallSegment,
+    spans: &mut Vec<Range<usize>>,
+    protocol: &mut ScratchVec<usize>,
+    applicable: &mut bool,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, size(call.readings.len()))?;
+    governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+    spans.push(call.span.clone());
+    let mut own_fence = false;
+    for reading in &call.readings {
+        let grammar = reading.dialect.grammar();
+        *applicable |= grammar.examples_content();
+        own_fence |= grammar.protocol_fences();
+    }
+    if own_fence {
+        protocol.push(call.span.start)?;
     }
     Ok(())
 }

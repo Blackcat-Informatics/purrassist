@@ -19,7 +19,8 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The fourteen built-in dialects are written in this DSL:
+The fifteen built-in dialects are written in this DSL:
+[`gemma3-tool-code.v1`](../../crates/core/src/tool_call/dialects/gemma3-tool-code.v1.grammar),
 [`glm-4.5.v1`](../../crates/core/src/tool_call/dialects/glm-4.5.v1.grammar),
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
 [`hermes.v1`](../../crates/core/src/tool_call/dialects/hermes.v1.grammar),
@@ -45,7 +46,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 - Identifiers match `[A-Za-z_][A-Za-z0-9_-]*`. Productions and closer classes
   share one namespace. The keywords `grammar`, `optional-id`,
   `declaration-content`, `json-envelope`, `reasoning`, `confusable`,
-  `closer`, `layout`, `line-start`, `examples-content`, `until`, `slot`, `commit`, `next`, and `insert` cannot
+  `closer`, `layout`, `line-start`, `examples-content`, `protocol-fences`, `until`, `slot`, `commit`, `next`, and `insert` cannot
   name a production or a closer.
 - String literals are double-quoted byte strings with the escapes `\\`, `\"`,
   `\n`, `\r`, `\t`, `\xHH` (one byte), and `\u{HEX}` (one Unicode scalar
@@ -68,6 +69,7 @@ A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 | `layout NAME "TEXT";` | Printing only: the class production `NAME` prints as `TEXT` wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
 | `line-start "OPEN";` | Admit the matching initial call opener only at turn or line start after spaces or tabs. Other opener alternatives are unaffected. The literal must be an initial opener without preceding effects or captures. |
 | `examples-content;` | Keep fenced, inline-code and blockquote call examples as content, including rejected attempts and embedded reasoning examples. |
+| `protocol-fences;` | Keep enclosing examples as content while treating the call or result's own fence as protocol markup. Both productions must start with literal fence headers and end in one named closer: a run of at least three backticks or tildes with one canonical spelling and no confusables. Headers use the same run followed by a nonblank info string, without marker characters, newlines, variants or confusables. Openers require a line start after spaces or tabs. Closers require only spaces or tabs before LF, CRLF or end of input; a prefix of another header cannot close a block. Verbatim `until` delimiters must be LF or CRLF followed by that closer. This directive and `examples-content` are mutually exclusive. |
 | `NAME = EXPR;` | A production. |
 
 ## Expressions

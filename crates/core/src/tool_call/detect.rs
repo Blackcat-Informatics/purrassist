@@ -12,8 +12,7 @@
 //! [`Rejection::UnsupportedDialect`](super::Rejection::UnsupportedDialect),
 //! and the bytes stay content). Two kinds of family are detected:
 //!
-//! - families no built-in dialect parses yet: Gemma 3 `` ```tool_code `` blocks,
-//!   and the *stripped* renderings of
+//! - families no built-in dialect parses yet: the *stripped* renderings of
 //!   built-in dialects whose special tokens a detokenizer removed and which
 //!   no built-in grammar reads (Kimi-K2 `functions.NAME:IDX{...}`, Harmony
 //!   `to=functions.NAME` without its tokens, DeepSeek-V3 `functionNAME` with
@@ -92,10 +91,10 @@ pub enum MarkupFamily {
     OpenAiToolCalls,
     /// `qwen3-coder-xml.v1`: `<function=NAME>` in a `<tool_call>`.
     Qwen3CoderXml,
-    /// `pythonic.v1` (not built in): a list of Python-style calls with
+    /// `pythonic.v1`: a list of Python-style calls with
     /// keyword arguments, `[get_weather(city="Paris"), ...]`.
     Pythonic,
-    /// `gemma3-tool-code.v1` (not built in): a `` ```tool_code `` fenced
+    /// `gemma3-tool-code.v1`: a `` ```tool_code `` fenced
     /// block holding a call.
     Gemma3ToolCode,
     /// `glm-4.5.v1`: `<arg_key>`/`<arg_value>` pairs in a
@@ -167,8 +166,8 @@ impl MarkupFamily {
             Self::OpenAiToolCalls => DialectId::OpenAiToolCalls,
             Self::Qwen3CoderXml => DialectId::Qwen3CoderXml,
             Self::Pythonic => DialectId::Pythonic,
-            Self::Gemma3ToolCode
-            | Self::KimiK2Stripped
+            Self::Gemma3ToolCode => DialectId::Gemma3ToolCode,
+            Self::KimiK2Stripped
             | Self::HarmonyStripped
             | Self::DeepSeekV3Stripped
             | Self::NameArgumentsStripped => return None,
@@ -183,8 +182,7 @@ impl MarkupFamily {
     pub const fn built_in(self) -> bool {
         !matches!(
             self,
-            Self::Gemma3ToolCode
-                | Self::KimiK2Stripped
+            Self::KimiK2Stripped
                 | Self::HarmonyStripped
                 | Self::DeepSeekV3Stripped
                 | Self::NameArgumentsStripped
@@ -821,7 +819,10 @@ impl Scan<'_> {
 
     /// A Gemma 3 `` ```tool_code `` fence whose first line is a call.
     fn tool_code(&mut self, at: usize) -> Option<(MarkupFamily, Range<usize>)> {
-        if !self.lit(at, b"```tool_code") || !self.line_start(at) {
+        if !self.lit(at, b"```tool_code")
+            || !self.line_start(at)
+            || !self.reported(MarkupFamily::Gemma3ToolCode)
+        {
             return None;
         }
         let info = at + b"```tool_code".len();

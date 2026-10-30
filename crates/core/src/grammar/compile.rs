@@ -72,6 +72,13 @@ impl ScratchCharge for Inst {
     };
 }
 
+/// A validated final fence literal and optional verbatim body delimiter set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProtocolFence {
+    pub(crate) closer: u32,
+    pub(crate) body: Option<u32>,
+}
+
 /// The recognizer program of one production.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program {
@@ -82,6 +89,7 @@ pub(crate) struct Program {
     pub(crate) openers: ScratchVec<u32>,
     /// Initial opener PCs admitted only at a blank line prefix.
     pub(crate) line_start_openers: ScratchVec<u32>,
+    pub(crate) protocol: Option<ProtocolFence>,
     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
     pub(crate) first: [u64; 4],
     /// The configuration bound (see `CompiledGrammar::configuration_bound`).
@@ -1510,6 +1518,7 @@ fn compile_program(
         start,
         openers,
         line_start_openers: ScratchVec::new(governor),
+        protocol: None,
         first,
         bound,
         committed,
@@ -1685,6 +1694,21 @@ impl Declared<'_> {
         Ok(())
     }
 
+    fn add_line_start(
+        &mut self,
+        opener: &[u8],
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(), GrammarError> {
+        for (prior, _) in &self.line_start {
+            if equal(prior, opener, governor)? {
+                return Err(duplicate(at, "line-start", governor)?);
+            }
+        }
+        self.line_start.push((owned_bytes(opener, governor)?, at))?;
+        Ok(())
+    }
+
     fn new(governor: &Governor) -> Self {
         Self {
             reasoning: ScratchVec::new(governor),
@@ -1723,20 +1747,19 @@ fn declare<'d>(
                 declared.add_reasoning(open, close, *explicit, *at, builder.governor)?;
             }
             Statement::LineStart { opener, at } => {
-                for (prior, _) in &declared.line_start {
-                    if equal(prior, opener, builder.governor)? {
-                        return Err(duplicate(*at, "line-start", builder.governor)?);
-                    }
-                }
-                declared
-                    .line_start
-                    .push((owned_bytes(opener, builder.governor)?, *at))?;
+                declared.add_line_start(opener, *at, builder.governor)?;
             }
             Statement::ExamplesContent { at } => {
-                if declared.examples == ExamplePolicy::Content {
+                if declared.examples != ExamplePolicy::Recover {
                     return Err(duplicate(*at, "examples-content", builder.governor)?);
                 }
                 declared.examples = ExamplePolicy::Content;
+            }
+            Statement::ProtocolFences { at } => {
+                if declared.examples != ExamplePolicy::Recover {
+                    return Err(duplicate(*at, "protocol-fences", builder.governor)?);
+                }
+                declared.examples = ExamplePolicy::ProtocolFences;
             }
             Statement::OptionalId { at } => {
                 if declared.optional_id {
@@ -2050,6 +2073,20 @@ fn required_production(
     Err(GrammarError::MissingProduction { name })
 }
 
+/// Check the production graph, resolve its layouts, then its required roots.
+fn checked_entry_points(
+    builder: &mut Builder<'_>,
+    productions: &[Production],
+    declared_layouts: &[Layout<'_>],
+) -> Result<(ScratchVec<Option<Bytes>>, [ProductionId; 3]), GrammarError> {
+    check_acyclic(productions, &builder.production_offsets, builder.governor)?;
+    let layouts = layouts(builder, productions, declared_layouts)?;
+    let call = required_production(productions, "call", builder.governor)?;
+    let result = required_production(productions, "result", builder.governor)?;
+    let declaration = required_production(productions, "declaration", builder.governor)?;
+    Ok((layouts, [call, result, declaration]))
+}
+
 fn line_start_openers(
     program: &mut Program,
     declarations: &[(ScratchVec<u8>, usize)],
@@ -2101,11 +2138,8 @@ pub(crate) fn compile(
         json_envelope,
     } = declare(&mut builder, document.statements.as_slice())?;
     let productions = resolve_productions(&mut builder, bodies)?;
-    check_acyclic(&productions, &builder.production_offsets, builder.governor)?;
-    let layouts = layouts(&mut builder, &productions, &declared_layouts)?;
-    let call = required_production(&productions, "call", builder.governor)?;
-    let result = required_production(&productions, "result", builder.governor)?;
-    let declaration = required_production(&productions, "declaration", builder.governor)?;
+    let (layouts, [call, result, declaration]) =
+        checked_entry_points(&mut builder, &productions, &declared_layouts)?;
     let Builder {
         governor,
         mut literals,
@@ -2144,6 +2178,16 @@ pub(crate) fn compile(
         programs = source.compile(&literals, &literal_tables, &renames, governor)?;
     }
     line_start_openers(&mut programs[0], &line_start, &literals, governor)?;
+    if examples == ExamplePolicy::ProtocolFences {
+        protocol_fences(
+            &mut programs,
+            &literals,
+            &closers,
+            &literal_tables,
+            &delimiters,
+            governor,
+        )?;
+    }
     let longest = longest_literal(
         &literals,
         &literal_tables,
@@ -2612,6 +2656,225 @@ fn layouts(
         layouts.as_mut_slice()[index] = Some(owned_bytes(text, builder.governor)?);
     }
     Ok(layouts)
+}
+
+/// Validate the opt-in fence form and admit its additional finite suffix states.
+fn protocol_fences(
+    programs: &mut [Program; 2],
+    literals: &[Literal],
+    closers: &[CloserClass],
+    repairs: &[LiteralTables],
+    delimiters: &[DelimiterSet],
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    for program in programs {
+        let closer = protocol_closer(program, literals, closers, repairs, governor)?;
+        protocol_headers(program, literals, repairs, closer, governor)?;
+        let (body, extra) = protocol_states(
+            program,
+            &literals[closer as usize].bytes,
+            closer,
+            repairs,
+            delimiters,
+            governor,
+        )?;
+        program.bound = program
+            .bound
+            .checked_add(extra)
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        program.protocol = Some(ProtocolFence { closer, body });
+    }
+    Ok(())
+}
+
+fn protocol_closer(
+    program: &Program,
+    literals: &[Literal],
+    closers: &[CloserClass],
+    repairs: &[LiteralTables],
+    governor: &mut Governor,
+) -> Result<u32, GrammarError> {
+    let completing = reach_back(
+        &program.insts,
+        |inst| matches!(inst, Inst::Accept),
+        true,
+        governor,
+    )?;
+    if completing[program.start as usize] {
+        return Err(protocol_error(
+            "every path must end in a literal fence",
+            governor,
+        )?);
+    }
+    let mut last = None;
+    for inst in &program.insts {
+        governor.charge(Resource::Work, 1)?;
+        match *inst {
+            Inst::Lit { lit, next } if completing[next as usize] => {
+                if last.is_some_and(|prior| prior != lit) {
+                    return Err(protocol_error(
+                        "one final named fence closer is required",
+                        governor,
+                    )?);
+                }
+                last = Some(lit);
+            }
+            Inst::Class { next, .. } | Inst::Until { next, .. } | Inst::Slot { next, .. }
+                if completing[next as usize] =>
+            {
+                return Err(protocol_error(
+                    "every path must end in a literal fence",
+                    governor,
+                )?);
+            }
+            _ => {}
+        }
+    }
+    let Some(closer) = last else {
+        return Err(protocol_error(
+            "a final named fence closer is required",
+            governor,
+        )?);
+    };
+    let literal = &literals[closer as usize];
+    let bytes = literal.bytes.as_slice();
+    governor.charge(Resource::Work, size(bytes.len()))?;
+    if bytes.len() < 3
+        || !matches!(bytes[0], b'`' | b'~')
+        || bytes.iter().any(|byte| *byte != bytes[0])
+    {
+        return Err(protocol_error(
+            "a closer must be one fence run of at least three markers",
+            governor,
+        )?);
+    }
+    let Some(class) = literal.closer else {
+        return Err(protocol_error(
+            "the final fence must be a named closer",
+            governor,
+        )?);
+    };
+    if closers[class.0 as usize].spellings.len() != 1
+        || !repairs[closer as usize].confusables.list.is_empty()
+    {
+        return Err(protocol_error(
+            "fence closer variants and confusables are not supported",
+            governor,
+        )?);
+    }
+    Ok(closer)
+}
+
+fn protocol_headers(
+    program: &mut Program,
+    literals: &[Literal],
+    repairs: &[LiteralTables],
+    closer: u32,
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    if program.start_closure || program.openers.is_empty() {
+        return Err(protocol_error(
+            "initial literal fence headers are required",
+            governor,
+        )?);
+    }
+    let bytes = literals[closer as usize].bytes.as_slice();
+    for &pc in &program.openers {
+        governor.charge(Resource::Work, 1)?;
+        let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+            unreachable!("literal opener")
+        };
+        let header = literals[lit as usize].bytes.as_slice();
+        governor.charge(Resource::Work, size(header.len()))?;
+        let info = header.strip_prefix(bytes);
+        if info.is_none_or(|info| {
+            info.is_empty()
+                || info.iter().all(u8::is_ascii_whitespace)
+                || info
+                    .iter()
+                    .any(|byte| matches!(byte, b'\r' | b'\n') || *byte == bytes[0])
+        }) {
+            return Err(protocol_error(
+                "headers must contain one fence run followed by an info string",
+                governor,
+            )?);
+        }
+        if !repairs[lit as usize].variants.list.is_empty()
+            || !repairs[lit as usize].confusables.list.is_empty()
+        {
+            return Err(protocol_error(
+                "fence header variants and confusables are not supported",
+                governor,
+            )?);
+        }
+        if !program.line_start_openers.contains(&pc) {
+            program.line_start_openers.push(pc)?;
+        }
+    }
+    Ok(())
+}
+
+fn protocol_states(
+    program: &Program,
+    bytes: &[u8],
+    closer: u32,
+    repairs: &[LiteralTables],
+    delimiters: &[DelimiterSet],
+    governor: &mut Governor,
+) -> Result<(Option<u32>, u64), GrammarError> {
+    let mut body = None;
+    let mut extra = 0_u64;
+    for inst in &program.insts {
+        governor.charge(Resource::Work, 1)?;
+        let additional = match *inst {
+            Inst::Lit { lit, .. } if lit == closer => {
+                let nodes = repairs[lit as usize].trie_nodes(governor)?;
+                // Each spelling can wait in horizontal-space or CR state.
+                size(bytes.len())
+                    .checked_add(nodes)
+                    .and_then(|base| base.checked_mul(2))
+                    .and_then(|states| states.checked_add(2))
+                    .ok_or_else(|| governor.stop_resource(Resource::Work))?
+            }
+            Inst::Until { set, .. } => {
+                if body.is_some_and(|prior| prior != set) {
+                    return Err(protocol_error(
+                        "one verbatim fence body delimiter set is supported",
+                        governor,
+                    )?);
+                }
+                for delimiter in &delimiters[set as usize].declared {
+                    let delimiter = delimiter.as_slice();
+                    governor.charge(Resource::Work, size(delimiter.len()))?;
+                    let suffix = delimiter
+                        .strip_prefix(b"\r\n")
+                        .or_else(|| delimiter.strip_prefix(b"\n"));
+                    if suffix != Some(bytes) {
+                        return Err(protocol_error(
+                            "verbatim body delimiters must be a newline followed by the final fence",
+                            governor,
+                        )?);
+                    }
+                }
+                body = Some(set);
+                2
+            }
+            // A stray fence may be deleted while any literal is pending.
+            Inst::Lit { .. } => 2,
+            _ => 0,
+        };
+        extra = extra
+            .checked_add(additional)
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+    }
+    Ok((body, extra))
+}
+
+fn protocol_error(reason: &str, governor: &mut Governor) -> Result<GrammarError, GrammarError> {
+    Ok(GrammarError::InvalidOpener {
+        offset: 0,
+        production: diagnostic(reason, governor)?,
+    })
 }
 
 #[cfg(test)]

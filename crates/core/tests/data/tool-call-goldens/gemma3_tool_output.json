@@ -1,0 +1,52 @@
+{
+  "description": "A tool_output result is retained as content, never an executable call.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "```tool_output\nThe city is Paris.\n```",
+  "dialects": [
+    "gemma3-tool-code.v1"
+  ],
+  "outcome": "resolved",
+  "stopped": "completed",
+  "finish": "content_only",
+  "openai_finish_reason": "stop",
+  "verdict": "no_calls",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 0
+  },
+  "calls": [],
+  "rejected": [],
+  "embedded": [],
+  "content": [
+    "```tool_output\nThe city is Paris.\n```"
+  ],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": []
+}

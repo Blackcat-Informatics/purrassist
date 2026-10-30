@@ -1007,6 +1007,7 @@ every value below to equal the code's.
 | `bare-json.v1` | 378 | 378 |
 | `deepseek-v3.1.v1` | 2945 | 2945 |
 | `deepseek-v3.v1` | 4793 | 4793 |
+| `gemma3-tool-code.v1` | 97 | 97 |
 | `glm-4.5.v1` | 107 | 107 |
 | `harmony.v1` | 3890 | 3890 |
 | `hermes.v1` | 1137 | 1137 |
@@ -1018,14 +1019,19 @@ every value below to equal the code's.
 | `pythonic.v1` | 129 | 129 |
 | `qwen3-coder-xml.v1` | 971 | 971 |
 
-The default request allows all fourteen built-in dialects.
-Its framing bound is `(2 + 1 + 30192)·n + 8·E = 30195·n + 8·E`.
+The default request allows all fifteen built-in dialects. Their combined bound is
+`(2 + 1 + 30289)·n + 8·E = 30292·n + 8·E`.
 
 The `kv-pairs` codec scans argument fields forward with a bounded tag
 comparison at each byte. Typed JSON boundaries use the native JSON cursor,
 then decode the bounded value once. Exact closers take precedence over fuzzy
 substrings in verbatim text. The shared linear, sized-budget and dense-markup
 checks include GLM calls.
+
+Gemma uses the same finite-state Pythonic framer and native literal conversion.
+Its long-argument, sized-budget and dense-call runtime checks pass. The
+configuration bound is included above, and the dense scale measurement appears
+in the table below.
 
 ### Budgets for large outputs and busy turns
 
@@ -1186,16 +1192,16 @@ Qwen3-Coder XML nested items, string items and calls, `OpenAI`, Mistral v11
 and Anthropic) would still have run out of the preset's flat
 `EvidenceEntries`.
 `tool_call_scale::
-one_mib_dense_markup_fits_published_budget` (`make corpus`; 19 s in a debug
-build) now recovers each of these shapes at 1 MiB under plain
+one_mib_dense_markup_fits_published_budget` (`make corpus`) now recovers each of these shapes at 1 MiB under plain
 `sized(Effort::Standard, output)` with the stop `Completed` and every unit
 recovered; `tool_call_cost::dense_markup_fits_published_budget` (`make
-check`) runs the same shapes at 64 KiB. The Pythonic row uses the fourteen-dialect
-request. The GLM row uses the thirteen-dialect request captured before Pythonic;
+check`) runs the same shapes at 64 KiB. The Gemma row uses the current
+fifteen-dialect request. The Pythonic row uses the fourteen-dialect request. The GLM row uses the thirteen-dialect request captured before Pythonic;
 the other recorded rows use the twelve-dialect request before GLM.
 
 | Dense shape (1 MiB) | Units | Work per byte | Peak scratch per byte | Evidence per byte |
 | --- | ---: | ---: | ---: | ---: |
+| Gemma calls | 29,127 | 48.5 | 226.5 | 0.028 |
 | Pythonic calls | 49,932 | 69.2 | 380.2 | 0.048 |
 | GLM 4.5 calls | 13,107 | 106.0 | 88.8 | 0.012 |
 | Qwen3-Coder XML repeated nested items | 16,911 | 59.4 | 268.3 | 0.065 |

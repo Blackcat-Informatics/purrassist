@@ -1,5 +1,5 @@
 {
-  "description": "A Gemma 3 ```tool_code block holding a call (gemma3-tool-code.v1, not built in yet): reported, the fenced bytes stay content.",
+  "description": "A positional Gemma argument is explicitly rejected.",
   "tools_openai": [
     {
       "type": "function",
@@ -27,7 +27,10 @@
     }
   ],
   "stop": "stop",
-  "input": "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n",
+  "input": "```tool_code\nget_weather('Paris')\n```",
+  "dialects": [
+    "gemma3-tool-code.v1"
+  ],
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "unresolved",
@@ -41,22 +44,20 @@
   "rejected": [
     {
       "span": [
-        19,
-        61
+        0,
+        37
       ],
-      "dialect": null,
-      "candidate_dialects": [],
-      "reason": "UnsupportedDialect { family: Gemma3ToolCode }",
-      "raw": "```tool_code\nget_weather(city=\"Paris\")\n```"
+      "dialect": "gemma3-tool-code.v1",
+      "candidate_dialects": [
+        "gemma3-tool-code.v1"
+      ],
+      "reason": "PythonicPositionalRejected { at: 25 }",
+      "raw": "```tool_code\nget_weather('Paris')\n```"
     }
   ],
   "embedded": [],
-  "content": [
-    "I will look it up.\n```tool_code\nget_weather(city=\"Paris\")\n```\n"
-  ],
+  "content": [],
   "reasoning_text": [],
   "failed_validations": [],
-  "ledger_rules": [
-    "tool_call.markup.unparsed-dialect"
-  ]
+  "ledger_rules": []
 }

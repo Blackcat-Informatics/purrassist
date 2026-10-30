@@ -27,7 +27,8 @@
 // (https://github.com/rust-lang/rust-clippy/issues/6188); `pub(crate)`
 // (matching `unreachable_pub`) wins, as in `grammar::engine`.
 #![allow(clippy::redundant_pub_crate)]
-use crate::contract::{Governor, Resource, StopReason};
+use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
+use crate::grammar::{LineDecision, LineSuffix};
 use core::ops::Range;
 
 /// Scratch bytes charged per recorded fence line, quote line or backtick run.
@@ -53,12 +54,30 @@ enum Line {
 struct FenceLine {
     start: usize,
     end: usize,
+    marker: usize,
+    indent: u8,
+    protocol_closing: bool,
     fence: u8,
     length: usize,
     /// Only whitespace follows the run: the line can close a fence.
     closing: bool,
     /// The info string holds no backtick: the line can open a fence.
     opening: bool,
+}
+
+/// One grammar-owned fence region, with a portable charge for its two offsets.
+pub(crate) struct ProtocolRegion(Range<usize>);
+
+impl ScratchCharge for ProtocolRegion {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 16);
+        16
+    };
+}
+
+pub(crate) struct StrictFences {
+    pub(crate) examples: Vec<Range<usize>>,
+    pub(crate) protocol: ScratchVec<ProtocolRegion>,
 }
 
 /// The byte-step Markdown context scanner of one turn.
@@ -68,6 +87,9 @@ pub(crate) struct ContextTracker {
     indent: u8,
     state: Line,
     run: (u8, usize),
+    run_start: usize,
+    protocols: bool,
+    suffix: Option<LineSuffix>,
     rest_blank: bool,
     rest_tick: bool,
     tick: Option<usize>,
@@ -77,12 +99,15 @@ pub(crate) struct ContextTracker {
 }
 
 impl ContextTracker {
-    pub(crate) const fn new() -> Self {
+    pub(crate) const fn new(protocols: bool) -> Self {
         Self {
             line: 0,
             indent: 0,
             state: Line::Start,
             run: (0, 0),
+            run_start: 0,
+            protocols,
+            suffix: Some(LineSuffix::Horizontal),
             rest_blank: true,
             rest_tick: false,
             tick: None,
@@ -106,16 +131,18 @@ impl ContextTracker {
             self.ticks.push(start..at);
         }
         if byte == b'\n' {
-            return self.end_line(at + 1, governor);
+            return self.end_line(at + 1, false, governor);
         }
         match self.state {
             Line::Start => match byte {
                 b' ' if self.indent < 3 => self.indent += 1,
+                b' ' | b'\t' if self.protocols => self.indent = 4,
                 b'`' | b'~' => {
                     self.state = Line::Run;
                     self.run = (byte, 1);
+                    self.run_start = at;
                 }
-                b'>' => self.state = Line::Quote,
+                b'>' if self.indent < 4 => self.state = Line::Quote,
                 _ => self.state = Line::Other,
             },
             Line::Run => {
@@ -137,11 +164,24 @@ impl ContextTracker {
     const fn rest(&mut self, byte: u8) {
         self.rest_blank &= byte.is_ascii_whitespace();
         self.rest_tick |= byte == b'`';
+        if self.protocols
+            && let Some(mut suffix) = self.suffix
+        {
+            self.suffix = match suffix.step(byte) {
+                LineDecision::Invalid => None,
+                _ => Some(suffix),
+            };
+        }
     }
 
     /// Finish the current line at `end` (just past its newline, or the end
     /// of output) and start the next.
-    fn end_line(&mut self, end: usize, governor: &mut Governor) -> Result<(), StopReason> {
+    fn end_line(
+        &mut self,
+        end: usize,
+        eof: bool,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         let fence = match self.state {
             Line::Run => self.run.1 >= 3,
             Line::Rest => true,
@@ -152,6 +192,9 @@ impl ContextTracker {
             self.fences.push(FenceLine {
                 start: self.line,
                 end,
+                marker: self.run_start,
+                indent: self.indent,
+                protocol_closing: self.suffix.is_some_and(|suffix| !eof || suffix.at_end()),
                 fence: self.run.0,
                 length: self.run.1,
                 closing: self.rest_blank,
@@ -165,6 +208,7 @@ impl ContextTracker {
         self.indent = 0;
         self.state = Line::Start;
         self.run = (0, 0);
+        self.suffix = Some(LineSuffix::Horizontal);
         self.rest_blank = true;
         self.rest_tick = false;
         Ok(())
@@ -177,7 +221,7 @@ impl ContextTracker {
             self.ticks.push(start..end);
         }
         if self.line < end {
-            self.end_line(end, governor)?;
+            self.end_line(end, true, governor)?;
         }
         Ok(())
     }
@@ -189,7 +233,12 @@ impl ContextTracker {
         let mut blocks = Vec::new();
         let mut open: Option<&FenceLine> = None;
         for line in &self.fences {
-            if inside(excluded, line.start) {
+            let position = if self.protocols {
+                line.marker
+            } else {
+                line.start
+            };
+            if line.indent > 3 || inside(excluded, position) {
                 continue;
             }
             match open {
@@ -211,50 +260,90 @@ impl ContextTracker {
         blocks
     }
 
-    /// Fences for grammars whose examples are content. A call that started
-    /// inside a fence cannot hide its closing line; rejected spans never enter
-    /// `calls`. Sorted ranges and fence lines are advanced once each.
+    /// Complete calls protect literal text. Protocol starts identify only a
+    /// header, never an arbitrary rejected span's claimed end.
     pub(crate) fn strict_fenced(
         &self,
         calls: &[Range<usize>],
+        starts: &[usize],
         end: usize,
         governor: &mut Governor,
-    ) -> Result<Vec<Range<usize>>, StopReason> {
+    ) -> Result<StrictFences, StopReason> {
         governor.charge(
             Resource::Work,
-            crate::contract::saturating_size(calls.len() + self.fences.len()),
+            crate::contract::saturating_size(calls.len() + starts.len() + self.fences.len()),
         )?;
-        let mut blocks = Vec::new();
+        let mut regions = StrictFences {
+            examples: Vec::new(),
+            protocol: ScratchVec::new(governor),
+        };
         let mut open: Option<&FenceLine> = None;
-        let mut next = 0;
-        let mut protected_end = 0;
+        let mut protocol: Option<&FenceLine> = None;
+        let (mut next, mut hint, mut protected_end) = (0, 0, 0);
         for line in &self.fences {
-            while let Some(call) = calls.get(next).filter(|call| call.start <= line.start) {
-                if open.is_none_or(|fence| call.start < fence.start) {
+            while starts.get(hint).is_some_and(|start| *start < line.marker) {
+                hint += 1;
+            }
+            let header = starts.get(hint).is_some_and(|start| *start == line.marker);
+            if header
+                && line.marker >= protected_end
+                && let Some(prior) = protocol.take()
+            {
+                regions
+                    .protocol
+                    .push(ProtocolRegion(prior.start..line.start))?;
+            }
+            let position = if self.protocols {
+                line.marker
+            } else {
+                line.start
+            };
+            while let Some(call) = calls.get(next).filter(|call| call.start <= position) {
+                if protocol.is_none() && open.is_none_or(|fence| call.start < fence.start) {
                     protected_end = protected_end.max(call.end);
                 }
                 next += 1;
             }
-            if line.start < protected_end {
+            if position < protected_end {
+                continue;
+            }
+            if let Some(prior) = protocol {
+                if line.fence == prior.fence && line.length == prior.length && line.protocol_closing
+                {
+                    regions
+                        .protocol
+                        .push(ProtocolRegion(prior.start..line.end))?;
+                    protocol = None;
+                }
+                continue;
+            }
+            if open.is_none() && header {
+                protocol = Some(line);
+                continue;
+            }
+            if line.indent > 3 {
                 continue;
             }
             match open {
                 None if line.opening => open = Some(line),
-                Some(start)
-                    if line.fence == start.fence && line.length >= start.length && line.closing =>
+                Some(prior)
+                    if line.fence == prior.fence && line.length >= prior.length && line.closing =>
                 {
                     governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
-                    blocks.push(start.start..line.end);
+                    regions.examples.push(prior.start..line.end);
                     open = None;
                 }
                 _ => {}
             }
         }
-        if let Some(start) = open {
-            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
-            blocks.push(start.start..end);
+        if let Some(prior) = protocol {
+            regions.protocol.push(ProtocolRegion(prior.start..end))?;
         }
-        Ok(blocks)
+        if let Some(prior) = open {
+            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+            regions.examples.push(prior.start..end);
+        }
+        Ok(regions)
     }
 
     /// Paired inline backtick spans. Literal text of calls that began outside
@@ -263,24 +352,38 @@ impl ContextTracker {
         &self,
         calls: &[Range<usize>],
         fenced: &[Range<usize>],
+        protocol: &[ProtocolRegion],
         governor: &mut Governor,
     ) -> Result<Vec<Range<usize>>, StopReason> {
         governor.charge(
             Resource::Work,
             crate::contract::saturating_size(
-                calls.len() + self.ticks.len() + fenced.len() * 2 + self.quotes.len(),
+                calls.len()
+                    + self.ticks.len()
+                    + fenced.len() * 2
+                    + self.quotes.len()
+                    + protocol.len(),
             ),
         )?;
         let mut blocks = Vec::new();
         let mut open: Option<&Range<usize>> = None;
         let (mut next, mut fence, mut call_fence, mut quote, mut protected_end) = (0, 0, 0, 0, 0);
+        let mut owned = 0;
         for run in &self.ticks {
-            while fenced
-                .get(fence)
-                .is_some_and(|block| block.end <= run.start)
+            while protocol
+                .get(owned)
+                .is_some_and(|region| region.0.end <= run.start)
             {
-                fence += 1;
+                owned += 1;
             }
+            if open.is_none()
+                && protocol
+                    .get(owned)
+                    .is_some_and(|region| region.0.contains(&run.start))
+            {
+                continue;
+            }
+            advance_regions(fenced, &mut fence, run.start);
             if fenced
                 .get(fence)
                 .is_some_and(|block| block.contains(&run.start))
@@ -289,19 +392,8 @@ impl ContextTracker {
                 continue;
             }
             while let Some(call) = calls.get(next).filter(|call| call.start <= run.start) {
-                while fenced
-                    .get(call_fence)
-                    .is_some_and(|block| block.end <= call.start)
-                {
-                    call_fence += 1;
-                }
-                while self
-                    .quotes
-                    .get(quote)
-                    .is_some_and(|block| block.end <= call.start)
-                {
-                    quote += 1;
-                }
+                advance_regions(fenced, &mut call_fence, call.start);
+                advance_regions(&self.quotes, &mut quote, call.start);
                 let example = fenced
                     .get(call_fence)
                     .is_some_and(|block| block.contains(&call.start))
@@ -401,6 +493,13 @@ fn inside(ranges: &[Range<usize>], offset: usize) -> bool {
     index > 0 && offset < ranges[index - 1].end
 }
 
+/// Each cursor advances once per range, covered by the caller's linear scan admission.
+fn advance_regions(regions: &[Range<usize>], cursor: &mut usize, at: usize) {
+    while regions.get(*cursor).is_some_and(|region| region.end <= at) {
+        *cursor += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ContextTracker;
@@ -408,7 +507,7 @@ mod tests {
 
     fn scan(text: &str) -> ContextTracker {
         let mut governor = Governor::new(Budget::default());
-        let mut tracker = ContextTracker::new();
+        let mut tracker = ContextTracker::new(false);
         for (at, &byte) in text.as_bytes().iter().enumerate() {
             tracker.step(byte, at, &mut governor).expect("step");
         }

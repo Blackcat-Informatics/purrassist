@@ -297,10 +297,10 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
   definitions or lossless `OpenAI`, MCP, and Anthropic declarations, whose
   exact parameters schemas are validated under Draft 2020-12 or Draft-07 (the
   dialect MCP servers commonly declare). Dialects are weighted, invertible
-  grammars in a first-party DSL; fourteen ship (`qwen3-coder-xml.v1`,
+  grammars in a first-party DSL; fifteen ship (`qwen3-coder-xml.v1`,
   `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-  `anthropic-tool-use.v1`, `harmony.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`) and callers compile
+  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`) and callers compile
   their own. A
   best-first search repairs call markup with named, costed rules; each call
   is resolved against its tool with a per-call outcome, itemized repairs,
@@ -313,8 +313,7 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
   governed quadratic conversion), and exposed through Rust, CLI
   (`recover-tool-calls`), and MCP (`recover_tool_calls`). Typed tool
   definitions can be derived from Rust structs and enums (`purrassist-derive`).
-  Still tracked: the
-  `gemma3-tool-code.v1` (#14) dialect, the `*-stripped` variants (#18),
+  Still tracked: the `*-stripped` variants (#18),
   streaming recognition (#16), and provider streaming events (#17).
   See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.

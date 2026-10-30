@@ -43,6 +43,10 @@ pub fn openai(content: &str) -> String {
     )
 }
 
+pub fn gemma3(content: &str) -> String {
+    format!("```tool_code\nwrite(content=\"{content}\")\n```\n")
+}
+
 pub fn pythonic(content: &str) -> String {
     format!("[write(content=\"{content}\")] ")
 }
@@ -153,6 +157,7 @@ pub fn argument_work_bound(small: usize, large: usize) {
         ("glm45", glm as fn(&str) -> String),
         ("hermes", hermes),
         ("pythonic", pythonic),
+        ("gemma3", gemma3),
         ("llama3", llama3),
         ("mistral", mistral),
         ("mistral11", mistral11),
@@ -218,6 +223,7 @@ pub fn argument_fits_published_budget(size: usize) {
         ("glm45", glm(&content), true),
         ("hermes", hermes(&content), true),
         ("pythonic", pythonic(&content), true),
+        ("gemma3", gemma3(&content), true),
         ("llama3", llama3(&content), true),
         ("mistral", mistral(&content), true),
         ("mistral11", mistral11(&content), true),
@@ -368,7 +374,14 @@ fn dense_tools() -> ToolSet {
 /// output that is nothing but one small unit repeated, in every built-in
 /// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
 /// units become)`.
-const DENSE: [(&str, &str, &str, &str, Dense); 19] = [
+const DENSE: [(&str, &str, &str, &str, Dense); 20] = [
+    (
+        "gemma3-calls",
+        "",
+        "```tool_code\nwrite(content='a')\n```\n",
+        "",
+        Dense::Calls,
+    ),
     (
         "glm45-calls",
         "",

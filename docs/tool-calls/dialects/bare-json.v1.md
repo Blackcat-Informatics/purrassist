@@ -63,7 +63,7 @@ covers the object, so the wrapped dialect's call wins on evidence and the
 call's `candidate_dialects` names that dialect alone (the goldens
 `bare_json_in_hermes_wrapper` and the test
 `every_canonical_fixture_in_one_mixed_turn`, which recovers the canonical
-fixture of all fourteen dialects in one turn). A leading `"id"` beginning
+fixture of all fifteen dialects in one turn). A leading `"id"` beginning
 `toolu_` is not read here: such a block is Anthropic's, whose `"input"` key
 it may have written as `"arguments"`. A trailing id, which Anthropic
 evidence cannot precede, may have any spelling.

@@ -593,9 +593,7 @@ is reported as certain.
   and the `fuzz-tool-call` invariant that no call, embedded call or
   rejected attempt holds bytes of a reasoning range's opener or closer.
 - **Call markup is never silent content.** Call markup that no dialect of
-  the allow-list reads (a family not built in yet: Pythonic call lists,
-  Gemma 3 `` ```tool_code `` blocks, GLM-4.5 `<arg_key>` calls, and the
-  stripped renderings of built-in dialects no grammar reads; or a built-in
+  the allow-list reads (a family not built in yet: the stripped renderings of built-in dialects no grammar reads; or a built-in
   dialect the allow-list leaves out, `[TOOL_CALLS]` under a Hermes-only
   request) is reported as a `RejectedCall` with
   `Rejection::UnsupportedDialect { family }` (wire `reason.code`

@@ -4326,7 +4326,10 @@ fn unparsed_markup_is_reported() {
     use purrassist_core::tool_call::{MarkupFamily, Rejection};
     for (name, family) in [
         ("unparsed_pythonic_not_allowed", MarkupFamily::Pythonic),
-        ("unparsed_gemma3_tool_code", MarkupFamily::Gemma3ToolCode),
+        (
+            "unparsed_gemma3_tool_code_not_allowed",
+            MarkupFamily::Gemma3ToolCode,
+        ),
         ("unparsed_glm45_not_allowed", MarkupFamily::Glm45),
         ("unparsed_kimi_k2_stripped", MarkupFamily::KimiK2Stripped),
         ("unparsed_harmony_stripped", MarkupFamily::HarmonyStripped),

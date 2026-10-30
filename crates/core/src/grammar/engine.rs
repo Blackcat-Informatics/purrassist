@@ -65,6 +65,7 @@ use super::cost::{K_CAPTURE, K_CODEC, K_THREAD, STRAY_CLOSER_GAP, UNDECLARED_NAM
 use super::edit::{EditOperator, MarkupEdit};
 use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
+use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason};
 use crate::digest::Digest;
@@ -141,6 +142,19 @@ pub(crate) enum Sub {
     /// a JSON string and after a backslash in one) and how many of the
     /// literal's bytes matched so far.
     Resync(u32, u32),
+    /// A protocol fence candidate waits for its complete line suffix.
+    Fence {
+        end: usize,
+        suffix: LineSuffix,
+        kind: FenceKind,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FenceKind {
+    Literal,
+    Body,
+    Skip,
 }
 
 impl Sub {
@@ -188,6 +202,7 @@ impl Sub {
             Self::Misspelled(index, _) => (20, *index),
             Self::Transposed(index, _) => (21, *index),
             Self::Resync(state, matched) => (22, state.wrapping_mul(64).wrapping_add(*matched)),
+            Self::Fence { suffix, kind, .. } => (23 + *kind as u8, *suffix as u32),
         }
     }
 }
@@ -762,6 +777,9 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if matches!(thread.sub, Sub::Fence { .. }) {
+            return self.step_fence(thread, byte, stack, out, governor);
+        }
         let grammar = self.grammar;
         let canonical = &grammar.literals[lit as usize].bytes;
         let tables = &grammar.literal_tables[lit as usize];
@@ -819,7 +837,9 @@ impl<'s> Step<'_, 's> {
                     thread, lit, next, byte, state, matched, stack, out, governor,
                 );
             }
-            Sub::Class(_) | Sub::Body(..) => unreachable!("literal configurations only"),
+            Sub::Class(_) | Sub::Body(..) | Sub::Fence { .. } => {
+                unreachable!("literal configurations only")
+            }
         };
         let Some(child) = trie.step(node, byte) else {
             return Self::fail(out, thread, pos, Rejection::Malformed { at: pos });
@@ -835,7 +855,32 @@ impl<'s> Step<'_, 's> {
         if trie.accept(child).is_none() {
             return Ok(());
         }
+        self.finish_literal_repair(thread, (lit, next), operator, stack, out, governor)
+    }
+
+    /// Record an accepted repaired spelling and continue its original literal.
+    fn finish_literal_repair(
+        &mut self,
+        mut thread: Thread,
+        literal: (u32, u32),
+        operator: EditOperator,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let (lit, next) = literal;
+        let canonical = &self.grammar.literals[lit as usize].bytes;
+        let pos = thread.pos;
         let deleted = operator == EditOperator::DeleteStrayCloser;
+        if deleted && self.protocol_spelling(thread.entry..pos + 1) {
+            thread.sub = Sub::Fence {
+                end: pos + 1,
+                suffix: LineSuffix::Horizontal,
+                kind: FenceKind::Skip,
+            };
+            thread.pos = pos + 1;
+            return self.queue(thread, stack);
+        }
         let edit = MarkupEdit {
             operator,
             span: thread.entry..pos + 1,
@@ -1366,6 +1411,9 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if matches!(thread.sub, Sub::Fence { .. }) {
+            return self.step_fence(thread, byte, stack, out, governor);
+        }
         let Sub::Body(raw, codec) = thread.sub else {
             unreachable!("body configurations only")
         };
@@ -1408,6 +1456,20 @@ impl<'s> Step<'_, 's> {
         if end.is_none()
             && let Some((index, _)) = found
         {
+            if codec.is_none()
+                && self
+                    .program
+                    .protocol
+                    .is_some_and(|fence| fence.body == Some(set))
+            {
+                thread.sub = Sub::Fence {
+                    end: to,
+                    suffix: LineSuffix::Horizontal,
+                    kind: FenceKind::Body,
+                };
+                thread.pos = pos + 1;
+                return self.queue(thread, stack);
+            }
             if self.repaired_delimiter(&thread, set, index) {
                 // A delimiter that ends the body only by a repair (a closer
                 // variant or confusable spelling, or one written inside a
@@ -1973,6 +2035,111 @@ impl<'s> Step<'_, 's> {
         Ok(CodecContext { shape, ..markup })
     }
 
+    fn protocol_spelling(&self, range: Range<usize>) -> bool {
+        self.program.protocol.is_some_and(|fence| {
+            self.bytes(range)
+                == self.grammar.literals[fence.closer as usize]
+                    .bytes
+                    .as_slice()
+        })
+    }
+
+    fn step_fence(
+        &mut self,
+        mut thread: Thread,
+        byte: u8,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Sub::Fence {
+            end,
+            mut suffix,
+            kind,
+        } = thread.sub
+        else {
+            unreachable!("fence suffix")
+        };
+        match suffix.step(byte) {
+            LineDecision::More => {
+                thread.sub = Sub::Fence { end, suffix, kind };
+                thread.pos += 1;
+                self.queue(thread, stack)
+            }
+            LineDecision::End => self.finish_fence(thread, thread.pos + 1, stack, out, governor),
+            LineDecision::Invalid if kind == FenceKind::Body => {
+                thread.sub = Sub::Body(super::automaton::ROOT, None);
+                self.queue(thread, stack)
+            }
+            LineDecision::Invalid => {
+                let at = thread.entry;
+                Self::fail(
+                    out,
+                    Thread {
+                        sub: Sub::Lit(0),
+                        pos: at,
+                        ..thread
+                    },
+                    at,
+                    Rejection::Malformed { at },
+                )
+            }
+        }
+    }
+
+    fn finish_fence(
+        &mut self,
+        mut thread: Thread,
+        resume: usize,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Sub::Fence { end, kind, .. } = thread.sub else {
+            unreachable!("fence suffix")
+        };
+        match (kind, self.program.insts[thread.pc as usize]) {
+            (FenceKind::Body, Inst::Until { next, .. }) => {
+                thread.sub = Sub::Body(super::automaton::ROOT, None);
+                // A validated delimiter replays its footer after arbitrary
+                // suffix lookahead. That replay is real forward progress,
+                // not a zero-width cycle below the old high-water mark.
+                thread.reach = end;
+                thread.stall = 0;
+                self.end_body(
+                    thread,
+                    None,
+                    end,
+                    CodecEnd::Delimited,
+                    next,
+                    stack,
+                    out,
+                    governor,
+                )
+            }
+            (FenceKind::Literal, Inst::Lit { next, .. }) => {
+                self.closure(thread, next, end, stack, out, governor)
+            }
+            (FenceKind::Skip, Inst::Lit { .. }) => {
+                thread.hist = self.arena.edit(
+                    thread.hist,
+                    MarkupEdit {
+                        operator: EditOperator::DeleteStrayCloser,
+                        span: thread.entry..resume,
+                        original: self.bytes(thread.entry..resume).to_vec(),
+                        replacement: Vec::new(),
+                    },
+                    governor,
+                )?;
+                thread.sub = Sub::Lit(0);
+                thread.entry = resume;
+                thread.pos = resume;
+                self.queue(thread, stack)
+            }
+            _ => unreachable!("validated protocol fence terminal"),
+        }
+    }
+
     fn finish_literal(
         &mut self,
         mut thread: Thread,
@@ -1982,6 +2149,20 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if let Inst::Lit { lit, .. } = self.program.insts[thread.pc as usize]
+            && self
+                .program
+                .protocol
+                .is_some_and(|fence| fence.closer == lit)
+        {
+            thread.sub = Sub::Fence {
+                end: at,
+                suffix: LineSuffix::Horizontal,
+                kind: FenceKind::Literal,
+            };
+            thread.pos = at;
+            return self.queue(thread, stack);
+        }
         if !thread.opened && !self.program.deferred() && self.program.openers.contains(&thread.pc) {
             thread.opened = true;
             out.opened.push((thread.attempt, at))?;
@@ -2114,6 +2295,23 @@ impl<'s> Step<'_, 's> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let pos = thread.pos;
+        if let Sub::Fence { suffix, kind, .. } = thread.sub {
+            if suffix.at_end() {
+                return self.finish_fence(thread, pos, stack, out, governor);
+            }
+            if kind == FenceKind::Body {
+                return self.end(
+                    Thread {
+                        sub: Sub::Body(super::automaton::ROOT, None),
+                        ..thread
+                    },
+                    stack,
+                    out,
+                    governor,
+                );
+            }
+            return Self::fail(out, thread, pos, Rejection::Unterminated);
+        }
         match (self.program.insts[thread.pc as usize], thread.sub) {
             (Inst::Lit { .. }, Sub::Lit(_)) => {
                 Self::fail(out, thread, pos, Rejection::Unterminated)
@@ -4053,6 +4251,9 @@ enum HeldBody {
 /// a closer spelling: within `STRAY_CLOSER_GAP` plus the longest literal
 /// bytes of its current end, which the recognizer's lookbehind covers
 /// ([`DialectSet::lookbehind`](crate::tool_call::DialectSet::lookbehind)).
+/// An opt-in protocol fence additionally waits through horizontal whitespace
+/// until LF, CRLF or EOF validates the line. Its attempt retains the input
+/// and its original end holds the settlement frontier during that wait.
 #[derive(Clone, Copy, Debug)]
 struct Trail {
     /// The completed configuration; `pos` is the call's current end.
@@ -4063,6 +4264,7 @@ struct Trail {
     at: usize,
     /// The end of the longest complete spelling matched so far.
     accepted: Option<usize>,
+    fence: Option<(usize, LineSuffix)>,
     /// For a completion that inserted the call's wrapper closer
     /// mid-message, once the stray closers after it are absorbed: the
     /// lookahead deciding that insertion (see [`Engine::scan_trail`]).
@@ -4074,6 +4276,17 @@ struct Trail {
 struct Scan {
     /// The first byte after the call that is not ASCII whitespace.
     text: Option<usize>,
+}
+
+impl Scan {
+    /// A later marker decides whether preceding text was inside the wrapper.
+    fn before(self, start: usize, with_text: Verdict) -> Verdict {
+        if self.text.is_some_and(|text| text < start) {
+            with_text
+        } else {
+            Verdict::Report
+        }
+    }
 }
 
 /// What the bytes after a held completion decided.
@@ -4105,6 +4318,7 @@ pub(crate) struct Engine<'s> {
     fed: usize,
     /// Whitespace-only prefix of the current source line, independent of buffering.
     line_blank: bool,
+    protocol_fences: bool,
     arena: Arena,
     next_attempt: u64,
     stack: ScratchVec<Thread>,
@@ -4159,8 +4373,10 @@ impl<'s> Engine<'s> {
     ) -> Result<Self, StopReason> {
         let mut grammars = Vec::with_capacity(dialects.len());
         let mut tables = Vec::with_capacity(dialects.len() * 2);
+        let mut protocol_fences = false;
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
+            protocol_fences |= grammar.protocol_fences();
             let mut dfas = Vec::with_capacity(grammar.classes.len());
             for class in &grammar.classes {
                 dfas.push(class.automaton.dfa(governor)?);
@@ -4193,6 +4409,7 @@ impl<'s> Engine<'s> {
         Ok(Self {
             tables,
             grammars,
+            protocol_fences,
             buffer: ScratchVec::new(governor),
             base: 0,
             fed: 0,
@@ -4276,6 +4493,10 @@ impl<'s> Engine<'s> {
             _ => false,
         };
         self.collect(governor)
+    }
+
+    pub(crate) const fn protocol_fences(&self) -> bool {
+        self.protocol_fences
     }
 
     fn step_table(
@@ -5710,6 +5931,7 @@ impl<'s> Engine<'s> {
                     node: ROOT,
                     at: group.pos,
                     accepted: None,
+                    fence: None,
                     scan: None,
                 });
             }
@@ -5761,6 +5983,18 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    fn protocol_trail_spelling(&self, table: usize, end: usize) -> bool {
+        let Some(fence) = self.tables[table].program.protocol else {
+            return false;
+        };
+        let grammar = self.grammars[self.tables[table].grammar].grammar;
+        let bytes = grammar.literals[fence.closer as usize].bytes.as_slice();
+        end.checked_sub(bytes.len()).is_some_and(|start| {
+            start >= self.base
+                && self.buffer.as_slice()[start - self.base..end - self.base] == *bytes
+        })
+    }
+
     /// Step one held completion up to `until`; whether it is decided.
     fn step_trail(
         &mut self,
@@ -5773,6 +6007,30 @@ impl<'s> Engine<'s> {
         let grammar = self.grammars[self.tables[table].grammar].grammar;
         let stray = &grammar.stray;
         loop {
+            if let Some((token_end, mut suffix)) = trail.fence {
+                if trail.at >= until {
+                    if !end {
+                        return Ok(false);
+                    }
+                    if !suffix.at_end() {
+                        return Ok(true);
+                    }
+                } else {
+                    governor.charge(Resource::Work, K_THREAD)?;
+                    match suffix.step(self.buffer.as_slice()[trail.at - self.base]) {
+                        LineDecision::More => {
+                            trail.at += 1;
+                            trail.fence = Some((token_end, suffix));
+                            continue;
+                        }
+                        LineDecision::Invalid => return Ok(true),
+                        LineDecision::End => {}
+                    }
+                }
+                trail.fence = None;
+                self.absorb(trail, token_end, governor)?;
+                continue;
+            }
             if trail.at >= until {
                 if !end {
                     return Ok(false);
@@ -5798,6 +6056,10 @@ impl<'s> Engine<'s> {
                 trail.at += 1;
                 trail.node = child;
                 if stray.accept(child).is_some() {
+                    if self.protocol_trail_spelling(table, trail.at) {
+                        trail.fence = Some((trail.at, LineSuffix::Horizontal));
+                        continue;
+                    }
                     trail.accepted = Some(trail.at);
                 }
                 if stray.has_children(child) {
@@ -5877,6 +6139,19 @@ impl<'s> Engine<'s> {
             let at = trail.at;
             let byte = self.buffer.as_slice()[at - self.base];
             trail.at += 1;
+            if let Some((token_end, mut suffix)) = trail.fence {
+                match suffix.step(byte) {
+                    LineDecision::More => {
+                        trail.fence = Some((token_end, suffix));
+                        continue;
+                    }
+                    LineDecision::Invalid => trail.fence = None,
+                    LineDecision::End => {
+                        trail.fence = None;
+                        return Ok(self.fence_verdict(table, token_end, scan));
+                    }
+                }
+            }
             if scan.text.is_none() && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
                 scan.text = Some(at);
             }
@@ -5890,24 +6165,26 @@ impl<'s> Engine<'s> {
                 // inserted closer is the only reading when only whitespace
                 // came between, and text before it is a guess as before.
                 let start = trail.at - opener.len();
-                return Ok(if scan.text.is_some_and(|text| text < start) {
-                    Verdict::Guess
-                } else {
-                    Verdict::Report
-                });
+                return Ok(scan.before(start, Verdict::Guess));
             }
             if let Some(closer) = closers.iter().find(|closer| read.ends_with(closer)) {
+                if self.protocol_trail_spelling(table, trail.at) {
+                    trail.fence = Some((trail.at, LineSuffix::Horizontal));
+                    continue;
+                }
                 // A closer after only whitespace is the wrapper's own,
                 // beyond the stray-closer gap: the call as it was read.
                 let start = trail.at - closer.len();
-                return Ok(if scan.text.is_some_and(|text| text < start) {
-                    Verdict::Reject
-                } else {
-                    Verdict::Report
-                });
+                return Ok(scan.before(start, Verdict::Reject));
             }
         }
         trail.scan = Some(scan);
+        if end && let Some((token_end, suffix)) = trail.fence {
+            trail.fence = None;
+            if suffix.at_end() {
+                return Ok(self.fence_verdict(table, token_end, scan));
+            }
+        }
         Ok(match (end, scan.text) {
             (false, _) => Verdict::Held,
             (true, None) => Verdict::Report,
@@ -5915,8 +6192,21 @@ impl<'s> Engine<'s> {
         })
     }
 
+    fn fence_verdict(&self, table: usize, end: usize, scan: Scan) -> Verdict {
+        let grammar = self.grammars[self.tables[table].grammar].grammar;
+        let fence = self.tables[table]
+            .program
+            .protocol
+            .expect("protocol suffix");
+        scan.before(
+            end - grammar.literals[fence.closer as usize].bytes.len(),
+            Verdict::Reject,
+        )
+    }
+
     /// The earliest end of a call whose inserted wrapper closer is still
-    /// being decided ([`Self::scan_trail`]), or start of an attempt of a
+    /// being decided ([`Self::scan_trail`]), a protocol fence awaiting its
+    /// physical line suffix, or start of an attempt of a
     /// program with `commit` that has not committed yet ([`Self::commit`]):
     /// the turn layer settles no report at or after it until the decision
     /// is made or the attempt commits or ends.
@@ -5925,8 +6215,16 @@ impl<'s> Engine<'s> {
             .tables
             .iter()
             .flat_map(|table| table.trails.iter())
-            .filter(|trail| trail.scan.is_some())
+            .filter(|trail| trail.scan.is_some() || trail.fence.is_some())
             .map(|trail| trail.thread.pos);
+        let suffixes = self
+            .tables
+            .iter()
+            .flat_map(|table| table.threads.as_slice().iter())
+            .filter_map(|thread| match thread.sub {
+                Sub::Fence { end, .. } => Some(end),
+                _ => None,
+            });
         // An uncommitted attempt of a deferred program may still open at
         // its start: nothing at or after its start is settled until it
         // commits or ends.
@@ -5939,7 +6237,12 @@ impl<'s> Engine<'s> {
             .filter(|record| !record.opened)
             .map(|record| record.start);
         let deferred = self.deferred.iter().map(|(_, ended)| ended.at());
-        trails.chain(held).chain(uncommitted).chain(deferred).min()
+        trails
+            .chain(suffixes)
+            .chain(held)
+            .chain(uncommitted)
+            .chain(deferred)
+            .min()
     }
 
     /// Record every inserted wrapper closer ending `thread`'s history as

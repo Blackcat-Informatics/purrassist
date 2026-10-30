@@ -86,6 +86,8 @@ pub enum DialectId {
     /// `deepseek-v3.v1`: DeepSeek-V3 / R1 tool-calls sections with fenced
     /// JSON arguments.
     DeepSeekV3,
+    /// `gemma3-tool-code.v1`: a direct Python keyword call in a `tool_code` fence.
+    Gemma3ToolCode,
     /// `glm-4.5.v1`: GLM alternating key/value tag calls.
     Glm45,
     /// `harmony.v1`: `OpenAI` Harmony (gpt-oss) assistant messages with a
@@ -155,6 +157,10 @@ static DEEPSEEK_V3: BuiltIn = BuiltIn::new(
     "deepseek-v3.v1",
     include_str!("dialects/deepseek-v3.v1.grammar"),
 );
+static GEMMA3_TOOL_CODE: BuiltIn = BuiltIn::new(
+    "gemma3-tool-code.v1",
+    include_str!("dialects/gemma3-tool-code.v1.grammar"),
+);
 static GLM45: BuiltIn = BuiltIn::new("glm-4.5.v1", include_str!("dialects/glm-4.5.v1.grammar"));
 static HARMONY: BuiltIn = BuiltIn::new("harmony.v1", include_str!("dialects/harmony.v1.grammar"));
 static HERMES: BuiltIn = BuiltIn::new("hermes.v1", include_str!("dialects/hermes.v1.grammar"));
@@ -196,6 +202,7 @@ impl DialectId {
     ///         "bare-json.v1",
     ///         "deepseek-v3.1.v1",
     ///         "deepseek-v3.v1",
+    ///         "gemma3-tool-code.v1",
     ///         "glm-4.5.v1",
     ///         "harmony.v1",
     ///         "hermes.v1",
@@ -209,11 +216,12 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 14] = [
+    pub const BUILT_IN: [Self; 15] = [
         Self::AnthropicToolUse,
         Self::BareJson,
         Self::DeepSeekV31,
         Self::DeepSeekV3,
+        Self::Gemma3ToolCode,
         Self::Glm45,
         Self::Harmony,
         Self::Hermes,
@@ -241,6 +249,7 @@ impl DialectId {
             Self::AnthropicToolUse => Some(&ANTHROPIC_TOOL_USE),
             Self::DeepSeekV31 => Some(&DEEPSEEK_V31),
             Self::DeepSeekV3 => Some(&DEEPSEEK_V3),
+            Self::Gemma3ToolCode => Some(&GEMMA3_TOOL_CODE),
             Self::Glm45 => Some(&GLM45),
             Self::Harmony => Some(&HARMONY),
             Self::Hermes => Some(&HERMES),
@@ -288,6 +297,7 @@ impl DialectId {
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.id,
             Self::DeepSeekV31 => DEEPSEEK_V31.id,
             Self::DeepSeekV3 => DEEPSEEK_V3.id,
+            Self::Gemma3ToolCode => GEMMA3_TOOL_CODE.id,
             Self::Glm45 => GLM45.id,
             Self::Harmony => HARMONY.id,
             Self::Hermes => HERMES.id,
@@ -332,6 +342,7 @@ impl DialectId {
             Self::AnthropicToolUse => ANTHROPIC_TOOL_USE.grammar(),
             Self::DeepSeekV31 => DEEPSEEK_V31.grammar(),
             Self::DeepSeekV3 => DEEPSEEK_V3.grammar(),
+            Self::Gemma3ToolCode => GEMMA3_TOOL_CODE.grammar(),
             Self::Glm45 => GLM45.grammar(),
             Self::Harmony => HARMONY.grammar(),
             Self::Hermes => HERMES.grammar(),

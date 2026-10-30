@@ -7,7 +7,7 @@ use purrassist::{
     digest::Digest,
     json::{self, Node},
     tool_call::{
-        EmitTarget, GenerationStop, IdPolicy, ToolChoice, ToolRecoveryRequest, ToolSet,
+        DialectId, EmitTarget, GenerationStop, IdPolicy, ToolChoice, ToolRecoveryRequest, ToolSet,
         turn_id_prefix,
     },
 };
@@ -1089,13 +1089,55 @@ fn bare_json_dialect_over_mcp() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// The MCP tool reports call markup no allowed dialect reads as a rejected
-/// attempt with reason `unsupported_dialect` (its output schema admits a
-/// `null` dialect and the family members).
+/// Every core built-in is admitted by both host dialect selector fields.
 #[test]
-fn unparsed_markup_over_mcp() {
-    let (tools, root) = tools("unparsed");
+fn every_builtin_dialect_selector_is_admitted_over_mcp() {
+    let (tools, root) = tools("dialect-selectors");
+    for dialect in DialectId::BUILT_IN {
+        let id = json::quote(dialect.id());
+        let extra = format!(r#","dialects":[{id}],"emit":{id}"#);
+        let result = tools.call("recover_tool_calls", &arguments(QWEN, &extra));
+        assert!(result.is_ok(), "{}: {result:?}", dialect.id());
+    }
+    for extra in [
+        r#","dialects":["unknown-dialect.v1"]"#,
+        r#","emit":"unknown-dialect.v1""#,
+    ] {
+        assert!(
+            tools
+                .call("recover_tool_calls", &arguments(QWEN, extra))
+                .is_err()
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The MCP tool recovers Gemma through default and explicit allow-lists, and
+/// reports unsupported or omitted dialects without losing their markup.
+#[test]
+fn gemma_and_unparsed_markup_over_mcp() {
+    let (tools, root) = tools("gemma-unparsed");
     let output = "```tool_code\nlist_dir(path=\"src\")\n```";
+    for extra in ["", r#","dialects":["gemma3-tool-code.v1"]"#] {
+        let node = tools
+            .call("recover_tool_calls", &arguments(output, extra))
+            .unwrap();
+        assert_eq!(
+            node.pointer("/value/finish").and_then(Node::as_str),
+            Some("calls")
+        );
+        assert_eq!(
+            node.pointer("/value/calls/0/dialect")
+                .and_then(Node::as_str),
+            Some("gemma3-tool-code.v1")
+        );
+        assert_eq!(
+            node.pointer("/value/calls/0/arguments/path")
+                .and_then(Node::as_str),
+            Some("src")
+        );
+    }
+    let output = r#"functions.list_dir:0{"path":"src"}"#;
     let node = tools
         .call("recover_tool_calls", &arguments(output, ""))
         .unwrap();
@@ -1112,7 +1154,7 @@ fn unparsed_markup_over_mcp() {
     );
     assert_eq!(
         rejected.pointer("/reason/family").and_then(Node::as_str),
-        Some("gemma3-tool-code.v1")
+        Some("kimi-k2-stripped.v1")
     );
     let node = tools
         .call(

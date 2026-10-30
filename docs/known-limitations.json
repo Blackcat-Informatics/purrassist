@@ -24,12 +24,6 @@
       ]
     },
     {
-      "issue": 14,
-      "title": "Tool-call recovery: add the gemma3-tool-code.v1 dialect",
-      "impact": "`gemma3-tool-code.v1` is not built in, so its call markup is not recovered as a tool call.",
-      "blocks_release": false
-    },
-    {
       "issue": 16,
       "title": "Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress)",
       "impact": "There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.",

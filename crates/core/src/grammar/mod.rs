@@ -27,6 +27,7 @@
 //! | `closer NAME = "S1" \| "S2" ...;` | A closer class: `S1` is canonical, the rest are variant spellings. |
 //! | `layout NAME "TEXT";` | Printing only: the class production `NAME` is printed as `TEXT` (a member of the class) wherever it occurs uncaptured, optional occurrences included. Recognition is unchanged. |
 //! | `line-start "OPEN";` | Restrict matching initial call-opener literals to turn or line start after horizontal whitespace; explicit alternative openers remain unguarded. |
+//! | `protocol-fences;` | Keep enclosing Markdown examples as content; validate grammar-owned fence headers and full closing lines, retaining standalone malformed protocol rejections. |
 //! | `examples-content;` | Treat calls inside fenced, inline-code, and blockquote examples as content, including rejected attempts. |
 //! | `NAME = EXPR;` | A production. |
 //!
@@ -156,6 +157,47 @@ use codec::CodecKind;
 use core::fmt;
 
 pub(crate) use compile::{Inst, LiteralTables, Program};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineSuffix {
+    Horizontal,
+    CarriageReturn,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineDecision {
+    More,
+    End,
+    Invalid,
+}
+impl LineSuffix {
+    pub(crate) const fn step(&mut self, byte: u8) -> LineDecision {
+        match (*self, byte) {
+            (Self::Horizontal, b' ' | b'\t') => LineDecision::More,
+            (Self::Horizontal, b'\r') => {
+                *self = Self::CarriageReturn;
+                LineDecision::More
+            }
+            (_, b'\n') => LineDecision::End,
+            _ => LineDecision::Invalid,
+        }
+    }
+    pub(crate) const fn at_end(self) -> bool {
+        matches!(self, Self::Horizontal)
+    }
+    /// Whether a suffix already proves a complete closing line.
+    /// The caller admits the bounded byte scan before calling this helper.
+    pub(crate) fn complete(bytes: &[u8], eof: bool) -> bool {
+        let mut suffix = Self::Horizontal;
+        for &byte in bytes {
+            match suffix.step(byte) {
+                LineDecision::More => {}
+                LineDecision::End => return true,
+                LineDecision::Invalid => return false,
+            }
+        }
+        eof && suffix.at_end()
+    }
+}
 
 /// A named capture recorded into the recognized IR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -816,6 +858,8 @@ pub(crate) enum ExamplePolicy {
     Recover,
     /// Keep examples as assistant content.
     Content,
+    /// Grammar-owned protocol fence lines are markup, including rejected calls.
+    ProtocolFences,
 }
 
 // Compiled grammars are shared across threads (`DialectId::Custom` holds an
@@ -827,8 +871,15 @@ const _: fn() = || {
 };
 
 impl CompiledGrammar {
+    pub(crate) const fn protocol_fences(&self) -> bool {
+        matches!(self.examples, ExamplePolicy::ProtocolFences)
+    }
+
     pub(crate) const fn examples_content(&self) -> bool {
-        matches!(self.examples, ExamplePolicy::Content)
+        matches!(
+            self.examples,
+            ExamplePolicy::Content | ExamplePolicy::ProtocolFences
+        )
     }
 
     /// The grammar's declared id.
