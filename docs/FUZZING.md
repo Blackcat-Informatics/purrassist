@@ -952,8 +952,9 @@ its executions reach none of them, which is why `tool-call-ref` exists.
 
 The current grammar repair search carries cost in its internal proposal ledger
 and keeps actual provenance in the original parser history. It no longer clones
-throwaway evidence for every successor, admits the 41-byte successor hash, and
-borrows pending bytes while computing repair eligibility. The exact issue
+throwaway evidence for every successor, shares one lazily computed successor
+digest within each replay, and borrows pending bytes while computing repair
+eligibility. The exact issue
 reproduction is appended to `tool-call-ref` seeds under standard and deep sized
 budgets, preserving earlier seed/header associations. Current timeout and
 performance evidence remains pending automatic CI. The measurements below are

@@ -17,9 +17,9 @@
 //! every accepted configuration of the least cost.
 //!
 //! Every explored configuration charges [`K_ERR`] `Work` on top of the
-//! search's own per-candidate charges. Each successor admits 41 hash-input
-//! bytes before extending its edit digest; repair chains are bounded by the
-//! program length. Search ledgers retain cost only: the thread's history
+//! search's own per-candidate charges; repair chains are bounded by the
+//! program length. Outcomes of one replay share their parent's extended
+//! edit digest. Search ledgers retain cost only: the thread's history
 //! already records the actual markup edits.
 //!
 //! [`Search`]: crate::search::Search
@@ -179,17 +179,16 @@ impl<'a, 's> RepairState<'a, 's> {
         thread: Thread,
         status: Status,
         operator: EditOperator,
-        governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
-        // The existing digest (32), operator (1), and offset (8) are hashed.
-        governor.charge(Resource::Work, 41)?;
-        Ok(Self {
+        digest: &mut Option<Digest>,
+    ) -> Self {
+        Self {
             thread,
             status,
-            digest: extend_digest(self.digest, operator, self.thread.pos),
+            digest: *digest
+                .get_or_insert_with(|| extend_digest(self.digest, operator, self.thread.pos)),
             depth: self.depth + 1,
             marker: PhantomData,
-        })
+        }
     }
 
     /// Run the configurations on `seeds` (already moved by `operator`) to
@@ -207,19 +206,22 @@ impl<'a, 's> RepairState<'a, 's> {
         context
             .step
             .advance(seeds, context.until, eof, &mut out, governor)?;
+        // Every outcome has the same parent, operator and parent offset.
+        // Hash only when one is proposed, once for this replay invocation.
+        let mut digest = None;
         for &thread in out.live.as_slice() {
-            let successor = self.successor(thread, Status::Live, operator, governor)?;
+            let successor = self.successor(thread, Status::Live, operator, &mut digest);
             proposals.commit_cost(governor, successor, operator.rule().cost)?;
         }
         for &thread in out.completed.as_slice() {
-            let successor = self.successor(thread, Status::Completed, operator, governor)?;
+            let successor = self.successor(thread, Status::Completed, operator, &mut digest);
             proposals.commit_cost(governor, successor, operator.rule().cost)?;
         }
         for failure in out.failed.as_slice() {
             if let Some(next) =
                 Self::seed(&context.step, failure, context.eof.as_ref(), context.opened)
             {
-                let successor = self.successor(next.thread, next.status, operator, governor)?;
+                let successor = self.successor(next.thread, next.status, operator, &mut digest);
                 proposals.commit_cost(governor, successor, operator.rule().cost)?;
             }
         }
@@ -367,8 +369,9 @@ impl<'a, 's> RepairState<'a, 's> {
             governor,
         )?;
         // The inserted literal may complete the production at once.
+        let mut digest = None;
         for &thread in out.completed.as_slice().iter().filter(|_| complete) {
-            let successor = self.successor(thread, Status::Completed, operator, governor)?;
+            let successor = self.successor(thread, Status::Completed, operator, &mut digest);
             proposals.commit_cost(governor, successor, operator.rule().cost)?;
         }
         self.replay(context, proposals, &mut seeds, operator, governor)

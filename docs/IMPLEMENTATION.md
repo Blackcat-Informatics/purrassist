@@ -6,9 +6,10 @@ Internal grammar repair proposals retain only their saturated search cost.
 Actual edit provenance stays in the parser history and is still published by
 the existing resolver. A cost-only proposal refuses a parent that carries
 provenance rather than discarding it; ordinary schema-search proposals retain
-their complete ledgers. Successor identities admit their 41 hash-input bytes
-before the unchanged digest operation, and repair eligibility borrows the
-pending suffix instead of copying it. Current performance and differential
+their complete ledgers. Successors within one replay share a lazily computed
+identity digest; the cache stays local to one parent, operator and offset.
+Existing work admission and wire counters are preserved. Repair eligibility
+borrows the pending suffix instead of copying it. Current performance and differential
 execution evidence for issue #11 remains pending automatic CI.
 
 Compiled schema indexes now retain fallible owners for location/document arenas,
