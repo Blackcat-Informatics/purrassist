@@ -588,9 +588,10 @@ pub(crate) struct Step<'a, 's> {
     /// a later closer give up (a skipped call ends at its first call
     /// closer).
     pub(crate) resynced: &'a mut Vec<(u64, usize, usize)>,
-    /// The openers (by attempt start) a resynchronizing attempt met inside
-    /// a JSON string of the call it skips: text of the string, never a
-    /// reason to give up (see `step_resync`).
+    /// Each resynchronizing attempt's latest opener met inside a JSON
+    /// string of the call it skips: text of the string, never a reason to
+    /// give up. Only the current, monotonically increasing `newest_open`
+    /// is queried, so earlier ignored openers need not be retained.
     pub(crate) quoted_openers: &'a mut Vec<(u64, usize)>,
     /// The table's live attempts (see `Step::opens_call`).
     pub(crate) attempts: &'a [Attempt],
@@ -937,13 +938,18 @@ impl<'s> Step<'_, 's> {
         // An opener inside a JSON string of the skipped call is text of the
         // string, not another call (its attempt opened inside this one's
         // markup and has no reading of its own).
-        let ignored = self
+        let ignored_slot = self
             .quoted_openers
             .iter()
-            .any(|&(attempt, opener)| attempt == thread.attempt && opener == newest);
+            .position(|&(attempt, _)| attempt == thread.attempt);
+        let ignored = ignored_slot.is_some_and(|index| self.quoted_openers[index].1 == newest);
         if later && !reading_it && scan.quoted && !ignored {
-            governor.charge(Resource::ScratchBytes, 16)?;
-            self.quoted_openers.push((thread.attempt, newest));
+            if let Some(index) = ignored_slot {
+                self.quoted_openers[index].1 = newest;
+            } else {
+                governor.charge(Resource::ScratchBytes, 16)?;
+                self.quoted_openers.push((thread.attempt, newest));
+            }
         }
         if (later && !reading_it && !scan.quoted && !ignored)
             || self
@@ -1002,6 +1008,12 @@ impl<'s> Step<'_, 's> {
             matched = 0;
         }
         scan.step(byte);
+        // A multi-byte target is admitted at every bracket depth. Depth
+        // does not affect the other scan fields and is discarded when the
+        // literal finishes; do not distinguish otherwise identical scans.
+        if multi {
+            scan.depth = 0;
+        }
         if scan.quoted {
             matched = 0;
         }
@@ -5377,9 +5389,18 @@ impl<'s> Engine<'s> {
             .saturating_add(split)
             .saturating_add(super::cost::REJECT);
         for pc in targets {
+            // resync_targets admits only call-closer literals and literal
+            // openers after Next; every target is therefore a literal.
+            let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+                unreachable!("resynchronization targets are literal locations");
+            };
+            let mut scan = JsonScan::unpack(state);
+            if grammar.literals[lit as usize].bytes.len() > 1 {
+                scan.depth = 0;
+            }
             live.push(Thread {
                 pc,
-                sub: Sub::Resync(state, 0),
+                sub: Sub::Resync(scan.pack(), 0),
                 attempt: record.id,
                 start: record.start,
                 entry: boundary.failed,

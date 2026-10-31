@@ -1140,3 +1140,44 @@ fn whole_segmentation_fallback_is_correct_and_charged() {
     assert!(usage.work > 0 && usage.work <= cost::RECOVER_WORK_PER_BYTE * n);
     assert!(usage.peak_scratch_bytes <= cost::RECOVER_SCRATCH_PER_BYTE * n);
 }
+
+/// Issue #10: growing restarted sections must retain linear work and scratch,
+/// without relying on wall time or raising the standard sized budget.
+#[test]
+fn restarted_deepseek_sections_cost_is_linear() {
+    let tools = support::restarted_deepseek_tools();
+    let dialects = DialectSet::new(
+        [DialectId::DeepSeekV31],
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("DeepSeek dialect");
+    let mut measured = Vec::new();
+    for count in [16, 32, 64, 128, 256, 512, 1024] {
+        let input = support::restarted_deepseek_sections(count);
+        let request = ToolRecoveryRequest::sized_for(Effort::Standard, input.as_bytes(), &dialects);
+        let result = tools.recover(input.as_bytes(), &request, &dialects);
+        assert_eq!(result.receipt.stopped, StopReason::Completed, "{count}");
+        let usage = result.receipt.usage;
+        measured.push((
+            input.len() as u128,
+            [
+                u128::from(usage.work),
+                u128::from(usage.total_scratch_charged),
+                u128::from(usage.peak_scratch_bytes),
+            ],
+        ));
+    }
+    let (small_bytes, small) = measured[0];
+    for &(bytes, charged) in &measured[1..] {
+        for (index, label) in ["work", "total scratch", "peak scratch"]
+            .into_iter()
+            .enumerate()
+        {
+            let (ratio, byte_ratio) = (charged[index] * small_bytes, small[index] * bytes);
+            assert!(
+                ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
+                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+            );
+        }
+    }
+}
