@@ -494,10 +494,9 @@ fn crafted_reading_explosion_exhausts_explicitly() {
 fn sized_budget_follows_the_published_formula() {
     let output = busy_turn(3);
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    // Per call: `<tool_call>` (GLM, Qwen3-Coder XML and Hermes) and
-    // `<function=` (a bare Qwen3-Coder XML element); per stray line:
-    // `<tool_call>` three times.
-    assert_eq!(openers, 21);
+    // Literal and derived opener alternatives are counted separately by
+    // the same registry that constructs the sized request.
+    assert_eq!(openers, 27);
     for effort in [
         Effort::Exact,
         Effort::Quick,

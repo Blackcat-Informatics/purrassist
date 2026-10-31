@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Twenty-three dialects are built in. The original fifteen are:
+Twenty-three dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -30,6 +30,14 @@ Twenty-three dialects are built in. The original fifteen are:
 | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}` (`[CALL_ID]` optional), repeated per call | [dialect](dialects/mistral-v11.v1.md) |
 | `pythonic.v1` | `[NAME(keyword=VALUE), ...]` at line start or after an explicit marker | [dialect](dialects/pythonic.v1.md) |
 | `bare-json.v1` | an unwrapped `{"name": NAME, "arguments": {...}}` object: the whole turn, in prose, in a code fence, or an array element; never a declaration-shaped object | [dialect](dialects/bare-json.v1.md) |
+| `deepseek-v3-stripped.v1` | Function name with a fenced JSON argument block | [dialect](dialects/deepseek-v3-stripped.v1.md) |
+| `deepseek-v3.1-stripped.v1` | Name followed by JSON arguments | [dialect](dialects/deepseek-v3.1-stripped.v1.md) |
+| `harmony-stripped.v1` | Recipient and ordinary header text followed by arguments | [dialect](dialects/harmony-stripped.v1.md) |
+| `hermes-stripped.v1` | JSON name/arguments object | [dialect](dialects/hermes-stripped.v1.md) |
+| `kimi-k2-stripped.v1` | `functions.NAME:IDX` followed by JSON arguments | [dialect](dialects/kimi-k2-stripped.v1.md) |
+| `llama3-json-stripped.v1` | JSON name/parameters object | [dialect](dialects/llama3-json-stripped.v1.md) |
+| `mistral-v11-stripped.v1` | Name, optional adjacent ID, and JSON arguments | [dialect](dialects/mistral-v11-stripped.v1.md) |
+| `mistral-v3-stripped.v1` | JSON array of name/arguments call objects | [dialect](dialects/mistral-v3-stripped.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Tool definitions and their typed arguments can be
@@ -47,16 +55,7 @@ reasoning conventions. The per-dialect references distinguish verified special-t
 skipping from explicit protocol-marker suppression; a name ending in `-stripped`
 does not claim that every tokenizer marks those bytes as special tokens.
 
-| Dialect | Retained call shape | Reference |
-| --- | --- | --- |
-| `deepseek-v3-stripped.v1` | Function name with a fenced JSON argument block | [dialect](dialects/deepseek-v3-stripped.v1.md) |
-| `deepseek-v3.1-stripped.v1` | Name followed by JSON arguments | [dialect](dialects/deepseek-v3.1-stripped.v1.md) |
-| `harmony-stripped.v1` | Recipient and ordinary header text followed by arguments | [dialect](dialects/harmony-stripped.v1.md) |
-| `hermes-stripped.v1` | JSON name/arguments object | [dialect](dialects/hermes-stripped.v1.md) |
-| `kimi-k2-stripped.v1` | `functions.NAME:IDX` followed by JSON arguments | [dialect](dialects/kimi-k2-stripped.v1.md) |
-| `llama3-json-stripped.v1` | JSON name/parameters object | [dialect](dialects/llama3-json-stripped.v1.md) |
-| `mistral-v11-stripped.v1` | Name, optional adjacent ID, and JSON arguments | [dialect](dialects/mistral-v11-stripped.v1.md) |
-| `mistral-v3-stripped.v1` | JSON array of name/arguments call objects | [dialect](dialects/mistral-v3-stripped.v1.md) |
+
 
 Exact and derived readings can share an invocation. Exact framing has
 representative priority at equal cost; distinct names, IDs, arguments and

@@ -297,11 +297,10 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
   definitions or lossless `OpenAI`, MCP, and Anthropic declarations, whose
   exact parameters schemas are validated under Draft 2020-12 or Draft-07 (the
   dialect MCP servers commonly declare). Dialects are weighted, invertible
-  grammars in a first-party DSL; twenty-three are built in (`qwen3-coder-xml.v1`,
+  grammars in a first-party DSL; twenty-three dialects are built in (`qwen3-coder-xml.v1`,
   `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, and the eight derived marker-suppressed
-  variants in `tool-calls/README.md`) and callers compile
+  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`) and callers compile
   their own. A
   best-first search repairs call markup with named, costed rules; each call
   is resolved against its tool with a per-call outcome, itemized repairs,

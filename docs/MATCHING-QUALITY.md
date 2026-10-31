@@ -467,6 +467,9 @@ and by dialect allow-list:
 | `openai` | 1060 | 654 | 0 | 406 |
 | `qwen` | 1741 | 1249 | 0 | 492 |
 
+The following allow-list results retain their recorded source. Added recipes
+are listed as pending rather than assigned unmeasured counts.
+
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `anthropic-tool-use.v1` | 666 | 459 | 0 | 207 |
@@ -487,6 +490,14 @@ and by dialect allow-list:
 | `openai-tool-calls.v1` | 460 | 294 | 0 | 166 |
 | `pythonic.v1` | 9 | 5 | 0 | 4 |
 | `qwen3-coder-xml.v1` | 850 | 616 | 0 | 234 |
+| `deepseek-v3-stripped.v1` | pending | pending | pending | pending |
+| `deepseek-v3.1-stripped.v1` | pending | pending | pending | pending |
+| `harmony-stripped.v1` | pending | pending | pending | pending |
+| `hermes-stripped.v1` | pending | pending | pending | pending |
+| `kimi-k2-stripped.v1` | pending | pending | pending | pending |
+| `llama3-json-stripped.v1` | pending | pending | pending | pending |
+| `mistral-v11-stripped.v1` | pending | pending | pending | pending |
+| `mistral-v3-stripped.v1` | pending | pending | pending | pending |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value
 contains a backslash to unescape). `tool_call.markup.terminal-confusable` is

@@ -5305,6 +5305,18 @@ impl<'s> Engine<'s> {
         }
         for thread in threads {
             governor.charge(Resource::Work, K_THREAD)?;
+            // An opened attempt never emits another opening report. In
+            // particular, do not rescan a weak header's history on every
+            // subsequent argument byte once its evidence was admitted.
+            if program.argument_anchor
+                && !self.tables[table]
+                    .attempts
+                    .as_slice()
+                    .iter()
+                    .any(|record| record.id == thread.attempt && !record.opened)
+            {
+                continue;
+            }
             let accepted = matches!(program.insts[thread.pc as usize], Inst::Accept);
             let committed = if program.argument_anchor {
                 let active = match thread.sub {

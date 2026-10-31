@@ -1352,9 +1352,13 @@ impl<'s> Recognizer<'s> {
             _ => {}
         }
         // An exact envelope inside a weak header inherits the pre-header
-        // interpretations. Raw name/ID/argument OPEN equality is forbidden:
-        // an exact-looking value there is data of the outer call.
-        if interps.is_empty() && weak_header.is_none() {
+        // interpretations unless a native outer attempt already owns this
+        // span. Raw name/ID/argument OPEN equality is forbidden: an
+        // exact-looking value there is data of the outer call.
+        if interps.is_empty()
+            && weak_header.is_none()
+            && !self.has_exact_outer(start, governor)?
+        {
             governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
             let mut origins = Vec::new();
             for (&owner, &barrier) in &self.turn.weak_headers {
@@ -1424,6 +1428,14 @@ impl<'s> Recognizer<'s> {
             self.turn.interps.insert(attempt, (start, interps));
         }
         Ok(())
+    }
+
+    /// Weak framing cannot reopen the committed span of a native attempt.
+    fn has_exact_outer(&self, start: usize, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, size(self.turn.interps.len()))?;
+        Ok(self.turn.interps.iter().any(|(owner, (prefix, _))| {
+            *prefix < start && !self.turn.weak_headers.contains_key(owner)
+        }))
     }
 
     /// The base of a call that closes the unclosed reasoning block `think`

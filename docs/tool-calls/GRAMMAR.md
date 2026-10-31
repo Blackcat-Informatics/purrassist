@@ -19,7 +19,8 @@ into a `CompiledGrammar`. One compiled grammar serves three purposes:
   choices to print well-formed calls for given argument shapes, for tests and
   corpora.
 
-The fifteen built-in dialects are written in this DSL:
+Twenty-three built-in dialects are written through literal DSL sources or
+derived recipes:
 [`gemma3-tool-code.v1`](../../crates/core/src/tool_call/dialects/gemma3-tool-code.v1.grammar),
 [`glm-4.5.v1`](../../crates/core/src/tool_call/dialects/glm-4.5.v1.grammar),
 [`qwen3-coder-xml.v1`](../../crates/core/src/tool_call/dialects/qwen3-coder-xml.v1.grammar),
@@ -33,8 +34,16 @@ The fifteen built-in dialects are written in this DSL:
 [`kimi-k2.v1`](../../crates/core/src/tool_call/dialects/kimi-k2.v1.grammar),
 [`anthropic-tool-use.v1`](../../crates/core/src/tool_call/dialects/anthropic-tool-use.v1.grammar),
 [`harmony.v1`](../../crates/core/src/tool_call/dialects/harmony.v1.grammar),
-[`pythonic.v1`](../../crates/core/src/tool_call/dialects/pythonic.v1.grammar), and
-[`bare-json.v1`](../../crates/core/src/tool_call/dialects/bare-json.v1.grammar).
+[`pythonic.v1`](../../crates/core/src/tool_call/dialects/pythonic.v1.grammar),
+[`bare-json.v1`](../../crates/core/src/tool_call/dialects/bare-json.v1.grammar),
+[`deepseek-v3-stripped.v1`](dialects/deepseek-v3-stripped.v1.md),
+[`deepseek-v3.1-stripped.v1`](dialects/deepseek-v3.1-stripped.v1.md),
+[`harmony-stripped.v1`](dialects/harmony-stripped.v1.md),
+[`hermes-stripped.v1`](dialects/hermes-stripped.v1.md),
+[`kimi-k2-stripped.v1`](dialects/kimi-k2-stripped.v1.md),
+[`llama3-json-stripped.v1`](dialects/llama3-json-stripped.v1.md),
+[`mistral-v11-stripped.v1`](dialects/mistral-v11-stripped.v1.md),
+[`mistral-v3-stripped.v1`](dialects/mistral-v3-stripped.v1.md).
 A caller-compiled grammar becomes a dialect with `DialectId::custom`; see
 [Add a custom dialect](#add-a-custom-dialect).
 

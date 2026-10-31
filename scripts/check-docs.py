@@ -70,7 +70,9 @@ EXCLUDED_PREFIXES = ('.stage/', 'vendor/', 'crates/core/tests/data/')
 NUMBER_WORDS = {word: number for number, word in enumerate((
     'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven',
     'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'))}
-NUMBER = '|'.join(NUMBER_WORDS)
+NUMBER_WORDS.update({f'twenty-{word}': 20 + value
+                     for word, value in tuple(NUMBER_WORDS.items()) if 1 <= value <= 9})
+NUMBER = r'\d+|' + '|'.join(sorted(NUMBER_WORDS, key=len, reverse=True))
 
 # A numbered reference to a work item ("Task 12"). Shared by the Markdown ban and
 # the published-source rule, so the two cannot drift.
