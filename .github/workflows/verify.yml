@@ -23,6 +23,12 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component clippy,rustfmt,llvm-tools
       - run: make check
+      # The resynchronization optimization preserves readings while changing
+      # resource usage; this pinned predecessor belongs to this branch only.
+      - if: runner.os == 'Linux' && github.event_name == 'pull_request' && github.head_ref == 'paudley/10-tool-call-recovery-restarted-deepseek'
+        name: Compare resynchronization optimization with its previous engine
+        timeout-minutes: 20
+        run: python3 scripts/compare-tool-call-revisions.py
       - name: Test release workflow validation and publish preflight offline
         run: python3 scripts/test-check-release.py
       - name: Replay committed CLI/MCP transcripts against the built CLI
