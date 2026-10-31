@@ -1251,7 +1251,7 @@ impl<'s> Recognizer<'s> {
                     weak_header,
                     ..
                 }) => {
-                    self.opened(&mut frame, attempt, start, weak_header, governor)?;
+                    self.opened(&mut frame, attempt, start..at, weak_header, governor)?;
                 }
                 Pending::Marker {
                     start,
@@ -1327,10 +1327,11 @@ impl<'s> Recognizer<'s> {
         &mut self,
         frame: &mut Frame,
         attempt: u64,
-        start: usize,
+        prefix: Range<usize>,
         weak_header: Option<usize>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        let start = prefix.start;
         let mut interps = Vec::new();
         match (frame.top, self.turn.last_kill) {
             (Some(top), last) if top.boundary <= start => {
@@ -1355,10 +1356,7 @@ impl<'s> Recognizer<'s> {
         // interpretations unless a native outer attempt already owns this
         // span. Raw name/ID/argument OPEN equality is forbidden: an
         // exact-looking value there is data of the outer call.
-        if interps.is_empty()
-            && weak_header.is_none()
-            && !self.has_exact_outer(start, governor)?
-        {
+        if interps.is_empty() && weak_header.is_none() && !self.has_exact_outer(start, governor)? {
             governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
             let mut origins = Vec::new();
             for (&owner, &barrier) in &self.turn.weak_headers {
@@ -1421,11 +1419,42 @@ impl<'s> Recognizer<'s> {
             // reading it.
             self.engine.abandon(attempt, governor)?;
         } else {
+            if weak_header.is_none() && prefix.len() > 1 {
+                self.suppress_weak_prefix(start, governor)?;
+            }
             if let Some(barrier) = weak_header {
                 governor.charge(Resource::ScratchBytes, 64)?;
                 self.turn.weak_headers.insert(attempt, barrier);
             }
             self.turn.interps.insert(attempt, (start, interps));
+        }
+        Ok(())
+    }
+
+    /// A written native opener owns its prefix. A projected preamble at
+    /// that same prefix must not turn the framing into lossy prose and
+    /// revive a path that omits earlier calls from the native group.
+    fn suppress_weak_prefix(
+        &mut self,
+        start: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        let mut suppressed = ScratchVec::new(governor);
+        for &owner in self.turn.weak_headers.keys() {
+            if self
+                .turn
+                .interps
+                .get(&owner)
+                .is_some_and(|(prefix, _)| *prefix == start)
+            {
+                suppressed.push(owner)?;
+            }
+        }
+        for &owner in &suppressed {
+            self.turn.weak_headers.remove(&owner);
+            self.turn.interps.remove(&owner);
+            self.engine.abandon(owner, governor)?;
         }
         Ok(())
     }
