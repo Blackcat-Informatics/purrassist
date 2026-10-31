@@ -139,6 +139,7 @@
 //! working set to the same governor before allocating it.
 //! [`ToolRecoveryRequest::sized`] sizes a budget for an output: its length
 //! and its call openers.
+use super::StreamEvent;
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{ContinuationFrontier, edit_entries, escaped};
@@ -3151,20 +3152,6 @@ struct RecognizedInput {
     forced: Option<String>,
 }
 
-/// One temporary, admitted content payload. The sink borrows it for one
-/// notification; retaining consumer-owned copies is outside this intake.
-/// Batch constructs and drops the same payload before interpreting another byte.
-struct ContentDelta {
-    span: Range<usize>,
-    raw: ScratchVec<u8>,
-}
-
-impl ContentDelta {
-    fn dispatch(self, sink: &mut impl FnMut(Range<usize>, &[u8])) {
-        sink(self.span, self.raw.as_slice());
-    }
-}
-
 /// Shared byte intake for batch recovery and the forthcoming stream facade.
 /// It owns source storage without lending it to its live recognizer. Every
 /// method uses the original governor. Interpretation failure does not discard
@@ -3237,7 +3224,7 @@ impl<'s> RecoveryIntake<'s> {
     /// leaves source capture independent; capture or governor failure stops
     /// admission without retrying an allocation or publishing a retained prefix.
     pub(super) fn feed(&mut self, bytes: &[u8], governor: &mut Governor) {
-        self.feed_with(bytes, governor, &mut |_| {}, &mut |_, _| {});
+        self.feed_with(bytes, governor, &mut |_| {}, &mut |_| Ok(()));
     }
 
     /// Native frontier notifications use the same byte fold and event charges
@@ -3245,13 +3232,14 @@ impl<'s> RecoveryIntake<'s> {
     /// initial native content run; they are not the complete public event API.
     /// The source range and copied raw payload have byte-derived boundaries,
     /// independent of the caller's feed boundaries. The payload is admitted and
-    /// built before either sink is notified and is released before the next byte.
+    /// built and permanently published before either sink is notified, including
+    /// batch's discard sink. Consumer retention cannot affect resource usage.
     pub(super) fn feed_with(
         &mut self,
         bytes: &[u8],
         governor: &mut Governor,
         progress: &mut impl FnMut(ContinuationFrontier),
-        content: &mut impl FnMut(Range<usize>, &[u8]),
+        content: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) {
         self.digest.update(bytes);
         for &byte in bytes {
@@ -3289,7 +3277,7 @@ impl<'s> RecoveryIntake<'s> {
         &mut self,
         governor: &mut Governor,
         progress: &mut impl FnMut(ContinuationFrontier),
-        content: &mut impl FnMut(Range<usize>, &[u8]),
+        content: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
         let mut frontier = self
             .setup
@@ -3322,8 +3310,9 @@ impl<'s> RecoveryIntake<'s> {
             self.progress = frontier;
             progress(frontier);
             if let Some(delta) = delta {
-                self.content_end = delta.span.end;
-                delta.dispatch(content);
+                let StreamEvent::ContentDelta { span, .. } = &delta;
+                self.content_end = span.end;
+                content(delta)?;
             }
         }
         Ok(())
@@ -3385,7 +3374,7 @@ impl<'s> RecoveryIntake<'s> {
         &self,
         frontier: ContinuationFrontier,
         governor: &mut Governor,
-    ) -> Result<Option<ContentDelta>, StopReason> {
+    ) -> Result<Option<StreamEvent>, StopReason> {
         let Some((0, end)) = frontier.content else {
             return Ok(None);
         };
@@ -3402,7 +3391,7 @@ impl<'s> RecoveryIntake<'s> {
         let mut raw = ScratchVec::new(governor);
         raw.reserve(source.len())?;
         raw.extend(source.iter().copied())?;
-        Ok(Some(ContentDelta { span, raw }))
+        StreamEvent::content(span, raw, governor).map(Some)
     }
 
     fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
@@ -3441,6 +3430,7 @@ impl<'s> RecoveryIntake<'s> {
         if let Some(reason) = &self.failed {
             return Err(reason.clone());
         }
+        governor.check()?;
         self.encoding.finish(governor)?;
         let IntakeSetup {
             recognizer,
