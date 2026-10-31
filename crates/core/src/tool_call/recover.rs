@@ -3268,8 +3268,14 @@ fn equivalent_options(
 
 /// Whether two resolved calls are the same call, whichever dialect read it.
 fn same_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
+    left.span == right.span && same_captured_call(left, right)
+}
+
+/// Compare every resolved field except the enclosing span and dialect.
+/// This alone never establishes that two different frames are equivalent.
+fn same_captured_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
     let ResolvedCall {
-        span,
+        span: _,
         dialect: _,
         order,
         id,
@@ -3281,8 +3287,7 @@ fn same_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
         alternatives,
         distinguishing,
     } = left;
-    *span == right.span
-        && *order == right.order
+    *order == right.order
         && *id == right.id
         && *name == right.name
         && *closure == right.closure
@@ -3291,6 +3296,73 @@ fn same_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
         && *competing == right.competing
         && *alternatives == right.alternatives
         && *distinguishing == right.distinguishing
+}
+
+/// A singleton written JSON array adds only framing around the exact same
+/// native object invocation. Preserve every captured source anchor and every
+/// resolved fact; arbitrary overlapping or nested calls do not qualify.
+fn same_written_array_call(
+    native: &[ResolvedSegment],
+    projected: &[ResolvedSegment],
+    output: &[u8],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    fn singleton(segments: &[ResolvedSegment]) -> Option<&ResolvedCall> {
+        let mut found = None;
+        for segment in segments {
+            match segment {
+                ResolvedSegment::Call(call) if found.is_none() => found = Some(&**call),
+                ResolvedSegment::Content(_) => {}
+                _ => return None,
+            }
+        }
+        found
+    }
+    fn outside<'a>(
+        segments: &'a [ResolvedSegment],
+        frame: &'a Range<usize>,
+    ) -> impl Iterator<Item = Range<usize>> + 'a {
+        segments
+            .iter()
+            .filter_map(|segment| match segment {
+                ResolvedSegment::Content(span) => Some(span),
+                _ => None,
+            })
+            .flat_map(move |span| {
+                [
+                    span.start..span.end.min(frame.start),
+                    span.start.max(frame.end)..span.end,
+                ]
+            })
+            .filter(|span| span.start < span.end)
+    }
+    governor.charge(
+        Resource::Work,
+        size(native.len()).saturating_add(size(projected.len())),
+    )?;
+    let (Some(exact), Some(derived)) = (singleton(native), singleton(projected)) else {
+        return Ok(false);
+    };
+    if exact.dialect != DialectId::BareJson
+        || derived.dialect != DialectId::MistralV3Stripped
+        || derived.span.start >= exact.span.start
+        || exact.span.end >= derived.span.end
+    {
+        return Ok(false);
+    }
+    let before = &output[derived.span.start..exact.span.start];
+    let after = &output[exact.span.end..derived.span.end];
+    governor.charge(
+        Resource::Work,
+        size(before.len())
+            .saturating_add(size(after.len()))
+            .saturating_add(exact.reading.arguments.estimated_bytes())
+            .saturating_add(derived.reading.arguments.estimated_bytes()),
+    )?;
+    Ok(before.trim_ascii() == b"["
+        && after.trim_ascii() == b"]"
+        && same_captured_call(exact, derived)
+        && outside(native, &derived.span).eq(outside(projected, &derived.span)))
 }
 
 impl Reading {
@@ -3611,7 +3683,12 @@ impl Recovery<'_> {
         let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
         for piece in &turn.pieces {
             if let ResolvedPiece::Choice(choice) = piece {
-                choices.push(fold_options(&choice.readings, self.output, governor)?);
+                choices.push(fold_options(
+                    &choice.readings,
+                    self.output,
+                    !matches!(self.request.tool_choice, ToolChoice::ForcedStrict(_)),
+                    governor,
+                )?);
             }
         }
         if !choices.is_empty() {
@@ -4949,9 +5026,12 @@ pub(crate) fn assign_ids(
 /// segmentations. The kept segmentation of a group is its member with the
 /// most body evidence (see [`Reading::body_evidence`]), the earliest on a tie: the member [`merge`] keeps
 /// among whole readings that differ only in this span.
+/// A proven singleton written-array projection also yields to its native
+/// object before the product, except under strict tool-choice constraints.
 fn fold_options<'t>(
     options: &'t [Vec<ResolvedSegment>],
     output: &[u8],
+    fold_written_arrays: bool,
     governor: &mut Governor,
 ) -> Result<Vec<Fold<'t>>, StopReason> {
     // Each group: its member indices, in option order.
@@ -4989,6 +5069,52 @@ fn fold_options<'t>(
             fold.absorb(&options[member], governor)?;
         }
         folds.push((kept, fold));
+    }
+    // Do this after ordinary equivalence grouping: dialect ordering must not
+    // determine whether the native object and its enclosing projection meet.
+    // Strict choices retain both readings because the native brackets remain
+    // content and can affect an allow_content=false check.
+    if fold_written_arrays {
+        for projected in (0..folds.len()).rev() {
+            if !folds[projected].1.attempts.is_empty() {
+                continue;
+            }
+            let mut native = None;
+            for index in 0..folds.len() {
+                if index != projected
+                    && folds[index].1.attempts.is_empty()
+                    && same_written_array_call(
+                        folds[index].1.segments,
+                        folds[projected].1.segments,
+                        output,
+                        governor,
+                    )?
+                {
+                    native = Some(index);
+                    break;
+                }
+            }
+            let Some(mut native) = native else {
+                continue;
+            };
+            governor.charge(Resource::Work, size(folds.len() - projected))?;
+            let (_, projected_fold) = folds.remove(projected);
+            native -= usize::from(native > projected);
+            // The proof above established exactly one aligned invocation.
+            // Attach its dialects to the retained native source range only.
+            let dialects = folds[native]
+                .1
+                .calls
+                .values_mut()
+                .next()
+                .expect("the native fold has one call");
+            for candidate in projected_fold.calls.values().flatten() {
+                governor.charge(Resource::Work, size(dialects.len()).saturating_add(1))?;
+                if dialects.insert(candidate.clone()) {
+                    governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                }
+            }
+        }
     }
     // The readings' order is the order of the kept segmentations.
     folds.sort_unstable_by_key(|(kept, _)| *kept);

@@ -7,7 +7,6 @@ use purrassist_core::tool_call::{
     DialectId, DialectSet, GenerationStop, MarkupFamily, ReasoningPolicy, RecognizedTurn,
     Recognizer, ToolCalls, ToolRecoveryRequest, ToolSet,
 };
-use purrassist_core::wire::WireValue;
 use purrassist_core::{Budget, Governor, Outcome};
 
 fn tools() -> ToolSet {
@@ -243,35 +242,26 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
         &ToolRecoveryRequest::default(),
         DialectSet::built_in(),
     );
-    let Outcome::Ambiguous(readings) = result.outcome else {
-        panic!("retain differing array ledgers: {result:?}")
+    let Outcome::Resolved(calls) = result.outcome else {
+        panic!("prefer the exact singleton object framing: {result:?}")
     };
-    assert!(
-        !readings[0].calls[0].dialect.grammar().is_derived(),
-        "{readings:?}"
-    );
-    assert_eq!(readings[0].calls[0].span, 1..array.len() - 1);
+    assert_eq!(calls.calls.len(), 1);
+    assert_eq!(calls.calls[0].dialect, DialectId::BareJson);
+    assert_eq!(calls.calls[0].span, 1..array.len() - 1);
     assert_eq!(
-        readings[0]
+        calls
             .content
             .iter()
             .map(|span| &array[span.clone()])
             .collect::<Vec<_>>(),
         ["[", "]"]
     );
-    assert!(readings.iter().any(|reading| {
-        reading
-            .calls
-            .iter()
-            .any(|call| call.dialect == DialectId::MistralV3Stripped)
-    }));
-    assert_eq!(result.receipt.alternatives.len(), readings.len());
-    for (reading, receipt) in readings.iter().zip(&result.receipt.alternatives) {
-        assert_eq!(
-            receipt.output,
-            purrassist_core::digest::Digest::of(reading.to_node().to_json().as_bytes())
-        );
-    }
+    assert!(
+        calls.calls[0]
+            .candidate_dialects
+            .contains(&DialectId::MistralV3Stripped)
+    );
+    assert!(result.receipt.alternatives.is_empty());
 
     // Retained exact-looking objects inside arguments are data of the outer
     // weak call, even though a separate exact grammar knows their shape.

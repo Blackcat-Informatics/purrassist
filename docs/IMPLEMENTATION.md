@@ -890,3 +890,19 @@ checks, manifests, bound receipts and proof-bound projection/release remain
 required under #37 and their original tracking contracts. The existing
 `project_result` operation still validates its supplied original before its own
 field mask; outer registry validation checks that operation's reply envelope.
+
+## Native singleton object framing
+
+Before constructing whole-message alternatives, a singleton Mistral V3
+projection yields to a native bare JSON object only when the source margins
+are a written array bracket pair plus whitespace. Both readings must have
+identical source-spanned name and ID captures, order, closure, outcome,
+arguments, repairs, validations, competing readings and distinguishing
+provenance. Content outside the frame must match; reasoning, embedded calls,
+results, rejected attempts and multiple-call partitions do not qualify.
+
+The native segmentation retains its full spans, content and ledgers. Candidate
+dialects are combined only for the proven matching invocation. Strict forced
+tool choices retain separate readings because the native array brackets remain
+content and can affect their checks. Other framing differences remain distinct.
+The implementation and its named behavioral case have not been executed.

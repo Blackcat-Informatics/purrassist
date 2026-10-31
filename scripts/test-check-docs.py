@@ -422,9 +422,11 @@ class DialectIds(Case):
 
     def test_a_list_broken_into_short_pieces_is_not_found(self):
         tree = self.tree()
-        tree.replace('crates/host/README.md', '`llama3-json.v1`', 'llama3-json.v1')
-        tree.replace('crates/host/README.md', '`kimi-k2.v1`', 'kimi-k2.v1')
-        tree.replace('crates/host/README.md', '`harmony.v1`', 'harmony.v1')
+        name = 'crates/host/README.md'
+        ids = re.findall(rf'`({CD.DIALECT_ID})`', tree.read(name))
+        # Break every qualifying run, including newly added dialects.
+        for dialect in ids[CD.DIALECT_RUN_MINIMUM - 1::CD.DIALECT_RUN_MINIMUM]:
+            tree.replace(name, f'`{dialect}`', dialect)
         self.assertFails(tree.errors(), 'dialect-ids', 'crates/host/README.md', NOT_FOUND)
 
     def test_a_list_wrapped_across_lines_is_still_a_list(self):
@@ -434,16 +436,16 @@ class DialectIds(Case):
         self.assertFails(tree.errors(), 'dialect-ids', 'crates/core/README.md', "missing ['mistral-v3.v1']")
 
     def test_wrong_count_fails(self):
-        for name, old, new in (('README.md', 'Fifteen dialects ship', 'Eleven dialects ship'),
-                               ('docs/tool-calls/GRAMMAR.md', 'fifteen built-in dialects', 'ten built-in dialects'),
-                               ('docs/RESOURCES.md', 'all fifteen built-in dialects', 'all ten built-in dialects'),
-                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all fifteen dialects', 'all ten dialects'),
-                               ('docs/IMPLEMENTATION.md', 'fifteen ship', 'ten ship'),
-                               ('crates/host/README.md', 'over fifteen built-in', 'over ten built-in')):
+        for name, old, new in (('README.md', 'Twenty-three dialects are built in', 'Eleven dialects are built in'),
+                               ('docs/tool-calls/GRAMMAR.md', 'Twenty-three built-in dialects', 'ten built-in dialects'),
+                               ('docs/RESOURCES.md', 'all twenty-three built-in dialects', 'all ten built-in dialects'),
+                               ('docs/tool-calls/dialects/bare-json.v1.md', 'all twenty-three dialects', 'all ten dialects'),
+                               ('docs/IMPLEMENTATION.md', 'twenty-three dialects are built in', 'ten dialects are built in'),
+                               ('crates/host/README.md', 'over twenty-three built-in', 'over ten built-in')):
             with self.subTest(name=name):
                 tree = self.tree()
                 tree.replace(name, old, new)
-                self.assertFails(tree.errors(), 'dialect-count', name, 'has 15')
+                self.assertFails(tree.errors(), 'dialect-count', name, 'has 23')
 
     def test_a_subset_count_is_not_a_dialect_count(self):
         tree = self.tree()
@@ -452,7 +454,7 @@ class DialectIds(Case):
 
     def test_a_missing_count_sentence_is_not_found(self):
         tree = self.tree()
-        tree.replace('crates/purrassist/README.md', 'Fifteen dialects ship:', 'These dialects exist:')
+        tree.replace('crates/purrassist/README.md', 'Twenty-three dialects ship:', 'These dialects exist:')
         self.assertFails(tree.errors(), 'dialect-count', 'crates/purrassist/README.md', NOT_FOUND)
 
 
@@ -1854,7 +1856,7 @@ ABSENT = (
     ('fuzz-targets', 'Makefile', r'across all ten targets', 'across the targets'),
     ('receipt-version', 'docs/QUALIFICATION.md', r'receipt wire v3', 'receipt wire format'),
     ('receipt-version', 'crates/core/src/contract.rs', r'RECEIPT_VERSION: u32 = 3;', 'RECEIPT_REVISION: u32 = 3;'),
-    ('dialect-count', 'README.md', r'Fifteen dialects ship', 'These dialects ship'),
+    ('dialect-count', 'README.md', r'Twenty-three dialects are built in', 'These dialects are built in'),
     ('fuzz-baseline-table', 'docs/FUZZING.md', r'### Recorded 10,000-mutation baselines', '### Baselines'),
     ('fuzz-row-limits', 'docs/QUALIFICATION.md', r'`make fuzz`', '`make  fuzz`'),
 )
