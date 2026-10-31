@@ -181,7 +181,7 @@ fn assert_ambiguous_tail(input: &str, held: &str) {
         expected.sort_unstable();
         assert_eq!(values, expected, "{effects:?} {input:?}");
         assert_eq!(calls.finish, Finish::Unresolved, "{effects:?} {input:?}");
-        assert!(calls.usable_accepting_guesses().is_empty());
+        assert_eq!(calls.usable_accepting_guesses().len(), 0);
     }
 }
 
