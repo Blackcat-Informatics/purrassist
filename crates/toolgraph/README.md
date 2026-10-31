@@ -28,7 +28,7 @@ Missing, duplicate, unknown, mistyped, unsupported-mode and numeric refusals
 retain their original locations and enclosing tool index. The two wire modes
 are `aa-exec` and `change_hat`. Profile/hat strings remain verbatim. All five
 resource quantities are exact positive `u64` values, including integral decimal
-and exponent spellings; the AppArmor renderer's narrower representation limits
+and exponent spellings; the `AppArmor` renderer's narrower representation limits
 remain a separate operation. `encode_json` reuses the governed JSON writer with
 fixed field order, preserving numeric spellings and decoded string values without copying the source DOM.
 This fragment establishes neither RDF agreement nor an executable graph. Full
