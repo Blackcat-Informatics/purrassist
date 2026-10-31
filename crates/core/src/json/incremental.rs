@@ -643,6 +643,12 @@ impl IncrementalRecovery {
         }
     }
 
+    /// The native parser currently holds an object opened at its root.
+    /// A nested object inside an array is not root-object evidence.
+    pub(crate) fn root_object_open(&self) -> bool {
+        self.stack.first().is_some_and(|frame| frame.object)
+    }
+
     /// Absolute offset just past the last consumed character.
     pub(crate) const fn position(&self) -> usize {
         self.position

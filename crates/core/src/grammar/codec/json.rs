@@ -101,6 +101,8 @@ pub struct JsonCodec {
     lead: Lead,
     /// Decoded root-string bytes already checked after an escaped lead.
     decoded_prefix: usize,
+    /// Admission observation only; never changes native JSON acceptance.
+    native_anchor: NativeAnchor,
     /// Runs of malformed UTF-8 read as U+FFFD: each run's absolute range
     /// and how many U+FFFD (maximal malformed subparts) it was read as.
     invalid: Vec<InvalidRun>,
@@ -125,6 +127,14 @@ enum Lead {
     DecodedQuoted,
     /// `json-args`, the value's leading bytes were checked.
     Checked,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NativeAnchor {
+    /// Only newly decoded root-string bytes need examination.
+    Pending(usize),
+    Object,
+    Other,
 }
 
 /// A JSON value decoded from a byte range.
@@ -182,6 +192,42 @@ impl JsonCodec {
     pub(crate) const fn argument_anchor(&self) -> bool {
         matches!(self.lead, Lead::Checked)
     }
+
+    /// Observe the existing native parser, without imposing json-args policy.
+    /// Decoded string prefixes are examined once, including native escapes.
+    pub(crate) fn observe_native_anchor(
+        &mut self,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let NativeAnchor::Pending(mut checked) = self.native_anchor else {
+            return Ok(matches!(self.native_anchor, NativeAnchor::Object));
+        };
+        if self.parser.root_object_open() {
+            self.native_anchor = NativeAnchor::Object;
+            return Ok(true);
+        }
+        if let Some(prefix) = self.parser.root_string_prefix() {
+            let pending = prefix
+                .get(checked..)
+                .expect("native decoded root strings only append to their prefix");
+            for character in pending.chars() {
+                governor.charge(Resource::Work, size(character.len_utf8()))?;
+                checked += character.len_utf8();
+                if !character.is_whitespace() {
+                    let object = character == '{';
+                    self.native_anchor = if object {
+                        NativeAnchor::Object
+                    } else {
+                        NativeAnchor::Other
+                    };
+                    return Ok(object);
+                }
+            }
+        }
+        self.native_anchor = NativeAnchor::Pending(checked);
+        Ok(false)
+    }
 }
 
 impl Codec for JsonCodec {
@@ -197,6 +243,7 @@ impl Codec for JsonCodec {
             stalled: false,
             lead: Lead::Any,
             decoded_prefix: 0,
+            native_anchor: NativeAnchor::Pending(0),
             invalid: Vec::new(),
         })
     }

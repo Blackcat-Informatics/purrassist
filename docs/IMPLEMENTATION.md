@@ -949,3 +949,11 @@ location, admitted through the original governor and bounded by compiled program
 length. Active codec evidence is recomputed. Summaries never depend on a mutable
 history link, and arena reuse clears their IDs. These corrections have passed
 source review; current execution and cost acceptance remain unverified.
+
+Erased-entry admission now observes the existing native JSON parser separately
+from its acceptance policy. A root object frame supplies object evidence;
+decoded root-string prefixes are examined incrementally for a stringified object.
+The observation admits one work unit per query plus the newly inspected decoded
+bytes. It does not change the codec's lead policy, parser state, accepted values,
+repairs or provenance. Existing weak name-only argument anchors keep their
+stricter admission path. Current runtime and cost evidence remains pending.

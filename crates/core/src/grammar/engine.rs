@@ -2162,13 +2162,14 @@ impl<'s> Step<'_, 's> {
         pc: u32,
         hist: u32,
         active: Option<u32>,
+        observe_native: bool,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        let active = active.is_some_and(|slot| {
-            self.arena.codecs[slot as usize]
-                .as_ref()
-                .is_some_and(CodecState::argument_anchor)
-        });
+        let active = match active.and_then(|slot| self.arena.codecs[slot as usize].as_mut()) {
+            Some(codec) if observe_native => codec.observe_native_anchor(governor)?,
+            Some(codec) => codec.argument_anchor(),
+            None => false,
+        };
         governor.charge(Resource::Work, 1)?;
         let index = pc as usize;
         while self.weak_evidence.len() <= index {
@@ -5453,7 +5454,13 @@ impl<'s> Engine<'s> {
                     _ => None,
                 };
                 let (mut step, _, _) = self.split(table);
-                step.weak_call_evidence(thread.pc, thread.hist, active, governor)?
+                step.weak_call_evidence(
+                    thread.pc,
+                    thread.hist,
+                    active,
+                    !program.argument_anchor,
+                    governor,
+                )?
             } else {
                 program.commits(thread.pc)
             };
