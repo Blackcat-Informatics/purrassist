@@ -1051,11 +1051,23 @@ TOOL_CALL_REF_STRICT = [
     b'\xe6\x23' + b'<tool_call>\n<function=list_records>\n<parameter=records>\n<parameter=name>\nA\n</function>\n</tool_call>' + b'\xff',  # a rejected nested attempt, all options
 ]
 
+# Issue #11's exact 192-byte free-form-item repair reproduction. Keep the
+# original seed/header associations unchanged; append these requests below.
+_REF_REPAIR_COST_TURN = bytes.fromhex(
+    '3c746f6f6c5f63616c6c3e0a3c66756e6374696f6e3d667265655f6974656d733e0a3c706172616d657465723d6b6565'
+    '703e0a3c706172616d657465723d706174683e0a2f700a3c2f706172616d657465723e0a3c2f606070652265723e0a3c'
+    '706172616d657465723d706174683e0a710a3c2f706172616d657465723e0a3c2f667b2f746f6f6c5f2265723e0a3c70'
+    '6172616d657465723d706174683e0a710a3c2f706172616d657465723e0a3c2f667b2f746f6f22696e707574223a5d5d'
+)
+
 TOOL_CALL_REF_SEEDS = [
     TOOL_CALL_REF_HEADERS[(index + offset) % len(TOOL_CALL_REF_HEADERS)] + turn
     for index, turn in enumerate(TOOL_CALL_REF_TURNS + TOOL_CALL_REF_NEGATIVES)
     for offset in (0, 2)
-] + TOOL_CALL_REF_STRICT
+] + TOOL_CALL_REF_STRICT + [
+    b'\x02\x52' + _REF_REPAIR_COST_TURN,  # tolerant, standard sized budget
+    b'\x02\x53' + _REF_REPAIR_COST_TURN,  # same recovery under deep effort
+]
 TOOL_CALL_REF_TOKENS = TOOL_CALL_TOKENS + [
     b'list_records', b'batch_refs', b'any_items', b'tree_walk', b'free_items', b'root_ref',
     b'records', b'items', b'children', b'root', b'label', b'name', b'owner', b'tags', b'keep',

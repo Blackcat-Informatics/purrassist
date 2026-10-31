@@ -950,6 +950,15 @@ its executions reach none of them, which is why `tool-call-ref` exists.
 
 ### Known slow input (issue #11)
 
+The current grammar repair search carries cost in its internal proposal ledger
+and keeps actual provenance in the original parser history. It no longer clones
+throwaway evidence for every successor, admits the 41-byte successor hash, and
+borrows pending bytes while computing repair eligibility. The exact issue
+reproduction is appended to `tool-call-ref` seeds under standard and deep sized
+budgets, preserving earlier seed/header associations. Current timeout and
+performance evidence remains pending automatic CI. The measurements below are
+historical observations of the earlier implementation.
+
 The recorded `tool-call-ref` campaign at the default seed reached, at execution 682, a
 192-byte turn (free-form-object items with mutated closers) on which the repair
 search spends about 240 to 280 ns per charged work unit, several times the
