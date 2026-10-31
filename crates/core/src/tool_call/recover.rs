@@ -3378,8 +3378,9 @@ fn only_exterior_prose(exact: &ResolvedCall, derived: &ResolvedCall, output: &[u
                 })
         })
         && derived.reading.cost
-            == size(repairs.evidence.len())
-                .saturating_mul(crate::grammar::edit::EditOperator::ExtractProse.rule().cost)
+            == size(repairs.evidence.len()).saturating_mul(
+                rules::of_operator(crate::grammar::edit::EditOperator::ExtractProse).cost,
+            )
         && (derived.closure == exact.closure || !repairs.evidence.is_empty())
 }
 
