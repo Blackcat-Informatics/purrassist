@@ -3484,6 +3484,18 @@ impl Recovery<'_> {
     /// Every whole-message reading of the output, before they are compared
     /// ([`Self::conclude`]).
     fn recognized(&self, governor: &mut Governor) -> Result<Vec<Reading>, StopReason> {
+        let forced = self.preconditions(governor)?;
+        let encoding = self.encoding(governor)?;
+        let mut recognizer =
+            Recognizer::with_tools(self.dialects, self.tools, self.request.reasoning, governor)?;
+        recognizer.push(self.output, governor)?;
+        let turn =
+            recognizer.finish_over(self.request.stop.clone(), Some(self.output), governor)?;
+        self.resolve_turn(turn, &encoding, forced.as_deref(), governor)
+    }
+
+    /// Validate the request once before constructing or advancing a recognizer.
+    fn preconditions(&self, governor: &mut Governor) -> Result<Option<String>, StopReason> {
         governor.check()?;
         self.policies.validate(self.tools)?;
         let forced = match &self.request.tool_choice {
@@ -3514,22 +3526,22 @@ impl Recovery<'_> {
                     .to_owned(),
             ));
         }
-        let encoding = self.encoding(governor)?;
-        let mut recognizer =
-            Recognizer::with_tools(self.dialects, self.tools, self.request.reasoning, governor)?;
-        recognizer.push(self.output, governor)?;
-        let turn =
-            recognizer.finish_over(self.request.stop.clone(), Some(self.output), governor)?;
+        Ok(forced)
+    }
+
+    /// Resolve an already finished recognizer without reading the input again.
+    /// Callers retain the original source and its encoding ledger throughout.
+    fn resolve_turn(
+        &self,
+        turn: super::RecognizedTurn,
+        encoding: &CallLedger,
+        forced: Option<&str>,
+        governor: &mut Governor,
+    ) -> Result<Vec<Reading>, StopReason> {
         let resolved = resolve_forest(self.tools, &turn, &self.policies, governor)?;
         let attempted = turn.rejected_attempts().to_vec();
         drop(turn);
-        let readings = self.readings(
-            &resolved,
-            &encoding,
-            &attempted,
-            forced.as_deref(),
-            governor,
-        )?;
+        let readings = self.readings(&resolved, encoding, &attempted, forced, governor)?;
         drop(resolved);
         Ok(readings)
     }
