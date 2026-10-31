@@ -1,5 +1,5 @@
 {
-  "description": "S3: repeated closers right after a rejected attempt's closer are its stray closers, recorded in its raw text, never content; the prose after them stays content.",
+  "description": "S3, updated for issue #7: text after an unpaired parameter closer through the parameter body end has both equally ranked guess readings. Repeated call closers remain recorded markup rather than content; prose after them stays content.",
   "tools_openai": [
     {
       "type": "function",
@@ -23,70 +23,46 @@
     "f": "read_only"
   },
   "input": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>\n</tool_call></tool_call> tail",
-  "default_expect": {
-    "outcome": "resolved",
-    "stopped": "completed",
-    "finish": "unresolved",
-    "openai_finish_reason": "stop",
-    "verdict": "nothing_usable",
-    "usable_calls": {
-      "strict": 0,
-      "accepting_guesses": 0
-    },
-    "calls": [],
-    "rejected": [
-      {
-        "span": [
-          0,
-          114
-        ],
-        "dialect": "qwen3-coder-xml.v1",
-        "candidate_dialects": [
-          "glm-4.5.v1",
-          "hermes.v1",
-          "qwen3-coder-xml.v1"
-        ],
-        "reason": "Malformed { at: 54 }",
-        "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>\n</tool_call></tool_call>"
-      }
-    ],
-    "embedded": [],
-    "content": [
-      " tail"
-    ],
-    "reasoning_text": [],
-    "failed_validations": [],
-    "ledger_rules": []
-  },
-  "outcome": "resolved",
+  "outcome": "best_guess",
   "stopped": "completed",
   "finish": "unresolved",
   "openai_finish_reason": "stop",
-  "verdict": "nothing_usable",
+  "verdict": "ambiguous",
   "usable_calls": {
     "strict": 0,
     "accepting_guesses": 0
   },
-  "calls": [],
-  "rejected": [
+  "calls": [
     {
-      "span": [
-        0,
-        114
-      ],
-      "dialect": "qwen3-coder-xml.v1",
+      "tool": "f",
+      "arguments": {
+        "a": "x\n</parameter>\nthat is all"
+      },
       "candidate_dialects": [
         "qwen3-coder-xml.v1"
       ],
-      "reason": "Malformed { at: 54 }",
-      "raw": "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>\n</tool_call></tool_call>"
+      "outcome": "ambiguous",
+      "rules": [
+        "tool_call.xml.framing-newline",
+        "tool_call.value.closer-in-value",
+        "tool_call.value.text-after-closer",
+        "tool_call.markup.stray-closer",
+        "tool_call.markup.stray-closer"
+      ]
     }
   ],
+  "rejected": [],
   "embedded": [],
   "content": [
     " tail"
   ],
   "reasoning_text": [],
   "failed_validations": [],
-  "ledger_rules": []
+  "ledger_rules": [
+    "tool_call.xml.framing-newline",
+    "tool_call.value.closer-in-value",
+    "tool_call.value.text-after-closer",
+    "tool_call.markup.stray-closer",
+    "tool_call.markup.stray-closer"
+  ]
 }
