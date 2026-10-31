@@ -1354,7 +1354,12 @@ impl<'t> Reader<'_, 't, '_> {
             .tree
             .adopt_keyed(opener.name, &canonical, tree, collect);
         self.bound(canonical, opener.start, false)?;
-        Ok(Ok(match terminator {
+        self.parameter_end(stop, terminator).map(Ok)
+    }
+
+    /// Consume a parameter's terminator and record a missing closer when required.
+    fn parameter_end(&mut self, stop: usize, terminator: Terminator) -> Result<usize, StopReason> {
+        Ok(match terminator {
             Terminator::Closer(width, spelling) => {
                 self.respelled(stop, width, spelling)?;
                 stop + width
@@ -1378,7 +1383,7 @@ impl<'t> Reader<'_, 't, '_> {
                 }
                 stop
             }
-        }))
+        })
     }
 
     /// Select one independent local reading only after both values pass the
@@ -1750,29 +1755,7 @@ impl<'t> Reader<'_, 't, '_> {
                 _ => missing,
             })
             .collect();
-        // What the opener or end `stop` costs once the value has ended and
-        // `open` nested objects are still open: the objects it closes, and
-        // its own respelling.
-        let settle = |stop: &Candidate, open: usize| -> u64 {
-            if stop.terminator == Terminator::End {
-                return size(open).saturating_mul(at_end);
-            }
-            let owner = stop
-                .owners
-                .iter()
-                .copied()
-                .filter(|owner| *owner <= open)
-                .max()
-                .unwrap_or(open);
-            let respelled = if stop.respelled {
-                cost(EditOperator::TokenMisspelled)
-            } else {
-                0
-            };
-            unit[owner + 1..=open]
-                .iter()
-                .fold(respelled, |total, unit| total.saturating_add(*unit))
-        };
+        let settle = |stop: &Candidate, open: usize| Self::settle_cost(stop, open, at_end, &unit);
         let spelling = |terminator: Terminator| match terminator {
             Terminator::Closer(_, Spelling::Variant) => cost(EditOperator::CloserVariant),
             Terminator::Closer(_, Spelling::Misspelled) => cost(EditOperator::CloserMisspelled),
@@ -1851,6 +1834,29 @@ impl<'t> Reader<'_, 't, '_> {
             }
         }
         Ok(best.map(|(_, index)| index))
+    }
+
+    /// The cost of the opener or end after a value, closing nested frames
+    /// and paying the opener's respelling cost.
+    fn settle_cost(stop: &Candidate, open: usize, at_end: u64, unit: &[u64]) -> u64 {
+        if stop.terminator == Terminator::End {
+            return size(open).saturating_mul(at_end);
+        }
+        let owner = stop
+            .owners
+            .iter()
+            .copied()
+            .filter(|owner| *owner <= open)
+            .max()
+            .unwrap_or(open);
+        let respelled = if stop.respelled {
+            EditOperator::TokenMisspelled.rule().cost
+        } else {
+            0
+        };
+        unit[owner + 1..=open]
+            .iter()
+            .fold(respelled, |total, unit| total.saturating_add(*unit))
     }
 
     /// Whether the value ending at a terminator was cut off by a length stop.

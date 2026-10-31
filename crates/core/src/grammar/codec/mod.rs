@@ -344,8 +344,10 @@ impl ScratchCharge for CodecValue {
 }
 const _: () = assert!(core::mem::size_of::<CodecValue>() <= CodecValue::CHARGE);
 
-/// One owned link to an alternative codec reading. Dereferencing borrows the
-/// reading; `link.into_value()` transfers it and its remaining alternatives.
+/// One owned link to an alternative codec reading.
+///
+/// Dereferencing borrows the reading; `link.into_value()` transfers it and its
+/// remaining alternatives.
 /// Its destructor releases arbitrarily long chains iteratively.
 pub struct CodecAlternative {
     value: Vec<CodecValue>,
