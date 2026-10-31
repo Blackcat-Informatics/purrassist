@@ -370,11 +370,37 @@ fn dense_tools() -> ToolSet {
     .expect("tools compile")
 }
 
+/// The exact restarted-section reproduction from issue #10.
+const DEEPSEEK_RESTART_SECTION: &str = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"pat<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>delete_path<｜tool▁sep｜>\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\"\"parameters\":call▁begin｜>";
+const DEEPSEEK_RESTART_TAIL: &str = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>read_file<｜tool▁sep｜>\"{\\\"path\\\":\\\"a\\\"}\"<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+
+pub fn restarted_deepseek_sections(sections: usize) -> String {
+    format!(
+        "{}{DEEPSEEK_RESTART_TAIL}",
+        DEEPSEEK_RESTART_SECTION.repeat(sections)
+    )
+}
+
+pub fn restarted_deepseek_tools() -> ToolSet {
+    ToolSet::compile(
+        [
+            ToolDefinition::new("delete_path")
+                .effects(Effects::Mutating)
+                .param("path", Param::string().required()),
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required()),
+        ],
+        Budget::default(),
+    )
+    .expect("restart tools compile")
+}
+
 /// The dense-markup shapes `docs/RESOURCES.md` ("Dense markup") measures:
 /// output that is nothing but one small unit repeated, in every built-in
 /// dialect. Each is `(label, wrapper before, unit, wrapper after, what the
 /// units become)`.
-const DENSE: [(&str, &str, &str, &str, Dense); 20] = [
+const DENSE: [(&str, &str, &str, &str, Dense); 21] = [
     (
         "gemma3-calls",
         "",
@@ -509,6 +535,13 @@ const DENSE: [(&str, &str, &str, &str, Dense); 20] = [
         Dense::Calls,
     ),
     (
+        "deepseek31-restarted-sections",
+        "",
+        DEEPSEEK_RESTART_SECTION,
+        DEEPSEEK_RESTART_TAIL,
+        Dense::RestartedSections,
+    ),
+    (
         "bare-json-empty-calls",
         "",
         "{\"name\":\"tree\",\"arguments\":{}}",
@@ -527,6 +560,8 @@ enum Dense {
     ArrayOfCalls,
     /// One item each of the named array parameter of the one call.
     Items(&'static str),
+    /// Truncated sections followed by one complete read-only call.
+    RestartedSections,
 }
 
 /// Dense markup of `bytes` bytes in the shape `label` recovers under plain
@@ -536,13 +571,22 @@ enum Dense {
 /// section each and as the elements of one JSON array; v11 calls both
 /// separated by `</s>` and as one whitespace-separated chain.
 fn dense_fits_published_budget(label: &str, bytes: usize) {
-    let tools = dense_tools();
     let &(_, before, unit, after, expected) = DENSE
         .iter()
         .find(|shape| shape.0 == label)
         .expect("a dense shape");
     let units = (bytes - before.len() - after.len()) / unit.len();
-    let input = format!("{before}{}{after}", unit.repeat(units));
+    let (tools, input) = if matches!(expected, Dense::RestartedSections) {
+        (
+            restarted_deepseek_tools(),
+            restarted_deepseek_sections(units),
+        )
+    } else {
+        (
+            dense_tools(),
+            format!("{before}{}{after}", unit.repeat(units)),
+        )
+    };
     let request = ToolRecoveryRequest::sized(Effort::Standard, input.as_bytes());
     let result = tools.recover(input.as_bytes(), &request, DialectSet::built_in());
     let n = input.len() as u64;
@@ -571,6 +615,12 @@ fn dense_fits_published_budget(label: &str, bytes: usize) {
                     .iter()
                     .all(|call| call.outcome == CallOutcome::Resolved),
                 "{label}"
+            );
+        }
+        Dense::RestartedSections => {
+            assert!(
+                !calls.calls.is_empty() || !calls.rejected.is_empty(),
+                "{label}: restarted call markup remains visible"
             );
         }
         Dense::Items(name) => {
