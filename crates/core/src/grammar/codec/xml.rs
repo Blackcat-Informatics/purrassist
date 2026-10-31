@@ -525,6 +525,9 @@ struct Held {
     /// Text after the most recent unpaired closer. A final actual closer with
     /// only whitespace after it retains its original spelling/cost decision.
     tail: Option<usize>,
+    /// Whether the latest unpaired closer belongs to the parameter itself.
+    /// A held call closer cannot supply the parameter's missing close.
+    parameter_close: bool,
     /// The first call it holds whole after `first`.
     call: Option<usize>,
     /// For each closer tag name (see `Reader::tag`), how many elements of
@@ -535,9 +538,19 @@ struct Held {
 
 impl Held {
     /// An unpaired closer at `at` outside any call the value holds.
-    fn closer(&mut self, at: usize) {
+    fn closer(&mut self, at: usize, parameter: bool) {
         self.first.get_or_insert(at);
         self.tail = None;
+        self.parameter_close = parameter;
+    }
+
+    /// Only an actual parameter closer can anchor the new endpoint readings.
+    /// Call closers retain their original missing-parameter-close cost and
+    /// cannot turn trailing wrapper prose into a completed parameter.
+    fn anchors(&self, stop: usize) -> bool {
+        self.parameter_close
+            && self.admits(stop) == Hold::Forked
+            && self.tail.is_some_and(|text| text < stop)
     }
 
     /// The bytes `range`, outside any call the value holds and not an
@@ -750,7 +763,7 @@ impl<'t> Reader<'_, 't, '_> {
             if self.paired(at, held)? {
                 held.mark(at);
             } else {
-                held.closer(at);
+                held.closer(at, false);
             }
             return Ok(Some(at + width));
         }
@@ -1495,6 +1508,7 @@ impl<'t> Reader<'_, 't, '_> {
             first: None,
             text: None,
             tail: None,
+            parameter_close: false,
             call: None,
             open: Vec::new(),
         };
@@ -1537,7 +1551,7 @@ impl<'t> Reader<'_, 't, '_> {
                 if spelling == Spelling::Misspelled || (verbatim && self.paired(at, &mut held)?) {
                     held.mark(at);
                 } else {
-                    held.closer(at);
+                    held.closer(at, true);
                 }
                 ends.push(Candidate {
                     at,
@@ -1608,10 +1622,14 @@ impl<'t> Reader<'_, 't, '_> {
             let fork = (held.admits(chosen.at) == Hold::Forked)
                 .then_some(held.first)
                 .flatten();
-            let terminator = match (fork, chosen.terminator) {
-                (Some(_), Terminator::Boundary) => Terminator::TailBoundary,
-                (Some(_), Terminator::End) => Terminator::TailEnd,
-                _ => chosen.terminator,
+            let terminator = if held.anchors(chosen.at) {
+                match chosen.terminator {
+                    Terminator::Boundary => Terminator::TailBoundary,
+                    Terminator::End => Terminator::TailEnd,
+                    _ => chosen.terminator,
+                }
+            } else {
+                chosen.terminator
             };
             return Ok(Ending {
                 stop: chosen.at,
@@ -1779,8 +1797,7 @@ impl<'t> Reader<'_, 't, '_> {
         let canonical = |index: usize| first.is_some_and(|first| first < index);
         // The value runs to `last`: a string still open at the end of
         // output is malformed (the output may have ended inside it).
-        let anchored =
-            held.admits(last.at) == Hold::Forked && held.tail.is_some_and(|text| text < last.at);
+        let anchored = held.anchors(last.at);
         let whole = match last.terminator {
             _ if canonical(ends.len()) && !anchored => None,
             Terminator::End if self.end == CodecEnd::EndOfInput && !anchored => None,
