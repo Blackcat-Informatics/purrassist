@@ -28,7 +28,13 @@ jobs:
       - if: runner.os == 'Linux' && github.event_name == 'pull_request' && github.head_ref == 'paudley/11-tool-call-recovery-repair-search-under'
         name: Compare repair-search optimization with its previous engine
         timeout-minutes: 20
-        run: python3 scripts/compare-tool-call-revisions.py
+        run: python3 scripts/compare-tool-call-revisions.py --comparison repair
+      # The resynchronization optimization preserves readings while changing
+      # resource usage; this pinned predecessor belongs to this branch only.
+      - if: runner.os == 'Linux' && github.event_name == 'pull_request' && github.head_ref == 'paudley/10-tool-call-recovery-restarted-deepseek'
+        name: Compare resynchronization optimization with its previous engine
+        timeout-minutes: 20
+        run: python3 scripts/compare-tool-call-revisions.py --comparison resync
       - name: Test release workflow validation and publish preflight offline
         run: python3 scripts/test-check-release.py
       - name: Replay committed CLI/MCP transcripts against the built CLI
