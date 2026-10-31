@@ -1067,6 +1067,7 @@ TOOL_CALL_REF_SEEDS = [
 ] + TOOL_CALL_REF_STRICT + [
     b'\x02\x52' + _REF_REPAIR_COST_TURN,  # tolerant, standard sized budget
     b'\x02\x53' + _REF_REPAIR_COST_TURN,  # same recovery under deep effort
+    b'\x5b\x5b\x00\x52' + _REF_REPAIR_COST_TURN,  # original issue probe request
 ]
 TOOL_CALL_REF_TOKENS = TOOL_CALL_TOKENS + [
     b'list_records', b'batch_refs', b'any_items', b'tree_walk', b'free_items', b'root_ref',

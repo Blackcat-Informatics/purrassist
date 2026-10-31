@@ -120,11 +120,8 @@ def cases(fuzz, comparison):
             data = fuzz.mutate(seeds[parent], random, specification['tokens'])
             yield f'{target}/mutation/{index}/parent/{parent}', data, arguments, False
     if comparison == 'repair':
-        # Preserve the original four-byte prefix as well as the Standard/Deep
-        # reproduction seeds already in the existing reference input roster.
-        yield 'tool-call-ref/original-repair-reproduction', (
-            bytes.fromhex('5b5b0052') + fuzz._REF_REPAIR_COST_TURN
-        ), ['--snapshot', '--tools', 'ref'], False
+        # The reference roster already includes the exact original probe
+        # request and Standard/Deep versions, each compared above once.
         return
     # Read the exact existing Rust fixture literals. These literals use the
     # JSON-compatible subset of Rust string escapes; no shape is reconstructed.

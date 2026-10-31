@@ -119,8 +119,8 @@ jobs:
       - name: Install pinned Node for the pattern differential oracle
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - name: Coverage-guided and differential fuzzing (smoke counts)
-        # All ten targets, 1,000 mutations each; every panic fails. The issue
-        # #11 timeout for tool-call-ref is documented in docs/RELEASE.md.
+        # All ten targets, 1,000 mutations each; every panic fails. The runner
+        # default probe timeout applies to every target.
         run: make fuzz-hosted
   qualification:
     # Independent oracles, archive audits, and fresh resource measurements
