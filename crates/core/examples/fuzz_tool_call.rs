@@ -18,6 +18,9 @@
 //! root `$ref` tool. The default (`--tools fixed`) is unchanged: new tools
 //! live only in the `ref` set so no earlier seed changes meaning. Every
 //! other byte of the protocol and every check below is shared.
+//! `--snapshot` prints the complete recovery wire result instead of running
+//! the invariant checks and printing `ok`. Cross-revision CI uses this mode
+//! with the identical driver, tools and request decoding on both revisions.
 //!
 //! Control byte: bits 0-1 the repair policy (per tool, all `Structural`, all
 //! `Tolerant`, per tool), bits 2-3 the generation stop (`Stop`, `Length`,
@@ -253,14 +256,17 @@ fn ref_tools() -> ToolSet {
     ToolSet::from_openai(REF_TOOLS, Budget::default()).expect("the ref tool set compiles")
 }
 
-/// The tool set the command line selects: `--tools fixed` (the default) or
-/// `--tools ref`. Anything else is a usage error, never a silent fallback.
-fn tools() -> ToolSet {
+/// The selected tool set and whether to print a cross-revision snapshot.
+/// Existing fuzz invocations retain their invariant checks and `ok` output.
+/// Unknown options are a usage error, never a silent fallback.
+fn tools() -> (ToolSet, bool) {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        [] | ["--tools", "fixed"] => fixed_tools(),
-        ["--tools", "ref"] => ref_tools(),
-        _ => panic!("usage: fuzz-tool-call [--tools fixed|ref]; got {arguments:?}"),
+        [] | ["--tools", "fixed"] => (fixed_tools(), false),
+        ["--tools", "ref"] => (ref_tools(), false),
+        ["--snapshot"] | ["--snapshot", "--tools", "fixed"] => (fixed_tools(), true),
+        ["--snapshot", "--tools", "ref"] => (ref_tools(), true),
+        _ => panic!("usage: fuzz-tool-call [--snapshot] [--tools fixed|ref]; got {arguments:?}"),
     }
 }
 
@@ -1835,13 +1841,17 @@ fn main() {
         .map(|last| last & 7);
     let end = bytes.len() - usize::from(strict.is_some());
     let output = bytes.get(2..end).unwrap_or_default();
-    let tools = tools();
+    let (tools, snapshot) = tools();
     let request = request(control, split, strict, output);
     let result = tools.recover(
         output,
         &request,
         purrassist_core::tool_call::DialectSet::built_in(),
     );
+    if snapshot {
+        println!("{}", result.to_node().to_json());
+        return;
+    }
     if let ToolChoice::ForcedStrict(StrictForced {
         allow_reasoning: false,
         ..
