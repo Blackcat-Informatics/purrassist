@@ -816,6 +816,18 @@ bundle even when a projection cannot interpret them; unknown security semantics
 still refuse admission. A plain MCP consumer's metadata ignorance is a
 projection loss and never an execution capability.
 
+The current `codec::mcp::ExecutionProfile` fragment reader validates the complete
+JSON execution profile while retaining its original nodes and locations. Both
+`aa-exec` and `change_hat` are explicit; no mode is inferred. Its five resource
+quantities must be mathematically positive integers representable as `u64`;
+zero, negatives, fractions and larger values receive typed refusals. Integral
+exponent spellings are accepted without rounding. These wire limits are distinct
+from a selected AppArmor renderer's representability limits. Profile and hat
+strings are preserved without extra syntax restrictions. Fragment encoding fixes
+field order while preserving numeric spellings and decoded string values through the shared JSON writer.
+This is wire validation; RDF agreement and full graph/manifest conversion remain
+#33 acceptance.
+
 The JSON example uses a top-level `_meta.security.sourceGraph` Turtle string,
 added in the complete manifest block below, as the self-contained bundle's
 source dataset. The typed metadata and dataset must agree exactly; disagreement
