@@ -2,6 +2,16 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Internal grammar repair proposals retain only their saturated search cost.
+Actual edit provenance stays in the parser history and is still published by
+the existing resolver. A cost-only proposal refuses a parent that carries
+provenance rather than discarding it; ordinary schema-search proposals retain
+their complete ledgers. Successors within one replay share a lazily computed
+identity digest; the cache stays local to one parent, operator and offset.
+Existing work admission and wire counters are preserved. Repair eligibility
+borrows the pending suffix instead of copying it. Current performance and differential
+execution evidence for issue #11 remains pending automatic CI.
+
 Compiled schema indexes now retain fallible owners for location/document arenas,
 routes, resource and anchor lookup, dialect inheritance, optional-vocabulary
 metadata, child tables and pattern tables. A private AVL arena preserves stable
@@ -371,6 +381,16 @@ exact integer reading and formatting. Its `roundtrip_context` example exercises
 canonical bidirectional conversion. Source DOM construction is caller-owned; this
 does not establish governed raw JSON parsing, full manifests, RDF loading or
 host result release. Those integration requirements remain under #33 and #47.
+
+The MCP envelope reader now checks each execution-profile fragment through
+`codec::mcp::ExecutionProfile`. Its borrowed view retains original JSON and
+locations, checks both declared modes and all required fields, and reads exact
+positive `u64` resource quantities. Wire quantities are independent of the native
+renderer limits. Encoding uses the existing governed JSON writer with fixed key
+order and preserved scalar spellings; refusals expose the offending occurrence
+and enclosing tool index. The `execution_profile_codec` cases cover round trips,
+located invalid neighbors and output admission. Full RDF agreement, graph loading
+and manifest integration remain under #33; host release remains under #37.
 
 The internal tool-graph crate also provides governed AppArmor glob syntax and
 safe policy words through `AppArmorGlob`. Its flat arena retains exact source,

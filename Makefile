@@ -84,18 +84,14 @@ fuzz:
 	fi
 
 # The CI and pre-tag fuzz gate (docs/RELEASE.md): every target at the smoke
-# count, stopping at every probe panic. tool-call-ref gets the 120 s probe
-# timeout docs/FUZZING.md prescribes for the issue #11 slow input.
+# count, stopping at every probe panic. Every target uses the runner default
+# probe timeout, including the issue #11 repair reproduction.
 fuzz-hosted:
 	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-fuzz-feedback.py
 	@for target in json markdown schema pattern unified fuzzy matching patch tool-call tool-call-ref; do \
-		case $$target in \
-			tool-call-ref) args='--timeout 120' ;; \
-			*) args='' ;; \
-		esac; \
-		echo "== fuzz target: $$target$${args:+ $$args} =="; \
-		python3 scripts/fuzz.py --target $$target $$args || exit 1; \
+		echo "== fuzz target: $$target =="; \
+		python3 scripts/fuzz.py --target $$target || exit 1; \
 	done
 
 # Detector self-tests and strict clone enforcement are mandatory; the strict

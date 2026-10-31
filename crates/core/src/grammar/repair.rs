@@ -18,7 +18,9 @@
 //!
 //! Every explored configuration charges [`K_ERR`] `Work` on top of the
 //! search's own per-candidate charges; repair chains are bounded by the
-//! program length.
+//! program length. Outcomes of one replay share their parent's extended
+//! edit digest. Search ledgers retain cost only: the thread's history
+//! already records the actual markup edits.
 //!
 //! [`Search`]: crate::search::Search
 // `unreachable_pub` and `redundant_pub_crate` disagree on the right
@@ -33,9 +35,9 @@ use super::cost::{K_ERR, K_THREAD};
 use super::edit::{EditOperator, MarkupEdit};
 use super::engine::{Failure, HistKind, Out, Step, Sub, Thread, extend_digest};
 use super::{CompiledGrammar, Inst, Literal, Program};
-use crate::contract::{Evidence, Governor, Resource, ScratchVec, StopReason};
+use crate::contract::{Governor, Resource, ScratchVec, StopReason};
 use crate::digest::Digest;
-use crate::search::{Acceptance, Change, Proposals, SearchState};
+use crate::search::{Acceptance, Proposals, SearchState};
 use crate::tool_call::{GenerationStop, Rejection};
 use core::marker::PhantomData;
 
@@ -172,11 +174,18 @@ impl<'a, 's> RepairState<'a, 's> {
         })
     }
 
-    fn successor(&self, thread: Thread, status: Status, operator: EditOperator) -> Self {
+    fn successor(
+        &self,
+        thread: Thread,
+        status: Status,
+        operator: EditOperator,
+        digest: &mut Option<Digest>,
+    ) -> Self {
         Self {
             thread,
             status,
-            digest: extend_digest(self.digest, operator, self.thread.pos),
+            digest: *digest
+                .get_or_insert_with(|| extend_digest(self.digest, operator, self.thread.pos)),
             depth: self.depth + 1,
             marker: PhantomData,
         }
@@ -197,29 +206,23 @@ impl<'a, 's> RepairState<'a, 's> {
         context
             .step
             .advance(seeds, context.until, eof, &mut out, governor)?;
+        // Every outcome has the same parent, operator and parent offset.
+        // Hash only when one is proposed, once for this replay invocation.
+        let mut digest = None;
         for &thread in out.live.as_slice() {
-            proposals.commit(
-                governor,
-                self.successor(thread, Status::Live, operator),
-                change(operator),
-            )?;
+            let successor = self.successor(thread, Status::Live, operator, &mut digest);
+            proposals.commit_cost(governor, successor, operator.rule().cost)?;
         }
         for &thread in out.completed.as_slice() {
-            proposals.commit(
-                governor,
-                self.successor(thread, Status::Completed, operator),
-                change(operator),
-            )?;
+            let successor = self.successor(thread, Status::Completed, operator, &mut digest);
+            proposals.commit_cost(governor, successor, operator.rule().cost)?;
         }
         for failure in out.failed.as_slice() {
             if let Some(next) =
                 Self::seed(&context.step, failure, context.eof.as_ref(), context.opened)
             {
-                proposals.commit(
-                    governor,
-                    self.successor(next.thread, next.status, operator),
-                    change(operator),
-                )?;
+                let successor = self.successor(next.thread, next.status, operator, &mut digest);
+                proposals.commit_cost(governor, successor, operator.rule().cost)?;
             }
         }
         Ok(())
@@ -366,12 +369,10 @@ impl<'a, 's> RepairState<'a, 's> {
             governor,
         )?;
         // The inserted literal may complete the production at once.
+        let mut digest = None;
         for &thread in out.completed.as_slice().iter().filter(|_| complete) {
-            proposals.commit(
-                governor,
-                self.successor(thread, Status::Completed, operator),
-                change(operator),
-            )?;
+            let successor = self.successor(thread, Status::Completed, operator, &mut digest);
+            proposals.commit_cost(governor, successor, operator.rule().cost)?;
         }
         self.replay(context, proposals, &mut seeds, operator, governor)
     }
@@ -499,22 +500,6 @@ pub(crate) fn completes(
     Ok(false)
 }
 
-/// The search ledger entry of one operator application.
-fn change(operator: EditOperator) -> Change {
-    let rule = operator.rule();
-    Change {
-        evidence: Evidence {
-            rule: rule.id.into(),
-            explanation: String::new(),
-            span: None,
-            destination: String::new(),
-        },
-        cost: rule.cost,
-        original: None,
-        guess: None,
-    }
-}
-
 impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
     type Tie = (usize, u32, u8, u32, Status, usize, Digest);
     type Context<'c> = RepairContext<'a, 's>;
@@ -595,9 +580,15 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
         match self.status {
             Status::Failed | Status::Respelled => {
                 let respell = self.status == Status::Respelled;
-                // Owned: the insertions below borrow the context mutably.
-                let pending = &context.step.bytes(at..context.until).to_vec()[..];
-                let modes = respellings(grammar, literal, tables, pending, respell, context.opened);
+                // Keep only eligibility results across mutable insertion/replay.
+                let modes = respellings(
+                    grammar,
+                    literal,
+                    tables,
+                    context.step.bytes(at..context.until),
+                    respell,
+                    context.opened,
+                );
                 // A missing JSON `,` or `:` of the envelope, inserted.
                 if let Some(operator) =
                     json_punctuation(&literal.bytes).filter(|_| grammar.json_envelope)
@@ -626,6 +617,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     // that closer behind as content: a repeated or stray
                     // closer belongs to the call, so only the deletion
                     // (`tool_call.markup.stray-closer`) reads it.
+                    let pending = context.step.bytes(at..context.until);
                     let ordinary_stray = grammar.stray.admits(pending);
                     let stray = if protocol && pending.starts_with(&literal.bytes) {
                         governor.charge(

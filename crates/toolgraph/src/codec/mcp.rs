@@ -8,6 +8,10 @@
 //! between the source graph and projected metadata belong to the graph loader.
 //! These views do not establish graph admission or executable tool identities.
 
+mod execution;
+
+pub use execution::{ExecutionMode, ExecutionProfile, ExecutionQuantityProblem};
+
 use std::{fmt, ops::Range};
 
 use purrassist_core::{
@@ -50,6 +54,15 @@ pub enum EnvelopeProblem {
     UnsupportedMediaType,
     /// The bundle names a different projection loss contract.
     UnsupportedLossProfile,
+    /// The execution mode is neither `aa-exec` nor `change_hat`.
+    UnsupportedExecutionMode,
+    /// A numeric execution quantity cannot represent a positive wire `u64`.
+    ExecutionQuantity {
+        /// Original wire field name.
+        field: &'static str,
+        /// Exact numeric refusal, separate from a wrong JSON type.
+        problem: ExecutionQuantityProblem,
+    },
     /// The caller refused further work or cancelled the operation.
     Resource(StopReason),
 }
@@ -94,6 +107,12 @@ impl fmt::Display for EnvelopeError {
             EnvelopeProblem::UnsupportedLossProfile => {
                 write!(output, "bundle lossProfile must be {LOSS_PROFILE_ID}")
             }
+            EnvelopeProblem::UnsupportedExecutionMode => {
+                output.write_str("execution mode must be aa-exec or change_hat")
+            }
+            EnvelopeProblem::ExecutionQuantity { field, problem } => {
+                write!(output, "invalid execution quantity {field}: {problem:?}")
+            }
             EnvelopeProblem::Resource(cause) => cause.fmt(output),
         }
     }
@@ -117,7 +136,7 @@ impl std::error::Error for EnvelopeError {
 /// empty tool slice and the exact empty source string; it does not infer an
 /// admitted RDF graph. Nonempty bundles retain every original declaration.
 ///
-/// Prefix meanings and duplicates, tool-name uniqueness, nested metadata and
+/// Prefix meanings and duplicates, tool-name uniqueness, rule metadata and
 /// schema semantics require their owning vocabulary and graph operations.
 #[derive(Clone, Copy, Debug)]
 pub struct ManifestEnvelope<'a> {
@@ -131,7 +150,8 @@ impl<'a> ManifestEnvelope<'a> {
     /// Read every envelope occurrence under the caller's original governor.
     ///
     /// Fixed member names, their uniqueness, required members and wire types
-    /// are checked without allocating or reparsing. Legacy formats are refused
+    /// and complete execution-profile fragments are checked without allocating
+    /// or reparsing. Legacy formats are refused
     /// before any tool is interpreted. Source graph and schema bytes are not
     /// rewritten. The caller retains ownership of the parsed DOM throughout.
     ///
@@ -243,7 +263,8 @@ impl<'a> ManifestEnvelope<'a> {
 
 /// Original MCP declaration fields under a checked enclosing v2 envelope.
 ///
-/// JSON Schema and profile objects remain opaque original nodes. Annotation
+/// JSON Schema and rule metadata remain opaque original nodes. Execution
+/// profiles are checked completely and retain their original nodes. Annotation
 /// hints use MCP defaults while retaining original member presence. Semantic
 /// agreement with RDF requires the graph loader.
 #[derive(Clone, Copy, Debug)]
@@ -255,7 +276,7 @@ pub struct ToolEnvelope<'a> {
     output: &'a Node,
     annotations: Annotations<'a>,
     security: &'a Node,
-    execution: &'a Node,
+    execution: ExecutionProfile<'a>,
     context: &'a Node,
 }
 
@@ -295,6 +316,7 @@ impl<'a> ToolEnvelope<'a> {
         ] {
             object(node, field, 4, governor)?;
         }
+        let execution = ExecutionProfile::read_at(execution, 4, governor)?;
         Ok(Self {
             original: source,
             name,
@@ -343,10 +365,16 @@ impl<'a> ToolEnvelope<'a> {
     pub const fn security(&self) -> &'a Node {
         self.security
     }
-    /// Original execution metadata for subsequent typed validation.
+    /// Original execution metadata with all scalar spellings and source spans.
     #[must_use]
     pub const fn execution_profile(&self) -> &'a Node {
-        self.execution
+        self.execution.original()
+    }
+    /// Complete typed wire profile, already checked during envelope reading.
+    /// RDF agreement and host execution remain separate operations.
+    #[must_use]
+    pub const fn execution(&self) -> &ExecutionProfile<'a> {
+        &self.execution
     }
     /// Original context fragment for the existing context codec.
     #[must_use]

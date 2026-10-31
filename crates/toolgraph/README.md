@@ -21,6 +21,19 @@ serialized results intact; it makes no token-count claim. Graph loading, the
 production schema bridge, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 
+`codec::mcp::ExecutionProfile` reads the complete execution-profile fragment
+from a caller-owned JSON DOM; `ManifestEnvelope::read` checks these fields for
+every tool and `ToolEnvelope::execution` exposes the borrowed typed view.
+Missing, duplicate, unknown, mistyped, unsupported-mode and numeric refusals
+retain their original locations and enclosing tool index. The two wire modes
+are `aa-exec` and `change_hat`. Profile/hat strings remain verbatim. All five
+resource quantities are exact positive `u64` values, including integral decimal
+and exponent spellings; the `AppArmor` renderer's narrower representation limits
+remain a separate operation. `encode_json` reuses the governed JSON writer with
+fixed field order, preserving numeric spellings and decoded string values without copying the source DOM.
+This fragment establishes neither RDF agreement nor an executable graph. Full
+manifest conversion and host integration remain under #33 and #37.
+
 `FramedPrompt::assemble_bytes` assembles explicit prefix, separator and suffix
 with ordered caller-prepared declarations. It preserves original source/part
 identities and all supplied bytes, enforces a separate exact prompt byte ceiling,

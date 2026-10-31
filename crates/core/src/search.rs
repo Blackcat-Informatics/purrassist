@@ -242,9 +242,9 @@ impl<S> Accepted<S> {
 
 /// The successor sink handed to [`SearchState::expand`].
 ///
-/// Every committed successor inherits a clone of the parent's [`Ledger`]
-/// with one more [`Change`], and is enqueued immediately under the search's
-/// ordering and deduplication rules.
+/// [`Self::commit`] inherits the parent's [`Ledger`] with one more [`Change`].
+/// [`Self::commit_cost`] retains only cost when provenance belongs to the state.
+/// Both enqueue immediately under the search's ordering and deduplication rules.
 pub(crate) struct Proposals<'p, S: SearchState> {
     search: &'p mut Search<S>,
     parent: &'p Ledger,
@@ -272,6 +272,34 @@ impl<S: SearchState> Proposals<'_, S> {
     ) -> Result<(), StopReason> {
         let mut ledger = self.parent.clone();
         ledger.record(change);
+        self.search.enqueue(governor, state, ledger)
+    }
+
+    /// Enqueue an internal state whose provenance is retained in the state
+    /// itself, adding only `cost` to the parent's saturated search cost.
+    ///
+    /// # Errors
+    /// Returns [`StopReason::InvalidInput`] if the parent has provenance
+    /// that this path would discard. Otherwise preserves enqueue exhaustion
+    /// and cancellation, before the candidate is queued.
+    pub(crate) fn commit_cost(
+        &mut self,
+        governor: &mut Governor,
+        state: S,
+        cost: u64,
+    ) -> Result<(), StopReason> {
+        if !self.parent.evidence.is_empty()
+            || !self.parent.losses.is_empty()
+            || !self.parent.inferences.is_empty()
+        {
+            return Err(StopReason::InvalidInput(
+                "cost-only search proposals require a parent ledger without provenance".into(),
+            ));
+        }
+        let ledger = Ledger {
+            cost: self.parent.cost.saturating_add(cost),
+            ..Ledger::default()
+        };
         self.search.enqueue(governor, state, ledger)
     }
 }
