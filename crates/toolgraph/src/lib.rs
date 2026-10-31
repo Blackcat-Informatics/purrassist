@@ -6,6 +6,7 @@
 
 mod apparmor_glob;
 mod binding;
+pub mod codec;
 mod file_rule;
 mod glob_language;
 mod internet;

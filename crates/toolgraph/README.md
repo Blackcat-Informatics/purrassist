@@ -88,6 +88,17 @@ order with canonical masks and exact byte enforcement. Run
 `cargo run -p purrassist-toolgraph --example roundtrip_context` for an actual
 round trip. Full manifest, RDF and host-release integration remain outstanding.
 
+`codec::mcp::ManifestEnvelope` has a source implementation for borrowing a
+complete v2 bundle envelope from the existing ordered JSON DOM. It checks fixed
+wire fields, duplicates, required types and contract tags, retaining original
+declarations and key/value spans. `ToolEnvelope::decode_context` delegates to
+the existing context codec. Typed annotation hints use the MCP defaults and
+preserve the original title and member presence without copying. Source review
+is complete; compilation and execution evidence are recorded in the delivery
+PR. Prefix semantics, nested profile metadata,
+schema compilation, RDF agreement and bidirectional graph conversion remain
+part of the loader/codec delivery.
+
 `AppArmorGlob` parses caller-declared pathname patterns into a flat semantic
 arena and emits safe quoted policy words. Literal host bindings use the same
 renderer and explicitly refuse pattern metacharacters or policy injection.
