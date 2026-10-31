@@ -92,8 +92,10 @@ round trip. Full manifest, RDF and host-release integration remain outstanding.
 complete v2 bundle envelope from the existing ordered JSON DOM. It checks fixed
 wire fields, duplicates, required types and contract tags, retaining original
 declarations and key/value spans. `ToolEnvelope::decode_context` delegates to
-the existing context codec. The new envelope implementation has passed source
-review but has not been compiled or executed. Prefix semantics, nested metadata,
+the existing context codec. Typed annotation hints use the MCP defaults and
+preserve the original title and member presence without copying. Source review
+is complete; compilation and execution evidence are recorded in the delivery
+PR. Prefix semantics, nested profile metadata,
 schema compilation, RDF agreement and bidirectional graph conversion remain
 part of the loader/codec delivery.
 

@@ -243,8 +243,9 @@ impl<'a> ManifestEnvelope<'a> {
 
 /// Original MCP declaration fields under a checked enclosing v2 envelope.
 ///
-/// JSON Schema and annotation/profile objects remain opaque original nodes.
-/// This is a wire view; semantic agreement with RDF requires the graph loader.
+/// JSON Schema and profile objects remain opaque original nodes. Annotation
+/// hints use MCP defaults while retaining original member presence. Semantic
+/// agreement with RDF requires the graph loader.
 #[derive(Clone, Copy, Debug)]
 pub struct ToolEnvelope<'a> {
     original: &'a Node,
@@ -252,7 +253,7 @@ pub struct ToolEnvelope<'a> {
     description: &'a str,
     input: &'a Node,
     output: &'a Node,
-    annotations: &'a Node,
+    annotations: Annotations<'a>,
     security: &'a Node,
     execution: &'a Node,
     context: &'a Node,
@@ -276,13 +277,10 @@ impl<'a> ToolEnvelope<'a> {
         )?;
         let name = text(name, "name", governor)?;
         let description = text(description, "description", governor)?;
-        for (field, node) in [
-            ("inputSchema", input),
-            ("outputSchema", output),
-            ("annotations", annotations),
-        ] {
+        for (field, node) in [("inputSchema", input), ("outputSchema", output)] {
             object(node, field, 3, governor)?;
         }
+        let annotations = Annotations::read(annotations, governor)?;
         let [security, execution, context] = fields(
             meta,
             "tool _meta",
@@ -335,9 +333,9 @@ impl<'a> ToolEnvelope<'a> {
     pub const fn output_schema(&self) -> &'a Node {
         self.output
     }
-    /// Original annotation object, including member presence.
+    /// Typed annotation hints with their original object and member presence.
     #[must_use]
-    pub const fn annotations(&self) -> &'a Node {
+    pub const fn annotations(&self) -> Annotations<'a> {
         self.annotations
     }
     /// Original rule metadata for subsequent graph agreement checking.
@@ -369,6 +367,91 @@ impl<'a> ToolEnvelope<'a> {
         governor: &mut Governor,
     ) -> Result<ContextManagement, ContextCodecError> {
         ContextManagement::decode_mcp(Some(MCP_CONTEXT_FORMAT), self.context, governor)
+    }
+}
+
+/// Borrowed MCP annotations with the protocol's declared defaults.
+///
+/// An empty object means `readOnlyHint=false`, `destructiveHint=true`,
+/// `idempotentHint=false` and `openWorldHint=true`, with no title. Explicit
+/// values override those defaults. The original object retains whether each
+/// member was present; graph binding separately selects execution effects.
+#[derive(Clone, Copy, Debug)]
+pub struct Annotations<'a> {
+    original: &'a Node,
+    title: Option<&'a str>,
+    hints: u8,
+}
+
+impl<'a> Annotations<'a> {
+    fn read(source: &'a Node, governor: &mut Governor) -> Result<Self, EnvelopeError> {
+        const NAMES: [&str; 5] = [
+            "title",
+            "readOnlyHint",
+            "destructiveHint",
+            "idempotentHint",
+            "openWorldHint",
+        ];
+        let selected = member_map(source, "annotations", NAMES, 3, governor)?;
+        let title = selected[0]
+            .map(|node| text(node, NAMES[0], governor))
+            .transpose()?;
+        let mut hints = 0b1010;
+        for (index, node) in selected[1..].iter().enumerate() {
+            step(source, Resource::Work, 1, governor)?;
+            if let Some(node) = node {
+                let Value::Bool(value) = &node.value else {
+                    return Err(error(node, EnvelopeProblem::WrongType(NAMES[index + 1])));
+                };
+                if *value {
+                    hints |= 1 << index;
+                } else {
+                    hints &= !(1 << index);
+                }
+            }
+        }
+        step(source, Resource::Work, 1, governor)?;
+        Ok(Self {
+            original: source,
+            title,
+            hints,
+        })
+    }
+
+    /// Original object, including absent members and explicit default values.
+    #[must_use]
+    pub const fn original(&self) -> &'a Node {
+        self.original
+    }
+
+    /// Supplied display title; absence remains distinct from an empty title.
+    #[must_use]
+    pub const fn title(&self) -> Option<&'a str> {
+        self.title
+    }
+
+    /// Declared read-only hint, defaulting to false.
+    #[must_use]
+    pub const fn read_only_hint(&self) -> bool {
+        self.hints & 0b0001 != 0
+    }
+
+    /// Declared destructive hint, defaulting to true.
+    #[must_use]
+    pub const fn destructive_hint(&self) -> bool {
+        self.hints & 0b0010 != 0
+    }
+
+    /// Declared idempotence hint, defaulting to false.
+    #[must_use]
+    pub const fn idempotent_hint(&self) -> bool {
+        self.hints & 0b0100 != 0
+    }
+
+    /// Declared open-world hint, defaulting to true.
+    #[must_use]
+    pub const fn open_world_hint(&self) -> bool {
+        self.hints & 0b1000 != 0
     }
 }
 
@@ -446,6 +529,29 @@ fn fields<'a, const N: usize>(
     depth: u64,
     governor: &mut Governor,
 ) -> Result<[&'a Node; N], EnvelopeError> {
+    let selected = member_map(source, label, names, depth, governor)?;
+    for (slot, value) in selected.iter().enumerate() {
+        step(source, Resource::Work, 1, governor)?;
+        if value.is_none() {
+            return Err(error(
+                source,
+                EnvelopeProblem::MissingField {
+                    object: label,
+                    field: names[slot],
+                },
+            ));
+        }
+    }
+    Ok(selected.map(|value| value.expect("all required envelope members were checked")))
+}
+
+fn member_map<'a, const N: usize>(
+    source: &'a Node,
+    label: &'static str,
+    names: [&'static str; N],
+    depth: u64,
+    governor: &mut Governor,
+) -> Result<[Option<&'a Node>; N], EnvelopeError> {
     object(source, label, depth, governor)?;
     let Value::Object(members) = &source.value else {
         unreachable!("object type was checked")
@@ -487,17 +593,5 @@ fn fields<'a, const N: usize>(
             });
         }
     }
-    for (slot, value) in selected.iter().enumerate() {
-        step(source, Resource::Work, 1, governor)?;
-        if value.is_none() {
-            return Err(error(
-                source,
-                EnvelopeProblem::MissingField {
-                    object: label,
-                    field: names[slot],
-                },
-            ));
-        }
-    }
-    Ok(selected.map(|value| value.expect("all required envelope members were checked")))
+    Ok(selected)
 }
