@@ -950,8 +950,32 @@ available when a later stage refuses. The metadata vector is reserved before
 intake, so publishing a complete source after refusal moves existing storage
 without allocating.
 
-Batch recovery runs this path now. Stable-prefix events, the public stream API,
-decoding queries, and CLI/MCP progress remain unfinished under #16.
+Batch recovery runs this path now. Its recognizer also maintains a conservative
+native continuation frontier after each byte. The frontier intersects the
+content state, every active attempt's turn interpretations, open reasoning and
+promoted bases, and pending and engine ownership barriers. Turn histories cache
+their unambiguous structural prefix with one skip link per node; prefix
+intersection visits those links rather than enumerating or replaying histories.
+The portable history-node reservation is 48 bytes. Traversals admit work before
+each visited step, and scanning live owners admits work for their records.
+Pending reports keep their dispatch order separately from a counted ordered
+source-origin index. The cached source minimum covers every pending report,
+including a later-ending report whose source begins earlier. Each distinct
+origin admits 256 bytes for its count and ordered-node storage, released when
+its final report leaves the queue. Index updates admit lookup and update work
+before mutation; frontier updates read the cached minimum without scanning the
+pending queue.
+
+The shared intake can notify a private callback when that frontier changes.
+It caps the reported range before incomplete UTF-8 and charges `K_EVENT` work
+per notification; batch uses the same producer with a discard sink. Feed count
+and chunk boundaries do not decide notification boundaries. These notifications
+carry native ownership metadata, not resolved calls or permission to execute.
+Packed ambiguity and grouped attempts can hold this conservative frontier even
+when later recovery would fold their meanings together. Proving the longest
+semantic stable prefix, exact held/candidate byte accounting, public stream
+events, decoding queries, governed cloning and CLI/MCP progress remain
+unfinished under #16.
 
 Each dialect `d` of the explicit prepared allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is

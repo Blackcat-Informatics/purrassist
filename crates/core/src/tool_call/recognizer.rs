@@ -174,6 +174,27 @@ struct TurnNode {
     prev: u32,
     end: usize,
     kind: TurnKind,
+    /// Last structurally unambiguous prefix, before any packed alternatives.
+    plain: u32,
+    /// Depth and skip ancestor in the unambiguous-prefix tree.
+    depth: u32,
+    jump: u32,
+}
+
+const TURN_NODE_BYTES: u64 = 48;
+const _: () = assert!(core::mem::size_of::<TurnNode>() as u64 <= TURN_NODE_BYTES);
+/// One source-origin count plus its share of ordered-map node storage.
+const PENDING_ORIGIN_BYTES: u64 = 256;
+
+/// A conservative native continuation boundary, not a resolved stream event.
+/// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
+/// proving semantic equivalence and the longest stable prefix remains separate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ContinuationFrontier {
+    pub(crate) prefix_end: usize,
+    pub(crate) content: Option<(usize, usize)>,
+    /// Conservative ownership barrier, not the D7 candidate-byte count.
+    pub(crate) blocked_from: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -247,6 +268,19 @@ impl Pending {
         }
     }
 
+    fn source_start(&self) -> usize {
+        match self {
+            Self::Engine(Event::Opened { start, .. } | Event::Ended { start, .. })
+            | Self::Marker { start, .. } => *start,
+            Self::Engine(Event::Completed { at, parts, .. }) => {
+                parts.first().map_or(*at, |(part, _)| match part {
+                    Part::Call(call) => call.span.start,
+                    Part::Rejected { span, .. } => span.start,
+                })
+            }
+        }
+    }
+
     /// Order within one offset: openers before revivals.
     const fn phase(&self) -> u8 {
         match self {
@@ -308,9 +342,112 @@ impl Turn {
         kind: TurnKind,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        governor.charge(Resource::ScratchBytes, 32)?;
-        self.nodes.push(TurnNode { prev, end, kind });
-        Ok(u32::try_from(self.nodes.len() - 1).unwrap_or(u32::MAX))
+        let index = u32::try_from(self.nodes.len())
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        let parent = self.nodes[prev as usize];
+        let (plain, depth, jump) = if let TurnKind::Pack(other) = kind {
+            (self.common_plain(prev, other, governor)?, 0, 0)
+        } else if parent.plain == prev {
+            let depth = parent
+                .depth
+                .checked_add(1)
+                .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+            let first = self.nodes[parent.jump as usize];
+            let second = self.nodes[first.jump as usize];
+            let jump = if parent.depth - first.depth == first.depth - second.depth {
+                first.jump
+            } else {
+                prev
+            };
+            (index, depth, jump)
+        } else {
+            (parent.plain, 0, 0)
+        };
+        governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
+        self.nodes.push(TurnNode {
+            prev,
+            end,
+            kind,
+            plain,
+            depth,
+            jump,
+        });
+        Ok(index)
+    }
+
+    /// Intersect cached prefix trees using one logarithmic skip link per node.
+    /// Histories behind a packed disagreement are never enumerated or replayed.
+    fn common_plain(
+        &self,
+        left: u32,
+        right: u32,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let mut left = self.nodes[left as usize].plain;
+        let mut right = self.nodes[right as usize].plain;
+        if self.nodes[left as usize].depth < self.nodes[right as usize].depth {
+            core::mem::swap(&mut left, &mut right);
+        }
+        let target = self.nodes[right as usize].depth;
+        while self.nodes[left as usize].depth > target {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let node = self.nodes[left as usize];
+            left = if self.nodes[node.jump as usize].depth >= target {
+                node.jump
+            } else {
+                node.prev
+            };
+        }
+        while left != right {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let (a, b) = (self.nodes[left as usize], self.nodes[right as usize]);
+            if a.jump != b.jump {
+                left = a.jump;
+                right = b.jump;
+            } else {
+                left = a.prev;
+                right = b.prev;
+            }
+        }
+        Ok(left)
+    }
+
+    fn prefix_before(
+        &self,
+        mut node: u32,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(u32, Option<(usize, usize)>), StopReason> {
+        let mut crossing = None;
+        while self.nodes[node as usize].end > at {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let current = self.nodes[node as usize];
+            node = if self.nodes[current.jump as usize].end > at {
+                current.jump
+            } else {
+                crossing = Some(node);
+                current.prev
+            };
+        }
+        let content = crossing.and_then(|index| match self.nodes[index as usize].kind {
+            TurnKind::Content(start) if start < at => Some((start, at)),
+            _ => None,
+        });
+        Ok((node, content))
+    }
+
+    fn include_plain(
+        &self,
+        common: &mut Option<u32>,
+        hist: u32,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, K_CAPTURE)?;
+        *common = Some(match *common {
+            Some(previous) => self.common_plain(previous, hist, governor)?,
+            None => self.nodes[hist as usize].plain,
+        });
+        Ok(())
     }
 
     fn store(&mut self, segment: Segment, governor: &mut Governor) -> Result<u32, StopReason> {
@@ -939,10 +1076,15 @@ pub struct Recognizer<'s> {
     marker: u32,
     /// The queued reports, by offset, phase and arrival.
     pending: BTreeMap<(usize, u8, u64), Pending>,
+    /// Report offsets and source origins have different orders. Keep their
+    /// counted source index and cached minimum separate from dispatch order.
+    pending_sources: BTreeMap<usize, usize>,
+    pending_source_floor: Option<usize>,
     arrivals: u64,
     queued: Queued,
     turn: Turn,
     context: ContextTracker,
+    frontier: ContinuationFrontier,
     failed: Option<StopReason>,
 }
 
@@ -1031,7 +1173,11 @@ impl<'s> Recognizer<'s> {
             prev: 0,
             end: 0,
             kind: TurnKind::Root,
+            plain: 0,
+            depth: 0,
+            jump: 0,
         };
+        governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
         let turn = Turn {
             nodes: vec![root],
             store: Vec::new(),
@@ -1062,6 +1208,8 @@ impl<'s> Recognizer<'s> {
             digest: DigestBuilder::new(),
             marker: 0,
             pending: BTreeMap::new(),
+            pending_sources: BTreeMap::new(),
+            pending_source_floor: None,
             arrivals: 0,
             queued: Queued {
                 meter: governor.scratch_meter(),
@@ -1069,6 +1217,7 @@ impl<'s> Recognizer<'s> {
             },
             turn,
             context,
+            frontier: ContinuationFrontier::default(),
             failed: None,
         })
     }
@@ -1090,6 +1239,10 @@ impl<'s> Recognizer<'s> {
     #[must_use]
     pub const fn fed(&self) -> usize {
         self.engine.fed()
+    }
+
+    pub(crate) const fn continuation_frontier(&self) -> ContinuationFrontier {
+        self.frontier
     }
 
     /// Consume the next chunk of output.
@@ -1163,6 +1316,65 @@ impl<'s> Recognizer<'s> {
                 .map_or(limit, |floor| limit.min(floor.saturating_sub(1)));
             self.settle(limit, governor)?;
         }
+        self.update_frontier(governor)
+    }
+
+    /// Intersect all native continuation bases once per byte. The result is
+    /// deliberately structural: a packed disagreement is not resolved here.
+    fn update_frontier(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        let engine_floor = self.engine.continuation_floor(governor)?;
+        let report_floor = self.pending_source_floor;
+        let mut barrier = engine_floor.into_iter().chain(report_floor).min();
+        let mut common = None;
+        if let Some(top) = self.turn.top {
+            self.turn.include_plain(&mut common, top.hist, governor)?;
+        }
+        for (_, interpretations) in self.turn.interps.values() {
+            governor.charge(Resource::Work, size(interpretations.len()))?;
+            for interpretation in interpretations {
+                match interpretation {
+                    Interp::Top(base) => {
+                        self.turn.include_plain(&mut common, base.hist, governor)?
+                    }
+                    Interp::Embedded(start) => {
+                        barrier = Some(barrier.map_or(*start, |known| known.min(*start)));
+                    }
+                }
+            }
+        }
+        if let Some(think) = &self.turn.think {
+            self.turn.include_plain(&mut common, think.hist, governor)?;
+            if let Some((_, base)) = think.promoted {
+                self.turn.include_plain(&mut common, base.hist, governor)?;
+            }
+            barrier = Some(barrier.map_or(think.start, |known| known.min(think.start)));
+        }
+        if let Some((start, base)) = self.turn.last_kill
+            && barrier.is_some_and(|floor| floor <= start)
+        {
+            self.turn.include_plain(&mut common, base.hist, governor)?;
+        }
+        let lexical = self.engine.fed().saturating_sub(self.set.lookbehind);
+        let limit = barrier.map_or(lexical, |floor| lexical.min(floor));
+        let (node, mut content) = self
+            .turn
+            .prefix_before(common.unwrap_or(0), limit, governor)?;
+        let mut prefix_end = content.map_or(self.turn.nodes[node as usize].end, |(_, end)| end);
+        if let Some(top) = self.turn.top
+            && self.turn.think.is_none()
+            && self.turn.interps.is_empty()
+            && node == top.hist
+            && self.turn.nodes[top.hist as usize].plain == top.hist
+            && top.boundary < limit
+        {
+            content = Some((top.boundary, limit));
+            prefix_end = limit;
+        }
+        self.frontier = ContinuationFrontier {
+            prefix_end,
+            content,
+            blocked_from: barrier,
+        };
         Ok(())
     }
 
@@ -1171,11 +1383,65 @@ impl<'s> Recognizer<'s> {
     /// whose inserted wrapper closer is still being decided, and a queue too
     /// long for the budget is `BudgetExceeded(ScratchBytes)`.
     fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
-        governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
-        self.queued.bytes += QUEUED_REPORT;
-        self.arrivals += 1;
+        self.admit_source_index(governor)?;
+        let source = pending.source_start();
+        let previous = self.pending_sources.get(&source).copied();
+        let count = previous
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let arrival = self
+            .arrivals
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        let admitted = QUEUED_REPORT
+            + if previous.is_none() {
+                PENDING_ORIGIN_BYTES
+            } else {
+                0
+            };
+        governor.charge(Resource::ScratchBytes, admitted)?;
+        self.queued.bytes += admitted;
+        self.pending_sources.insert(source, count);
+        self.pending_source_floor = Some(
+            self.pending_source_floor
+                .map_or(source, |known| known.min(source)),
+        );
+        self.arrivals = arrival;
         self.pending
             .insert((pending.at(), pending.phase(), self.arrivals), pending);
+        Ok(())
+    }
+
+    /// Admit logarithmic native-map lookup/update work, including a possible
+    /// minimum refresh. A node search compares at most 11 keys per level;
+    /// binary height bounds conservatively cover the native B-tree's height.
+    fn admit_source_index(&self, governor: &mut Governor) -> Result<(), StopReason> {
+        let levels = usize::BITS - self.pending_sources.len().leading_zeros() + 1;
+        governor.charge(Resource::Work, u64::from(levels).saturating_mul(33))
+    }
+
+    /// Remove an origin after its index work was admitted, before dispatch.
+    fn unqueue_source(&mut self, source: usize, governor: &mut Governor) -> Result<(), StopReason> {
+        let count = self.pending_sources.get(&source).copied().ok_or_else(|| {
+            StopReason::InvalidInput("queued report has no source-origin count".into())
+        })?;
+        let remaining = count
+            .checked_sub(1)
+            .ok_or_else(|| StopReason::InvalidInput("queued source-origin count is zero".into()))?;
+        if remaining == 0 {
+            self.pending_sources.remove(&source);
+            if self.pending_source_floor == Some(source) {
+                self.pending_source_floor = self
+                    .pending_sources
+                    .first_key_value()
+                    .map(|(&first, _)| first);
+            }
+            governor.release_scratch(PENDING_ORIGIN_BYTES)?;
+            self.queued.bytes -= PENDING_ORIGIN_BYTES;
+        } else {
+            self.pending_sources.insert(source, remaining);
+        }
         Ok(())
     }
 
@@ -1193,11 +1459,18 @@ impl<'s> Recognizer<'s> {
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
         let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
         // Stable order: offset, then phase, then arrival.
-        while let Some(entry) = self.pending.first_entry() {
-            if entry.key().0 > limit {
+        while let Some((&key, _)) = self.pending.first_key_value() {
+            if key.0 > limit {
                 break;
             }
-            let pending = entry.remove();
+            // Admit before removing either index entry, so work refusal
+            // leaves both orders and their ownership intact.
+            self.admit_source_index(governor)?;
+            let (_, pending) = self
+                .pending
+                .pop_first()
+                .expect("pending minimum was just read");
+            self.unqueue_source(pending.source_start(), governor)?;
             ready.push((ready.len(), pending.at(), pending));
         }
         if ready.is_empty() {

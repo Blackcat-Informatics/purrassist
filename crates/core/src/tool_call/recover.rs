@@ -141,7 +141,7 @@
 //! and its call openers.
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
-use super::recognizer::{edit_entries, escaped};
+use super::recognizer::{ContinuationFrontier, edit_entries, escaped};
 use super::resolve::loss_kind;
 use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
@@ -158,8 +158,8 @@ use crate::contract::{
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CallEnd;
 use crate::grammar::cost::{
-    RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR, RECOVER_SCRATCH_PER_BYTE,
-    RECOVER_WORK_PER_BYTE,
+    K_EVENT, RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR,
+    RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
 };
 use crate::grammar::edit::LossKind;
 use crate::json::{Node, Value, pointer_segment};
@@ -3165,6 +3165,7 @@ pub(super) struct RecoveryIntake<'s> {
     encoding: EncodingCursor,
     setup: Option<IntakeSetup<'s>>,
     failed: Option<StopReason>,
+    progress: ContinuationFrontier,
 }
 
 impl<'s> RecoveryIntake<'s> {
@@ -3184,6 +3185,7 @@ impl<'s> RecoveryIntake<'s> {
             encoding: EncodingCursor::new(governor),
             setup: None,
             failed: None,
+            progress: ContinuationFrontier::default(),
         };
         let result = (|| {
             intake.capture = Some(SourceCapture::new(governor)?);
@@ -3217,6 +3219,17 @@ impl<'s> RecoveryIntake<'s> {
     /// leaves source capture independent; capture or governor failure stops
     /// admission without retrying an allocation or publishing a retained prefix.
     pub(super) fn feed(&mut self, bytes: &[u8], governor: &mut Governor) {
+        self.feed_with(bytes, governor, &mut |_| {});
+    }
+
+    /// Native frontier notifications use the same byte fold and event charges
+    /// as batch's discard sink. These are not resolved public stream events.
+    pub(super) fn feed_with(
+        &mut self,
+        bytes: &[u8],
+        governor: &mut Governor,
+        progress: &mut impl FnMut(ContinuationFrontier),
+    ) {
         self.digest.update(bytes);
         for &byte in bytes {
             if self.capture.is_none() {
@@ -3239,12 +3252,43 @@ impl<'s> RecoveryIntake<'s> {
                 continue;
             }
             if self.failed.is_none()
-                && let Err(reason) = self.interpret_byte(byte, governor)
+                && let Err(reason) = self
+                    .interpret_byte(byte, governor)
+                    .and_then(|()| self.report_progress(governor, progress))
             {
                 self.setup = None;
                 self.failed = Some(reason);
             }
         }
+    }
+
+    fn report_progress(
+        &mut self,
+        governor: &mut Governor,
+        progress: &mut impl FnMut(ContinuationFrontier),
+    ) -> Result<(), StopReason> {
+        let mut frontier = self
+            .setup
+            .as_ref()
+            .expect("live interpretation owns a recognizer")
+            .recognizer
+            .continuation_frontier();
+        let utf8 = if self.encoding.len == 0 {
+            self.received
+        } else {
+            self.encoding.start
+        };
+        frontier.prefix_end = frontier.prefix_end.min(utf8);
+        frontier.content = frontier.content.and_then(|(start, end)| {
+            let end = end.min(utf8);
+            (start < end).then_some((start, end))
+        });
+        if frontier != self.progress {
+            governor.charge(Resource::Work, K_EVENT)?;
+            self.progress = frontier;
+            progress(frontier);
+        }
+        Ok(())
     }
 
     fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
