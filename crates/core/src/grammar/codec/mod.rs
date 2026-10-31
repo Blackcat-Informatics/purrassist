@@ -94,7 +94,9 @@ pub(crate) const XML_CLOSER: &[u8] = b"</parameter>";
 pub(crate) const XML_CLOSER_VARIANT: &[u8] = b"</parameters>";
 
 use super::edit::{EditOperator, MarkupEdit};
-use crate::contract::{Governor, Resource, ScratchLease, ScratchVec, StopReason, saturating_size};
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchVec, StopReason, saturating_size,
+};
 use crate::tool_call::{ArgTree, ArgumentShape};
 use core::ops::Range;
 
@@ -335,6 +337,13 @@ pub struct CodecValue {
     pub alternative: Option<CodecAlternative>,
 }
 
+impl ScratchCharge for CodecValue {
+    // Portable record bound: ArgTree (184), edit Vec (24), and optional link
+    // (at most 48). Pointer width must not change recovery usage or admission.
+    const CHARGE: usize = 256;
+}
+const _: () = assert!(core::mem::size_of::<CodecValue>() <= CodecValue::CHARGE);
+
 /// One owned link to an alternative codec reading. Dereferencing borrows the
 /// reading; `link.into_value()` transfers it and its remaining alternatives.
 /// Its destructor releases arbitrarily long chains iteratively.
@@ -346,7 +355,7 @@ pub struct CodecAlternative {
 impl CodecAlternative {
     pub(crate) fn new(value: CodecValue, governor: &mut Governor) -> Result<Self, StopReason> {
         governor.charge(Resource::Work, 1)?;
-        let lease = governor.lease_scratch(saturating_size(core::mem::size_of::<CodecValue>()))?;
+        let lease = governor.lease_scratch(saturating_size(CodecValue::CHARGE))?;
         let mut values = Vec::new();
         values
             .try_reserve_exact(1)
