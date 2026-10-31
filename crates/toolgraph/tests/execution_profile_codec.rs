@@ -46,7 +46,10 @@ fn complete_profiles_roundtrip_both_modes_and_preserve_exact_wire_quantities() {
                 ExecutionProfile::read(&node, &mut governor()).expect("positive wire domain");
             assert_eq!(decoded.mode(), expected_mode);
             assert_eq!(decoded.limits().processes, expected);
-            assert!(core::ptr::eq(decoded.original(), &node));
+            assert!(core::ptr::eq(
+                decoded.original(),
+                core::ptr::from_ref(&node)
+            ));
             let encoded = decoded
                 .encode_json(&mut governor())
                 .expect("governed encoder");
@@ -189,6 +192,10 @@ fn envelope_checks_execution_fields_and_reports_original_occurrences() {
             members.last().expect("offending member").key_span
         );
     }
+    assert_quantity_refusals_are_located();
+}
+
+fn assert_quantity_refusals_are_located() {
     for (spelling, problem) in [
         ("0", ExecutionQuantityProblem::NonPositive),
         ("-0.0", ExecutionQuantityProblem::NonPositive),
