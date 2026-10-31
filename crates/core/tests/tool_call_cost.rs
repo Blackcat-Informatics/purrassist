@@ -21,7 +21,7 @@ const RESOURCES: &str = include_str!("../../../docs/RESOURCES.md");
 const COST_SOURCE: &str = include_str!("../src/grammar/cost.rs");
 const SECTION: &str = "## Tool-call recovery cost bound";
 /// The published bound, exactly as `docs/RESOURCES.md` states it.
-const BOUND: &str = "work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E,   K_d = K_THREAD·B_d";
+const BOUND: &str = "work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux,   K_d = K_THREAD·B_d";
 
 /// Every `grammar::cost` constant and its value.
 fn constants() -> Vec<(&'static str, u64)> {

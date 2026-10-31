@@ -889,7 +889,8 @@ governor, with the named constants of `purrassist_core::grammar::cost`.
 Recovering `n` output bytes charges exactly
 
 ```text
-recover     = 2·n (retaining the output, the encoding scan) + recognition + resolution
+recover     = W_intake + recognition + resolution
+W_intake    = 2·n (source insertion, encoding scan) + G_source(n) + r + G_ranges(r)
 recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment events)
             + K_CAPTURE·(captured bytes and history nodes materialized)
             + K_ERR·(error configurations explored)
@@ -899,6 +900,13 @@ resolution  = one unit per member, option, alternative and validation step,
               plus the recovered value, ids, checks and ledger entries
             + (unparsed-markup scan: one unit per content byte read)
 ```
+
+Here `r` is the number of maximal invalid UTF-8 runs. `G_source` and
+`G_ranges` sum the occupied lengths charged before each capacity growth of
+the source and invalid-range vectors. The shared doubling growth policy gives
+`G_source(n) ≤ 2·n`, `G_ranges(r) ≤ 2·r` and `r ≤ n`, so intake work is at most
+`7·n`. Empty vectors contribute zero relocation work. These terms describe
+admitted work; refusal stops the byte fold at its original cause.
 
 Pythonic's finite-state framing and canonical decimal literal path scan
 linearly. Converting a binary, octal or hexadecimal integer with `n` digits
@@ -916,6 +924,29 @@ anchor (at most 29.5 units per byte, for `to=functions.` on every line),
 linear within 1.05x and under 32 units per byte. A turn that is a single
 call has no content to scan.
 
+Tool-call recovery now uses one incremental intake path. It admits the source
+document's metadata before validating the request and constructing the
+recognizer. Each input byte then admits the cumulative input length, source
+storage and copying, UTF-8 classification, and recognition, in that order.
+Source and invalid-range vectors admit insertion and relocation work before
+growth; their capacity schedule depends on the byte sequence, never the number
+or size of caller chunks. The pending UTF-8 scalar holds at most three bytes
+between byte steps. Invalid runs retain their original ranges and receive the
+existing loss records once the complete source digest is available.
+
+This intentionally replaces the earlier ordering that retained the whole
+source and scanned its encoding before recognition began. Usage counters and
+the first refusal may therefore differ from that ordering. After refusal,
+remaining supplied bytes contribute only to the source digest: no further
+source copying, resource admission or interpretation occurs. A receipt retains
+the complete admitted source or no source. A retained prefix is never published
+as the complete input; a fully captured source remains available when a later
+stage refuses. The metadata vector is reserved before intake, so publishing a
+complete source after refusal moves existing storage without allocating.
+
+Batch recovery runs this path now. Stable-prefix events, the public stream API,
+decoding queries, and CLI/MCP progress remain unfinished under #16.
+
 Each dialect `d` of the explicit prepared allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is
 `CompiledGrammar::configuration_bound()` (one per program location plus one
@@ -925,16 +956,21 @@ colonless JSON spellings of its envelope literals); `K_d = K_THREAD·B_d` is its
 per-byte term. The published bound is
 
 ```text
-work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E,   K_d = K_THREAD·B_d
+work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux,   K_d = K_THREAD·B_d
 ```
 
-where `E` is the number of error configurations the repair search explores,
+Here `W_aux` includes the separately admitted class-automaton construction,
+segment events, captured history, codec and JSON-recovery work, search keys,
+and resolution listed in the exact decomposition above. The configuration
+term bounds finite-state framing, not arbitrary codec/schema computation or
+materialization of competing readings. `E` is the number of error configurations the repair search explores,
 capped by the effort's `Work` budget (explicit `BudgetExceeded` beyond it).
-The configuration term is an upper bound per byte: on the fast path only a
+Current intake counters have not been measured; historical throughput rows
+do not qualify the new byte-fold costs. The configuration term is an upper bound per byte: on the fast path only a
 handful of the `B_d` configurations are live at any byte, and the remaining
 linear terms (segment events, captured bytes, codec scans, JSON recovery
-units, resolution) are each a small constant per byte: whole recoveries
-measure 10 to 26 units per byte in total (the throughput table below), far
+units, resolution) are each a small constant per byte: recorded baseline recoveries
+measured 10 to 26 units per byte in total (the throughput table below), far
 inside the slack of any built-in `K_d`.
 `crates/core/tests/tool_call_scale.rs` (`make corpus`) checks the bound on
 64 KiB and 1 MiB Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3, Mistral v11,
