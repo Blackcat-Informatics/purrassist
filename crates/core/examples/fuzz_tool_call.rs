@@ -18,6 +18,12 @@
 //! root `$ref` tool. The default (`--tools fixed`) is unchanged: new tools
 //! live only in the `ref` set so no earlier seed changes meaning. Every
 //! other byte of the protocol and every check below is shared.
+//! `--snapshot` prints the complete recovery wire result instead of running
+//! the invariant checks and printing `ok`. Cross-revision CI uses this mode
+//! with the identical driver, tools and request decoding on both revisions.
+//! `--snapshot-restarted` instead accepts a raw restarted-section turn,
+//! using its exact two-tool schema, DeepSeek-V3.1, and a fixed finite budget
+//! shared by both revisions. Default fuzz input decoding is unchanged.
 //!
 //! Control byte: bits 0-1 the repair policy (per tool, all `Structural`, all
 //! `Tolerant`, per tool), bits 2-3 the generation stop (`Stop`, `Length`,
@@ -253,15 +259,43 @@ fn ref_tools() -> ToolSet {
     ToolSet::from_openai(REF_TOOLS, Budget::default()).expect("the ref tool set compiles")
 }
 
-/// The tool set the command line selects: `--tools fixed` (the default) or
-/// `--tools ref`. Anything else is a usage error, never a silent fallback.
-fn tools() -> ToolSet {
+/// The selected tool set and whether to print a cross-revision snapshot.
+/// Existing fuzz invocations retain their invariant checks and `ok` output.
+/// Unknown options are a usage error, never a silent fallback.
+fn tools() -> (ToolSet, ProbeMode) {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        [] | ["--tools", "fixed"] => fixed_tools(),
-        ["--tools", "ref"] => ref_tools(),
-        _ => panic!("usage: fuzz-tool-call [--tools fixed|ref]; got {arguments:?}"),
+        [] | ["--tools", "fixed"] => (fixed_tools(), ProbeMode::Checks),
+        ["--tools", "ref"] => (ref_tools(), ProbeMode::Checks),
+        ["--snapshot"] | ["--snapshot", "--tools", "fixed"] => (fixed_tools(), ProbeMode::Snapshot),
+        ["--snapshot", "--tools", "ref"] => (ref_tools(), ProbeMode::Snapshot),
+        ["--snapshot-restarted"] => (restarted_tools(), ProbeMode::Restarted),
+        _ => panic!(
+            "usage: fuzz-tool-call [--snapshot] [--tools fixed|ref] or --snapshot-restarted; got {arguments:?}"
+        ),
     }
+}
+
+enum ProbeMode {
+    Checks,
+    Snapshot,
+    Restarted,
+}
+
+/// The same tool definitions as `tool_call_cost_support::restarted_deepseek_tools`.
+fn restarted_tools() -> ToolSet {
+    ToolSet::compile(
+        [
+            ToolDefinition::new("delete_path")
+                .effects(Effects::Mutating)
+                .param("path", Param::string().required()),
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string().required()),
+        ],
+        Budget::default(),
+    )
+    .expect("restart tools compile")
 }
 
 /// The request knobs the two header bytes select.
@@ -1834,6 +1868,26 @@ fn main() {
     let mut bytes = Vec::new();
     io::stdin().take(4097).read_to_end(&mut bytes).unwrap();
     assert!(bytes.len() <= 4096, "probe input exceeds 4096 bytes");
+    let (tools, mode) = tools();
+    if matches!(mode, ProbeMode::Restarted) {
+        let request = ToolRecoveryRequest::new(Effort::Standard).budget(Budget {
+            work: 100_000_000,
+            candidates: 1_000_000,
+            input_bytes: 4096,
+            scratch_bytes: 256 * 1024 * 1024,
+            depth: 128,
+            evidence_entries: 1_000_000,
+            helper_calls: 0,
+        });
+        let dialects = DialectSet::new(
+            [DialectId::DeepSeekV31],
+            &mut Governor::new(Budget::default()),
+        )
+        .expect("DeepSeek dialect");
+        let result = tools.recover(&bytes, &request, &dialects);
+        println!("{}", result.to_node().to_json());
+        return;
+    }
     let control = bytes.first().copied().unwrap_or(0);
     let split = bytes.get(1).copied().unwrap_or(0);
     let strict = bytes
@@ -1843,13 +1897,16 @@ fn main() {
         .map(|last| last & 7);
     let end = bytes.len() - usize::from(strict.is_some());
     let output = bytes.get(2..end).unwrap_or_default();
-    let tools = tools();
     let request = request(control, split, strict, output);
     let result = tools.recover(
         output,
         &request,
         purrassist_core::tool_call::DialectSet::built_in(),
     );
+    if matches!(mode, ProbeMode::Snapshot) {
+        println!("{}", result.to_node().to_json());
+        return;
+    }
     if let ToolChoice::ForcedStrict(StrictForced {
         allow_reasoning: false,
         ..

@@ -1255,6 +1255,23 @@ budget of about 236 million Work, 432 MiB of scratch and 215,000 evidence
 entries at `Effort::Standard`. The larger Work allowance also permits more
 computation before pathological input exhausts.
 
+Restarted DeepSeek-V3.1 sections (issue #10) now normalize bracket depth
+for multi-byte resynchronization targets. These markers match at any depth;
+quote, escape, colon and partial-marker state remain unchanged. The existing
+configuration merge can therefore combine equivalent scans rather than keeping
+one depth-distinguished scan per restarted section. Each attempt retains only
+its latest ignored opener because the current opener position increases
+monotonically; sibling targets still share that record.
+
+The exact issue reproduction is included in the existing dense-markup cases at
+64 KiB and 1 MiB. `restarted_deepseek_sections_cost_is_linear` checks Work,
+total scratch and peak scratch against input growth from 16 through 1,024
+sections, with the existing 1.05 tolerance and standard sized budgets. Growth
+is measured above the first sample to account for fixed setup and the closing
+tail. These
+current-source execution results remain pending automatic CI; no new measured
+counters or timing result is claimed here.
+
 Historical work-heavy shapes under the twelve-dialect sized recipe include
 the following explicit exhaustions. These measurements do not assert their
 current counters or termination under the fourteen-dialect recipe:
@@ -1263,19 +1280,6 @@ current counters or termination under the fourteen-dialect recipe:
   895 work per byte (every `{` may open a Llama 3 JSON, Anthropic `tool_use`
   or bare JSON attempt, and each stays live), and a megabyte of `{"a":`
   195. Both are linear in `n`, and both end `BudgetExceeded(Work)`.
-- DeepSeek-V3.1 output with many sections, each restarted after a truncated
-  stringified-argument call (issue #10). The history of each restarted
-  section packs readings that reach different call boundaries, so each is
-  segmented whole (the fallback below). Charged work grows quadratically in
-  the number of such sections: at `Effort::Maximum`, 238 work per byte at 8
-  sections, 460 at 16, 911 at 32 and 1,813 at 64, where a clean DeepSeek-V3.1
-  output costs 73. Wall time grows faster than the charged work (0.3 s, 3.8 s
-  and 42 s at 16, 32 and 64 sections), so the governor under-counts this
-  shape (wall times in the dev profile, which is optimized). The growth
-  predates the chained segmentation, and the numbers are the same on `main`
-  943fa04. Under plain `sized`, such output ends
-  `BudgetExceeded(Work)` explicitly from about 16 sections. Ordinary output
-  rarely restarts a section. The fix is tracked in issue #10.
 - A mutated Qwen3-Coder XML turn calling a tool whose array items are
   free-form objects (issue #11): the repair search spends about 240 to 280 ns
   per charged work unit, against 40 to 80 ns for ordinary recovery. Charged
@@ -1298,9 +1302,11 @@ lie within one call. A history whose equal-cost readings reach different
 call boundaries, or differ in whether a call was skipped, is segmented
 whole, as before, at the completion that reaches it; the work is charged
 (per history node, per call read) like any segmentation. No Mistral v11
-chain tried reached this path. It was reached only by DeepSeek-V3.1
-sections restarted after a truncated call, once per section
-(`tool_call_cost::whole_segmentation_fallback_is_correct_and_charged`).
+chain tried reached this path. DeepSeek-V3.1 sections restarted after a
+truncated call cover it in
+`tool_call_cost::whole_segmentation_fallback_is_correct_and_charged`.
+Saved computation traces for issue #10 attributed its quadratic growth to
+resynchronization scans and retained-attempt visits, rather than this fallback.
 
 A Mistral v3 `[TOOL_CALLS] [..]` array of thousands of calls holds one
 literal failure per element (each element's closing `}` or `]` meets the
