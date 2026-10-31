@@ -5,8 +5,8 @@
 //! twice: against read-only tools (so `Tolerant`, where guesses are
 //! admitted) and against mutating tools (so `Structural`).
 //!
-//! The malformed cases (an unterminated opener, an empty name, text between
-//! parameters, a nested `<function=`, trailing text inside the wrapper,
+//! The malformed cases (an unterminated opener, an empty name,
+//! a nested `<function=`, trailing text inside the wrapper,
 //! positional text) are rejected attempts whose reason is kept and whose
 //! raw span is the whole call markup, closers included, so no content range
 //! holds call markup; a hallucinated tool is a per-call `Unresolved` call. Either way the
@@ -15,6 +15,9 @@
 //! fenced code or quoted prose may instead be a guess-flagged reading
 //! (`tool_call.context.fenced-example`): `BestGuess` at most under
 //! `Tolerant`, `Unresolved` under `Structural`, and never in `usable()`.
+//!
+//! Text after an unpaired parameter closer retains both equally ranked guesses
+//! through the next parameter or body end (issue #7), and neither is usable.
 //!
 //! JSON content without call-shaped evidence is plain content under the
 //! default allow-list (every built-in dialect): no Llama 3 JSON attempt
@@ -149,10 +152,43 @@ fn empty_function_name() {
     assert_rejected(input, &[(0..46, Rejection::Malformed { at: 21 })]);
 }
 
+/// Issue #7 retains both readings while preserving the negative corpus's
+/// requirement that no interpretation is usable, even accepting guesses.
+fn assert_ambiguous_tail(input: &str, held: &str) {
+    for effects in PROFILES {
+        let calls = recover(input, effects);
+        assert_never_usable(input, &calls);
+        assert_no_markup_in_content(input, &calls);
+        assert!(calls.rejected.is_empty(), "{effects:?} {input:?}");
+        assert_eq!(calls.calls.len(), 1, "{effects:?} {input:?}");
+        let call = &calls.calls[0];
+        assert_eq!(
+            call.outcome,
+            CallOutcome::Ambiguous,
+            "{effects:?} {call:#?}"
+        );
+        let mut values: Vec<_> = core::iter::once(&call.arguments)
+            .chain(call.alternatives.iter().map(|reading| &reading.arguments))
+            .map(|arguments| {
+                arguments
+                    .get("a")
+                    .and_then(purrassist_core::json::Node::as_str)
+                    .expect("parameter a")
+            })
+            .collect();
+        values.sort_unstable();
+        let mut expected = ["x", held];
+        expected.sort_unstable();
+        assert_eq!(values, expected, "{effects:?} {input:?}");
+        assert_eq!(calls.finish, Finish::Unresolved, "{effects:?} {input:?}");
+        assert!(calls.usable_accepting_guesses().is_empty());
+    }
+}
+
 #[test]
 fn text_between_parameters() {
     let input = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nsome text\n<parameter=b>\ny\n</parameter>\n</function>\n</tool_call>";
-    assert_rejected(input, &[(0..117, Rejection::Malformed { at: 54 })]);
+    assert_ambiguous_tail(input, "x\n</parameter>\nsome text");
 }
 
 #[test]
@@ -167,22 +203,18 @@ fn trailing_text_inside_wrapper() {
     assert_rejected(input, &[(0..90, Rejection::Malformed { at: 66 })]);
 }
 
-/// Repeated closers after a rejected attempt's end literal are its stray
-/// closers: recorded in its raw text, not left as content; the prose after
-/// them stays content.
+/// Repeated closers after an ambiguous body tail remain markup; only the
+/// prose after them stays content.
 #[test]
-fn stray_closers_after_rejected_attempt() {
+fn stray_closers_after_ambiguous_body_tail() {
     let input = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>\n</tool_call> tail";
     let tail = input.len() - " tail".len();
+    assert_ambiguous_tail(input, "x\n</parameter>\nthat is all");
     for effects in PROFILES {
         let calls = recover(input, effects);
         assert_never_usable(input, &calls);
         assert_no_markup_in_content(input, &calls);
-        assert_eq!(
-            rejected(&calls),
-            [(0..tail, Rejection::Malformed { at: 54 })],
-            "{effects:?}"
-        );
+        assert!(calls.rejected.is_empty(), "{effects:?}");
         assert_eq!(calls.content, vec![tail..input.len()], "{effects:?}");
     }
 }
@@ -333,15 +365,15 @@ fn json_content_without_call_evidence_is_content() {
 /// rejected attempt, never silent content.
 #[test]
 fn unwrapped_negative_corpus_is_rejected() {
+    assert_ambiguous_tail(
+        "<function=f>\n<parameter=a>\nx\n</parameter>\nsome text\n<parameter=b>\ny\n</parameter>\n</function>",
+        "x\n</parameter>\nsome text",
+    );
     for (input, expected) in [
         ("<function=f", vec![(0..11, Rejection::Unterminated)]),
         (
             "<function=>x</function>",
             vec![(0..23, Rejection::Malformed { at: 10 })],
-        ),
-        (
-            "<function=f>\n<parameter=a>\nx\n</parameter>\nsome text\n<parameter=b>\ny\n</parameter>\n</function>",
-            vec![(0..92, Rejection::Malformed { at: 42 })],
         ),
         (
             "<function=f>\n<function=g>\n<parameter=a>\nx\n</parameter>\n</function>\n</function>",
