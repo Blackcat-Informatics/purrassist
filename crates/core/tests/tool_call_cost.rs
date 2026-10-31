@@ -1174,17 +1174,28 @@ fn restarted_deepseek_sections_cost_is_linear() {
             ],
         ));
     }
-    let (small_bytes, small) = measured[0];
-    for &(bytes, charged) in &measured[1..] {
+    // Setup and the final complete call are fixed. Compare resource growth
+    // above the first sample against added bytes, retaining the same tolerance.
+    let (first_bytes, first) = measured[0];
+    let (next_bytes, next) = measured[1];
+    let small_bytes = next_bytes - first_bytes;
+    for &(bytes, charged) in &measured[2..] {
+        let added_bytes = bytes - first_bytes;
         for (index, label) in ["work", "total scratch", "peak scratch"]
             .into_iter()
             .enumerate()
         {
-            let (ratio, byte_ratio) = (charged[index] * small_bytes, small[index] * bytes);
+            let small = next[index]
+                .checked_sub(first[index])
+                .expect("positive resource growth");
+            let growth = charged[index]
+                .checked_sub(first[index])
+                .expect("positive resource growth");
+            let (ratio, byte_ratio) = (growth * small_bytes, small * added_bytes);
             assert!(
                 ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
-                "{small_bytes} -> {bytes} bytes: {label} {} -> {}, scaled {ratio}, expected {byte_ratio}",
-                small[index],
+                "{first_bytes} -> {bytes} bytes: {label} {} -> {}, growth {growth}, scaled {ratio}, expected {byte_ratio}",
+                first[index],
                 charged[index]
             );
         }

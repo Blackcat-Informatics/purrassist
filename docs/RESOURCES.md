@@ -1257,7 +1257,9 @@ monotonically; sibling targets still share that record.
 The exact issue reproduction is included in the existing dense-markup cases at
 64 KiB and 1 MiB. `restarted_deepseek_sections_cost_is_linear` checks Work,
 total scratch and peak scratch against input growth from 16 through 1,024
-sections, with the existing 1.05 tolerance and standard sized budgets. These
+sections, with the existing 1.05 tolerance and standard sized budgets. Growth
+is measured above the first sample to account for fixed setup and the closing
+tail. These
 current-source execution results remain pending automatic CI; no new measured
 counters or timing result is claimed here.
 
