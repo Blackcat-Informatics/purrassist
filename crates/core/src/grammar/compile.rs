@@ -23,8 +23,8 @@ use super::cost::K_COMPILE;
 use super::syntax::{Document, PExpr, Statement};
 use super::{
     CallEnd, CaptureKind, ClassId, ClassTerminal, CloserClass, CloserId, CompiledGrammar,
-    DelimiterSet, DelimiterSetId, ExamplePolicy, Expr, ExprChild, ExprItems, GrammarError, Literal,
-    LiteralId, Production, ProductionId, index_u32,
+    DelimiterSet, DelimiterSetId, ExamplePolicy, Expr, ExprChild, ExprItems, GrammarError,
+    GrammarOrigin, Literal, LiteralId, Production, ProductionId, index_u32,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
@@ -91,7 +91,7 @@ pub(crate) struct Program {
     pub(crate) line_start_openers: ScratchVec<u32>,
     pub(crate) protocol: Option<ProtocolFence>,
     pub(crate) argument_anchor: bool,
-    pub(crate) derived: bool,
+    pub(crate) origin: GrammarOrigin,
     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
     pub(crate) first: [u64; 4],
     /// The configuration bound (see `CompiledGrammar::configuration_bound`).
@@ -139,7 +139,7 @@ impl Program {
     /// their opener literal.
     #[inline]
     pub(crate) const fn deferred(&self) -> bool {
-        self.derived || self.argument_anchor || !self.committed.is_empty()
+        self.origin.is_projected() || self.argument_anchor || !self.committed.is_empty()
     }
 
     /// Whether a configuration at `pc` belongs to a committed attempt.
@@ -1558,7 +1558,7 @@ fn compile_program(
         line_start_openers: ScratchVec::new(governor),
         protocol: None,
         argument_anchor: tables.argument_anchor,
-        derived: tables.derived,
+        origin: GrammarOrigin::from_derived(tables.derived),
         first,
         bound,
         committed,
@@ -1668,6 +1668,54 @@ struct Programs<'p> {
 }
 
 impl Programs<'_> {
+    /// Compile the original tables, then rebuild JSON key spellings when declared.
+    fn compile_tables(
+        &self,
+        literals: &mut ScratchVec<Literal>,
+        literal_tables: &mut ScratchVec<LiteralTables>,
+        closers: &[CloserClass],
+        confusables: &[(Bytes, Bytes)],
+        json_envelope: bool,
+        governor: &mut Governor,
+    ) -> Result<[Program; 2], GrammarError> {
+        let mut programs = self.compile(literals, literal_tables, &[], governor)?;
+        if json_envelope {
+            // Key uses of a literal also used otherwise point at its key copy.
+            let renames;
+            (*literal_tables, renames) =
+                json_tables(&programs, literals, closers, confusables, governor)?;
+            programs = self.compile(literals, literal_tables, &renames, governor)?;
+        }
+        Ok(programs)
+    }
+
+    /// Retained joint captures use the existing native space layout.
+    fn joint_layouts(
+        &self,
+        program: &Program,
+        classes: &[ClassTerminal],
+        layouts: &mut ScratchVec<Option<Bytes>>,
+        governor: &mut Governor,
+    ) -> Result<ScratchVec<super::partition::JointCapture>, GrammarError> {
+        let joint_captures = if self.derived {
+            super::partition::relations(program, governor)?
+        } else {
+            ScratchVec::new(governor)
+        };
+        if !joint_captures.is_empty() {
+            for (index, production) in self.productions.iter().enumerate() {
+                governor.charge(Resource::Work, 1)?;
+                if layouts[index].is_none()
+                    && let Expr::Class(class) = production.expr
+                    && classes[class.index()].accepts(b" ", governor)?
+                {
+                    layouts.as_mut_slice()[index] = Some(owned_bytes(b" ", governor)?);
+                }
+            }
+        }
+        Ok(joint_captures)
+    }
+
     fn compile(
         &self,
         literals: &[Literal],
@@ -2139,6 +2187,13 @@ fn line_start_openers(
     literals: &[Literal],
     governor: &mut Governor,
 ) -> Result<(), GrammarError> {
+    if program.origin.is_projected() {
+        governor.charge(Resource::Work, size(program.openers.len()))?;
+        let openers = core::mem::replace(&mut program.openers, ScratchVec::new(governor));
+        program.line_start_openers.extend(openers.iter().copied())?;
+        program.openers = openers;
+        return Ok(());
+    }
     for (opener, offset) in declarations {
         let before = program.line_start_openers.len();
         if !program.start_closure {
@@ -2239,27 +2294,15 @@ fn compile_policy(
         argument_anchor,
         derived,
     };
-    let mut programs = source.compile(&literals, &literal_tables, &[], governor)?;
-    if json_envelope {
-        // The JSON spellings need to know which literals are member keys,
-        // which the compiled programs tell; the programs are then compiled
-        // again over the extended tables, key uses of a literal also used
-        // otherwise pointing at its key copy.
-        let renames;
-        (literal_tables, renames) =
-            json_tables(&programs, &mut literals, &closers, &confusables, governor)?;
-        programs = source.compile(&literals, &literal_tables, &renames, governor)?;
-    }
-    if derived {
-        governor.charge(Resource::Work, size(programs[0].openers.len()))?;
-        let openers = core::mem::replace(&mut programs[0].openers, ScratchVec::new(governor));
-        programs[0]
-            .line_start_openers
-            .extend(openers.iter().copied())?;
-        programs[0].openers = openers;
-    } else {
-        line_start_openers(&mut programs[0], &line_start, &literals, governor)?;
-    }
+    let mut programs = source.compile_tables(
+        &mut literals,
+        &mut literal_tables,
+        &closers,
+        &confusables,
+        json_envelope,
+        governor,
+    )?;
+    line_start_openers(&mut programs[0], &line_start, &literals, governor)?;
     if examples == ExamplePolicy::ProtocolFences {
         protocol_fences(
             &mut programs,
@@ -2278,24 +2321,7 @@ fn compile_policy(
         &reasoning,
         governor,
     )?;
-    let joint_captures = if derived {
-        super::partition::relations(&programs[0], governor)?
-    } else {
-        ScratchVec::new(governor)
-    };
-    // A retained space is a valid canonical boundary for adjacent captures.
-    // Native layouts already print optional whitespace without a second printer.
-    if !joint_captures.is_empty() {
-        for (index, production) in productions.iter().enumerate() {
-            governor.charge(Resource::Work, 1)?;
-            if layouts[index].is_none()
-                && let Expr::Class(class) = production.expr
-                && classes[class.index()].accepts(b" ", governor)?
-            {
-                layouts.as_mut_slice()[index] = Some(owned_bytes(b" ", governor)?);
-            }
-        }
-    }
+    let joint_captures = source.joint_layouts(&programs[0], &classes, &mut layouts, governor)?;
     let call_ends = call_ends(&programs[0], &literals, &literal_tables, governor)?;
     let call_literals = call_literals(&programs[0], &literals, &literal_tables, governor)?;
     // An optional-id grammar reads model-added ids absent from its markup.
@@ -2305,7 +2331,7 @@ fn compile_policy(
     Ok(CompiledGrammar {
         id: document.id.into_string(),
         digest,
-        derived,
+        origin: GrammarOrigin::from_derived(derived),
         joint_captures,
         literals,
         literal_tables,

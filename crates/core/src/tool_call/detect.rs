@@ -199,7 +199,7 @@ impl MarkupFamily {
 
     /// Every built-in dialect whose grammar reads the detected shape.
     ///
-    /// A bare name followed by arguments maps to both DeepSeek V3.1 and
+    /// A bare name followed by arguments maps to both `DeepSeek` V3.1 and
     /// Mistral v11 projections; the detector cannot identify one from that shape.
     #[must_use]
     pub const fn dialects(self) -> &'static [DialectId] {

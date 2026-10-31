@@ -80,6 +80,9 @@ use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Original name capture and optional beginning of its chained call.
+type CapturedName = (Range<usize>, Option<usize>);
+
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
 /// the reading that ended there (see `Step::step_body`).
@@ -579,7 +582,7 @@ pub(crate) struct Step<'a, 's> {
     /// What the program reads (a call's verbatim argument body may hold
     /// closer text; see `Step::repaired_delimiter`).
     pub(crate) kind: ProductionKind,
-    pub(crate) dfas: &'a mut [DerivativeDfa<'s>],
+    pub(crate) dfas: &'a mut [Option<DerivativeDfa<'s>>],
     pub(crate) arena: &'a mut Arena,
     pub(crate) buffer: &'a [u8],
     pub(crate) base: usize,
@@ -604,6 +607,24 @@ pub(crate) struct Step<'a, 's> {
 }
 
 impl<'s> Step<'_, 's> {
+    /// Initialize a class's original working automaton only when reached.
+    /// A failed admission leaves the slot empty and propagates unchanged.
+    fn class_dfa(
+        &mut self,
+        class: u32,
+        governor: &mut Governor,
+    ) -> Result<&mut DerivativeDfa<'s>, StopReason> {
+        let slot = &mut self.dfas[class as usize];
+        if slot.is_none() {
+            *slot = Some(
+                self.grammar.classes[class as usize]
+                    .automaton
+                    .dfa(governor)?,
+            );
+        }
+        Ok(slot.as_mut().expect("the class automaton was initialized"))
+    }
+
     pub(crate) const fn byte(&self, pos: usize) -> u8 {
         self.buffer[pos - self.base]
     }
@@ -1373,7 +1394,7 @@ impl<'s> Step<'_, 's> {
             unreachable!("class configurations only")
         };
         let pos = thread.pos;
-        let dfa = &mut self.dfas[class as usize];
+        let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;
         if !dfa.is_dead(stepped, governor)? {
             thread.sub = Sub::Class(stepped);
@@ -2064,7 +2085,7 @@ impl<'s> Step<'_, 's> {
         &self,
         hist: u32,
         governor: &mut Governor,
-    ) -> Result<Option<(Range<usize>, Option<usize>)>, StopReason> {
+    ) -> Result<Option<CapturedName>, StopReason> {
         let nodes = self.arena.nodes.as_slice();
         let (mut node, mut close, mut name) = (hist, None, None);
         let mut segment = None;
@@ -2100,25 +2121,29 @@ impl<'s> Step<'_, 's> {
         active: Option<u32>,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        if self.name_range(hist, governor)?.is_none() {
-            return Ok(false);
-        }
-        if active.is_some_and(|slot| {
+        let mut json = active.is_some_and(|slot| {
             self.arena.codecs[slot as usize]
                 .as_ref()
                 .is_some_and(CodecState::argument_anchor)
-        }) {
-            return Ok(true);
-        }
+        });
+        let (mut closed_name, mut named) = (false, false);
         let mut node = hist;
         loop {
             governor.charge(Resource::Work, K_CODEC)?;
             let HistNode { prev, kind } = self.arena.nodes[node as usize];
             match kind {
                 HistKind::Root | HistKind::Next(..) => return Ok(false),
-                HistKind::Value(_) => return Ok(true),
-                _ => node = prev,
+                HistKind::Close(CaptureKind::Name, _) => closed_name = true,
+                HistKind::Open(CaptureKind::Name, _) if closed_name => named = true,
+                HistKind::Value(_) => json = true,
+                _ => {}
             }
+            // Follow exactly the original history path, including for an
+            // arguments-first envelope. No sibling Pack path supplies evidence.
+            if named && json {
+                return Ok(true);
+            }
+            node = prev;
         }
     }
 
@@ -2161,10 +2186,7 @@ impl<'s> Step<'_, 's> {
         }
         governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
         let bytes = self.bytes(name);
-        if core::str::from_utf8(bytes)
-            .ok()
-            .is_some_and(|name| tools.lookup_exact(name).is_some())
-        {
+        if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
             return Ok(true);
         }
         for &relation in &self.grammar.joint_captures {
@@ -2335,12 +2357,7 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let words = self.program.insts.len().div_ceil(64);
-        self.visited.clear();
-        self.visited.resize(words, 0);
-        self.pending.clear();
-        self.pending
-            .push((pc, thread.hist, thread.cost, thread.header_end));
+        self.seed_closure(pc, thread);
         while let Some((pc, hist, cost, mut header_end)) = self.pending.pop() {
             let (word, bit) = (pc as usize / 64, 1_u64 << (pc % 64));
             if self.visited[word] & bit != 0 {
@@ -2387,16 +2404,7 @@ impl<'s> Step<'_, 's> {
                     continue;
                 }
                 Inst::Insert { lit, next } => {
-                    let edit = MarkupEdit {
-                        operator: EditOperator::MissingToken,
-                        span: at..at,
-                        original: Vec::new(),
-                        replacement: self.grammar.literals[lit as usize]
-                            .bytes
-                            .as_slice()
-                            .to_vec(),
-                    };
-                    let node = self.arena.edit(hist, edit, governor)?;
+                    let node = self.insert_token(hist, lit, at, governor)?;
                     let cost = cost.saturating_add(EditOperator::MissingToken.rule().cost);
                     self.pending.push((next, node, cost, header_end));
                     continue;
@@ -2416,7 +2424,7 @@ impl<'s> Step<'_, 's> {
                     continue;
                 }
                 Inst::Lit { .. } => Sub::Lit(0),
-                Inst::Class { class, .. } => Sub::Class(self.dfas[class as usize].start()),
+                Inst::Class { class, .. } => Sub::Class(self.class_dfa(class, governor)?.start()),
                 Inst::Until { .. } => Sub::Body(super::automaton::ROOT, None),
                 Inst::Slot { codec, .. } => {
                     if !self.weak_name_evidence(hist, thread.start, at, None, governor)? {
@@ -2459,6 +2467,36 @@ impl<'s> Step<'_, 's> {
         Ok(())
     }
 
+    /// Start an input-free traversal with fresh visitation and pending state.
+    fn seed_closure(&mut self, pc: u32, thread: Thread) {
+        let words = self.program.insts.len().div_ceil(64);
+        self.visited.clear();
+        self.visited.resize(words, 0);
+        self.pending.clear();
+        self.pending
+            .push((pc, thread.hist, thread.cost, thread.header_end));
+    }
+
+    /// Record one omitted literal at its original input-free transition.
+    fn insert_token(
+        &mut self,
+        hist: u32,
+        lit: u32,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let edit = MarkupEdit {
+            operator: EditOperator::MissingToken,
+            span: at..at,
+            original: Vec::new(),
+            replacement: self.grammar.literals[lit as usize]
+                .bytes
+                .as_slice()
+                .to_vec(),
+        };
+        self.arena.edit(hist, edit, governor)
+    }
+
     /// End-of-input transitions of a configuration at the end of input.
     fn end(
         &mut self,
@@ -2490,7 +2528,7 @@ impl<'s> Step<'_, 's> {
                 Self::fail(out, thread, pos, Rejection::Unterminated)
             }
             (Inst::Class { class, next }, Sub::Class(state)) => {
-                let dfa = &mut self.dfas[class as usize];
+                let dfa = self.class_dfa(class, governor)?;
                 if thread.entry < pos && dfa.accepting(state, governor)? {
                     return self.closure(thread, next, pos, stack, out, governor);
                 }
@@ -3020,20 +3058,7 @@ impl<'s> Step<'_, 's> {
                 continue;
             };
             let group = &mut groups[index].1;
-            for (readings, part) in group.iter_mut().zip(calls) {
-                let (PartReadings::Call(readings), PartReadings::Call(mut call)) = (readings, part)
-                else {
-                    continue;
-                };
-                let call = call.remove(0);
-                if !readings.contains(&call) {
-                    // Every reading beyond the first competes.
-                    if !readings.is_empty() {
-                        governor.charge(Resource::Candidates, 1)?;
-                    }
-                    readings.push(call);
-                }
-            }
+            merge_part_readings(group, calls, governor)?;
         }
         // A segmentation that read no call is no reading of the attempt: it
         // is rejected whole, as one attempt.
@@ -3095,6 +3120,28 @@ impl<'s> Step<'_, 's> {
         }
         Ok(Ok(segmentations))
     }
+}
+
+/// Combine histories with the same boundaries and rejected-part shape.
+fn merge_part_readings(
+    group: &mut [PartReadings],
+    calls: Vec<PartReadings>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    for (readings, part) in group.iter_mut().zip(calls) {
+        let (PartReadings::Call(readings), PartReadings::Call(mut call)) = (readings, part) else {
+            continue;
+        };
+        let call = call.remove(0);
+        if !readings.contains(&call) {
+            // Every reading beyond the first competes.
+            if !readings.is_empty() {
+                governor.charge(Resource::Candidates, 1)?;
+            }
+            readings.push(call);
+        }
+    }
+    Ok(())
 }
 
 /// When `parts` begins with rejected parts (the attempt's first call could
@@ -4590,7 +4637,7 @@ enum Verdict {
 struct GrammarRuntime<'s> {
     grammar: &'s CompiledGrammar,
     dialect: DialectId,
-    dfas: Vec<DerivativeDfa<'s>>,
+    dfas: Vec<Option<DerivativeDfa<'s>>>,
 }
 
 /// The segment-candidate layer over every table of a dialect set.
@@ -4661,10 +4708,7 @@ impl<'s> Engine<'s> {
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
             protocol_fences |= grammar.protocol_fences();
-            let mut dfas = Vec::with_capacity(grammar.classes.len());
-            for class in &grammar.classes {
-                dfas.push(class.automaton.dfa(governor)?);
-            }
+            let dfas = (0..grammar.classes.len()).map(|_| None).collect();
             grammars.push(GrammarRuntime {
                 grammar,
                 dialect: dialect.clone(),
@@ -5337,7 +5381,7 @@ impl<'s> Engine<'s> {
                     .iter()
                     .any(|record| record.id == thread.attempt && !record.opened)
             {
-                if program.derived {
+                if program.origin.is_projected() {
                     let boundary = thread.header_end.min(thread.pos);
                     self.out.headers.push((thread.attempt, boundary))?;
                 }

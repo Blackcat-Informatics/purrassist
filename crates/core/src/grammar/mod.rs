@@ -818,7 +818,7 @@ impl CallEnd {
 pub struct CompiledGrammar {
     pub(crate) id: String,
     pub(crate) digest: Digest,
-    pub(crate) derived: bool,
+    pub(crate) origin: GrammarOrigin,
     joint_captures: crate::contract::ScratchVec<partition::JointCapture>,
     pub(crate) literals: crate::contract::ScratchVec<Literal>,
     pub(crate) literal_tables: crate::contract::ScratchVec<LiteralTables>,
@@ -856,6 +856,27 @@ pub struct CompiledGrammar {
     pub(crate) layouts: crate::contract::ScratchVec<Option<crate::contract::ScratchVec<u8>>>,
 }
 
+/// Whether recognition uses the original grammar or its marker projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GrammarOrigin {
+    Native,
+    Projected,
+}
+
+impl GrammarOrigin {
+    pub(crate) const fn from_derived(derived: bool) -> Self {
+        if derived {
+            Self::Projected
+        } else {
+            Self::Native
+        }
+    }
+
+    pub(crate) const fn is_projected(self) -> bool {
+        matches!(self, Self::Projected)
+    }
+}
+
 /// How recognized markup inside Markdown examples is handled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExamplePolicy {
@@ -881,7 +902,7 @@ impl CompiledGrammar {
     /// The recipe identity includes its unchanged parent source and policy.
     #[must_use]
     pub const fn is_derived(&self) -> bool {
-        self.derived
+        self.origin.is_projected()
     }
 
     pub(crate) const fn protocol_fences(&self) -> bool {

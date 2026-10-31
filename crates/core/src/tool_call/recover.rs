@@ -4785,20 +4785,7 @@ impl Recovery<'_> {
         if let Some(reading) = readings.iter().find(|reading| !reading.inexact.is_empty()) {
             // No exact reading of the message exists: nothing is reported
             // as a value, and no repair reaches the receipt.
-            return Ok(Done {
-                outcome: Outcome::Unresolved,
-                evidence: Vec::new(),
-                losses: Vec::new(),
-                inferences: Vec::new(),
-                validations: vec![Validation {
-                    validator: TOOL_CALL_VALIDATOR.into(),
-                    constraint: "effort=exact".into(),
-                    passed: false,
-                    diagnostics: reading.inexact.clone(),
-                }],
-                alternatives: Vec::new(),
-                stopped: StopReason::NoCandidate,
-            });
+            return Ok(exact_effort_refusal(reading));
         }
         let mut readings = same_calls(self, readings, governor)?;
         let reject = self.request.ambiguity == AmbiguityPolicy::Reject;
@@ -4895,6 +4882,24 @@ impl Recovery<'_> {
             alternatives: published.alternatives,
             stopped,
         })
+    }
+}
+
+/// An inexact reading cannot publish a value under exact effort.
+fn exact_effort_refusal(reading: &Reading) -> Done {
+    Done {
+        outcome: Outcome::Unresolved,
+        evidence: Vec::new(),
+        losses: Vec::new(),
+        inferences: Vec::new(),
+        validations: vec![Validation {
+            validator: TOOL_CALL_VALIDATOR.into(),
+            constraint: "effort=exact".into(),
+            passed: false,
+            diagnostics: reading.inexact.clone(),
+        }],
+        alternatives: Vec::new(),
+        stopped: StopReason::NoCandidate,
     }
 }
 
@@ -5102,6 +5107,10 @@ fn fold_options<'t>(
             native -= usize::from(native > projected);
             // The proof above established exactly one aligned invocation.
             // Attach its dialects to the retained native source range only.
+            #[expect(
+                clippy::mutable_key_type,
+                reason = "DialectId Eq/Ord use only immutable grammar name and digest; scratch-meter atomics never participate in key identity"
+            )]
             let dialects = folds[native]
                 .1
                 .calls

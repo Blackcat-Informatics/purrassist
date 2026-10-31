@@ -298,7 +298,7 @@ fn references(
             }
         }
         PExpr::Capture { inner, .. } | PExpr::Repeat { inner, .. } => {
-            references(inner.get(), statements, pending, depth + 1, governor)?
+            references(inner.get(), statements, pending, depth + 1, governor)?;
         }
         PExpr::Sequence(items, ..) | PExpr::Choice(items, ..) => {
             for item in items {

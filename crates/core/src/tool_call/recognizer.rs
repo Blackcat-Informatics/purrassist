@@ -2872,6 +2872,13 @@ pub(super) fn escaped(bytes: &[u8]) -> String {
 /// parameter element, or a call cut at a reasoning marker.
 fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> String {
     match edit.operator {
+        EditOperator::JsonBody => {
+            "read a whole JSON object in the function body as the arguments".into()
+        }
+        EditOperator::StrippedNameIdBoundary => format!(
+            "partitioned the retained joint name and ID at byte {} after the selected profile suppressed their separator; every admitted boundary remains a competing guess",
+            edit.span.start
+        ),
         EditOperator::ExtractProse => {
             format!("dropped prose `{original}` inside the call's markup")
         }
@@ -2969,9 +2976,6 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::NestedParameter => format!(
             "read nested parameter elements after `{original}` as the members of an object parameter, or of one object item of an array parameter"
         ),
-        EditOperator::JsonBody => {
-            "read a whole JSON object in the function body as the arguments".into()
-        }
         EditOperator::ArrayItem => {
             format!(
                 "read array parameter value `{original}` as one item of the array (an object item when written as nested parameter elements)"
@@ -2986,11 +2990,9 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::StringifiedArguments => {
             format!("decoded stringified arguments `{original}` as JSON `{replacement}`")
         }
-        EditOperator::StrippedNameIdBoundary => format!(
-            "partitioned the retained joint name and ID at byte {} after the selected profile suppressed their separator; every admitted boundary remains a competing guess",
-            edit.span.start
-        ),
-        EditOperator::ExtractProse
+        EditOperator::JsonBody
+        | EditOperator::StrippedNameIdBoundary
+        | EditOperator::ExtractProse
         | EditOperator::ExtractFence
         | EditOperator::GroupSplit
         | EditOperator::CloserMisspelled
