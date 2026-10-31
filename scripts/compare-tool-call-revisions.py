@@ -22,7 +22,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BASELINE = 'c30595347c073404af8421ff7602a4a00c3c4c28'
+BASELINE = '28de2a4b4acd6dd837badba521d547aeb0676801'
 DRIVER = Path('crates/core/examples/fuzz_tool_call.rs')
 MUTATIONS = 32
 RANDOM_SEED = 0x5A1727EE614D934B
