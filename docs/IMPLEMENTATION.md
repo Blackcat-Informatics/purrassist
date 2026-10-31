@@ -891,3 +891,29 @@ checks, manifests, bound receipts and proof-bound projection/release remain
 required under #37 and their original tracking contracts. The existing
 `project_result` operation still validates its supplied original before its own
 field mask; outer registry validation checks that operation's reply envelope.
+
+
+## Independent XML closer-text readings
+
+The XML parameter reader retains both equal-cost guesses when text after an
+unpaired closer reaches a declared parameter opener or the body end. The source
+closer anchors the boundary; a value with no such closer keeps the existing
+missing-close and non-length end-of-output rules. Paired markup and stray-only
+closers retain their existing single reading, and a next-call opener is never
+held after an unpaired closer. The outer grammar retains separate call attempts
+and its existing next-opener completion rule.
+
+Ambiguous values use one independently indexed choice plan at a time through
+the existing reader. This returns every combination without eager Cartesian
+materialization or an infallible copy of opaque reader state. The original
+per-body work is repeated once per syntactic output; every pass and retained
+reading uses the original governor. Exhaustion returns its original resource outcome
+without publishing a truncated set of readings. Every completed combination
+carries its own source spans, edits and guess flags through the existing
+least-cost history packing. Alternative construction is fallible, and chain
+consumption, comparison, cloning, formatting and destruction are iterative.
+
+`CodecValue::alternative` stores `CodecAlternative`; dereference it to inspect
+the reading, or consume it with `into_value()` to move its fields and remaining
+alternatives without cloning. The link retains its original allocation lease
+until its buffer is destroyed.
