@@ -17,10 +17,10 @@ use purrassist_core::tool_call::rules::{self, DISABLED, RULES};
 use purrassist_core::tool_call::{
     CallFacts, CallLedger, CallLoss, CallOutcome, DialectId, DialectSet, Effects, GenerationStop,
     ObjectSpec, Param, Policies, PolicySelection, ReasoningPolicy, RecognizedTurn, Recognizer,
-    Rejection, RepairPolicy, ResolvedCall, ResolvedSegment, ResolvedTurn, ToolDefinition, ToolSet,
-    UnknownParameters, UnresolvedReason, resolve_forest,
+    Rejection, RepairPolicy, ResolvedCall, ResolvedSegment, ResolvedTurn, ToolDefinition,
+    ToolRecoveryRequest, ToolSet, UnknownParameters, UnresolvedReason, resolve_forest,
 };
-use purrassist_core::{Budget, Governor, StopReason};
+use purrassist_core::{Budget, Governor, Outcome, StopReason};
 
 fn set(dialects: &[DialectId]) -> DialectSet {
     DialectSet::new(
@@ -897,10 +897,9 @@ fn bare_parameter_element_reads_as_its_declared_parameter() {
     }
 }
 
-/// A body with more than one reading of a bare element stays malformed, as
-/// before the repair; and an envelope the reader already accepts keeps its
-/// meaning: a string value holding a declared parameter's element keeps it
-/// as text.
+/// Bare-element ambiguity stays malformed. A canonical parameter followed by
+/// bare markup retains the independent tail readings from issue #7. A string
+/// holding a declared parameter's element keeps it as text.
 #[test]
 fn ambiguous_bare_parameter_elements_stay_malformed() {
     let tools = note_tool();
@@ -915,7 +914,6 @@ fn ambiguous_bare_parameter_elements_stay_malformed() {
         "stray\n<note>a</note>",
         // Beside a wrapped element of the same parameter.
         "<note>a</note>\n<parameter=note>\nb\n</parameter>",
-        "<parameter=note>\nb\n</parameter>\n<note>a</note>",
         // A value holding parameter markup.
         "<note>a <parameter=count>3</parameter></note>",
     ] {
@@ -932,6 +930,15 @@ fn ambiguous_bare_parameter_elements_stay_malformed() {
             "{body}"
         );
     }
+    assert_ambiguous_parameter_tail(
+        &tools,
+        &qwen(
+            "set_note",
+            "<parameter=note>\nb\n</parameter>\n<note>a</note>",
+        ),
+        "note",
+        ["b", "b\n</parameter>\n<note>a</note>"],
+    );
     let held = "<parameter=note>\nsee <note>x</note>\n</parameter>";
     let turn = run(DialectId::Qwen3CoderXml, &tools, &qwen("set_note", held));
     let call = one(&turn);
@@ -943,29 +950,66 @@ fn ambiguous_bare_parameter_elements_stay_malformed() {
     assert_eq!(count(call, "tool_call.markup.bare-parameter-element"), 0);
 }
 
+/// Both independent tail readings remain visible, and neither is usable.
+fn assert_ambiguous_parameter_tail(tools: &ToolSet, text: &str, key: &str, expected: [&str; 2]) {
+    let result = tools.recover(
+        text.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &set(&[DialectId::Qwen3CoderXml]),
+    );
+    let calls = match result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
+        other => panic!("{text}: expected one turn reading, got {other:?}"),
+    };
+    assert!(calls.rejected.is_empty(), "{text}: {calls:#?}");
+    assert_eq!(calls.calls.len(), 1, "{text}: {calls:#?}");
+    let call = &calls.calls[0];
+    assert_eq!(call.outcome, CallOutcome::Ambiguous, "{text}: {call:#?}");
+    let mut readings: Vec<_> = core::iter::once(&call.arguments)
+        .chain(call.alternatives.iter().map(|reading| &reading.arguments))
+        .map(|arguments| {
+            arguments
+                .get(key)
+                .and_then(purrassist_core::json::Node::as_str)
+                .expect("string parameter")
+        })
+        .collect();
+    readings.sort_unstable();
+    let mut expected = expected;
+    expected.sort_unstable();
+    assert_eq!(readings, expected, "{text}");
+    assert!(calls.usable().is_empty(), "{text}: {calls:#?}");
+    assert!(
+        calls.usable_accepting_guesses().is_empty(),
+        "{text}: {calls:#?}"
+    );
+}
+
 #[test]
 fn positional_text_never_named() {
     let tools = compile([ToolDefinition::new("f")
         .effects(Effects::ReadOnly)
         .param("a", Param::string())]);
-    // Text before, between or after parameters is never a parameter.
-    for body in [
-        "hello\n<parameter=a>\nx\n</parameter>",
-        "<parameter=a>\nx\n</parameter>\ntrailing text",
-    ] {
-        let turn = run(DialectId::Qwen3CoderXml, &tools, &qwen("f", body));
-        assert!(turn.calls().is_empty(), "{body}");
-        assert!(
-            turn.selected().iter().any(|segment| matches!(
-                segment,
-                ResolvedSegment::Rejected {
-                    reason: Rejection::Malformed { .. },
-                    ..
-                }
-            )),
-            "{body}"
-        );
-    }
+    // Text before parameters is never a parameter.
+    let body = "hello\n<parameter=a>\nx\n</parameter>";
+    let turn = run(DialectId::Qwen3CoderXml, &tools, &qwen("f", body));
+    assert!(turn.calls().is_empty(), "{body}");
+    assert!(
+        turn.selected().iter().any(|segment| matches!(
+            segment,
+            ResolvedSegment::Rejected {
+                reason: Rejection::Malformed { .. },
+                ..
+            }
+        )),
+        "{body}"
+    );
+    assert_ambiguous_parameter_tail(
+        &tools,
+        &qwen("f", "<parameter=a>\nx\n</parameter>\ntrailing text"),
+        "a",
+        ["x", "x\n</parameter>\ntrailing text"],
+    );
     // Positional arguments are not an object of named parameters.
     let text = r#"<tool_call>{"name": "f", "arguments": ["x"]}</tool_call>"#;
     let turn = run(DialectId::Hermes, &tools, text);

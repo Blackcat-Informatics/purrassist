@@ -1330,7 +1330,7 @@ pub struct KeywordUse {
 /// use purrassist_core::tool_call::{DialectId, DialectSet, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
 /// use purrassist_core::{Budget, Governor, Outcome};
 /// let tools = ToolSet::compile([ToolDefinition::new("f").param("a", Param::string())], Budget::default()).unwrap();
-/// let call = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>";
+/// let call = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>\nthat is all</tool_call>";
 /// let output = format!("{call} done");
 /// let dialects = DialectSet::new([DialectId::Qwen3CoderXml], &mut Governor::new(Budget::default())).unwrap();
 /// let request = ToolRecoveryRequest::default();

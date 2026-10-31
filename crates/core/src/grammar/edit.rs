@@ -325,14 +325,15 @@ pub enum EditOperator {
     CloserInValue,
     /// Read the text a verbatim value holds after an unpaired closer (a
     /// closer that closes no markup opened in the value and no call the
-    /// value holds) as text of the value, up to a later closer: one of two
+    /// value holds) as text of the value, up to a later closer, declared
+    /// parameter opener or body end: one of two
     /// equally cheap readings, beside
     /// [`Self::TextBetweenParameters`], so the call is ambiguous. The edit
     /// spans from that closer to where the value ends.
     TextAfterCloser,
     /// End a verbatim value at an unpaired closer it would otherwise hold
-    /// before text, and drop the bytes from that closer to the closer that
-    /// ends it in the competing [`Self::TextAfterCloser`] reading, as text
+    /// before text, and drop the bytes from that closer to the common end
+    /// of the competing [`Self::TextAfterCloser`] reading, as text
     /// between parameters: a data loss, one of two equally cheap readings.
     TextBetweenParameters,
     /// Close an open nested object whose schema names no member (a

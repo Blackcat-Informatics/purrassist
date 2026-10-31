@@ -94,7 +94,9 @@ pub(crate) const XML_CLOSER: &[u8] = b"</parameter>";
 pub(crate) const XML_CLOSER_VARIANT: &[u8] = b"</parameters>";
 
 use super::edit::{EditOperator, MarkupEdit};
-use crate::contract::{Governor, Resource, ScratchVec, StopReason, saturating_size};
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchVec, StopReason, saturating_size,
+};
 use crate::tool_call::{ArgTree, ArgumentShape};
 use core::ops::Range;
 
@@ -297,15 +299,15 @@ pub struct CodecContext<'t> {
 }
 
 /// A decoded slot body: the value and the edits recorded while reading it,
-/// in source order, and the body's other reading when it has two equally
-/// cheap ones.
+/// in source order, and the body's independently ambiguous readings.
 ///
 /// `alternative` is set only by the `xml-params` codec, for a body holding
 /// a value with text after an unpaired closer (see [`XmlParamsCodec`]): the
 /// reading that holds the text, and the alternative that ends the value at
 /// that closer and drops the text. The engine records both readings of the
 /// body side by side (their edits cost the same), so the call is
-/// `Ambiguous`; an alternative never has an alternative of its own.
+/// `Ambiguous`. Independent ambiguous values produce a chain containing every
+/// combination; the chain is consumed and dropped without recursive traversal.
 ///
 /// ```
 /// use purrassist_core::grammar::codec::{Codec, CodecContext, CodecEnd, XmlParamsCodec};
@@ -325,14 +327,175 @@ pub struct CodecContext<'t> {
 /// assert_eq!(cost(&value.edits), cost(&other.edits));
 /// # Ok::<(), purrassist_core::StopReason>(())
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodecValue {
     /// The value.
     pub tree: ArgTree,
     /// Every edit the codec recorded, in source order.
     pub edits: Vec<MarkupEdit>,
-    /// The body's other, equally cheap reading, if it has one.
-    pub alternative: Option<Box<Self>>,
+    /// The next independently selected reading, if one remains. Every reading
+    /// retains its own edits; the engine keeps all equally least-cost readings.
+    pub alternative: Option<CodecAlternative>,
+}
+
+impl ScratchCharge for CodecValue {
+    // Portable record bound: ArgTree (184), edit Vec (24), and optional link
+    // (at most 48). Pointer width must not change recovery usage or admission.
+    const CHARGE: usize = 256;
+}
+const _: () = assert!(core::mem::size_of::<CodecValue>() <= CodecValue::CHARGE);
+
+/// One owned link to an alternative codec reading.
+///
+/// Dereferencing borrows the reading; `link.into_value()` transfers it and its
+/// remaining alternatives.
+/// Its destructor releases arbitrarily long chains iteratively.
+pub struct CodecAlternative {
+    value: Vec<CodecValue>,
+    lease: Option<ScratchLease>,
+}
+
+impl CodecAlternative {
+    pub(crate) fn new(value: CodecValue, governor: &mut Governor) -> Result<Self, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let lease = governor.lease_scratch(saturating_size(CodecValue::CHARGE))?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(1)
+            .map_err(|error| crate::contract::reserve_failure(&error))?;
+        if values.capacity() != 1 {
+            return Err(governor.stop_resource(Resource::ScratchBytes));
+        }
+        values.push(value);
+        Ok(Self {
+            value: values,
+            lease: Some(lease),
+        })
+    }
+
+    // Ordinary public Clone has no governor; production branching uses new().
+    fn cloned(value: CodecValue) -> Self {
+        Self {
+            value: vec![value],
+            lease: None,
+        }
+    }
+
+    /// Consume this link and return its original reading without cloning.
+    /// For example, `value.alternative.map(CodecAlternative::into_value)` moves
+    /// the next reading into ordinary owned form, keeping its edits and suffix.
+    ///
+    /// # Panics
+    /// Panics if the private single-reading invariant is broken. Construction
+    /// and public access preserve that invariant.
+    #[must_use]
+    pub fn into_value(mut self) -> CodecValue {
+        self.value
+            .pop()
+            .expect("a live alternative owns its reading")
+    }
+}
+
+impl core::ops::Deref for CodecAlternative {
+    type Target = CodecValue;
+    fn deref(&self) -> &Self::Target {
+        self.value
+            .first()
+            .expect("a live alternative owns its reading")
+    }
+}
+impl core::ops::DerefMut for CodecAlternative {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.value
+            .first_mut()
+            .expect("a live alternative owns its reading")
+    }
+}
+impl Drop for CodecAlternative {
+    fn drop(&mut self) {
+        while let Some(mut value) = self.value.pop() {
+            let buffer = core::mem::take(&mut self.value);
+            let lease = self.lease.take();
+            if let Some(mut next) = value.alternative.take() {
+                self.value = core::mem::take(&mut next.value);
+                self.lease = next.lease.take();
+            }
+            drop(value);
+            drop(buffer);
+            drop(lease);
+        }
+    }
+}
+impl Clone for CodecAlternative {
+    fn clone(&self) -> Self {
+        Self::cloned((**self).clone())
+    }
+}
+impl core::fmt::Debug for CodecAlternative {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&**self, formatter)
+    }
+}
+impl PartialEq for CodecAlternative {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+impl Eq for CodecAlternative {}
+
+impl Clone for CodecValue {
+    fn clone(&self) -> Self {
+        let mut result = Self {
+            tree: self.tree.clone(),
+            edits: self.edits.clone(),
+            alternative: None,
+        };
+        let mut tail = &mut result.alternative;
+        let mut source = self.alternative.as_deref();
+        while let Some(value) = source {
+            *tail = Some(CodecAlternative::cloned(Self {
+                tree: value.tree.clone(),
+                edits: value.edits.clone(),
+                alternative: None,
+            }));
+            tail = &mut tail.as_mut().expect("the reading was appended").alternative;
+            source = value.alternative.as_deref();
+        }
+        result
+    }
+}
+impl core::fmt::Debug for CodecValue {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut readings = formatter.debug_list();
+        let mut next = Some(self);
+        while let Some(value) = next {
+            readings.entry(&(&value.tree, &value.edits));
+            next = value.alternative.as_deref();
+        }
+        readings.finish()
+    }
+}
+impl PartialEq for CodecValue {
+    fn eq(&self, other: &Self) -> bool {
+        let (mut left, mut right) = (Some(self), Some(other));
+        loop {
+            match (left, right) {
+                (Some(a), Some(b)) if a.tree == b.tree && a.edits == b.edits => {
+                    left = a.alternative.as_deref();
+                    right = b.alternative.as_deref();
+                }
+                (None, None) => return true,
+                _ => return false,
+            }
+        }
+    }
+}
+impl Eq for CodecValue {}
+
+impl CodecValue {
+    /// Move one reading out while detaching its remaining alternatives.
+    pub(crate) fn into_parts(self) -> (ArgTree, Vec<MarkupEdit>, Option<CodecAlternative>) {
+        (self.tree, self.edits, self.alternative)
+    }
 }
 
 /// One argument codec: a push-based sub-machine over a slot body.
