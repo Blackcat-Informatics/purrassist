@@ -3151,6 +3151,20 @@ struct RecognizedInput {
     forced: Option<String>,
 }
 
+/// One temporary, admitted content payload. The sink borrows it for one
+/// notification; retaining consumer-owned copies is outside this intake.
+/// Batch constructs and drops the same payload before interpreting another byte.
+struct ContentDelta {
+    span: Range<usize>,
+    raw: ScratchVec<u8>,
+}
+
+impl ContentDelta {
+    fn dispatch(self, sink: &mut impl FnMut(Range<usize>, &[u8])) {
+        sink(self.span, self.raw.as_slice());
+    }
+}
+
 /// Shared byte intake for batch recovery and the forthcoming stream facade.
 /// It owns source storage without lending it to its live recognizer. Every
 /// method uses the original governor. Interpretation failure does not discard
@@ -3166,6 +3180,9 @@ pub(super) struct RecoveryIntake<'s> {
     setup: Option<IntakeSetup<'s>>,
     failed: Option<StopReason>,
     progress: ContinuationFrontier,
+    /// Only the contiguous native content prefix is published so far. Later
+    /// content can still be removed by rejection/stray-closer normalization.
+    content_end: usize,
 }
 
 impl<'s> RecoveryIntake<'s> {
@@ -3186,6 +3203,7 @@ impl<'s> RecoveryIntake<'s> {
             setup: None,
             failed: None,
             progress: ContinuationFrontier::default(),
+            content_end: 0,
         };
         let result = (|| {
             intake.capture = Some(SourceCapture::new(governor)?);
@@ -3219,16 +3237,21 @@ impl<'s> RecoveryIntake<'s> {
     /// leaves source capture independent; capture or governor failure stops
     /// admission without retrying an allocation or publishing a retained prefix.
     pub(super) fn feed(&mut self, bytes: &[u8], governor: &mut Governor) {
-        self.feed_with(bytes, governor, &mut |_| {});
+        self.feed_with(bytes, governor, &mut |_| {}, &mut |_, _| {});
     }
 
     /// Native frontier notifications use the same byte fold and event charges
-    /// as batch's discard sink. These are not resolved public stream events.
+    /// as batch's discard sink. Content notifications currently cover only the
+    /// initial native content run; they are not the complete public event API.
+    /// The source range and copied raw payload have byte-derived boundaries,
+    /// independent of the caller's feed boundaries. The payload is admitted and
+    /// built before either sink is notified and is released before the next byte.
     pub(super) fn feed_with(
         &mut self,
         bytes: &[u8],
         governor: &mut Governor,
         progress: &mut impl FnMut(ContinuationFrontier),
+        content: &mut impl FnMut(Range<usize>, &[u8]),
     ) {
         self.digest.update(bytes);
         for &byte in bytes {
@@ -3254,7 +3277,7 @@ impl<'s> RecoveryIntake<'s> {
             if self.failed.is_none()
                 && let Err(reason) = self
                     .interpret_byte(byte, governor)
-                    .and_then(|()| self.report_progress(governor, progress))
+                    .and_then(|()| self.report_progress(governor, progress, content))
             {
                 self.setup = None;
                 self.failed = Some(reason);
@@ -3266,6 +3289,7 @@ impl<'s> RecoveryIntake<'s> {
         &mut self,
         governor: &mut Governor,
         progress: &mut impl FnMut(ContinuationFrontier),
+        content: &mut impl FnMut(Range<usize>, &[u8]),
     ) -> Result<(), StopReason> {
         let mut frontier = self
             .setup
@@ -3278,17 +3302,107 @@ impl<'s> RecoveryIntake<'s> {
         } else {
             self.encoding.start
         };
-        frontier.prefix_end = frontier.prefix_end.min(utf8);
-        frontier.content = frontier.content.and_then(|(start, end)| {
-            let end = end.min(utf8);
-            (start < end).then_some((start, end))
-        });
+        let prefix = frontier.prefix_end.min(utf8);
+        frontier.prefix_end = self.source_boundary(prefix, governor)?;
+        frontier.content = match frontier.content {
+            Some((start, end)) => {
+                let end = end.min(utf8);
+                let end = if end == prefix {
+                    frontier.prefix_end
+                } else {
+                    self.source_boundary(end, governor)?
+                };
+                (start < end).then_some((start, end))
+            }
+            None => None,
+        };
         if frontier != self.progress {
             governor.charge(Resource::Work, K_EVENT)?;
+            let delta = self.content_delta(frontier, governor)?;
             self.progress = frontier;
             progress(frontier);
+            if let Some(delta) = delta {
+                self.content_end = delta.span.end;
+                delta.dispatch(content);
+            }
         }
         Ok(())
+    }
+
+    /// A lexical holdback can cut an earlier, already complete scalar even
+    /// when the encoding cursor has no pending bytes. Inspect only the scalar
+    /// crossing this cutoff; invalid sequences retain their original boundary.
+    fn source_boundary(&self, end: usize, governor: &mut Governor) -> Result<usize, StopReason> {
+        // A constant bound covers the cutoff lookup, at most three backward
+        // byte probes, leading-byte classification and validation of four bytes.
+        governor.charge(Resource::Work, 12)?;
+        let source = self
+            .capture
+            .as_ref()
+            .map(|capture| capture.bytes.as_slice())
+            .ok_or_else(|| invalid_input("content frontier has no admitted source"))?;
+        if end > source.len() {
+            return Err(invalid_input("content frontier exceeds admitted source"));
+        }
+        if end == 0 || source.get(end).is_none_or(|byte| byte & 0xc0 != 0x80) {
+            return Ok(end);
+        }
+        let mut start = end;
+        for _ in 0..3 {
+            start -= 1;
+            let first = source[start];
+            if first & 0xc0 != 0x80 {
+                let width = match first {
+                    0xc2..=0xdf => 2,
+                    0xe0..=0xef => 3,
+                    0xf0..=0xf4 => 4,
+                    _ => return Ok(end),
+                };
+                let Some(scalar) = source.get(start..start.saturating_add(width)) else {
+                    return Ok(end);
+                };
+                return Ok(
+                    if start.saturating_add(width) > end && core::str::from_utf8(scalar).is_ok() {
+                        start
+                    } else {
+                        end
+                    },
+                );
+            }
+            if start == 0 {
+                break;
+            }
+        }
+        Ok(end)
+    }
+
+    /// Initial content precedes every native call, attempt and reasoning block.
+    /// Final recovery can only add unsupported-markup reports over these bytes:
+    /// those reports keep their bytes as content. Rejection extension and stray
+    /// closer removal start after a structural segment, so later native content
+    /// is deliberately withheld until those owners have an incremental form.
+    fn content_delta(
+        &self,
+        frontier: ContinuationFrontier,
+        governor: &mut Governor,
+    ) -> Result<Option<ContentDelta>, StopReason> {
+        let Some((0, end)) = frontier.content else {
+            return Ok(None);
+        };
+        if end <= self.content_end {
+            return Ok(None);
+        }
+        let span = self.content_end..end;
+        let source = self
+            .capture
+            .as_ref()
+            .and_then(|capture| capture.bytes.as_slice().get(span.clone()))
+            .ok_or_else(|| invalid_input("content frontier exceeds admitted source"))?;
+        governor.charge(Resource::Work, K_EVENT.saturating_add(size(source.len())))?;
+        let mut raw = ScratchVec::new(governor);
+        raw.reserve(source.len())?;
+        raw.extend(source.iter().copied())?;
+        Ok(Some(ContentDelta { span, raw }))
     }
 
     fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {

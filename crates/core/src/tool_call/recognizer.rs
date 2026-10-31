@@ -429,10 +429,18 @@ impl Turn {
                 current.prev
             };
         }
-        let content = crossing.and_then(|index| match self.nodes[index as usize].kind {
-            TurnKind::Content(start) if start < at => Some((start, at)),
-            _ => None,
-        });
+        let content = crossing
+            .and_then(|index| match self.nodes[index as usize].kind {
+                TurnKind::Content(start) if start < at => Some((start, at)),
+                _ => None,
+            })
+            .or_else(|| {
+                let current = self.nodes[node as usize];
+                match current.kind {
+                    TurnKind::Content(start) => Some((start, current.end)),
+                    _ => None,
+                }
+            });
         Ok((node, content))
     }
 

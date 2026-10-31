@@ -968,9 +968,29 @@ pending queue.
 
 The shared intake can notify a private callback when that frontier changes.
 It caps the reported range before incomplete UTF-8 and charges `K_EVENT` work
-per notification; batch uses the same producer with a discard sink. Feed count
+per notification. Every reported end also checks its admitted source boundary:
+at most three backward byte probes and one scalar validation of at most four
+bytes move a cutoff inside valid UTF-8 back to the scalar's start. This admits
+12 work units per boundary check; matching content and prefix ends share that
+check. Invalid byte sequences retain their exact boundaries. Batch uses the
+same producer with a discard sink. Feed count
 and chunk boundaries do not decide notification boundaries. These notifications
 carry native ownership metadata, not resolved calls or permission to execute.
+The same intake now also constructs private `ContentDelta` payloads for advances
+of the initial native content run, before any call, attempt or reasoning block.
+Each payload copies only the newly exposed source range into a temporary
+`ScratchVec`, admitting its capacity and `K_EVENT` plus one work unit per copied
+byte before notification. Batch builds the payload before discarding it too.
+The callback borrows the payload, and its reservation is released before the
+next input byte; consumer-owned copies are outside this private intake. Empty
+feeds allocate no events, and input chunks do not set event boundaries. A closed
+native content node contributes its full settled range, including when the
+lexical boundary lands exactly on its end.
+
+Content after a structural segment is still withheld: final rejection extension
+and stray-closer handling can remove such bytes from native content. Unsupported
+markup reports over the initial content run preserve its content bytes. This
+limited producer neither replays source nor resolves later content at finish.
 Packed ambiguity and grouped attempts can hold this conservative frontier even
 when later recovery would fold their meanings together. Proving the longest
 semantic stable prefix, exact held/candidate byte accounting, public stream
