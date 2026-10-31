@@ -917,19 +917,21 @@ the reading, or consume it with `into_value()` to move its fields and remaining
 alternatives without cloning. The link retains its original allocation lease
 until its buffer is destroyed.
 
-## Native singleton object framing
+## Native JSON framing
 
-Before constructing whole-message alternatives, a singleton Mistral V3
-projection yields to a native bare JSON object only when the source margins
-are a written array bracket pair plus whitespace. Both readings must have
-identical source-spanned name and ID captures, order, closure, outcome,
-arguments, repairs, validations, competing readings and distinguishing
-provenance. Content outside the frame must match; reasoning, embedded calls,
-results, rejected attempts and multiple-call partitions do not qualify.
+Before constructing whole-message alternatives, a known projected JSON
+envelope yields only to the same intact canonical bare JSON invocation
+sequence. Source-spanned name and ID captures, order, argument trees,
+schema validations, effects, policy and blockers must match. Alternatives,
+reasoning, embedded calls, results and rejected attempts do not qualify.
+Mistral V3 margins must be the actual written array brackets and separators.
+Hermes margins may contain only layout or source bytes retained by its
+exterior prose-extraction losses; no argument repair is ignored.
 
 The native segmentation retains its full spans, content and ledgers. Candidate
 dialects are combined only for the proven matching invocation. Strict forced
-tool choices retain separate readings because the native array brackets remain
-content and can affect their checks. Other framing differences remain distinct.
-The implementation and its named behavioral case have not been executed.
+tool choices retain separate readings because native exterior content can affect
+their checks. This selects the intact native reading without upgrading the
+projected fallback's guess or loss status. Other invocation differences remain
+distinct. Current corrections have not been executed.
 

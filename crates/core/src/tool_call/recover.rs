@@ -144,10 +144,11 @@ use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{edit_entries, escaped};
 use super::resolve::loss_kind;
 use super::{
-    CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
-    FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
-    Recognizer, Rejection, RepairPolicy, ResolvedCall, ResolvedPiece, ResolvedSegment,
-    ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, detect_unparsed, resolve_forest, rules,
+    CallLedger, CallLoss, CallOutcome, CallReading, Closure, DialectId, DialectSet, Effects,
+    FromNode, FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy,
+    ReasoningSegment, Recognizer, Rejection, RepairPolicy, ResolvedCall, ResolvedPiece,
+    ResolvedSegment, ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, detect_unparsed,
+    resolve_forest, rules,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
@@ -3298,71 +3299,216 @@ fn same_captured_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
         && *distinguishing == right.distinguishing
 }
 
-/// A singleton written JSON array adds only framing around the exact same
-/// native object invocation. Preserve every captured source anchor and every
-/// resolved fact; arbitrary overlapping or nested calls do not qualify.
-fn same_written_array_call(
+fn resolved_json_call(segment: &ResolvedSegment) -> Option<&ResolvedCall> {
+    match segment {
+        ResolvedSegment::Call(call) => Some(&**call),
+        _ => None,
+    }
+}
+
+fn content_outside<'a>(
+    segments: &'a [ResolvedSegment],
+    frame: &'a Range<usize>,
+) -> impl Iterator<Item = Range<usize>> + 'a {
+    segments
+        .iter()
+        .filter_map(|segment| match segment {
+            ResolvedSegment::Content(span) => Some(span),
+            _ => None,
+        })
+        .flat_map(move |span| {
+            [
+                span.start..span.end.min(frame.start),
+                span.start.max(frame.end)..span.end,
+            ]
+        })
+        .filter(|span| span.start < span.end)
+}
+
+fn canonical_native_json(call: &ResolvedCall) -> bool {
+    call.dialect == DialectId::BareJson
+        && call.closure == Closure::Closed
+        && call.outcome == CallOutcome::Resolved
+        && call.competing == 1
+        && call.alternatives.is_empty()
+        && call.distinguishing.is_empty()
+        && call.reading.cost == 0
+        && call.reading.repairs.evidence.is_empty()
+        && call.reading.repairs.losses.is_empty()
+        && call.reading.repairs.inferences.is_empty()
+}
+
+fn same_projected_json_invocation(exact: &ResolvedCall, derived: &ResolvedCall) -> bool {
+    exact.order == derived.order
+        && exact.id == derived.id
+        && exact.name == derived.name
+        && exact.reading.tool == derived.reading.tool
+        && exact.reading.effects == derived.reading.effects
+        && exact.reading.policy == derived.reading.policy
+        && exact.reading.blocker == derived.reading.blocker
+        && exact.reading.validations == derived.reading.validations
+        && derived.competing == 1
+        && derived.alternatives.is_empty()
+        && derived.distinguishing.is_empty()
+        && matches!(
+            derived.outcome,
+            CallOutcome::Resolved | CallOutcome::BestGuess
+        )
+        && matches!(derived.closure, Closure::Closed | Closure::Repaired)
+        && derived.reading.repairs.inferences.is_empty()
+}
+
+fn only_exterior_prose(exact: &ResolvedCall, derived: &ResolvedCall, output: &[u8]) -> bool {
+    let repairs = &derived.reading.repairs;
+    let exterior = |evidence: &Evidence| {
+        evidence.rule == "tool_call.extract.prose"
+            && evidence.span.as_ref().is_some_and(|span| {
+                derived.span.start <= span.bytes.start
+                    && span.bytes.end <= derived.span.end
+                    && (span.bytes.end <= exact.span.start || span.bytes.start >= exact.span.end)
+            })
+    };
+    repairs.evidence.iter().all(exterior)
+        && repairs.losses.len() == repairs.evidence.len()
+        && repairs.losses.iter().all(|loss| {
+            loss.kind == LossKind::Data
+                && repairs.evidence.contains(&loss.loss.evidence)
+                && loss.loss.evidence.span.as_ref().is_some_and(|span| {
+                    &output[span.bytes.clone()] == loss.loss.original.as_bytes()
+                })
+        })
+        && derived.reading.cost
+            == size(repairs.evidence.len())
+                .saturating_mul(crate::grammar::edit::EditOperator::ExtractProse.rule().cost)
+        && (derived.closure == exact.closure || !repairs.evidence.is_empty())
+}
+
+fn native_json_margins(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    output: &[u8],
+    array: Option<(bool, bool)>,
+) -> bool {
+    let before = derived.span.start..exact.span.start;
+    let after = exact.span.end..derived.span.end;
+    if let Some((first, last)) = array {
+        let opening: &[u8] = if first { b"[" } else { b"" };
+        let closing: &[u8] = if last { b"]" } else { b"," };
+        return output[before].trim_ascii() == opening && output[after].trim_ascii() == closing;
+    }
+    // Every non-layout margin byte is retained in an exterior extraction
+    // loss; the native segmentation instead preserves that source as content.
+    [before, after].into_iter().all(|range| {
+        output[range.clone()]
+            .iter()
+            .enumerate()
+            .all(|(offset, byte)| {
+                byte.is_ascii_whitespace()
+                    || derived.reading.repairs.losses.iter().any(|loss| {
+                        loss.loss
+                            .evidence
+                            .span
+                            .as_ref()
+                            .is_some_and(|span| span.bytes.contains(&(range.start + offset)))
+                    })
+            })
+    })
+}
+
+/// An intact native JSON invocation dominates only the same source-anchored
+/// invocation sequence under a known projected envelope. Never infer identity
+/// from values alone or discard an alternative argument or source partition.
+fn native_json_dominates(
     native: &[ResolvedSegment],
     projected: &[ResolvedSegment],
     output: &[u8],
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
-    fn singleton(segments: &[ResolvedSegment]) -> Option<&ResolvedCall> {
-        let mut found = None;
-        for segment in segments {
-            match segment {
-                ResolvedSegment::Call(call) if found.is_none() => found = Some(&**call),
-                ResolvedSegment::Content(_) => {}
-                _ => return None,
-            }
-        }
-        found
-    }
-    fn outside<'a>(
-        segments: &'a [ResolvedSegment],
-        frame: &'a Range<usize>,
-    ) -> impl Iterator<Item = Range<usize>> + 'a {
-        segments
-            .iter()
-            .filter_map(|segment| match segment {
-                ResolvedSegment::Content(span) => Some(span),
-                _ => None,
-            })
-            .flat_map(move |span| {
-                [
-                    span.start..span.end.min(frame.start),
-                    span.start.max(frame.end)..span.end,
-                ]
-            })
-            .filter(|span| span.start < span.end)
-    }
     governor.charge(
         Resource::Work,
         size(native.len()).saturating_add(size(projected.len())),
     )?;
-    let (Some(exact), Some(derived)) = (singleton(native), singleton(projected)) else {
-        return Ok(false);
-    };
-    if exact.dialect != DialectId::BareJson
-        || derived.dialect != DialectId::MistralV3Stripped
-        || derived.span.start >= exact.span.start
-        || exact.span.end >= derived.span.end
-    {
+    if native.iter().chain(projected).any(|segment| {
+        !matches!(
+            segment,
+            ResolvedSegment::Call(_) | ResolvedSegment::Content(_)
+        )
+    }) {
         return Ok(false);
     }
-    let before = &output[derived.span.start..exact.span.start];
-    let after = &output[exact.span.end..derived.span.end];
-    governor.charge(
-        Resource::Work,
-        size(before.len())
-            .saturating_add(size(after.len()))
-            .saturating_add(exact.reading.arguments.estimated_bytes())
-            .saturating_add(derived.reading.arguments.estimated_bytes()),
-    )?;
-    Ok(before.trim_ascii() == b"["
-        && after.trim_ascii() == b"]"
-        && same_captured_call(exact, derived)
-        && outside(native, &derived.span).eq(outside(projected, &derived.span)))
+    let (Some(first), Some(last)) = (
+        projected.iter().find_map(resolved_json_call),
+        projected.iter().rev().find_map(resolved_json_call),
+    ) else {
+        return Ok(false);
+    };
+    let array = projected
+        .iter()
+        .filter_map(resolved_json_call)
+        .any(|call| call.dialect == DialectId::MistralV3Stripped);
+    let frame = first.span.start..last.span.end;
+    let mut exact_calls = native.iter().filter_map(resolved_json_call).peekable();
+    let mut projected_calls = projected.iter().filter_map(resolved_json_call);
+    let mut previous_end = frame.start;
+    let mut changed = false;
+    while let Some(exact) = exact_calls.next() {
+        let Some(derived) = projected_calls.next() else {
+            return Ok(false);
+        };
+        if !canonical_native_json(exact) {
+            return Ok(false);
+        }
+        if same_call(exact, derived) {
+            if array {
+                return Ok(false);
+            }
+            previous_end = exact.span.end;
+            continue;
+        }
+        let supported = if array {
+            derived.dialect == DialectId::MistralV3Stripped
+        } else {
+            derived.dialect == DialectId::HermesStripped
+        };
+        let next_start = exact_calls.peek().map_or(frame.end, |call| call.span.start);
+        if !supported
+            || derived.span.start < previous_end
+            || derived.span.start > exact.span.start
+            || derived.span.end < exact.span.end
+            || derived.span.end > next_start
+            || !same_projected_json_invocation(exact, derived)
+        {
+            return Ok(false);
+        }
+        governor.charge(
+            Resource::Work,
+            exact
+                .reading
+                .arguments
+                .estimated_bytes()
+                .saturating_add(derived.reading.arguments.estimated_bytes())
+                .saturating_add(
+                    size(derived.span.len()).saturating_mul(
+                        size(derived.reading.repairs.losses.len()).saturating_add(1),
+                    ),
+                ),
+        )?;
+        if exact.reading.arguments != derived.reading.arguments {
+            return Ok(false);
+        }
+        if !only_exterior_prose(exact, derived, output) {
+            return Ok(false);
+        }
+        let framing = array.then_some((!changed, exact_calls.peek().is_none()));
+        if !native_json_margins(exact, derived, output, framing) {
+            return Ok(false);
+        }
+        previous_end = exact.span.end;
+        changed = true;
+    }
+    Ok(changed
+        && projected_calls.next().is_none()
+        && content_outside(native, &frame).eq(content_outside(projected, &frame)))
 }
 
 impl Reading {
@@ -5031,12 +5177,12 @@ pub(crate) fn assign_ids(
 /// segmentations. The kept segmentation of a group is its member with the
 /// most body evidence (see [`Reading::body_evidence`]), the earliest on a tie: the member [`merge`] keeps
 /// among whole readings that differ only in this span.
-/// A proven singleton written-array projection also yields to its native
-/// object before the product, except under strict tool-choice constraints.
+/// A proven projected JSON envelope also yields to its intact canonical
+/// native invocation sequence, except under strict tool-choice constraints.
 fn fold_options<'t>(
     options: &'t [Vec<ResolvedSegment>],
     output: &[u8],
-    fold_written_arrays: bool,
+    prefer_native_json: bool,
     governor: &mut Governor,
 ) -> Result<Vec<Fold<'t>>, StopReason> {
     // Each group: its member indices, in option order.
@@ -5077,9 +5223,9 @@ fn fold_options<'t>(
     }
     // Do this after ordinary equivalence grouping: dialect ordering must not
     // determine whether the native object and its enclosing projection meet.
-    // Strict choices retain both readings because the native brackets remain
-    // content and can affect an allow_content=false check.
-    if fold_written_arrays {
+    // Strict choices retain both readings because native exterior content
+    // can affect an allow_content=false check.
+    if prefer_native_json {
         for projected in (0..folds.len()).rev() {
             if !folds[projected].1.attempts.is_empty() {
                 continue;
@@ -5088,7 +5234,7 @@ fn fold_options<'t>(
             for index in 0..folds.len() {
                 if index != projected
                     && folds[index].1.attempts.is_empty()
-                    && same_written_array_call(
+                    && native_json_dominates(
                         folds[index].1.segments,
                         folds[projected].1.segments,
                         output,
@@ -5105,22 +5251,20 @@ fn fold_options<'t>(
             governor.charge(Resource::Work, size(folds.len() - projected))?;
             let (_, projected_fold) = folds.remove(projected);
             native -= usize::from(native > projected);
-            // The proof above established exactly one aligned invocation.
-            // Attach its dialects to the retained native source range only.
-            #[expect(
-                clippy::mutable_key_type,
-                reason = "DialectId Eq/Ord use only immutable grammar name and digest; scratch-meter atomics never participate in key identity"
-            )]
-            let dialects = folds[native]
+            // The proof established the same ordered source-anchored calls.
+            // Both maps are in source order; attach each label only to its
+            // proven native invocation, retaining all native spans and ledgers.
+            for (dialects, candidates) in folds[native]
                 .1
                 .calls
                 .values_mut()
-                .next()
-                .expect("the native fold has one call");
-            for candidate in projected_fold.calls.values().flatten() {
-                governor.charge(Resource::Work, size(dialects.len()).saturating_add(1))?;
-                if dialects.insert(candidate.clone()) {
-                    governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                .zip(projected_fold.calls.values())
+            {
+                for candidate in candidates {
+                    governor.charge(Resource::Work, size(dialects.len()).saturating_add(1))?;
+                    if dialects.insert(candidate.clone()) {
+                        governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                    }
                 }
             }
         }

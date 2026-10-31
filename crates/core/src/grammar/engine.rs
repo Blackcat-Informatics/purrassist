@@ -83,6 +83,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Original name capture and optional beginning of its chained call.
 type CapturedName = (Range<usize>, Option<usize>);
 
+/// One immutable history summary, never the mutable active codec's evidence.
+#[derive(Clone, Copy)]
+struct WeakEvidence {
+    hist: u32,
+    named: bool,
+    value: bool,
+}
+
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
 /// the reading that ended there (see `Step::step_body`).
@@ -577,6 +585,7 @@ impl Out {
 /// The interpreter over one table's program, with split borrows of the
 /// engine state it needs.
 pub(crate) struct Step<'a, 's> {
+    weak_evidence: &'a mut Option<WeakEvidence>,
     pub(crate) grammar: &'s CompiledGrammar,
     pub(crate) program: &'s Program,
     /// What the program reads (a call's verbatim argument body may hold
@@ -1831,6 +1840,7 @@ impl<'s> Step<'_, 's> {
             governor,
         )? {
             Ok((top, cost)) => {
+                *self.weak_evidence = None;
                 self.arena.nodes.as_mut_slice()[deferred.node as usize].prev = top;
                 Reading::Read(cost)
             }
@@ -2128,35 +2138,50 @@ impl<'s> Step<'_, 's> {
     /// Weak framing needs both a native name and native JSON evidence. In an
     /// arguments-first envelope, the codec value precedes the completed name.
     fn weak_call_evidence(
-        &self,
+        &mut self,
         hist: u32,
         active: Option<u32>,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        let mut json = active.is_some_and(|slot| {
+        let active = active.is_some_and(|slot| {
             self.arena.codecs[slot as usize]
                 .as_ref()
                 .is_some_and(CodecState::argument_anchor)
         });
+        governor.charge(Resource::Work, 1)?;
+        if let Some(known) = self.weak_evidence.filter(|known| known.hist == hist) {
+            return Ok(known.named && (active || known.value));
+        }
         let (mut closed_name, mut named) = (false, false);
+        let (mut value, mut linked) = (false, false);
         let mut node = hist;
         loop {
             governor.charge(Resource::Work, K_CODEC)?;
             let HistNode { prev, kind } = self.arena.nodes[node as usize];
             match kind {
-                HistKind::Root | HistKind::Next(..) => return Ok(false),
+                HistKind::Root | HistKind::Next(..) => break,
                 HistKind::Close(CaptureKind::Name, _) => closed_name = true,
                 HistKind::Open(CaptureKind::Name, _) if closed_name => named = true,
-                HistKind::Value(_) => json = true,
+                HistKind::Value(_) => value = true,
+                HistKind::Link => linked = true,
                 _ => {}
             }
             // Follow exactly the original history path, including for an
             // arguments-first envelope. No sibling Pack path supplies evidence.
-            if named && json {
+            if named && (active || value) {
+                // Both historical witnesses are sufficient even if an unseen
+                // link below them later changes. Active-only success does not
+                // establish whether the remaining history contains a Value.
+                *self.weak_evidence =
+                    (value && !linked).then_some(WeakEvidence { hist, named, value });
                 return Ok(true);
             }
             node = prev;
         }
+        // Deferred links can be rewritten. Do not retain summaries depending
+        // on one, even if another table finishes that deferred value later.
+        *self.weak_evidence = (!linked).then_some(WeakEvidence { hist, named, value });
+        Ok(named && (active || value))
     }
 
     /// A plain word separated from JSON by whitespace also describes prose.
@@ -4292,6 +4317,8 @@ impl Event {
 }
 
 struct Table<'s> {
+    /// A single last-query slot: bounded storage, cleared before history reuse.
+    weak_evidence: Option<WeakEvidence>,
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
@@ -4736,6 +4763,7 @@ impl<'s> Engine<'s> {
                 .zip(&grammar.programs)
             {
                 tables.push(Table {
+                    weak_evidence: None,
                     grammar: index,
                     kind,
                     program,
@@ -4798,11 +4826,13 @@ impl<'s> Engine<'s> {
     fn split(&mut self, table: usize) -> (Step<'_, 's>, &mut ScratchVec<Thread>, &mut Out) {
         let stall_cap = self.stall_cap(table);
         let runtime = &mut self.grammars[self.tables[table].grammar];
+        let table = &mut self.tables[table];
         (
             Step {
+                weak_evidence: &mut table.weak_evidence,
                 grammar: runtime.grammar,
-                program: self.tables[table].program,
-                kind: self.tables[table].kind,
+                program: table.program,
+                kind: table.kind,
                 dfas: &mut runtime.dfas,
                 arena: &mut self.arena,
                 buffer: self.buffer.as_slice(),
@@ -4814,7 +4844,7 @@ impl<'s> Engine<'s> {
                 newest_open: self.newest_open,
                 resynced: &mut self.resynced,
                 quoted_openers: &mut self.quoted_openers,
-                attempts: self.tables[table].attempts.as_slice(),
+                attempts: table.attempts.as_slice(),
             },
             &mut self.stack,
             &mut self.out,
@@ -5386,7 +5416,7 @@ impl<'s> Engine<'s> {
                     Sub::Body(_, slot) => slot,
                     _ => None,
                 };
-                let (step, _, _) = self.split(table);
+                let (mut step, _, _) = self.split(table);
                 step.weak_call_evidence(thread.hist, active, governor)?
             } else {
                 program.commits(thread.pc)
@@ -7123,6 +7153,9 @@ impl<'s> Engine<'s> {
             })
             .min();
         let Some(earliest) = earliest else {
+            for table in &mut self.tables {
+                table.weak_evidence = None;
+            }
             self.arena.reset(governor)?;
             self.buffer.clear();
             self.base = self.fed;

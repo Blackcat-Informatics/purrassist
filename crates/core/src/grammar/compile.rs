@@ -1667,6 +1667,14 @@ struct Programs<'p> {
     derived: bool,
 }
 
+/// Frame configuration shared by the call and result compilation passes.
+type Framing<'f> = (
+    bool,
+    ExamplePolicy,
+    &'f [(ScratchVec<u8>, usize)],
+    &'f [DelimiterSet],
+);
+
 impl Programs<'_> {
     /// Compile literal spellings, then configure the declared opener and fence framing.
     fn compile_framed(
@@ -1675,12 +1683,7 @@ impl Programs<'_> {
         literal_tables: &mut ScratchVec<LiteralTables>,
         closers: &[CloserClass],
         confusables: &[(Bytes, Bytes)],
-        framing: (
-            bool,
-            ExamplePolicy,
-            &[(ScratchVec<u8>, usize)],
-            &[DelimiterSet],
-        ),
+        framing: Framing<'_>,
         governor: &mut Governor,
     ) -> Result<[Program; 2], GrammarError> {
         let (json_envelope, examples, line_start, delimiters) = framing;
