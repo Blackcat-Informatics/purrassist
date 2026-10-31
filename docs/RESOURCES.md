@@ -906,7 +906,9 @@ Here `r` is the number of maximal invalid UTF-8 runs. `G_source` and
 the source and invalid-range vectors. The shared doubling growth policy gives
 `G_source(n) ≤ 2·n`, `G_ranges(r) ≤ 2·r` and `r ≤ n`, so intake work is at most
 `7·n`. Empty vectors contribute zero relocation work. These terms describe
-admitted work; refusal stops the byte fold at its original cause.
+admitted work. A governor or capture refusal stops admission at its original
+cause; a semantic request error stops interpretation while admitted source
+capture can continue.
 
 Pythonic's finite-state framing and canonical decimal literal path scan
 linearly. Converting a binary, octal or hexadecimal integer with `n` digits
@@ -936,13 +938,17 @@ existing loss records once the complete source digest is available.
 
 This intentionally replaces the earlier ordering that retained the whole
 source and scanned its encoding before recognition began. Usage counters and
-the first refusal may therefore differ from that ordering. After refusal,
-remaining supplied bytes contribute only to the source digest: no further
-source copying, resource admission or interpretation occurs. A receipt retains
-the complete admitted source or no source. A retained prefix is never published
-as the complete input; a fully captured source remains available when a later
-stage refuses. The metadata vector is reserved before intake, so publishing a
-complete source after refusal moves existing storage without allocating.
+the first refusal may therefore differ from that ordering. A semantic invalid
+request stops interpretation but keeps capturing the original source under the
+same healthy governor. If source admission then fails, that explicit refusal
+takes precedence over the semantic error and no retained prefix is published.
+After a governor or capture refusal, remaining supplied bytes contribute only
+to the source digest: no further source copying, admission or interpretation
+occurs. Failed source allocation is never retried. A receipt retains the
+complete admitted source or no source; a fully captured source remains
+available when a later stage refuses. The metadata vector is reserved before
+intake, so publishing a complete source after refusal moves existing storage
+without allocating.
 
 Batch recovery runs this path now. Stable-prefix events, the public stream API,
 decoding queries, and CLI/MCP progress remain unfinished under #16.

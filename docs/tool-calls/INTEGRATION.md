@@ -651,8 +651,11 @@ request validation and recognizer construction precede byte intake. For each
 byte, source admission and copying precede UTF-8 classification and recognition.
 This replaces whole-source retention followed by whole-source encoding scans;
 resource counters and refusal precedence intentionally change with that shared
-ordering. After the first refusal there are no further copies, admissions or
-interpreter steps. The digest still identifies every supplied byte, while
+ordering. A semantic invalid request stops interpretation while source capture
+continues on the same healthy governor. A later source-admission failure is an
+explicit refusal with no source published. After a governor or capture refusal,
+there are no further copies, admissions or interpreter steps; failed source
+allocation is never retried. The digest still identifies every supplied byte, while
 `receipt.sources` contains either the complete admitted source or nothing.
 No retained prefix is presented as the full source. A complete source can still
 be retained when finalization or resolution refuses. See

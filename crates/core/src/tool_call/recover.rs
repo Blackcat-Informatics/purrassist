@@ -2992,10 +2992,12 @@ impl ToolSet {
     /// The receipt always names the complete supplied output's digest.
     /// Source metadata is admitted before request validation and recognizer
     /// construction. Each byte then admits input, source copying, encoding
-    /// classification and recognition in that order. Refusal stops further
-    /// admission and interpretation; remaining bytes contribute only to the
-    /// identity. The receipt retains either the complete admitted source or
-    /// no source, including when a later stage refuses after full capture.
+    /// classification and recognition in that order. A semantic request
+    /// refusal stops interpretation while source capture continues under the
+    /// same healthy governor. A governor or capture refusal stops copying and
+    /// admission; remaining bytes contribute only to the identity. The receipt
+    /// retains either the complete admitted source or no source, including
+    /// when a later stage refuses after full capture.
     ///
     /// ```
     /// use purrassist_core::tool_call::{Effects, ToolDefinition, ToolRecoveryRequest, ToolSet};
@@ -3010,9 +3012,10 @@ impl ToolSet {
     /// assert!(result.receipt.sources.is_empty());
     ///
     /// let request = ToolRecoveryRequest::default().effects("rm", Effects::ReadOnly);
-    /// let result = tools.recover_governed(b"", &request, purrassist_core::tool_call::DialectSet::built_in(), &mut Governor::new(Budget::default()));
+    /// let input = b"original output retained despite invalid request";
+    /// let result = tools.recover_governed(input, &request, purrassist_core::tool_call::DialectSet::built_in(), &mut Governor::new(Budget::default()));
     /// assert!(matches!(result.receipt.stopped, StopReason::InvalidInput(_)));
-    /// assert_eq!(result.receipt.sources.len(), 1);
+    /// assert_eq!(result.receipt.sources[0].bytes.as_slice(), input.as_slice());
     /// ```
     #[must_use]
     pub fn recover_governed(
@@ -3150,7 +3153,8 @@ struct RecognizedInput {
 
 /// Shared byte intake for batch recovery and the forthcoming stream facade.
 /// It owns source storage without lending it to its live recognizer. Every
-/// method uses the original governor; failure stops admission but not identity.
+/// method uses the original governor. Interpretation failure does not discard
+/// admissible source; capture refusal stops admission but never source identity.
 pub(super) struct RecoveryIntake<'s> {
     tools: &'s ToolSet,
     dialects: &'s DialectSet,
@@ -3209,31 +3213,44 @@ impl<'s> RecoveryIntake<'s> {
         intake
     }
 
-    /// Hash all supplied bytes, even after refusal. Once refused, neither
-    /// source capture nor the interpreter performs further work or admission.
+    /// Hash all supplied bytes, even after refusal. An interpretation error
+    /// leaves source capture independent; capture or governor failure stops
+    /// admission without retrying an allocation or publishing a retained prefix.
     pub(super) fn feed(&mut self, bytes: &[u8], governor: &mut Governor) {
         self.digest.update(bytes);
         for &byte in bytes {
-            if self.failed.is_some() {
+            if self.capture.is_none() {
+                continue;
+            }
+            if self
+                .failed
+                .as_ref()
+                .is_some_and(|reason| !matches!(reason, StopReason::InvalidInput(_)))
+            {
                 self.capture = None;
                 continue;
             }
-            let result = self.step(byte, governor);
-            if let Err(reason) = result {
-                self.failed = Some(reason);
+            if let Err(reason) = self.capture_byte(byte, governor) {
+                // Source refusal takes precedence over a semantic request
+                // error: the complete input could not be retained.
+                self.capture = None;
                 self.setup = None;
-                if self
-                    .capture
-                    .as_ref()
-                    .is_some_and(|capture| capture.bytes.len() != self.received)
-                {
-                    self.capture = None;
-                }
+                self.failed = Some(reason);
+                continue;
+            }
+            if self.failed.is_none()
+                && let Err(reason) = self.interpret_byte(byte, governor)
+            {
+                self.setup = None;
+                self.failed = Some(reason);
             }
         }
     }
 
-    fn step(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
+    fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
+        // A sticky governor refusal is observed before any further charge or
+        // copy, including when interpretation failed on the preceding byte.
+        governor.check()?;
         let Some(received) = self.received.checked_add(1) else {
             self.capture = None;
             return Err(invalid_input(
@@ -3245,8 +3262,11 @@ impl<'s> RecoveryIntake<'s> {
         let capture = self
             .capture
             .as_mut()
-            .expect("healthy intake owns source storage");
-        push_scratch(&mut capture.bytes, byte, governor)?;
+            .expect("capture admission requires an existing source owner");
+        push_scratch(&mut capture.bytes, byte, governor)
+    }
+
+    fn interpret_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
         self.encoding.step(byte, self.received - 1, governor)?;
         self.setup
             .as_mut()
