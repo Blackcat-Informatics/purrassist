@@ -373,6 +373,16 @@ canonical bidirectional conversion. Source DOM construction is caller-owned; thi
 does not establish governed raw JSON parsing, full manifests, RDF loading or
 host result release. Those integration requirements remain under #33 and #47.
 
+The MCP envelope reader now checks each execution-profile fragment through
+`codec::mcp::ExecutionProfile`. Its borrowed view retains original JSON and
+locations, checks both declared modes and all required fields, and reads exact
+positive `u64` resource quantities. Wire quantities are independent of the native
+renderer limits. Encoding uses the existing governed JSON writer with fixed key
+order and preserved scalar spellings; refusals expose the offending occurrence
+and enclosing tool index. The `execution_profile_codec` cases cover round trips,
+located invalid neighbors and output admission. Full RDF agreement, graph loading
+and manifest integration remain under #33; host release remains under #37.
+
 The internal tool-graph crate also provides governed AppArmor glob syntax and
 safe policy words through `AppArmorGlob`. Its flat arena retains exact source,
 byte/range semantics, brace links and caller-declared variable identities without
