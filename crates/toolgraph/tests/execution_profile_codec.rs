@@ -22,7 +22,7 @@ fn governor() -> Governor {
 }
 fn bundle(profile: &str) -> Node {
     source(&format!(
-        r#"{{"tools":[{{"name":"edit","description":"Edit","inputSchema":{{}},"outputSchema":{{}},"annotations":{{}},"_meta":{{"security":{{}},"executionProfile":{profile},"contextManagement":{{}}}}}}],"_meta":{{"security":{{"format":"purrassist-toolgraph-v2","mediaType":"text/turtle","prefixes":{{}},"sourceGraph":"","lossProfile":"purrassist-toolgraph-v1"}}}}"#
+        r#"{{"tools":[{{"name":"edit","description":"Edit","inputSchema":{{}},"outputSchema":{{}},"annotations":{{}},"_meta":{{"security":{{}},"executionProfile":{profile},"contextManagement":{{}}}}}}],"_meta":{{"security":{{"format":"purrassist-toolgraph-v2","mediaType":"text/turtle","prefixes":{{}},"sourceGraph":"","lossProfile":"purrassist-toolgraph-v1"}}}}}}"#
     ))
 }
 
