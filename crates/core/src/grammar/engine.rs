@@ -91,6 +91,12 @@ struct WeakEvidence {
     value: bool,
 }
 
+impl ScratchCharge for Option<WeakEvidence> {
+    // Fixed portable bound for the optional scalar history summary.
+    const CHARGE: usize = 16;
+}
+const _: () = assert!(core::mem::size_of::<Option<WeakEvidence>>() <= 16);
+
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
 /// the reading that ended there (see `Step::step_body`).
@@ -585,7 +591,7 @@ impl Out {
 /// The interpreter over one table's program, with split borrows of the
 /// engine state it needs.
 pub(crate) struct Step<'a, 's> {
-    weak_evidence: &'a mut Option<WeakEvidence>,
+    weak_evidence: &'a mut ScratchVec<Option<WeakEvidence>>,
     pub(crate) grammar: &'s CompiledGrammar,
     pub(crate) program: &'s Program,
     /// What the program reads (a call's verbatim argument body may hold
@@ -1399,7 +1405,8 @@ impl<'s> Step<'_, 's> {
         self.step_literal(thread, lit, next, byte, stack, out, governor)
     }
 
-    /// One byte of a maximal class run.
+    /// One byte of a maximal class run, beside any compiler-proven projected
+    /// name boundary whose retained literal can begin at this byte.
     #[allow(clippy::too_many_arguments)]
     fn step_class(
         &mut self,
@@ -1415,9 +1422,23 @@ impl<'s> Step<'_, 's> {
             unreachable!("class configurations only")
         };
         let pos = thread.pos;
+        let literal_boundary = if self.program.name_followers.is_empty() {
+            false
+        } else {
+            governor.charge(Resource::Work, size(self.program.name_followers.len()))?;
+            self.program.name_followers.iter().any(|&(pc, lit)| {
+                pc == thread.pc && self.grammar.literals[lit as usize].bytes.first() == Some(&byte)
+            })
+        };
         let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;
         if !dfa.is_dead(stepped, governor)? {
+            if literal_boundary && thread.entry < pos && dfa.accepting(state, governor)? {
+                // A removed separator can join a name to a retained channel
+                // word. Keep the maximal class and the grammar's literal
+                // continuation; neither source reading is thrown away.
+                self.closure(thread, next, pos, stack, out, governor)?;
+            }
             thread.sub = Sub::Class(stepped);
             thread.pos = pos + 1;
             return self.queue(thread, stack);
@@ -1840,7 +1861,6 @@ impl<'s> Step<'_, 's> {
             governor,
         )? {
             Ok((top, cost)) => {
-                *self.weak_evidence = None;
                 self.arena.nodes.as_mut_slice()[deferred.node as usize].prev = top;
                 Reading::Read(cost)
             }
@@ -2139,6 +2159,7 @@ impl<'s> Step<'_, 's> {
     /// arguments-first envelope, the codec value precedes the completed name.
     fn weak_call_evidence(
         &mut self,
+        pc: u32,
         hist: u32,
         active: Option<u32>,
         governor: &mut Governor,
@@ -2149,7 +2170,12 @@ impl<'s> Step<'_, 's> {
                 .is_some_and(CodecState::argument_anchor)
         });
         governor.charge(Resource::Work, 1)?;
-        if let Some(known) = self.weak_evidence.filter(|known| known.hist == hist) {
+        let index = pc as usize;
+        while self.weak_evidence.len() <= index {
+            crate::contract::push_scratch(self.weak_evidence, None, governor)?;
+        }
+        if let Some(known) = self.weak_evidence.as_slice()[index].filter(|known| known.hist == hist)
+        {
             return Ok(known.named && (active || known.value));
         }
         let (mut closed_name, mut named) = (false, false);
@@ -2172,7 +2198,7 @@ impl<'s> Step<'_, 's> {
                 // Both historical witnesses are sufficient even if an unseen
                 // link below them later changes. Active-only success does not
                 // establish whether the remaining history contains a Value.
-                *self.weak_evidence =
+                self.weak_evidence.as_mut_slice()[index] =
                     (value && !linked).then_some(WeakEvidence { hist, named, value });
                 return Ok(true);
             }
@@ -2180,7 +2206,8 @@ impl<'s> Step<'_, 's> {
         }
         // Deferred links can be rewritten. Do not retain summaries depending
         // on one, even if another table finishes that deferred value later.
-        *self.weak_evidence = (!linked).then_some(WeakEvidence { hist, named, value });
+        self.weak_evidence.as_mut_slice()[index] =
+            (!linked).then_some(WeakEvidence { hist, named, value });
         Ok(named && (active || value))
     }
 
@@ -4317,8 +4344,9 @@ impl Event {
 }
 
 struct Table<'s> {
-    /// A single last-query slot: bounded storage, cleared before history reuse.
-    weak_evidence: Option<WeakEvidence>,
+    /// One last history per program location, never a growing history cache.
+    /// Link-dependent summaries are not retained; reset clears reusable IDs.
+    weak_evidence: ScratchVec<Option<WeakEvidence>>,
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
@@ -4763,7 +4791,7 @@ impl<'s> Engine<'s> {
                 .zip(&grammar.programs)
             {
                 tables.push(Table {
-                    weak_evidence: None,
+                    weak_evidence: ScratchVec::new(governor),
                     grammar: index,
                     kind,
                     program,
@@ -5401,7 +5429,7 @@ impl<'s> Engine<'s> {
             // An opened attempt never emits another opening report. In
             // particular, do not rescan a weak header's history on every
             // subsequent argument byte once its evidence was admitted.
-            if program.argument_anchor
+            if (program.argument_anchor || !program.projected_entry_commit.is_empty())
                 && !self.tables[table]
                     .attempts
                     .as_slice()
@@ -5411,13 +5439,21 @@ impl<'s> Engine<'s> {
                 continue;
             }
             let accepted = matches!(program.insts[thread.pc as usize], Inst::Accept);
-            let committed = if program.argument_anchor {
+            let committed = if !program.argument_anchor && program.commits(thread.pc) {
+                true
+            } else if program.argument_anchor
+                || program
+                    .projected_entry_commit
+                    .get(thread.pc as usize)
+                    .copied()
+                    .unwrap_or(false)
+            {
                 let active = match thread.sub {
                     Sub::Body(_, slot) => slot,
                     _ => None,
                 };
                 let (mut step, _, _) = self.split(table);
-                step.weak_call_evidence(thread.hist, active, governor)?
+                step.weak_call_evidence(thread.pc, thread.hist, active, governor)?
             } else {
                 program.commits(thread.pc)
             };
@@ -7154,7 +7190,7 @@ impl<'s> Engine<'s> {
             .min();
         let Some(earliest) = earliest else {
             for table in &mut self.tables {
-                table.weak_evidence = None;
+                table.weak_evidence.clear();
             }
             self.arena.reset(governor)?;
             self.buffer.clear();

@@ -935,3 +935,17 @@ their checks. This selects the intact native reading without upgrading the
 projected fallback's guess or loss status. Other invocation differences remain
 distinct. Current corrections have not been executed.
 
+
+Projected entry admission retains the original program-location commit map
+before an erased marker's commit is replaced. Only those locations can regain
+admission from a completed native name and current or retained JSON evidence;
+a sibling's pre-commit path cannot inherit it. Surviving commits remain
+authoritative. Projected name classes retain their maximal reading and also
+follow compiled literal continuations, preserving an adjacent name and channel
+word when their former separator vanished.
+
+Weak-evidence memo storage keeps one last immutable history summary per program
+location, admitted through the original governor and bounded by compiled program
+length. Active codec evidence is recomputed. Summaries never depend on a mutable
+history link, and arena reuse clears their IDs. These corrections have passed
+source review; current execution and cost acceptance remain unverified.

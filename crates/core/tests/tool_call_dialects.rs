@@ -242,50 +242,60 @@ fn assert_expected(
         turn.pieces()
     );
     for (order, (call, expected)) in calls.iter().zip(expected).enumerate() {
-        let context = format!("{context} call {order}");
-        assert_eq!(&call.dialect, dialect, "{context}");
-        assert_eq!(call.kind, ProductionKind::Call, "{context}");
-        assert_eq!(call.order, order, "{context}");
-        assert_eq!(
-            call.name.as_ref().map(|name| name.value.as_str()),
-            Some(expected.name.as_str()),
-            "{context}"
-        );
-        assert_eq!(
-            call.id.as_ref().map(|id| id.value.as_str()),
-            expected.id.as_deref(),
-            "{context}"
-        );
-        assert!(
-            call.arguments.root.equivalent(&expected.arguments),
-            "{context}: {} != {}",
-            call.arguments.root.to_json(),
-            expected.arguments.to_json()
-        );
-        // Exact spellings and member order too.
-        assert_eq!(
-            call.arguments.root.to_json(),
-            expected.arguments.to_json(),
-            "{context}"
-        );
-        // The codec types the arguments by the declared tool when the name
-        // precedes them.
-        let arguments = call
-            .captures
-            .iter()
-            .find(|capture| capture.kind == CaptureKind::Arguments)
-            .expect("arguments capture");
-        let named_first = call
-            .name
-            .as_ref()
-            .is_some_and(|name| name.span.end <= arguments.span.start);
-        assert_eq!(
-            call.arguments.tool.as_deref(),
-            named_first.then_some(expected.name.as_str()),
-            "{context}: decoded against the declared tool"
-        );
-        assert_canonical(call, &context);
+        assert_expected_call(call, expected, dialect, order, context);
     }
+}
+
+fn assert_expected_call(
+    call: &RawCall,
+    expected: &Expected,
+    dialect: &DialectId,
+    order: usize,
+    context: &str,
+) {
+    let context = format!("{context} call {order}");
+    assert_eq!(&call.dialect, dialect, "{context}");
+    assert_eq!(call.kind, ProductionKind::Call, "{context}");
+    assert_eq!(call.order, order, "{context}");
+    assert_eq!(
+        call.name.as_ref().map(|name| name.value.as_str()),
+        Some(expected.name.as_str()),
+        "{context}"
+    );
+    assert_eq!(
+        call.id.as_ref().map(|id| id.value.as_str()),
+        expected.id.as_deref(),
+        "{context}"
+    );
+    assert!(
+        call.arguments.root.equivalent(&expected.arguments),
+        "{context}: {} != {}",
+        call.arguments.root.to_json(),
+        expected.arguments.to_json()
+    );
+    // Exact spellings and member order too.
+    assert_eq!(
+        call.arguments.root.to_json(),
+        expected.arguments.to_json(),
+        "{context}"
+    );
+    // The codec types the arguments by the declared tool when the name
+    // precedes them.
+    let arguments = call
+        .captures
+        .iter()
+        .find(|capture| capture.kind == CaptureKind::Arguments)
+        .expect("arguments capture");
+    let named_first = call
+        .name
+        .as_ref()
+        .is_some_and(|name| name.span.end <= arguments.span.start);
+    assert_eq!(
+        call.arguments.tool.as_deref(),
+        named_first.then_some(expected.name.as_str()),
+        "{context}: decoded against the declared tool"
+    );
+    assert_canonical(call, &context);
 }
 
 #[test]
@@ -696,31 +706,34 @@ fn ir_spans_slice_back_to_source() {
                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
                     assert!(raw.ends_with("</tool_call>"), "{}: {raw:?}", fixture.file);
                 }
-                let name = call.name.as_ref().expect("name");
-                assert_eq!(&source[name.span.clone()], name.value);
-                if let Some(id) = &call.id {
-                    assert_eq!(&source[id.span.clone()], id.value);
-                }
-                for capture in &call.captures {
-                    assert!(
-                        call.span.start <= capture.span.start && capture.span.end <= call.span.end,
-                        "{}: capture outside its call",
-                        fixture.file
-                    );
-                }
-                assert!(!call.arguments.leaves.is_empty(), "{}", fixture.file);
-                for leaf in &call.arguments.leaves {
-                    let value = call
-                        .arguments
-                        .root
-                        .pointer(&leaf.pointer)
-                        .expect("leaf pointer resolves");
-                    let raw = &source[leaf.raw.clone()];
-                    let context = format!("{} {} {raw:?}", fixture.file, leaf.pointer);
-                    assert_leaf_source(value, raw, leaf.origin, &context);
-                }
+                assert_call_source_spans(source, call, &fixture.file);
             }
         }
+    }
+}
+
+fn assert_call_source_spans(source: &str, call: &RawCall, context: &str) {
+    let name = call.name.as_ref().expect("name");
+    assert_eq!(&source[name.span.clone()], name.value);
+    if let Some(id) = &call.id {
+        assert_eq!(&source[id.span.clone()], id.value);
+    }
+    for capture in &call.captures {
+        assert!(
+            call.span.start <= capture.span.start && capture.span.end <= call.span.end,
+            "{context}: capture outside its call"
+        );
+    }
+    assert!(!call.arguments.leaves.is_empty(), "{context}");
+    for leaf in &call.arguments.leaves {
+        let value = call
+            .arguments
+            .root
+            .pointer(&leaf.pointer)
+            .expect("leaf pointer resolves");
+        let raw = &source[leaf.raw.clone()];
+        let context = format!("{context} {} {raw:?}", leaf.pointer);
+        assert_leaf_source(value, raw, leaf.origin, &context);
     }
 }
 
@@ -1353,7 +1366,7 @@ fn every_stripped_anchor_retains_its_calls_under_the_default_policy() {
                     core::slice::from_ref(calls)
                 }
                 Outcome::Ambiguous(alternatives) => alternatives.as_slice(),
-                other => panic!("{}: {other:?}", fixture.file),
+                other @ Outcome::Unresolved => panic!("{}: {other:?}", fixture.file),
             };
             assert!(
                 alternatives.iter().any(|reading| {

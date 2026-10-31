@@ -91,6 +91,13 @@ pub(crate) struct Program {
     pub(crate) line_start_openers: ScratchVec<u32>,
     pub(crate) protocol: Option<ProtocolFence>,
     pub(crate) argument_anchor: bool,
+    /// Locations beyond an original commit when an entry marker vanished.
+    /// Retained evidence may establish those commits, never a sibling's
+    /// pre-commit location. Surviving native commits remain authoritative.
+    pub(crate) projected_entry_commit: ScratchVec<bool>,
+    /// Retained literals directly after a projected maximal name class.
+    /// The original class reading remains beside these native continuations.
+    pub(crate) name_followers: ScratchVec<(u32, u32)>,
     pub(crate) origin: GrammarOrigin,
     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
     pub(crate) first: [u64; 4],
@@ -1456,6 +1463,82 @@ fn split_keys(
     Ok((keys, per_program))
 }
 
+struct ProjectedControls {
+    entry_commit: ScratchVec<bool>,
+    name_followers: ScratchVec<(u32, u32)>,
+}
+
+fn projected_controls(
+    insts: &mut ScratchVec<Inst>,
+    start: u32,
+    derived: bool,
+    governor: &mut Governor,
+) -> Result<ProjectedControls, GrammarError> {
+    let mut controls = ProjectedControls {
+        entry_commit: ScratchVec::new(governor),
+        name_followers: ScratchVec::new(governor),
+    };
+    if !derived {
+        return Ok(controls);
+    }
+    // An erased entry marker cannot commit before retained input. Remember
+    // that admission may instead be established by native name/JSON evidence.
+    let mut seen = flags(insts.len(), governor)?;
+    let mut pending = ScratchVec::new(governor);
+    pending.push(start)?;
+    while let Some(pc) = pending.pop() {
+        governor.charge(Resource::Work, 1)?;
+        if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
+            continue;
+        }
+        match insts[pc as usize] {
+            Inst::Commit { next } => {
+                if controls.entry_commit.is_empty() {
+                    // Capture the original graph before replacing any entry
+                    // commit. A sibling cannot inherit admission before its
+                    // own commit merely because another branch lost a marker.
+                    controls.entry_commit = committed(insts, start, governor)?;
+                }
+                insts.as_mut_slice()[pc as usize] = Inst::Split(next, next);
+                pending.push(next)?;
+            }
+            Inst::Split(..)
+            | Inst::Open { .. }
+            | Inst::Close { .. }
+            | Inst::Next { .. }
+            | Inst::Insert { .. } => {
+                pending.extend(successors(&insts[pc as usize]))?;
+            }
+            _ => {}
+        }
+    }
+    for (pc, inst) in insts.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        let Inst::Class { next, .. } = *inst else {
+            continue;
+        };
+        if !matches!(
+            insts[next as usize],
+            Inst::Close {
+                kind: CaptureKind::Name,
+                ..
+            }
+        ) {
+            continue;
+        }
+        for &follower in &epsilon_closure(insts, next, governor)? {
+            if let Inst::Lit { lit, .. } = insts[follower as usize] {
+                crate::contract::push_scratch(
+                    &mut controls.name_followers,
+                    (index_u32(pc), lit),
+                    governor,
+                )?;
+            }
+        }
+    }
+    Ok(controls)
+}
+
 fn compile_program(
     productions: &[Production],
     closer_literals: &[u32],
@@ -1482,33 +1565,7 @@ fn compile_program(
         };
         *lit = copy;
     }
-    if tables.derived {
-        // A commit whose marker vanished must not open on zero retained bytes.
-        // Preserve recipient/key commits reached after real input instead.
-        let mut seen = flags(insts.len(), governor)?;
-        let mut pending = ScratchVec::new(governor);
-        pending.push(start)?;
-        while let Some(pc) = pending.pop() {
-            governor.charge(Resource::Work, 1)?;
-            if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
-                continue;
-            }
-            match insts[pc as usize] {
-                Inst::Commit { next } => {
-                    insts.as_mut_slice()[pc as usize] = Inst::Split(next, next);
-                    pending.push(next)?;
-                }
-                Inst::Split(..)
-                | Inst::Open { .. }
-                | Inst::Close { .. }
-                | Inst::Next { .. }
-                | Inst::Insert { .. } => {
-                    pending.extend(successors(&insts[pc as usize]))?;
-                }
-                _ => {}
-            }
-        }
-    }
+    let controls = projected_controls(&mut insts, start, tables.derived, governor)?;
     let openers = epsilon_closure(&insts, start, governor)?;
     let mut first = [0_u64; 4];
     for &pc in &openers {
@@ -1558,6 +1615,8 @@ fn compile_program(
         line_start_openers: ScratchVec::new(governor),
         protocol: None,
         argument_anchor: tables.argument_anchor,
+        projected_entry_commit: controls.entry_commit,
+        name_followers: controls.name_followers,
         origin: GrammarOrigin::from_derived(tables.derived),
         first,
         bound,
