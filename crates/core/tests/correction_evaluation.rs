@@ -19,12 +19,13 @@
 mod tool_call_corpus;
 
 use purrassist_core::{
-    Budget, Effort, Governor, Outcome,
+    AssistResult, Budget, Effort, Governor, Outcome, StopReason,
     digest::Digest,
     json::{self, Node, Value},
     matching::{self, Candidate, MatchRequest, SelectionPolicy},
     paths::PathIndex,
     schema::{Schema, recovery::RecoveryRequest},
+    tool_call::{CallLedger, CallOutcome, ToolCalls},
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -498,6 +499,137 @@ fn tool_call_truth(case: &Node) -> Option<Vec<(String, Node)>> {
     )
 }
 
+/// Bound diagnostics before formatting, including caller-controlled strings.
+fn diagnostic_field(text: &str, limit: usize) -> String {
+    let mut characters = text.chars();
+    let mut clipped: String = characters.by_ref().take(limit).collect();
+    if characters.next().is_some() {
+        clipped.push('…');
+    }
+    clipped
+}
+
+fn diagnostic_rules(ledger: &CallLedger) -> Vec<String> {
+    ledger
+        .evidence
+        .iter()
+        .take(8)
+        .map(|evidence| diagnostic_field(&evidence.rule, 96))
+        .collect()
+}
+
+/// Summarize existing readings without serializing argument trees or receipts.
+fn diagnostic_reading(index: usize, calls: &ToolCalls) {
+    eprintln!(
+        "  reading={index} calls={} rejected={} content_spans={}",
+        calls.calls.len(),
+        calls.rejected.len(),
+        calls.content.len()
+    );
+    for call in calls.calls.iter().take(8) {
+        let outcome = match &call.outcome {
+            CallOutcome::Resolved => "resolved",
+            CallOutcome::BestGuess => "best_guess",
+            CallOutcome::Ambiguous => "ambiguous",
+            CallOutcome::Unresolved { reason } => reason.code(),
+        };
+        eprintln!(
+            "    call={} dialect={:?} tool={:?} name={:?} id={:?} source_id={:?} source_span={:?} argument_span={:?} outcome={outcome} rules={:?} rule_count={} alternatives={}",
+            call.index,
+            diagnostic_field(call.dialect.id(), 96),
+            diagnostic_field(call.tool.as_deref().unwrap_or("<none>"), 96),
+            diagnostic_field(call.name.as_deref().unwrap_or("<none>"), 96),
+            diagnostic_field(&call.id, 96),
+            diagnostic_field(call.source_id.as_deref().unwrap_or("<none>"), 96),
+            call.span,
+            call.arguments.span,
+            diagnostic_rules(&call.repairs),
+            call.repairs.evidence.len(),
+            call.alternatives.len(),
+        );
+        for (alternative, reading) in call.alternatives.iter().take(4).enumerate() {
+            eprintln!(
+                "      alternative={alternative} tool={:?} argument_span={:?} cost={} blocker={} rules={:?} rule_count={}",
+                diagnostic_field(reading.tool.as_deref().unwrap_or("<none>"), 96),
+                reading.arguments.span,
+                reading.cost,
+                reading
+                    .blocker
+                    .as_ref()
+                    .map_or("<none>", |reason| reason.code()),
+                diagnostic_rules(&reading.repairs),
+                reading.repairs.evidence.len(),
+            );
+        }
+    }
+}
+
+/// At most 64 recoverable canonical misses, with bounded readings and fields.
+/// Returns the number reported, leaving every score and recovery unchanged.
+fn diagnostic_canonical_miss(
+    case: &Node,
+    result: &AssistResult<ToolCalls>,
+    missed: bool,
+    reported: usize,
+) -> usize {
+    if !missed || reported >= 64 || text_field(case, "category") != "canonical" {
+        return 0;
+    }
+    let id = text_field(case, "id");
+    let stopped = match &result.receipt.stopped {
+        StopReason::Completed => "completed".to_owned(),
+        StopReason::NoCandidate => "no_candidate".to_owned(),
+        StopReason::BudgetExceeded(resource) => format!("budget_exceeded({resource:?})"),
+        StopReason::Cancelled => "cancelled".to_owned(),
+        StopReason::InvalidInput(_) => "invalid_input".to_owned(),
+    };
+    eprintln!(
+        "canonical-abstention: id={:?} printed_family={:?} allowlist={:?} policy={:?} stop={:?} termination={stopped}",
+        diagnostic_field(id, 192),
+        diagnostic_field(id.split('/').next().unwrap_or(id), 96),
+        diagnostic_field(text_field(case, "dialect"), 1024),
+        diagnostic_field(text_field(case, "policy"), 96),
+        diagnostic_field(text_field(case, "stop"), 96),
+    );
+    match &result.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => diagnostic_reading(0, calls),
+        Outcome::Ambiguous(readings) => {
+            let native = |reading: &ToolCalls| {
+                !reading.calls.is_empty()
+                    && reading
+                        .calls
+                        .iter()
+                        .all(|call| !call.dialect.grammar().is_derived())
+            };
+            eprintln!(
+                "  outcome=ambiguous readings={} native_only_readings={}",
+                readings.len(),
+                readings.iter().filter(|reading| native(reading)).count()
+            );
+            // Show native peers even when digest ordering puts projected
+            // alternatives first. Preserve original indices in every row.
+            for (index, reading) in readings
+                .iter()
+                .enumerate()
+                .filter(|(_, reading)| native(reading))
+                .take(2)
+            {
+                diagnostic_reading(index, reading);
+            }
+            for (index, reading) in readings
+                .iter()
+                .enumerate()
+                .filter(|(_, reading)| !native(reading))
+                .take(6)
+            {
+                diagnostic_reading(index, reading);
+            }
+        }
+        Outcome::Unresolved => eprintln!("  outcome=unresolved"),
+    }
+    1
+}
+
 /// Every case recovered under its request and scored. The answer is the
 /// calls the caller may run when it accepts guesses
 /// ([`ToolCalls::usable_accepting_guesses`]): `Resolved` calls and `BestGuess`
@@ -521,6 +653,7 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
         unresolved_truth: 0,
         unresolved_abstained: 0,
     };
+    let mut canonical_misses_reported = 0;
     for case in &cases {
         let (request, dialects) = tool_call_corpus::request(case);
         let set = tool_call_corpus::tools_for(case, &tools, &adapter);
@@ -554,6 +687,12 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
             Outcome::Ambiguous(_) | Outcome::Unresolved => None,
         };
         let truth = tool_call_truth(case);
+        canonical_misses_reported += diagnostic_canonical_miss(
+            case,
+            &result,
+            answer.is_none() && truth.as_ref().is_some_and(|calls| !calls.is_empty()),
+            canonical_misses_reported,
+        );
         let mut tally = Tally::default();
         match (&answer, &truth) {
             (None, _) => tally.abstained += 1,

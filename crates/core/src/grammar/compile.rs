@@ -1668,16 +1668,22 @@ struct Programs<'p> {
 }
 
 impl Programs<'_> {
-    /// Compile the original tables, then rebuild JSON key spellings when declared.
-    fn compile_tables(
+    /// Compile literal spellings, then configure the declared opener and fence framing.
+    fn compile_framed(
         &self,
         literals: &mut ScratchVec<Literal>,
         literal_tables: &mut ScratchVec<LiteralTables>,
         closers: &[CloserClass],
         confusables: &[(Bytes, Bytes)],
-        json_envelope: bool,
+        framing: (
+            bool,
+            ExamplePolicy,
+            &[(ScratchVec<u8>, usize)],
+            &[DelimiterSet],
+        ),
         governor: &mut Governor,
     ) -> Result<[Program; 2], GrammarError> {
+        let (json_envelope, examples, line_start, delimiters) = framing;
         let mut programs = self.compile(literals, literal_tables, &[], governor)?;
         if json_envelope {
             // Key uses of a literal also used otherwise point at its key copy.
@@ -1685,6 +1691,17 @@ impl Programs<'_> {
             (*literal_tables, renames) =
                 json_tables(&programs, literals, closers, confusables, governor)?;
             programs = self.compile(literals, literal_tables, &renames, governor)?;
+        }
+        line_start_openers(&mut programs[0], line_start, literals, governor)?;
+        if examples == ExamplePolicy::ProtocolFences {
+            protocol_fences(
+                &mut programs,
+                literals,
+                closers,
+                literal_tables,
+                delimiters,
+                governor,
+            )?;
         }
         Ok(programs)
     }
@@ -2294,25 +2311,14 @@ fn compile_policy(
         argument_anchor,
         derived,
     };
-    let mut programs = source.compile_tables(
+    let programs = source.compile_framed(
         &mut literals,
         &mut literal_tables,
         &closers,
         &confusables,
-        json_envelope,
+        (json_envelope, examples, &line_start, &delimiters),
         governor,
     )?;
-    line_start_openers(&mut programs[0], &line_start, &literals, governor)?;
-    if examples == ExamplePolicy::ProtocolFences {
-        protocol_fences(
-            &mut programs,
-            &literals,
-            &closers,
-            &literal_tables,
-            &delimiters,
-            governor,
-        )?;
-    }
     let longest = longest_literal(
         &literals,
         &literal_tables,

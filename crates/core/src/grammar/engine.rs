@@ -4709,11 +4709,16 @@ const RELEASE_VECTOR_BYTES: u64 = 40;
 const DEFERRED_BYTES: u64 = 64;
 
 impl<'s> Engine<'s> {
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "Keep the recognizer's exclusive operation-governor boundary while class allocation is deferred to its first transition"
+    )]
     pub(crate) fn new(
         dialects: &'s [DialectId],
         tools: Option<&'s ToolSet>,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
+        governor.check()?;
         let mut grammars = Vec::with_capacity(dialects.len());
         let mut tables = Vec::with_capacity(dialects.len() * 2);
         let mut protocol_fences = false;
