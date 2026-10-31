@@ -43,6 +43,9 @@ impl Child {
     pub(crate) fn get(&self) -> &PExpr {
         &self.values.as_slice()[0]
     }
+    pub(super) fn get_mut(&mut self) -> &mut PExpr {
+        &mut self.values.as_mut_slice()[0]
+    }
 }
 
 /// One positioned expression; all owning edges retain their exact reservations.
@@ -225,6 +228,27 @@ fn syntax(offset: usize, message: fmt::Arguments<'_>, governor: &mut Governor) -
         },
         Err(reason) => GrammarError::Resource(reason),
     }
+}
+pub(super) fn validate_id(
+    text: &str,
+    offset: usize,
+    governor: &mut Governor,
+) -> Result<(), GrammarError> {
+    governor.charge(Resource::Work, size(text.len()))?;
+    if text.is_empty() {
+        return Err(GrammarError::EmptyLiteral { offset });
+    }
+    if !text
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(syntax(
+            offset,
+            format_args!("grammar id must match [A-Za-z0-9._-]+"),
+            governor,
+        ));
+    }
+    Ok(())
 }
 fn admit_depth(depth: u32, governor: &mut Governor) -> Result<(), GrammarError> {
     if depth > NATIVE_DEPTH {
@@ -546,16 +570,7 @@ impl Parser<'_, '_> {
                 self.governor,
             )
         })?;
-        if !text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-        {
-            return Err(syntax(
-                id_at,
-                format_args!("grammar id must match [A-Za-z0-9._-]+"),
-                self.governor,
-            ));
-        }
+        validate_id(text, id_at, self.governor)?;
         let mut owned_id = ScratchString::new(self.governor);
         owned_id.push_str(text)?;
         drop(id);

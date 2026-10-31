@@ -348,6 +348,9 @@ pub enum EditOperator {
     /// closing tag as `</parameter>`. The definition grounds it: only a
     /// declared name, at the top level of the body, read once.
     BareParameterElement,
+    /// Partition a joint name/ID run after a profile suppressed its separator.
+    /// Every admitted source boundary remains a competing, explicit guess.
+    StrippedNameIdBoundary,
 }
 
 /// Static metadata of one [`EditOperator`].
@@ -439,7 +442,7 @@ const fn guessed_repair(operator: EditOperator, id: &'static str, cost: u64) -> 
 }
 
 /// The number of [`EditOperator`]s.
-pub const OPERATOR_COUNT: usize = 47;
+pub const OPERATOR_COUNT: usize = 48;
 
 /// Every grammar edit operator, in [`EditOperator`] order, as a constant
 /// table (the tool-call rule registry is built from it at compile time).
@@ -759,6 +762,13 @@ pub(crate) const OPERATOR_TABLE: [OperatorRule; OPERATOR_COUNT] = [
         cost::CLOSER_VARIANT,
         Grounding::Definition,
         Some(LossKind::Markup),
+    ),
+    note(
+        EditOperator::StrippedNameIdBoundary,
+        "tool_call.markup.stripped-name-id-boundary",
+        cost::JSON_GUESS,
+        true,
+        None,
     ),
 ];
 

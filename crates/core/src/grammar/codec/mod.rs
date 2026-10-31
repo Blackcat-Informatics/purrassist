@@ -585,6 +585,11 @@ pub(crate) enum CodecState {
 }
 
 impl CodecState {
+    /// Real retained JSON evidence for a marker-suppressed call attempt.
+    pub(crate) const fn argument_anchor(&self) -> bool {
+        matches!(self, Self::Json(codec) if codec.argument_anchor())
+    }
+
     pub(crate) const fn kind(&self) -> CodecKind {
         match self {
             Self::Raw(_) => CodecKind::Raw,

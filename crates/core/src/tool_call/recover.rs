@@ -4024,7 +4024,15 @@ impl Recovery<'_> {
                 raw: self.output[span.clone()].to_vec(),
                 span,
                 dialect: family.dialect(),
-                candidate_dialects: Vec::new(),
+                candidate_dialects: if family.dialect().is_none() {
+                    governor.charge(
+                        Resource::ScratchBytes,
+                        size(family.dialects().len()).saturating_mul(ENTRY_BYTES),
+                    )?;
+                    family.dialects().to_vec()
+                } else {
+                    Vec::new()
+                },
                 reason: Rejection::UnsupportedDialect { family },
                 repairs,
             });
@@ -4750,7 +4758,15 @@ impl Recovery<'_> {
             }
             derivations
         };
-        let published = forest.publish(&derivations, governor)?;
+        let mut published = forest.publish(&derivations, governor)?;
+        if readings.len() > 1 {
+            prefer_exact_ties(
+                &readings,
+                &mut published.order,
+                &mut published.alternatives,
+                governor,
+            )?;
+        }
         debug_assert!(
             published.order.windows(2).all(|pair| !forest
                 .distinguishing(&derivations[pair[0]], &derivations[pair[1]])
@@ -4958,9 +4974,13 @@ fn fold_options<'t>(
     for members in &groups {
         let mut kept = members[0];
         for &member in &members[1..] {
-            if Fold::body_evidence(&options[member], output)
-                > Fold::body_evidence(&options[kept], output)
-            {
+            let preference = |index: usize| {
+                let exact = options[index].iter().filter(|segment| {
+                    matches!(segment, ResolvedSegment::Call(call) if !call.dialect.grammar().is_derived())
+                }).count();
+                (exact, Fold::body_evidence(&options[index], output))
+            };
+            if preference(member) > preference(kept) {
                 kept = member;
             }
         }
@@ -5225,7 +5245,17 @@ fn merge(
     for group in groups {
         let mut best = group[0];
         for &member in &group[1..] {
-            let evidence = |at: usize| slots[at].as_ref().map(Reading::body_evidence);
+            let evidence = |at: usize| {
+                slots[at].as_ref().map(|reading| {
+                    let exact = reading
+                        .value
+                        .calls
+                        .iter()
+                        .filter(|call| !call.dialect.grammar().is_derived())
+                        .count();
+                    (exact, reading.body_evidence())
+                })
+            };
             if evidence(member) > evidence(best) {
                 best = member;
             }
@@ -5498,6 +5528,87 @@ fn call_derivations(
         }
     }
     Ok(derivations)
+}
+
+/// Refine the wire-digest tie order only for equal-cost readings of the same
+/// nonempty ordered invocations. Exact framing precedes projected framing;
+/// costs, distinct invocations, ledgers and native-only relative order remain.
+/// Both value indices and complete receipt records move together.
+fn prefer_exact_ties(
+    readings: &[Reading],
+    order: &mut [usize],
+    alternatives: &mut [AlternativeReceipt],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    fn projected(reading: &Reading) -> usize {
+        reading
+            .value
+            .calls
+            .iter()
+            .filter(|call| call.dialect.grammar().is_derived())
+            .count()
+    }
+    fn same_invocations(
+        left: &Reading,
+        right: &Reading,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if left.value.calls.is_empty() || left.value.calls.len() != right.value.calls.len() {
+            return Ok(false);
+        }
+        for (left, right) in left.value.calls.iter().zip(&right.value.calls) {
+            governor.charge(
+                Resource::Work,
+                left.arguments
+                    .estimated_bytes()
+                    .saturating_add(right.arguments.estimated_bytes())
+                    .saturating_add(size(left.id.len() + right.id.len()))
+                    .saturating_add(size(
+                        left.name.as_ref().map_or(0, String::len)
+                            + right.name.as_ref().map_or(0, String::len),
+                    )),
+            )?;
+            if left.name != right.name
+                || left.tool != right.tool
+                || left.id != right.id
+                || left.source_id != right.source_id
+                || left.arguments != right.arguments
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    let mut at = 0;
+    while at < order.len() {
+        let priority = projected(&readings[order[at]]);
+        if priority == 0 {
+            at += 1;
+            continue;
+        }
+        let mut through = at;
+        for later in at + 1..order.len() {
+            governor.charge(Resource::Work, 1)?;
+            if alternatives[later].cost != alternatives[at].cost {
+                break;
+            }
+            if projected(&readings[order[later]]) < priority
+                && same_invocations(&readings[order[at]], &readings[order[later]], governor)?
+            {
+                through = later;
+            }
+        }
+        if through == at {
+            at += 1;
+            continue;
+        }
+        // Move only the projected alternative. Native alternatives never swap
+        // with one another, even when unrelated invocations lie between them.
+        governor.charge(Resource::Work, size(through - at + 1))?;
+        order[at..=through].rotate_left(1);
+        alternatives[at..=through].rotate_left(1);
+    }
+    Ok(())
 }
 
 /// The diagnostics of the `tool_call.ambiguity` validation.

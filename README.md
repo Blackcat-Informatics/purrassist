@@ -161,15 +161,16 @@ Current surfaces include:
   mutating tools, and re-emission as any dialect or the `OpenAI` `tool_calls`
   array. Call markup of a dialect that is not built in yet, or not in the
   request's allow-list, is reported as a rejected attempt
-  (`unsupported_dialect`), never silent content. Fifteen dialects ship: `qwen3-coder-xml.v1`, `hermes.v1`,
+  (`unsupported_dialect`), never silent content. Twenty-three dialects are built in: `qwen3-coder-xml.v1`, `hermes.v1`,
   `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`; callers add
+  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`, plus the eight
+  [marker-suppressed variants](docs/tool-calls/README.md#marker-suppressed-variants); callers add
   their own with the grammar DSL. Typed tool definitions derive from Rust
   structs and enums with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`
   (the zero-dependency `purrassist-derive` crate, re-exported by the facade;
-  see the example below). Still tracked: the `*-stripped` variants
-  (#18), streaming recognition (#16), and provider streaming events (#17). See
+  see the example below). Streaming recognition (#16) and provider streaming
+  events (#17) remain tracked. See
   [tool-call recovery](docs/tool-calls/README.md).
 - CLI, stdio MCP, and resumable helper request/response adapters
   (`prepare_helper` and `complete_helper`; see [helpers](docs/HELPERS.md)). No

@@ -393,6 +393,39 @@ caller. The per-byte recognition cost of a dialect is `K_THREAD` times its
 `configuration_bound()`; the published bound and the built-in values are in
 [RESOURCES.md](../RESOURCES.md#tool-call-recovery-cost-bound).
 
+## Projected framing and ranking
+
+Built-in `*-stripped.v1` dialects use a governed positioned-AST recipe over
+an unchanged parent grammar. Results, declarations and reasoning conventions
+are inherited; the projection suppresses enumerated call markers. The recipe
+identity includes its parent source, marker inventory and anchor policy.
+
+Derived recipes are read-only presets for the eight shipped stripped dialects.
+`GrammarRecipe::Derived` carries immutable `DerivedRecipe` metadata: identity,
+unchanged parent source, exact marker inventory, suppression policy and call
+anchor policy. Public getters inspect the same bytes used for recompilation
+and digest generation. Construction remains inside the built-in registry;
+custom marker projections are not a public capability. Custom literal grammars
+continue through `GrammarRecipe::Literal` and the existing native compiler.
+The reviewed Mistral preset retains every nonempty source-valid name/ID boundary
+as an explicitly inferred alternative, using the original native class automata.
+For line-start name-and-arguments presets, a whitespace-separated name also
+requires a declared tool or alias when tools are supplied, including a name
+in any native-admitted joint ID split. Admission retains every original split;
+it does not select a preferred boundary. An unknown prose word
+such as `Saved {"name":"Ada"}` stays content; contiguous `unknown{}` retains
+unknown-tool semantics. Profiles with retained function, recipient or member-key
+evidence keep their own admission rules.
+
+Recovery keeps ascending search cost. Among equally costly readings of the
+same nonempty ordered invocations, exact framing precedes projected framing.
+Names, tools, source and assigned IDs, and arguments must agree for this tie
+preference; zero-call readings and different invocations do not acquire that
+preference. Native-only alternatives retain their order. Different outer spans,
+ID inferences and data-loss ledgers remain separate alternatives, with output
+digests, validation indices and receipt positions aligned. A repaired reading
+with a higher cost does not displace a cheaper reading through this tie rule.
+
 ## Retained expression ownership and reference depth
 
 The compiler's declarations, names, original literal/closer/delimiter/marker

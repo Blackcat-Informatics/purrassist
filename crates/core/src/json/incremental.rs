@@ -631,6 +631,18 @@ impl IncrementalRecovery {
         matches!(&self.mode, Mode::Text(text) if text.quote == '"')
     }
 
+    /// Borrow the native decoded prefix of a top-level JSON string.
+    /// Nested strings and object keys never constitute root-string evidence.
+    pub(crate) fn root_string_prefix(&self) -> Option<&str> {
+        if !self.stack.is_empty() {
+            return None;
+        }
+        match &self.mode {
+            Mode::Text(text) if !text.key && text.quote == '"' => Some(&text.value),
+            _ => self.root.as_ref().and_then(Node::as_str),
+        }
+    }
+
     /// Absolute offset just past the last consumed character.
     pub(crate) const fn position(&self) -> usize {
         self.position

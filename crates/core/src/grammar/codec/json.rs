@@ -99,6 +99,8 @@ pub struct JsonCodec {
     stalled: bool,
     /// What is still checked of the value's leading bytes.
     lead: Lead,
+    /// Decoded root-string bytes already checked after an escaped lead.
+    decoded_prefix: usize,
     /// Runs of malformed UTF-8 read as U+FFFD: each run's absolute range
     /// and how many U+FFFD (maximal malformed subparts) it was read as.
     invalid: Vec<InvalidRun>,
@@ -119,6 +121,8 @@ enum Lead {
     Value,
     /// `json-args`, after the value's opening `"`.
     Quoted,
+    /// A possible escaped stringified-object lead; the native parser decodes it.
+    DecodedQuoted,
     /// `json-args`, the value's leading bytes were checked.
     Checked,
 }
@@ -173,6 +177,11 @@ impl JsonCodec {
     pub const fn arguments_only(&self) -> bool {
         !matches!(self.lead, Lead::Any)
     }
+
+    /// Whether the arguments-only scanner has retained object-shaped evidence.
+    pub(crate) const fn argument_anchor(&self) -> bool {
+        matches!(self.lead, Lead::Checked)
+    }
 }
 
 impl Codec for JsonCodec {
@@ -187,6 +196,7 @@ impl Codec for JsonCodec {
             fault: None,
             stalled: false,
             lead: Lead::Any,
+            decoded_prefix: 0,
             invalid: Vec::new(),
         })
     }
@@ -201,10 +211,11 @@ impl Codec for JsonCodec {
             return Ok(CodecStep::Consumed);
         }
         match self.lead {
-            Lead::Any | Lead::Checked => {}
+            Lead::Any | Lead::Checked | Lead::DecodedQuoted => {}
             // The string's first character: a stringified object (after
             // spaces), or the closing quote of an empty string.
             Lead::Quoted if byte == b' ' => {}
+            Lead::Quoted if byte == b'\\' => self.lead = Lead::DecodedQuoted,
             Lead::Quoted if matches!(byte, b'{' | b'"') => self.lead = Lead::Checked,
             Lead::Value if byte.is_ascii_whitespace() => {}
             Lead::Value if byte == b'{' => self.lead = Lead::Checked,
@@ -239,9 +250,16 @@ impl Codec for JsonCodec {
         let held = usize::from(core::mem::take(&mut self.held_len));
         let chunk = self.held;
         let fed = self.parser.feed(&chunk[..held], governor);
-        Ok(self
+        let step = self
             .settle(fed, at + 1 - held)?
-            .unwrap_or(CodecStep::Consumed))
+            .unwrap_or(CodecStep::Consumed);
+        if self.lead == Lead::DecodedQuoted
+            && !self.stalled
+            && let Some(fault) = self.decoded_anchor(at, governor)?
+        {
+            return Ok(CodecStep::Fault(fault));
+        }
+        Ok(step)
     }
 
     fn finish(
@@ -273,6 +291,39 @@ impl Codec for JsonCodec {
 }
 
 impl JsonCodec {
+    /// Use the native escape decoder once per newly decoded prefix byte.
+    fn decoded_anchor(
+        &mut self,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<Option<CodecFault>, StopReason> {
+        let Some(prefix) = self.parser.root_string_prefix() else {
+            return Ok(None);
+        };
+        let pending = prefix
+            .get(self.decoded_prefix..)
+            .expect("native decoded root strings only append to their prefix");
+        for character in pending.chars() {
+            governor.charge(
+                Resource::Work,
+                u64::try_from(character.len_utf8()).unwrap_or(4),
+            )?;
+            self.decoded_prefix += character.len_utf8();
+            if character.is_whitespace() {
+                continue;
+            }
+            if character == '{' {
+                self.lead = Lead::Checked;
+                return Ok(None);
+            }
+            return Ok(Some(CodecFault::Malformed { at }));
+        }
+        if self.parser.value_complete() {
+            self.lead = Lead::Checked;
+        }
+        Ok(None)
+    }
+
     /// Feed one U+FFFD for the `width` malformed bytes at `at` and record
     /// the run; the step to report when the value ended or stalled.
     fn replace(

@@ -1,0 +1,84 @@
+{
+  "description": "First-party multiple calls anchor for the governed deepseek-v3-stripped.v1 projection; retained source boundaries and typed values are explicit.",
+  "markup": "functionf\n```json\n{\"text\":\"first\"}\n```\nfunctiong\n```json\n{\"text\":\"second\"}\n```",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "number": {
+              "type": "number"
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {}
+                }
+              }
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "g",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "number": {
+              "type": "number"
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {}
+                }
+              }
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "f",
+      "arguments": {
+        "text": "first"
+      }
+    },
+    {
+      "name": "g",
+      "arguments": {
+        "text": "second"
+      }
+    }
+  ]
+}

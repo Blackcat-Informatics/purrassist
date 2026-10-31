@@ -1,0 +1,89 @@
+{
+  "description": "First-party nested typed arguments anchor for the governed harmony-stripped.v1 projection; retained source boundaries and typed values are explicit.",
+  "markup": "commentary to=functions.f json{\"text\":\"line one\\n  line two\\t\",\"number\":2.5,\"options\":{\"backup\":false,\"items\":[null,true,{\"x\":3}]}}",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "f",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "number": {
+              "type": "number"
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {}
+                }
+              }
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "g",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "number": {
+              "type": "number"
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "backup": {
+                  "type": "boolean"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {}
+                }
+              }
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    }
+  ],
+  "expected_calls": [
+    {
+      "name": "f",
+      "arguments": {
+        "text": "line one\n  line two\t",
+        "number": 2.5,
+        "options": {
+          "backup": false,
+          "items": [
+            null,
+            true,
+            {
+              "x": 3
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

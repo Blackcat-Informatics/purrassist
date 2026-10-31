@@ -282,6 +282,8 @@ struct Turn {
     /// Each attempt with an interpretation, until its end is reported:
     /// where it began, and its interpretations.
     interps: BTreeMap<u64, (usize, Vec<Interp>)>,
+    /// Absolute raw OPEN barriers for interpreted derived headers only.
+    weak_headers: BTreeMap<u64, usize>,
     /// The base of the last opener start that ended a content run.
     last_kill: Option<(usize, Base)>,
     /// Every stored reasoning segment: its end and store index, by its
@@ -1050,6 +1052,7 @@ impl<'s> Recognizer<'s> {
                 embedded: Vec::new(),
             }),
             interps: BTreeMap::new(),
+            weak_headers: BTreeMap::new(),
             last_kill: None,
             blocks: BTreeMap::new(),
             blocked: Vec::new(),
@@ -1242,8 +1245,13 @@ impl<'s> Recognizer<'s> {
         };
         for pending in group {
             match pending {
-                Pending::Engine(Event::Opened { attempt, start, .. }) => {
-                    self.opened(&mut frame, attempt, start, governor)?;
+                Pending::Engine(Event::Opened {
+                    attempt,
+                    start,
+                    weak_header,
+                    ..
+                }) => {
+                    self.opened(&mut frame, attempt, start, weak_header, governor)?;
                 }
                 Pending::Marker {
                     start,
@@ -1320,6 +1328,7 @@ impl<'s> Recognizer<'s> {
         frame: &mut Frame,
         attempt: u64,
         start: usize,
+        weak_header: Option<usize>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mut interps = Vec::new();
@@ -1342,6 +1351,57 @@ impl<'s> Recognizer<'s> {
             (_, Some((kill_start, base))) if kill_start == start => interps.push(Interp::Top(base)),
             _ => {}
         }
+        // An exact envelope inside a weak header inherits the pre-header
+        // interpretations. Raw name/ID/argument OPEN equality is forbidden:
+        // an exact-looking value there is data of the outer call.
+        if interps.is_empty() && weak_header.is_none() {
+            governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+            let mut origins = Vec::new();
+            for (&owner, &barrier) in &self.turn.weak_headers {
+                let Some((prefix, inherited)) = self.turn.interps.get(&owner) else {
+                    continue;
+                };
+                if *prefix < start && start < barrier {
+                    for &interp in inherited {
+                        governor.charge(Resource::Work, 1)?;
+                        let origin = (*prefix, interp);
+                        if !origins.contains(&origin) {
+                            governor.charge(Resource::ScratchBytes, 64)?;
+                            origins.push(origin);
+                        }
+                    }
+                }
+            }
+            for (prefix, interp) in origins {
+                match interp {
+                    Interp::Top(base) => {
+                        let hist = self.turn.close(
+                            Top {
+                                cost: base.cost,
+                                hist: base.hist,
+                                boundary: prefix,
+                            },
+                            start,
+                            governor,
+                        )?;
+                        let base = Base {
+                            cost: base.cost,
+                            hist,
+                        };
+                        if !interps.contains(&Interp::Top(base)) {
+                            interps.push(Interp::Top(base));
+                        }
+                        self.turn.last_kill = Some((start, base));
+                        frame.kill = true;
+                    }
+                    Interp::Embedded(block) => {
+                        if !interps.contains(&Interp::Embedded(block)) {
+                            interps.push(Interp::Embedded(block));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(think) = self.turn.think.clone()
             && think.start <= start
         {
@@ -1357,6 +1417,10 @@ impl<'s> Recognizer<'s> {
             // reading it.
             self.engine.abandon(attempt, governor)?;
         } else {
+            if let Some(barrier) = weak_header {
+                governor.charge(Resource::ScratchBytes, 64)?;
+                self.turn.weak_headers.insert(attempt, barrier);
+            }
             self.turn.interps.insert(attempt, (start, interps));
         }
         Ok(())
@@ -1541,6 +1605,7 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        self.turn.weak_headers.remove(&ended.attempt);
         let removed = self.turn.interps.remove(&ended.attempt);
         // An opening reasoning marker the attempt read over cuts it: the
         // marker's bytes belong to the block, which opens where the
@@ -2880,6 +2945,10 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::StringifiedArguments => {
             format!("decoded stringified arguments `{original}` as JSON `{replacement}`")
         }
+        EditOperator::StrippedNameIdBoundary => format!(
+            "partitioned the retained joint name and ID at byte {} after the selected profile suppressed their separator; every admitted boundary remains a competing guess",
+            edit.span.start
+        ),
         EditOperator::ExtractProse
         | EditOperator::ExtractFence
         | EditOperator::GroupSplit
