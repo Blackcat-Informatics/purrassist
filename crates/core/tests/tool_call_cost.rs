@@ -1158,6 +1158,13 @@ fn restarted_deepseek_sections_cost_is_linear() {
         let result = tools.recover(input.as_bytes(), &request, &dialects);
         assert_eq!(result.receipt.stopped, StopReason::Completed, "{count}");
         let usage = result.receipt.usage;
+        println!(
+            "restarted k={count} bytes {}: work {} total_scratch_charged {} peak_scratch {}",
+            input.len(),
+            usage.work,
+            usage.total_scratch_charged,
+            usage.peak_scratch_bytes,
+        );
         measured.push((
             input.len() as u128,
             [
@@ -1176,7 +1183,9 @@ fn restarted_deepseek_sections_cost_is_linear() {
             let (ratio, byte_ratio) = (charged[index] * small_bytes, small[index] * bytes);
             assert!(
                 ratio * 100 <= byte_ratio * 105 && byte_ratio * 100 <= ratio * 105,
-                "{small_bytes} -> {bytes} bytes: {label} is not linear"
+                "{small_bytes} -> {bytes} bytes: {label} {} -> {}, scaled {ratio}, expected {byte_ratio}",
+                small[index],
+                charged[index]
             );
         }
     }
