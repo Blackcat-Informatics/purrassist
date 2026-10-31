@@ -414,27 +414,29 @@ impl Arena {
     /// alternative reading (see [`CodecValue::alternative`]) records both,
     /// packed side by side, so the call has both readings; were one
     /// cheaper, it alone is kept.
-    fn codec_value(&mut self, prev: u32, value: CodecValue) -> Result<(u32, u64), StopReason> {
-        let CodecValue {
-            tree,
-            edits,
-            alternative,
-        } = value;
-        let mut hist = self.value(prev, tree)?;
-        let mut cost = 0_u64;
-        for edit in edits {
-            cost = cost.saturating_add(edit.rule().cost);
-            hist = self.adopt_edit(hist, edit)?;
+    fn codec_value(&mut self, prev: u32, mut value: CodecValue) -> Result<(u32, u64), StopReason> {
+        let mut best = None;
+        loop {
+            let (tree, edits, alternative) = value.into_parts();
+            let mut hist = self.value(prev, tree)?;
+            let mut cost = 0_u64;
+            for edit in edits {
+                cost = cost.saturating_add(edit.rule().cost);
+                hist = self.adopt_edit(hist, edit)?;
+            }
+            best = Some(match best {
+                None => (hist, cost),
+                Some((prior, least)) => match cost.cmp(&least) {
+                    core::cmp::Ordering::Equal => (self.pack(prior, hist)?, least),
+                    core::cmp::Ordering::Less => (hist, cost),
+                    core::cmp::Ordering::Greater => (prior, least),
+                },
+            });
+            match alternative {
+                Some(next) => value = next.into_value(),
+                None => return Ok(best.expect("the first reading was recorded")),
+            }
         }
-        let Some(alternative) = alternative else {
-            return Ok((hist, cost));
-        };
-        let (other, other_cost) = self.codec_value(prev, *alternative)?;
-        Ok(match other_cost.cmp(&cost) {
-            core::cmp::Ordering::Equal => (self.pack(hist, other)?, cost),
-            core::cmp::Ordering::Less => (other, other_cost),
-            core::cmp::Ordering::Greater => (hist, cost),
-        })
     }
 
     fn value(&mut self, prev: u32, tree: ArgTree) -> Result<u32, StopReason> {
