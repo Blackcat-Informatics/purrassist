@@ -207,8 +207,9 @@ fn deep_reference_chain_exhausts_depth_budget_during_evaluation() {
     let schema =
         Schema::with_resources_governed(r#"{"$ref":"urn:test:chain0"}"#, &resources, &mut governor)
             .unwrap();
-    // A larger caller limit cannot disable the evaluator's native stack ceiling.
-    for depth in [64, 512] {
+    // The root-to-chain-0 route needs 257 levels beyond the root. Caller
+    // limits below that boundary refuse, including the former native ceiling.
+    for depth in [64, 256] {
         let mut governor = Governor::new(Budget {
             depth,
             work: 10_000_000,
@@ -222,11 +223,22 @@ fn deep_reference_chain_exhausts_depth_budget_during_evaluation() {
             StopReason::BudgetExceeded(purrassist_core::contract::Resource::Depth)
         );
     }
-    // Root depth is zero. Entering node 1 and following through node 256
-    // reaches exactly 256, while the node-0 entry above needs 257 frames
-    // beyond the root. The native ceiling admits the exact boundary.
+    for depth in [257, 512] {
+        let mut governor = Governor::new(Budget {
+            depth,
+            work: 10_000_000,
+            ..Budget::default()
+        });
+        assert!(
+            schema
+                .validate_with(&parse("42").unwrap(), &mut governor)
+                .unwrap()
+                .valid
+        );
+    }
+    // Starting at chain-1 needs exactly 256 levels beyond the root.
     let mut governor = Governor::new(Budget {
-        depth: 512,
+        depth: 256,
         work: 10_000_000,
         ..Budget::default()
     });

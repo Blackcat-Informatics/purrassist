@@ -4,8 +4,8 @@
 //!
 //! Recursion keys and transient paths/lookup keys retain fallible owners and
 //! admit copying, comparison, lookup and relocation through the caller governor.
-//! Active keys and dynamic scopes unwind on every result; recursion obeys both
-//! caller Depth and a native ceiling. Integer tests, bound comparisons and
+//! Active keys and dynamic scopes unwind on every result; recursion obeys
+//! caller Depth. Integer tests, bound comparisons and
 //! transient report records also use admitted operations. Reports and annotations
 //! remain owned through merging, branch rejection and internal consumption.
 //! Public validation and recovery receipts retain transferred output storage;
@@ -57,12 +57,6 @@ impl EvalResult {
         })
     }
 }
-
-/// Bound native evaluator nesting, with the root at depth zero.
-/// Reference and applicator crossings count too: one data level can require
-/// object, array and reference-target frames. This safety ceiling is separate
-/// from the ordinary caller Depth preset.
-const NATIVE_EVALUATION_DEPTH: u32 = 256;
 
 struct Evaluation {
     errors: Records<Violation>,
@@ -243,7 +237,7 @@ impl Evaluator<'_, '_> {
         key: &str,
         instance: &Node,
         path: &str,
-        depth: u32,
+        depth: u64,
     ) -> Result<Evaluation, StopReason> {
         let child = index::child(self.schema, id, key, self.governor)?;
         self.eval(child, instance, path, depth)
@@ -289,13 +283,10 @@ impl Evaluator<'_, '_> {
         id: usize,
         instance: &Node,
         path: &str,
-        depth: u32,
+        depth: u64,
     ) -> Result<Evaluation, StopReason> {
         self.governor.charge(Resource::Work, 1)?;
-        self.governor.charge(Resource::Depth, u64::from(depth))?;
-        if depth > NATIVE_EVALUATION_DEPTH {
-            return Err(self.governor.stop_resource(Resource::Depth));
-        }
+        self.governor.charge(Resource::Depth, depth)?;
         for (known_id, known_path) in &self.active {
             reference::work(self.governor, 1)?;
             if *known_id == id {
@@ -333,7 +324,7 @@ impl Evaluator<'_, '_> {
         id: usize,
         instance: &Node,
         path: &str,
-        depth: u32,
+        depth: u64,
     ) -> Result<Evaluation, StopReason> {
         let schema = self.schema;
         reference::work(self.governor, schema.index.locations[id].route.len())?;
@@ -369,7 +360,7 @@ impl Evaluator<'_, '_> {
         id: usize,
         instance: &Node,
         path: &str,
-        depth: u32,
+        depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
@@ -655,7 +646,7 @@ impl Evaluator<'_, '_> {
         id: usize,
         instance: &Node,
         path: &str,
-        depth: u32,
+        depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
@@ -761,7 +752,7 @@ impl Evaluator<'_, '_> {
         instance: &Node,
         members: &[Member],
         path: &str,
-        depth: u32,
+        depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
@@ -860,7 +851,7 @@ impl Evaluator<'_, '_> {
         id: usize,
         member: &Member,
         path: &str,
-        depth: u32,
+        depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
@@ -936,7 +927,7 @@ impl Evaluator<'_, '_> {
         id: usize,
         items: &[Node],
         path: &str,
-        depth: u32,
+        depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
@@ -1018,7 +1009,7 @@ impl Evaluator<'_, '_> {
         id: usize,
         instance: &Node,
         path: &str,
-        depth: u32,
+        depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
