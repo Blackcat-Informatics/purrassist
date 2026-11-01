@@ -144,6 +144,7 @@ use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{ContinuationFrontier, edit_entries, escaped};
 use super::resolve::loss_kind;
+use super::stream::EventCursor;
 use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
     FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
@@ -3152,7 +3153,7 @@ struct RecognizedInput {
     forced: Option<String>,
 }
 
-/// Shared byte intake for batch recovery and the forthcoming stream facade.
+/// Shared byte intake for batch recovery and the live stream facade.
 /// It owns source storage without lending it to its live recognizer. Every
 /// method uses the original governor. Interpretation failure does not discard
 /// admissible source; capture refusal stops admission but never source identity.
@@ -3170,6 +3171,7 @@ pub(super) struct RecoveryIntake<'s> {
     /// Only the contiguous native content prefix is published so far. Later
     /// content can still be removed by rejection/stray-closer normalization.
     content_end: usize,
+    events: EventCursor,
 }
 
 impl<'s> RecoveryIntake<'s> {
@@ -3191,6 +3193,7 @@ impl<'s> RecoveryIntake<'s> {
             failed: None,
             progress: ContinuationFrontier::default(),
             content_end: 0,
+            events: EventCursor::new(governor),
         };
         let result = (|| {
             intake.capture = Some(SourceCapture::new(governor)?);
@@ -3228,8 +3231,8 @@ impl<'s> RecoveryIntake<'s> {
     }
 
     /// Native frontier notifications use the same byte fold and event charges
-    /// as batch's discard sink. Content notifications currently cover only the
-    /// initial native content run; they are not the complete public event API.
+    /// as batch's discard sink. Live content currently covers only the initial
+    /// native run; shared native segments also produce call and reasoning facts.
     /// The source range and copied raw payload have byte-derived boundaries,
     /// independent of the caller's feed boundaries. The payload is admitted and
     /// built and permanently published before either sink is notified, including
@@ -3310,11 +3313,30 @@ impl<'s> RecoveryIntake<'s> {
             self.progress = frontier;
             progress(frontier);
             if let Some(delta) = delta {
-                let StreamEvent::ContentDelta { span, .. } = &delta;
-                self.content_end = span.end;
+                if let StreamEvent::ContentDelta { span, .. } = &delta {
+                    self.content_end = span.end;
+                }
                 content(delta)?;
             }
         }
+        let source = self
+            .capture
+            .as_ref()
+            .expect("live event production owns admitted source")
+            .bytes
+            .as_slice();
+        self.events.advance(
+            &self
+                .setup
+                .as_ref()
+                .expect("live event production owns its recognizer")
+                .recognizer,
+            source,
+            self.tools,
+            frontier.prefix_end,
+            governor,
+            content,
+        )?;
         Ok(())
     }
 
@@ -3472,6 +3494,7 @@ impl<'s> RecoveryIntake<'s> {
             policies,
             forced,
         } = self.recognize(request, governor)?;
+        self.events.remember_final(&turn, governor)?;
         let recovery = Recovery {
             tools: self.tools,
             request,
@@ -3490,12 +3513,34 @@ impl<'s> RecoveryIntake<'s> {
     }
 
     pub(super) fn finish(
-        mut self,
+        self,
         request: &ToolRecoveryRequest,
         governor: &mut Governor,
     ) -> AssistResult<ToolCalls> {
+        self.finish_with_events(request, governor, &mut |_| Ok(()))
+    }
+
+    pub(super) fn finish_with_events(
+        mut self,
+        request: &ToolRecoveryRequest,
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> AssistResult<ToolCalls> {
         self.receipt.source = core::mem::replace(&mut self.digest, DigestBuilder::new()).finish();
-        let outcome = match self.complete(request, governor) {
+        let completed = self.complete(request, governor).and_then(|done| {
+            if let Outcome::Resolved(calls) | Outcome::BestGuess(calls) = &done.outcome {
+                let source = self
+                    .capture
+                    .as_ref()
+                    .expect("completed recovery owns admitted source")
+                    .bytes
+                    .as_slice();
+                self.events
+                    .finish(calls, self.content_end, source, governor, sink)?;
+            }
+            Ok(done)
+        });
+        let outcome = match completed {
             Ok(done) => {
                 self.receipt.evidence = done.evidence;
                 self.receipt.losses = done.losses;

@@ -976,7 +976,7 @@ check. Invalid byte sequences retain their exact boundaries. Batch uses the
 same producer with a discard sink. Feed count and chunk boundaries do not
 decide notification boundaries. These notifications
 carry native ownership metadata, not resolved calls or permission to execute.
-The same intake now also constructs owned `ContentDelta` events for advances
+The same intake also constructs owned `ContentDelta` events for advances
 of the initial native content run, before any call, attempt or reasoning block.
 Each payload copies only the newly exposed source range into a temporary
 `ScratchVec`, admitting its capacity and `K_EVENT` plus one work unit per copied
@@ -993,14 +993,36 @@ no events, and input chunks do not set event boundaries. A closed
 native content node contributes its full settled range, including when the
 lexical boundary lands exactly on its end.
 
-Content after a structural segment is still withheld: final rejection extension
+Live content after a structural segment is still withheld: final rejection extension
 and stray-closer handling can remove such bytes from native content. Unsupported
 markup reports over the initial content run preserve its content bytes. This
-limited producer neither replays source nor resolves later content at finish.
+producer never replays source. At EOF, one completed whole-message reading
+flushes its remaining content and reasoning ranges from the existing result.
+Both batch discard and streaming sinks run that same final producer.
+
+A native event cursor follows the structurally shared history exactly once.
+The next-node lookup uses existing skip ancestry and admits every traversal;
+it does not rebuild or resolve prefix turns. Stored reasoning segments publish
+their exact marker-free text. Calls publish `CallStarted` only when every native
+reading is immune to examples-as-content and declaration-as-content suppression.
+A potentially suppressible call blocks subsequent live call indexing. Canonical
+tool-name or explicit-alias agreement across every reading publishes `CallName`;
+its lookup admission uses the actual canonical-name and alias index cardinality.
+Fuzzy identities wait for final resolution. A unique shared arguments-capture range
+publishes raw `ArgumentDelta`, including for mutating tools: raw bytes make no
+claim about settled parameter values or permission to execute.
+
+Before resolution consumes the finished native turn, the cursor records only
+governed argument-capture offsets. A charged sort and binary lookup allow EOF
+events to use captures whose native alternatives agree, without replaying the
+input or decoding arguments again. The completed unique reading fills missing
+call starts, canonical names and raw arguments. EOF names may follow a guessed
+final identity; the final outcome and receipt retain that uncertainty.
 Packed ambiguity and grouped attempts can hold this conservative frontier even
 when later recovery would fold their meanings together. Proving the longest
-semantic stable prefix, exact held/candidate byte accounting, public stream
-events beyond initial content, decoding queries, governed cloning and CLI/MCP progress remain
+semantic stable prefix, ambiguous EOF event intersection, exact held/candidate
+byte accounting, settled parameter/completion/rejection/revision events,
+decoding queries, governed cloning and CLI/MCP progress remain
 unfinished under #16.
 
 `ToolSet::stream` and `stream_governed` now own the request and original governor
@@ -1008,9 +1030,11 @@ while borrowing the tools and static built-in dialect set. Explicit dialect
 constructors borrow a prepared set instead, without a self-reference or clone.
 `ToolCallStream::feed` extends a caller's event sink, and `feed_collect` returns
 newly published events. `cancel` marks the original governor; `finish(stop)`
-checks refusal before completing and resolving the live recognizer. Source is
-not replayed. This facade currently exposes the limited initial-content event
-producer described above, not the complete streaming event contract.
+checks refusal before completing and resolving the live recognizer.
+`finish_with_events` and `finish_collect` preserve EOF events; plain `finish`
+delegates to the same producer with a discard sink. Allocation refusal during
+EOF collection is explicit in the returned result. This facade implements the
+source facts described above, not the complete streaming event contract.
 
 Each dialect `d` of the explicit prepared allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is

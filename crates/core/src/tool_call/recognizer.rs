@@ -197,6 +197,15 @@ pub(crate) struct ContinuationFrontier {
     pub(crate) blocked_from: Option<usize>,
 }
 
+/// One next node of the structurally shared native history. Source content has
+/// no stored segment; callers still advance its history cursor exactly once.
+#[derive(Debug)]
+pub(super) struct SettledStep<'a> {
+    pub(super) history: u32,
+    pub(super) end: usize,
+    pub(super) segment: Option<&'a Segment>,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Top {
     cost: u64,
@@ -1093,6 +1102,7 @@ pub struct Recognizer<'s> {
     turn: Turn,
     context: ContextTracker,
     frontier: ContinuationFrontier,
+    settled_history: u32,
     failed: Option<StopReason>,
 }
 
@@ -1226,6 +1236,7 @@ impl<'s> Recognizer<'s> {
             turn,
             context,
             frontier: ContinuationFrontier::default(),
+            settled_history: 0,
             failed: None,
         })
     }
@@ -1367,6 +1378,7 @@ impl<'s> Recognizer<'s> {
         let (node, mut content) = self
             .turn
             .prefix_before(common.unwrap_or(0), limit, governor)?;
+        self.settled_history = node;
         let mut prefix_end = content.map_or(self.turn.nodes[node as usize].end, |(_, end)| end);
         if let Some(top) = self.turn.top
             && self.turn.think.is_none()
@@ -1384,6 +1396,54 @@ impl<'s> Recognizer<'s> {
             blocked_from: barrier,
         };
         Ok(())
+    }
+
+    /// Visit only the next shared native node, never rebuilding a prefix turn.
+    /// Skip ancestry bounds each lookup by the history depth rather than by
+    /// source length. A packed disagreement cannot enter this history.
+    pub(super) fn settled_step(
+        &self,
+        previous: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<SettledStep<'_>>, StopReason> {
+        governor.charge(Resource::Work, K_CAPTURE)?;
+        let mut node = self.settled_history;
+        let target = self.turn.nodes[previous as usize]
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        if self.turn.nodes[node as usize].depth < target {
+            return Ok(None);
+        }
+        while self.turn.nodes[node as usize].depth > target {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let current = self.turn.nodes[node as usize];
+            node = if self.turn.nodes[current.jump as usize].depth >= target {
+                current.jump
+            } else {
+                current.prev
+            };
+        }
+        let current = self.turn.nodes[node as usize];
+        if current.prev != previous {
+            return Err(crate::contract::invalid_input(
+                "settled native event history diverged from its published prefix",
+            ));
+        }
+        let segment = match current.kind {
+            TurnKind::Stored(index, _) => Some(&self.turn.store[index as usize]),
+            TurnKind::Content(_) => None,
+            TurnKind::Root | TurnKind::Pack(_) => {
+                return Err(crate::contract::invalid_input(
+                    "settled native event history contains a non-segment node",
+                ));
+            }
+        };
+        Ok(Some(SettledStep {
+            history: node,
+            end: current.end,
+            segment,
+        }))
     }
 
     /// Queue one report, charging [`QUEUED_REPORT`] scratch bytes until it
