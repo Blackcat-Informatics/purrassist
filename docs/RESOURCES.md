@@ -973,8 +973,14 @@ It caps the reported range before incomplete UTF-8 and charges `K_EVENT` work
 per notification. Every reported end also checks its admitted source boundary:
 at most three backward byte probes and one scalar validation of at most four
 bytes move a cutoff inside valid UTF-8 back to the scalar's start. This admits
-12 work units per boundary check; matching content and prefix ends share that
-check. Invalid byte sequences retain their exact boundaries. Batch uses the
+12 work units per normalization. Separate fixed prefix/content caches admit
+one work unit per lookup and retain only successful results keyed by the
+UTF-8-capped cutoff integer. An unchanged cutoff skips normalization and its
+charge; matching content and prefix ends still share one result. A capped
+cutoff cannot later fall inside a newly completed valid scalar because the
+encoding cursor withholds every viable incomplete scalar at its start.
+Malformed subparts cannot become valid through later appends. Invalid byte
+sequences retain their exact boundaries. Batch uses the
 same producer with a discard sink. Feed count and chunk boundaries do not
 decide notification boundaries. These notifications
 carry native ownership metadata, not resolved calls or permission to execute.
@@ -1011,6 +1017,13 @@ flushes its remaining content and reasoning ranges from the existing result.
 Both batch discard and streaming sinks run that same final producer.
 
 A native event cursor follows the structurally shared history exactly once.
+Its direct fixed-key lookup admits one work unit. A successful traversal is
+cached by settled native history identity and normalized end; an unchanged key
+skips repeated ancestry traversal and its charges. A changed end reconsiders a
+step held beyond the earlier cutoff. Stored native ancestry is immutable;
+late reasoning embedding changes neither the text ranges nor the call readings
+this event cursor inspects. Progress and content callbacks still precede this
+traversal, and feed boundaries do not affect either cache.
 The next-node lookup uses existing skip ancestry and admits every traversal;
 it does not rebuild or resolve prefix turns. Stored reasoning segments publish
 their exact marker-free text. Calls publish `CallStarted` only when every native

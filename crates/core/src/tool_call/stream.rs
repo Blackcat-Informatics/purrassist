@@ -536,6 +536,11 @@ const _: () = assert!(core::mem::size_of::<ArgumentFact>() <= ArgumentFact::CHAR
 /// Nothing here resolves a prefix, replays source or snapshots a governor.
 pub(super) struct EventCursor {
     history: u32,
+    /// A successful traversal depends on immutable native ancestry and the
+    /// normalized end. Reasoning embedding can change, but its text and the
+    /// stored call readings inspected here do not. Include end so a pending
+    /// step beyond the previous cutoff is reconsidered when it advances.
+    advance_key: Option<(u32, usize)>,
     indexed: bool,
     reasoning_end: usize,
     calls: ScratchVec<LiveCall>,
@@ -547,6 +552,7 @@ impl EventCursor {
     pub(super) fn new(governor: &Governor) -> Self {
         Self {
             history: 0,
+            advance_key: None,
             indexed: true,
             reasoning_end: 0,
             calls: ScratchVec::new(governor),
@@ -564,6 +570,11 @@ impl EventCursor {
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
+        let key = (recognizer.settled_history_id(), end);
+        governor.charge(Resource::Work, 1)?;
+        if self.advance_key == Some(key) {
+            return Ok(());
+        }
         while let Some(step) = recognizer.settled_step(self.history, governor)? {
             if step.end > end {
                 break;
@@ -619,6 +630,7 @@ impl EventCursor {
             }
             self.history = step.history;
         }
+        self.advance_key = Some(key);
         Ok(())
     }
 

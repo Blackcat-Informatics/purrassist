@@ -3153,6 +3153,13 @@ struct RecognizedInput {
     forced: Option<String>,
 }
 
+/// The two independently normalized source cutoffs.
+#[derive(Clone, Copy)]
+enum BoundaryKind {
+    Prefix,
+    Content,
+}
+
 /// Shared byte intake for batch recovery and the live stream facade.
 /// It owns source storage without lending it to its live recognizer. Every
 /// method uses the original governor. Interpretation failure does not discard
@@ -3168,6 +3175,10 @@ pub(super) struct RecoveryIntake<'s> {
     setup: Option<IntakeSetup<'s>>,
     failed: Option<StopReason>,
     progress: ContinuationFrontier,
+    /// Successful normalization of each UTF-8-capped cutoff. Source appends
+    /// cannot change a scalar boundary already behind the encoding cursor.
+    prefix_boundary: Option<(usize, usize)>,
+    content_boundary: Option<(usize, usize)>,
     /// Only the contiguous native content prefix is published so far. Later
     /// content can still be removed by rejection/stray-closer normalization.
     content_end: usize,
@@ -3192,6 +3203,8 @@ impl<'s> RecoveryIntake<'s> {
             setup: None,
             failed: None,
             progress: ContinuationFrontier::default(),
+            prefix_boundary: None,
+            content_boundary: None,
             content_end: 0,
             events: EventCursor::new(governor),
         };
@@ -3235,8 +3248,9 @@ impl<'s> RecoveryIntake<'s> {
     /// native run; shared native segments also produce call and reasoning facts.
     /// The source range and copied raw payload have byte-derived boundaries,
     /// independent of the caller's feed boundaries. The payload is admitted and
-    /// built and permanently published before either sink is notified, including
-    /// batch's discard sink. Consumer retention cannot affect resource usage.
+    /// built under temporary ownership through sink handoff, including batch's
+    /// discard sink. Producer reservations release after the sink returns;
+    /// caller retention cannot affect recovery resource usage.
     pub(super) fn feed_with(
         &mut self,
         bytes: &[u8],
@@ -3294,14 +3308,15 @@ impl<'s> RecoveryIntake<'s> {
             self.encoding.start
         };
         let prefix = frontier.prefix_end.min(utf8);
-        frontier.prefix_end = self.source_boundary(prefix, governor)?;
+        frontier.prefix_end =
+            self.cached_source_boundary(prefix, BoundaryKind::Prefix, governor)?;
         frontier.content = match frontier.content {
             Some((start, end)) => {
                 let end = end.min(utf8);
                 let end = if end == prefix {
                     frontier.prefix_end
                 } else {
-                    self.source_boundary(end, governor)?
+                    self.cached_source_boundary(end, BoundaryKind::Content, governor)?
                 };
                 (start < end).then_some((start, end))
             }
@@ -3336,6 +3351,34 @@ impl<'s> RecoveryIntake<'s> {
             content,
         )?;
         Ok(())
+    }
+
+    /// Cache only cutoffs already capped before a viable incomplete scalar.
+    /// Future input cannot complete a scalar across such a cutoff: malformed
+    /// subparts stay malformed, and complete source scalars are append-only.
+    fn cached_source_boundary(
+        &mut self,
+        end: usize,
+        kind: BoundaryKind,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let cached = match kind {
+            BoundaryKind::Prefix => self.prefix_boundary,
+            BoundaryKind::Content => self.content_boundary,
+        };
+        if let Some((known, normalized)) = cached
+            && known == end
+        {
+            return Ok(normalized);
+        }
+        let normalized = self.source_boundary(end, governor)?;
+        let cached = Some((end, normalized));
+        match kind {
+            BoundaryKind::Prefix => self.prefix_boundary = cached,
+            BoundaryKind::Content => self.content_boundary = cached,
+        }
+        Ok(normalized)
     }
 
     /// A lexical holdback can cut an earlier, already complete scalar even

@@ -1264,6 +1264,13 @@ impl<'s> Recognizer<'s> {
         self.frontier
     }
 
+    /// Immutable ancestry identity of the current structurally settled prefix.
+    /// Stored reasoning may gain embedded calls later; event traversal reads
+    /// only its unchanged text range, not that mutable embedded projection.
+    pub(super) const fn settled_history_id(&self) -> u32 {
+        self.settled_history
+    }
+
     /// Consume the next chunk of output.
     ///
     /// Each byte charges [`K_LEX`] `Work` and is admitted against
