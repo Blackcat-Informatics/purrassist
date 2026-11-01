@@ -890,7 +890,13 @@ impl Scan<'_> {
     /// `NAME{"...` at the start of a line: a DeepSeek-V3.1 or Mistral v11
     /// call whose special tokens were removed.
     fn name_arguments(&mut self, at: usize) -> Option<(MarkupFamily, Range<usize>)> {
-        if !self.line_start(at) || !self.reported(MarkupFamily::NameArgumentsStripped) {
+        // Use the identifier's exact first-byte rule before looking backward:
+        // spaces cannot begin a name, even on a long indented or trailing line.
+        let first = self.byte(at)?;
+        if !(first.is_ascii_alphabetic() || first == b'_')
+            || !self.reported(MarkupFamily::NameArgumentsStripped)
+            || !self.line_start(at)
+        {
             return None;
         }
         let name_end = self.ident(at)?;
