@@ -224,14 +224,14 @@ fn disallowed_name_arguments_retains_both_distinct_dialect_candidates() {
     for dialect in MarkupFamily::NameArgumentsStripped.dialects() {
         let calls = recovered("f{}", &set([dialect.clone()]));
         assert_eq!(calls.calls.len(), 1);
-        assert!(calls.rejected.is_empty());
+        assert_eq!(calls.rejected.len(), 0);
     }
 }
 
 #[test]
 fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     let input = "{\"name\":\"f\",\"arguments\":{\"text\":\"retained\"}}";
-    let calls = recovered(input, &DialectSet::built_in());
+    let calls = recovered(input, DialectSet::built_in());
     assert_eq!(calls.calls.len(), 1);
     let call = &calls.calls[0];
     assert!(!call.dialect.grammar().is_derived(), "{call:?}");
@@ -261,7 +261,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
             .candidate_dialects
             .contains(&DialectId::MistralV3Stripped)
     );
-    assert!(result.receipt.alternatives.is_empty());
+    assert_eq!(result.receipt.alternatives.len(), 0);
 
     // Retained exact-looking objects inside arguments are data of the outer
     // weak call, even though a separate exact grammar knows their shape.
@@ -298,7 +298,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     let readings = match result.outcome {
         Outcome::Resolved(reading) | Outcome::BestGuess(reading) => vec![reading],
         Outcome::Ambiguous(readings) => readings,
-        other => panic!("reasoning evidence: {other:?}"),
+        other @ Outcome::Unresolved => panic!("reasoning evidence: {other:?}"),
     };
     assert!(readings.iter().any(|reading| !reading.embedded.is_empty()));
     for reading in readings {
@@ -319,7 +319,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     let readings = match result.outcome {
         Outcome::Resolved(reading) | Outcome::BestGuess(reading) => vec![reading],
         Outcome::Ambiguous(readings) => readings,
-        other => panic!("fenced example evidence: {other:?}"),
+        other @ Outcome::Unresolved => panic!("fenced example evidence: {other:?}"),
     };
     assert!(readings.iter().any(|reading| !reading.calls.is_empty()));
     for reading in readings {
@@ -329,7 +329,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
                 .iter()
                 .all(|call| call.outcome != purrassist_core::tool_call::CallOutcome::Resolved)
         );
-        assert!(reading.usable_accepting_guesses().is_empty());
+        assert_eq!(reading.usable_accepting_guesses().len(), 0);
     }
 }
 
@@ -375,7 +375,7 @@ fn derived_presets_expose_the_metadata_used_for_recompilation() {
         };
         assert_eq!(metadata.id(), dialect.id());
         assert_eq!(metadata.source(), recipe.base_text());
-        assert!(!metadata.markers().is_empty());
+        assert_ne!(metadata.markers().len(), 0);
         assert!(metadata.markers().iter().all(|marker| !marker.is_empty()));
         let grammar = recipe
             .compile_governed(&mut Governor::new(Budget::default()))

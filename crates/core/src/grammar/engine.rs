@@ -83,20 +83,6 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Original name capture and optional beginning of its chained call.
 type CapturedName = (Range<usize>, Option<usize>);
 
-/// One immutable history summary, never the mutable active codec's evidence.
-#[derive(Clone, Copy)]
-struct WeakEvidence {
-    hist: u32,
-    named: bool,
-    value: bool,
-}
-
-impl ScratchCharge for Option<WeakEvidence> {
-    // Fixed portable bound for the optional scalar history summary.
-    const CHARGE: usize = 16;
-}
-const _: () = assert!(core::mem::size_of::<Option<WeakEvidence>>() <= 16);
-
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
 /// the reading that ended there (see `Step::step_body`).
@@ -330,6 +316,37 @@ pub(crate) enum HistKind {
 pub(crate) struct HistNode {
     pub(crate) prev: u32,
     pub(crate) kind: HistKind,
+    evidence: HistoryEvidence,
+}
+
+/// Facts on the immutable `prev` suffix above the nearest Root, Next or Link.
+/// A Link leaves its older ancestry unknown even after its `prev` is resolved.
+/// Pack follows only `prev`, exactly as the admission history walk does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HistoryEvidence(u8);
+
+impl HistoryEvidence {
+    const OPEN_NAME: u8 = 1;
+    const NAMED: u8 = 2;
+    const VALUE: u8 = 4;
+    const LINKED: u8 = 8;
+
+    const fn appended(self, kind: HistKind) -> Self {
+        match kind {
+            HistKind::Root | HistKind::Next(..) => Self(0),
+            HistKind::Link => Self(Self::LINKED),
+            HistKind::Open(CaptureKind::Name, _) => Self(self.0 | Self::OPEN_NAME),
+            HistKind::Close(CaptureKind::Name, _) if self.has(Self::OPEN_NAME) => {
+                Self(self.0 | Self::NAMED)
+            }
+            HistKind::Value(_) => Self(self.0 | Self::VALUE),
+            _ => self,
+        }
+    }
+
+    const fn has(self, flag: u8) -> bool {
+        self.0 & flag != 0
+    }
 }
 
 impl ScratchCharge for HistNode {
@@ -383,6 +400,7 @@ impl Arena {
         nodes.push(HistNode {
             prev: ROOT,
             kind: HistKind::Root,
+            evidence: HistoryEvidence(0),
         })?;
         Ok(Self {
             nodes,
@@ -399,7 +417,12 @@ impl Arena {
     }
 
     pub(crate) fn push(&mut self, prev: u32, kind: HistKind) -> Result<u32, StopReason> {
-        self.nodes.push(HistNode { prev, kind })?;
+        let evidence = self.nodes[prev as usize].evidence.appended(kind);
+        self.nodes.push(HistNode {
+            prev,
+            kind,
+            evidence,
+        })?;
         Ok(index_u32(self.nodes.len() - 1))
     }
 
@@ -492,6 +515,7 @@ impl Arena {
         self.nodes.push(HistNode {
             prev: ROOT,
             kind: HistKind::Root,
+            evidence: HistoryEvidence(0),
         })?;
         self.values.clear();
         self.edits.clear();
@@ -591,7 +615,6 @@ impl Out {
 /// The interpreter over one table's program, with split borrows of the
 /// engine state it needs.
 pub(crate) struct Step<'a, 's> {
-    weak_evidence: &'a mut ScratchVec<Option<WeakEvidence>>,
     pub(crate) grammar: &'s CompiledGrammar,
     pub(crate) program: &'s Program,
     /// What the program reads (a call's verbatim argument body may hold
@@ -752,7 +775,7 @@ impl<'s> Step<'_, 's> {
         let nodes = self.arena.nodes.as_slice();
         let mut node = thread.hist;
         for _ in 0..8 {
-            let HistNode { prev, kind } = nodes[node as usize];
+            let HistNode { prev, kind, .. } = nodes[node as usize];
             match kind {
                 HistKind::Open(_, at) | HistKind::Close(_, at) | HistKind::Next(at, _)
                     if at == thread.entry =>
@@ -1861,6 +1884,8 @@ impl<'s> Step<'_, 's> {
             governor,
         )? {
             Ok((top, cost)) => {
+                // This Link and every descendant retain unknown-ancestry
+                // evidence: no immutable suffix fact relies on its old prev.
                 self.arena.nodes.as_mut_slice()[deferred.node as usize].prev = top;
                 Reading::Read(cost)
             }
@@ -2133,7 +2158,7 @@ impl<'s> Step<'_, 's> {
         let mut segment = None;
         loop {
             governor.charge(Resource::Work, K_CODEC)?;
-            let HistNode { prev, kind } = nodes[node as usize];
+            let HistNode { prev, kind, .. } = nodes[node as usize];
             match kind {
                 // The name of the call this slot belongs to: no earlier
                 // than the call's own beginning.
@@ -2159,61 +2184,61 @@ impl<'s> Step<'_, 's> {
     /// arguments-first envelope, the codec value precedes the completed name.
     fn weak_call_evidence(
         &mut self,
-        pc: u32,
         hist: u32,
         active: Option<u32>,
         observe_native: bool,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        let active = match active.and_then(|slot| self.arena.codecs[slot as usize].as_mut()) {
-            Some(codec) if observe_native => codec.observe_native_anchor(governor)?,
-            Some(codec) => codec.argument_anchor(),
-            None => false,
-        };
         governor.charge(Resource::Work, 1)?;
-        let index = pc as usize;
-        while self.weak_evidence.len() <= index {
-            crate::contract::push_scratch(self.weak_evidence, None, governor)?;
-        }
-        if let Some(known) = self.weak_evidence.as_slice()[index].filter(|known| known.hist == hist)
-        {
-            return Ok(known.named && (active || known.value));
-        }
-        let (mut closed_name, mut named) = (false, false);
-        let (mut value, mut linked) = (false, false);
+        let evidence = self.arena.nodes[hist as usize].evidence;
+        let mut named = evidence.has(HistoryEvidence::NAMED);
+        let mut value = evidence.has(HistoryEvidence::VALUE);
+        let mut observed = false;
+        let mut closed_name = false;
         let mut node = hist;
         loop {
+            if named {
+                if value {
+                    return Ok(true);
+                }
+                if !observed {
+                    // Active codec evidence is mutable and never part of a
+                    // history fact. Nameless paths never inspect the codec.
+                    observed = true;
+                    let anchored = match active
+                        .and_then(|slot| self.arena.codecs[slot as usize].as_mut())
+                    {
+                        Some(codec) if observe_native => codec.observe_native_anchor(governor)?,
+                        Some(codec) => codec.argument_anchor(),
+                        None => false,
+                    };
+                    if anchored {
+                        return Ok(true);
+                    }
+                }
+            }
+            if !evidence.has(HistoryEvidence::LINKED) {
+                return Ok(false);
+            }
+            // A deferred Link may have changed since these immutable suffix
+            // facts were recorded. Read its current ancestry, following only
+            // prev (never a sibling Pack operand), as the original walk did.
             governor.charge(Resource::Work, K_CODEC)?;
-            let HistNode { prev, kind } = self.arena.nodes[node as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes[node as usize];
             match kind {
-                HistKind::Root | HistKind::Next(..) => break,
+                HistKind::Root | HistKind::Next(..) => return Ok(false),
                 HistKind::Close(CaptureKind::Name, _) => closed_name = true,
                 HistKind::Open(CaptureKind::Name, _) if closed_name => named = true,
                 HistKind::Value(_) => value = true,
-                HistKind::Link => linked = true,
                 _ => {}
-            }
-            // Follow exactly the original history path, including for an
-            // arguments-first envelope. No sibling Pack path supplies evidence.
-            if named && (active || value) {
-                // Both historical witnesses are sufficient even if an unseen
-                // link below them later changes. Active-only success does not
-                // establish whether the remaining history contains a Value.
-                self.weak_evidence.as_mut_slice()[index] =
-                    (value && !linked).then_some(WeakEvidence { hist, named, value });
-                return Ok(true);
             }
             node = prev;
         }
-        // Deferred links can be rewritten. Do not retain summaries depending
-        // on one, even if another table finishes that deferred value later.
-        self.weak_evidence.as_mut_slice()[index] =
-            (!linked).then_some(WeakEvidence { hist, named, value });
-        Ok(named && (active || value))
     }
 
     /// A plain word separated from JSON by whitespace also describes prose.
     /// Weak name-only presets require declared-name evidence in that case.
+    /// Dropped prose supplies no retained framing before the name.
     /// Check at slot entry (and its first whitespace byte), never per body byte.
     fn weak_name_evidence(
         &self,
@@ -2232,21 +2257,15 @@ impl<'s> Step<'_, 's> {
         let Some((name, segment)) = self.name_range(hist, governor)? else {
             return Ok(true);
         };
-        let start = segment.unwrap_or(start);
-        governor.charge(Resource::Work, size(name.start.saturating_sub(start)))?;
-        if self
-            .bytes(start..name.start)
-            .iter()
-            .any(|byte| !byte.is_ascii_whitespace())
-        {
-            return Ok(true);
-        }
         let separated = if name.end < through {
             self.bytes(name.end..name.end + 1)[0].is_ascii_whitespace()
         } else {
             first.is_some_and(|byte| byte.is_ascii_whitespace())
         };
         if !separated {
+            return Ok(true);
+        }
+        if self.retained_name_prefix(hist, segment.unwrap_or(start)..name.start, governor)? {
             return Ok(true);
         }
         governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
@@ -2275,6 +2294,88 @@ impl<'s> Step<'_, 's> {
             }
         }
         Ok(false)
+    }
+
+    /// Written framing excludes source the same history reads as dropped text.
+    /// Extraction edits for Dropped captures are produced only at materialization,
+    /// so inspect both the native capture spans and already recorded edits.
+    fn retained_name_prefix(
+        &self,
+        hist: u32,
+        prefix: Range<usize>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, size(prefix.len()))?;
+        if !self
+            .bytes(prefix.clone())
+            .iter()
+            .any(|byte| !byte.is_ascii_whitespace())
+        {
+            return Ok(false);
+        }
+        let mut removed = ScratchVec::new(governor);
+        let (mut node, mut dropped_depth, mut dropped_end) = (hist, 0_usize, 0);
+        loop {
+            governor.charge(Resource::Work, K_CODEC)?;
+            let HistNode { prev, kind, .. } = self.arena.nodes[node as usize];
+            let span = match kind {
+                HistKind::Root | HistKind::Next(..) => break,
+                HistKind::Close(CaptureKind::Dropped, at) => {
+                    if dropped_depth == 0 {
+                        dropped_end = at;
+                    }
+                    dropped_depth += 1;
+                    None
+                }
+                HistKind::Open(CaptureKind::Dropped, at) if dropped_depth > 0 => {
+                    dropped_depth -= 1;
+                    (dropped_depth == 0).then_some((at, dropped_end))
+                }
+                HistKind::Edit(index) => {
+                    let edit = &self.arena.edits[index as usize];
+                    matches!(
+                        edit.operator,
+                        EditOperator::ExtractProse | EditOperator::ExtractFence
+                    )
+                    .then_some((edit.span.start, edit.span.end))
+                }
+                _ => None,
+            };
+            if let Some((start, end)) = span {
+                let clipped = (start.max(prefix.start), end.min(prefix.end));
+                if clipped.0 < clipped.1 {
+                    crate::contract::push_scratch(&mut removed, clipped, governor)?;
+                }
+            }
+            node = prev;
+        }
+        if removed.is_empty() {
+            return Ok(true);
+        }
+        governor.charge(
+            Resource::Work,
+            size(removed.len()).saturating_mul(size(removed.len())),
+        )?;
+        removed.as_mut_slice().sort_unstable();
+        let mut cursor = prefix.start;
+        for &(start, end) in &removed {
+            if cursor < start {
+                governor.charge(Resource::Work, size(start - cursor))?;
+                if self
+                    .bytes(cursor..start)
+                    .iter()
+                    .any(|byte| !byte.is_ascii_whitespace())
+                {
+                    return Ok(true);
+                }
+            }
+            cursor = cursor.max(end);
+        }
+        governor.charge(Resource::Work, size(prefix.end - cursor))?;
+        Ok(self
+            .bytes(cursor..prefix.end)
+            .iter()
+            .any(|byte| !byte.is_ascii_whitespace()))
     }
 
     fn protocol_spelling(&self, range: Range<usize>) -> bool {
@@ -2742,7 +2843,7 @@ impl<'s> Step<'_, 's> {
         while let Some((node, depth)) = stack.pop() {
             governor.charge(Resource::Work, K_CAPTURE)?;
             path.truncate(depth);
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[node as usize];
             match kind {
                 HistKind::Root => {
                     let forward: Vec<HistKind> = path.iter().rev().copied().collect();
@@ -3500,7 +3601,7 @@ impl Step<'_, '_> {
         while let Some((node, depth)) = stack.pop() {
             governor.charge(Resource::Work, K_CAPTURE)?;
             path.truncate(depth);
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[node as usize];
             let reached = match kind {
                 HistKind::Root => Some(None),
                 HistKind::Next(position, cost) => Some(Some((node, position, cost))),
@@ -3626,7 +3727,7 @@ impl Step<'_, '_> {
             if let Some(&known) = self.arena.memo.get(&at) {
                 break known;
             }
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[at as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[at as usize];
             let HistKind::Next(position, cost) = kind else {
                 unreachable!("a cut is a next node")
             };
@@ -4345,9 +4446,6 @@ impl Event {
 }
 
 struct Table<'s> {
-    /// One last history per program location, never a growing history cache.
-    /// Link-dependent summaries are not retained; reset clears reusable IDs.
-    weak_evidence: ScratchVec<Option<WeakEvidence>>,
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
@@ -4792,7 +4890,6 @@ impl<'s> Engine<'s> {
                 .zip(&grammar.programs)
             {
                 tables.push(Table {
-                    weak_evidence: ScratchVec::new(governor),
                     grammar: index,
                     kind,
                     program,
@@ -4858,7 +4955,6 @@ impl<'s> Engine<'s> {
         let table = &mut self.tables[table];
         (
             Step {
-                weak_evidence: &mut table.weak_evidence,
                 grammar: runtime.grammar,
                 program: table.program,
                 kind: table.kind,
@@ -5454,13 +5550,7 @@ impl<'s> Engine<'s> {
                     _ => None,
                 };
                 let (mut step, _, _) = self.split(table);
-                step.weak_call_evidence(
-                    thread.pc,
-                    thread.hist,
-                    active,
-                    !program.argument_anchor,
-                    governor,
-                )?
+                step.weak_call_evidence(thread.hist, active, !program.argument_anchor, governor)?
             } else {
                 program.commits(thread.pc)
             };
@@ -5665,7 +5755,7 @@ impl<'s> Engine<'s> {
             let mut node = failure.thread.hist;
             loop {
                 governor.charge(Resource::Work, 1)?;
-                let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+                let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[node as usize];
                 let boundary = match kind {
                     HistKind::Next(at, cost) => Some((at, prev, cost)),
                     // The attempt's first call: it began at the attempt's
@@ -6728,7 +6818,7 @@ impl<'s> Engine<'s> {
         let mut changed = false;
         while let Some(at) = pending.pop() {
             governor.charge(Resource::Work, K_THREAD)?;
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[at as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[at as usize];
             match kind {
                 HistKind::Edit(index) => {
                     let edit = &mut self.arena.edits[index as usize];
@@ -6761,7 +6851,7 @@ impl<'s> Engine<'s> {
         let mut pending = vec![hist];
         while let Some(at) = pending.pop() {
             governor.charge(Resource::Work, K_THREAD)?;
-            let HistNode { prev, kind } = nodes[at as usize];
+            let HistNode { prev, kind, .. } = nodes[at as usize];
             match kind {
                 HistKind::Edit(index) => match self.arena.edits[index as usize].operator {
                     EditOperator::MissingWrapperClose => {}
@@ -6802,7 +6892,7 @@ impl<'s> Engine<'s> {
         let start = trail.thread.pos;
         let original = self.buffer.as_slice()[start - self.base..stop - self.base].to_vec();
         governor.charge(Resource::Work, size(original.len()))?;
-        let HistNode { prev, kind } = self.arena.nodes.as_slice()[trail.thread.hist as usize];
+        let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[trail.thread.hist as usize];
         let inserted = match kind {
             HistKind::Edit(index) => {
                 let edit = &self.arena.edits[index as usize];
@@ -7196,9 +7286,6 @@ impl<'s> Engine<'s> {
             })
             .min();
         let Some(earliest) = earliest else {
-            for table in &mut self.tables {
-                table.weak_evidence.clear();
-            }
             self.arena.reset(governor)?;
             self.buffer.clear();
             self.base = self.fed;

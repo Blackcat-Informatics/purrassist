@@ -964,11 +964,14 @@ authoritative. Projected name classes retain their maximal reading and also
 follow compiled literal continuations, preserving an adjacent name and channel
 word when their former separator vanished.
 
-Weak-evidence memo storage keeps one last immutable history summary per program
-location, admitted through the original governor and bounded by compiled program
-length. Active codec evidence is recomputed. Summaries never depend on a mutable
-history link, and arena reuse clears their IDs. These corrections have passed
-source review; current execution and cost acceptance remain unverified.
+Weak admission reads immutable name/value facts stored on each history node
+under its existing reservation. Root and Next reset those facts; Pack follows
+only its original prev path. Link marks older ancestry unknown permanently,
+including after deferred resolution. Sufficient immutable suffix witnesses can
+answer directly; unresolved linked ancestry uses the original charged walk.
+Active codec observation occurs only after name evidence and at most once per
+query. There is no separate per-location history cache. Current execution and
+cost acceptance remain unverified.
 
 Erased-entry admission now observes the existing native JSON parser separately
 from its acceptance policy. A root object frame supplies object evidence;
@@ -977,3 +980,9 @@ The observation admits one work unit per query plus the newly inspected decoded
 bytes. It does not change the codec's lead policy, parser state, accepted values,
 repairs or provenance. Existing weak name-only argument anchors keep their
 stricter admission path. Current runtime and cost evidence remains pending.
+
+For whitespace-separated weak names, written framing excludes source spans
+captured as dropped text or retained as prose/fence extraction edits. These
+spans cannot turn an ordinary heading into protocol evidence. Actual retained
+literals still count; adjacent name/JSON forms and declared names, aliases and
+joint name/ID partitions keep their existing admission paths.
