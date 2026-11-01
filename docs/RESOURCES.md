@@ -983,14 +983,22 @@ of the initial native content run, before any call, attempt or reasoning block.
 Each payload copies only the newly exposed source range into a temporary
 `ScratchVec`, admitting its capacity and `K_EVENT` plus one work unit per copied
 byte before notification. Every event additionally admits 512 bytes for its
-record and collector capacity, plus four work units for amortized collector
-insertion and relocation. The record reservation covers four native slots,
-including a fresh collector receiving one event. Payload publication uses
-`ScratchVec::into_vec`, permanently retaining its reservation before either
-batch discards the event or a stream sink receives it. Consumer retention and
-collector capacity cannot change recovery usage. The convenience collector
-reserves fallibly within the already admitted per-event storage; allocation
-failure stops interpretation with an explicit refusal. Empty feeds allocate
+record and per-event collector insertion, plus four work units for amortized
+collector insertion and relocation. The record reservation covers four native
+slots, including a fresh collector receiving one event. A prepared event owns
+that temporary reservation and every payload reservation through sink handoff.
+Vectors, strings, typed parameter trees and copied outcome text transfer their
+reservations into this owner without permanent retention. The producer releases
+its reservations after the sink returns, including a refused collector insertion.
+Batch discard, external sinks and convenience collectors run the same admission
+and release schedule. Performed work and cumulative scratch charges remain;
+discarded event payloads no longer become permanent live scratch debt.
+
+Sink and collector storage belongs to the caller from inception, independently
+of the producer's temporary handoff ownership. Caller retention, collector
+capacity and feed boundaries do not change recovery admissions or releases.
+The convenience collectors reserve fallibly during handoff; allocation failure
+stops interpretation with an explicit refusal. Empty feeds allocate
 no events, and input chunks do not set event boundaries. A closed
 native content node contributes its full settled range, including when the
 lexical boundary lands exactly on its end.
@@ -1026,9 +1034,9 @@ outcome, preserving `BestGuess`, `Ambiguous` and every unresolved reason.
 Blocker text is copied fallibly under a transient storage lease and published
 only after the event record is admitted. For resolved or best-guess calls,
 `ParameterComplete` follows `CallComplete`, including for mutating tools.
-Values use `OwnedDocument::copy_from` and transfer their real reservations on
-publication; lexical numbers, typed values and spans are preserved. Parameters
-are emitted in canonical name order. Ambiguous and unresolved calls, and
+Values use `OwnedDocument::copy_from`; their real reservations stay with the
+prepared event through handoff, preserving lexical numbers, typed values and
+spans. Parameters are emitted in canonical name order. Ambiguous and unresolved calls, and
 duplicate member names, do not publish a supposedly settled parameter value.
 
 `CallRejected` carries each final rejected attempt's complete span and precise

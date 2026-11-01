@@ -144,7 +144,7 @@ use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{ContinuationFrontier, edit_entries, escaped};
 use super::resolve::loss_kind;
-use super::stream::EventCursor;
+use super::stream::{EventCursor, PreparedEvent};
 use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
     FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
@@ -3313,10 +3313,8 @@ impl<'s> RecoveryIntake<'s> {
             self.progress = frontier;
             progress(frontier);
             if let Some(delta) = delta {
-                if let StreamEvent::ContentDelta { span, .. } = &delta {
-                    self.content_end = span.end;
-                }
-                content(delta)?;
+                self.content_end = delta.content_end(governor)?;
+                delta.publish(content)?;
             }
         }
         let source = self
@@ -3396,7 +3394,7 @@ impl<'s> RecoveryIntake<'s> {
         &self,
         frontier: ContinuationFrontier,
         governor: &mut Governor,
-    ) -> Result<Option<StreamEvent>, StopReason> {
+    ) -> Result<Option<PreparedEvent>, StopReason> {
         let Some((0, end)) = frontier.content else {
             return Ok(None);
         };

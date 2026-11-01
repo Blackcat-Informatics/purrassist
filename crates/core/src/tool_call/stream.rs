@@ -27,8 +27,8 @@ use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
 use core::ops::Range;
 
-/// Portable admission per published event, including collector storage.
-/// Four native slots cover even a fresh `Vec` receiving a single event.
+/// Portable admission for constructing and handing off one event.
+/// Four native slots also admit the collector insertion per event.
 const EVENT_BYTES: u64 = 512;
 const _: () = assert!(4 * core::mem::size_of::<StreamEvent>() as u64 <= EVENT_BYTES);
 
@@ -134,25 +134,59 @@ pub enum StreamEvent {
     },
 }
 
-impl StreamEvent {
-    fn admit(governor: &mut Governor) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 4)?;
-        governor.charge(Resource::ScratchBytes, EVENT_BYTES)
+/// An event and every producer reservation needed through sink handoff.
+/// The event drops before its reservations if publication never occurs.
+pub(super) struct PreparedEvent {
+    event: StreamEvent,
+    storage: ScratchLease,
+}
+
+impl PreparedEvent {
+    pub(super) fn content_end(&self, governor: &mut Governor) -> Result<usize, StopReason> {
+        match &self.event {
+            StreamEvent::ContentDelta { span, .. } => Ok(span.end),
+            _ => Err(StopReason::InvalidInput(
+                crate::contract::format_output_governed(
+                    format_args!("content producer prepared a different event"),
+                    governor,
+                )?,
+            )),
+        }
     }
 
-    /// Publish identical ownership before either the batch discard sink or a
-    /// caller receives the event. Consumer retention cannot change accounting.
+    /// Caller sinks and collectors own their memory from inception. Release
+    /// producer storage after handoff, including a refused collector insertion.
+    pub(super) fn publish(
+        self,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> Result<(), StopReason> {
+        let Self { event, storage } = self;
+        let result = sink(event);
+        drop(storage);
+        result
+    }
+}
+
+impl StreamEvent {
+    fn admit(governor: &mut Governor) -> Result<ScratchLease, StopReason> {
+        governor.charge(Resource::Work, 4)?;
+        governor.lease_scratch(EVENT_BYTES)
+    }
+
+    /// Prepare identical ownership for batch discard and caller handoff.
     pub(super) fn content(
         span: Range<usize>,
         raw: ScratchVec<u8>,
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
+    ) -> Result<PreparedEvent, StopReason> {
         // Amortized collector insertion and relocation work is admitted per
         // event on every path, including batch and externally supplied sinks.
-        Self::admit(governor)?;
-        Ok(Self::ContentDelta {
-            span,
-            raw: raw.into_vec(),
+        let mut storage = Self::admit(governor)?;
+        let (raw, owned) = raw.into_owned_parts();
+        storage.absorb(owned);
+        Ok(PreparedEvent {
+            event: Self::ContentDelta { span, raw },
+            storage,
         })
     }
 
@@ -175,12 +209,14 @@ impl StreamEvent {
         span: Range<usize>,
         source: &[u8],
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
+    ) -> Result<PreparedEvent, StopReason> {
         let raw = Self::bytes(span.clone(), source, governor)?;
-        Self::admit(governor)?;
-        Ok(Self::ReasoningDelta {
-            span,
-            raw: raw.into_vec(),
+        let mut storage = Self::admit(governor)?;
+        let (raw, owned) = raw.into_owned_parts();
+        storage.absorb(owned);
+        Ok(PreparedEvent {
+            event: Self::ReasoningDelta { span, raw },
+            storage,
         })
     }
 
@@ -189,7 +225,7 @@ impl StreamEvent {
         offset: usize,
         candidates: impl IntoIterator<Item = DialectId>,
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
+    ) -> Result<PreparedEvent, StopReason> {
         let mut dialects = ScratchVec::new(governor);
         let mut longest = 0;
         for dialect in candidates {
@@ -212,20 +248,31 @@ impl StreamEvent {
                 .saturating_mul(size(longest).saturating_add(64)),
         )?;
         dialects.as_mut_slice().sort_unstable();
-        Self::admit(governor)?;
-        Ok(Self::CallStarted {
-            index,
-            offset,
-            dialect_candidates: dialects.into_vec(),
+        let mut storage = Self::admit(governor)?;
+        let (dialect_candidates, owned) = dialects.into_owned_parts();
+        storage.absorb(owned);
+        Ok(PreparedEvent {
+            event: Self::CallStarted {
+                index,
+                offset,
+                dialect_candidates,
+            },
+            storage,
         })
     }
 
-    fn name(index: usize, tool: &str, governor: &mut Governor) -> Result<Self, StopReason> {
-        let name = copy_text(tool, governor)?;
-        Self::admit(governor)?;
-        Ok(Self::CallName {
-            index,
-            tool: name.into_string(),
+    fn name(
+        index: usize,
+        tool: &str,
+        governor: &mut Governor,
+    ) -> Result<PreparedEvent, StopReason> {
+        let name = ScratchString::copy_from(tool, governor)?;
+        let mut storage = Self::admit(governor)?;
+        let (tool, owned) = name.into_owned_parts();
+        storage.absorb(owned);
+        Ok(PreparedEvent {
+            event: Self::CallName { index, tool },
+            storage,
         })
     }
 
@@ -234,12 +281,14 @@ impl StreamEvent {
         span: Range<usize>,
         source: &[u8],
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
+    ) -> Result<PreparedEvent, StopReason> {
         let raw = Self::bytes(span, source, governor)?;
-        Self::admit(governor)?;
-        Ok(Self::ArgumentDelta {
-            index,
-            raw: raw.into_vec(),
+        let mut storage = Self::admit(governor)?;
+        let (raw, owned) = raw.into_owned_parts();
+        storage.absorb(owned);
+        Ok(PreparedEvent {
+            event: Self::ArgumentDelta { index, raw },
+            storage,
         })
     }
 
@@ -247,15 +296,18 @@ impl StreamEvent {
         index: usize,
         outcome: &CallOutcome,
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
+    ) -> Result<PreparedEvent, StopReason> {
         let copied = copy_outcome(outcome, governor)?;
-        Self::admit(governor)?;
+        let mut storage = Self::admit(governor)?;
         let OwnedOutcome {
             value: outcome,
             lease,
         } = copied;
-        lease.retain();
-        Ok(Self::CallComplete { index, outcome })
+        storage.absorb(lease);
+        Ok(PreparedEvent {
+            event: Self::CallComplete { index, outcome },
+            storage,
+        })
     }
 
     fn parameter(
@@ -263,14 +315,17 @@ impl StreamEvent {
         name: &str,
         value: &Node,
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
-        let name = copy_text(name, governor)?;
+    ) -> Result<PreparedEvent, StopReason> {
+        let name = ScratchString::copy_from(name, governor)?;
         let value = OwnedDocument::copy_from(value, governor)?;
-        Self::admit(governor)?;
-        Ok(Self::ParameterComplete {
-            index,
-            name: name.into_string(),
-            value: value.into_node(),
+        let mut storage = Self::admit(governor)?;
+        let (name, owned) = name.into_owned_parts();
+        storage.absorb(owned);
+        let (value, owned) = value.into_owned_parts();
+        storage.absorb(owned);
+        Ok(PreparedEvent {
+            event: Self::ParameterComplete { index, name, value },
+            storage,
         })
     }
 
@@ -278,12 +333,15 @@ impl StreamEvent {
         span: Range<usize>,
         reason: Rejection,
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
-        Self::admit(governor)?;
-        Ok(Self::CallRejected {
-            index: None,
-            span,
-            reason,
+    ) -> Result<PreparedEvent, StopReason> {
+        let storage = Self::admit(governor)?;
+        Ok(PreparedEvent {
+            event: Self::CallRejected {
+                index: None,
+                span,
+                reason,
+            },
+            storage,
         })
     }
 
@@ -292,30 +350,35 @@ impl StreamEvent {
         edit: &EditFact,
         parameter: Option<&str>,
         governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
+    ) -> Result<PreparedEvent, StopReason> {
         let before = copy_bytes(&edit.before, governor)?;
         let after = copy_bytes(&edit.after, governor)?;
         let parameter = parameter
-            .map(|pointer| copy_text(pointer, governor))
+            .map(|pointer| ScratchString::copy_from(pointer, governor))
             .transpose()?;
-        Self::admit(governor)?;
-        Ok(Self::Revision {
-            index,
-            parameter: parameter.map(ScratchString::into_string),
-            rule: edit.operator.rule().id,
-            span: edit.at..edit.end,
-            before: before.into_vec(),
-            after: after.into_vec(),
-            guess: edit.operator.rule().guess,
+        let mut storage = Self::admit(governor)?;
+        let (before, owned) = before.into_owned_parts();
+        storage.absorb(owned);
+        let (after, owned) = after.into_owned_parts();
+        storage.absorb(owned);
+        let parameter = parameter.map(|pointer| {
+            let (pointer, owned) = pointer.into_owned_parts();
+            storage.absorb(owned);
+            pointer
+        });
+        Ok(PreparedEvent {
+            event: Self::Revision {
+                index,
+                parameter,
+                rule: edit.operator.rule().id,
+                span: edit.at..edit.end,
+                before,
+                after,
+                guess: edit.operator.rule().guess,
+            },
+            storage,
         })
     }
-}
-
-fn copy_text(text: &str, governor: &mut Governor) -> Result<ScratchString, StopReason> {
-    governor.charge(Resource::Work, size(text.len()).saturating_add(1))?;
-    let mut copied = ScratchString::new(governor);
-    copied.push_str(text)?;
-    Ok(copied)
 }
 
 fn copy_bytes(bytes: &[u8], governor: &mut Governor) -> Result<ScratchVec<u8>, StopReason> {
@@ -357,7 +420,7 @@ fn copy_reason(
 ) -> Result<UnresolvedReason, StopReason> {
     governor.charge(Resource::Work, 1)?;
     let mut text = |value: &str, governor: &mut Governor| {
-        let (copied, storage) = copy_text(value, governor)?.into_owned_parts();
+        let (copied, storage) = ScratchString::copy_from(value, governor)?.into_owned_parts();
         lease.absorb(storage);
         Ok::<_, StopReason>(copied)
     };
@@ -443,7 +506,7 @@ impl EditFact {
     }
 }
 
-/// Metadata only: payload ownership has already been permanently published.
+/// Metadata only: payload ownership has already transferred to the caller.
 #[derive(Debug)]
 struct LiveCall {
     start: usize,
@@ -508,11 +571,8 @@ impl EventCursor {
             match step.segment {
                 Some(Segment::Reasoning(block)) => {
                     if !block.text.is_empty() {
-                        sink(StreamEvent::reasoning(
-                            block.text.clone(),
-                            source,
-                            governor,
-                        )?)?;
+                        StreamEvent::reasoning(block.text.clone(), source, governor)?
+                            .publish(sink)?;
                     }
                     self.reasoning_end = block.text.end;
                 }
@@ -527,24 +587,21 @@ impl EventCursor {
                         self.indexed = false;
                     } else {
                         let index = self.calls.len();
-                        sink(StreamEvent::started(
+                        StreamEvent::started(
                             index,
                             call.span.start,
                             call.readings.iter().map(|raw| raw.dialect.clone()),
                             governor,
-                        )?)?;
+                        )?
+                        .publish(sink)?;
                         let name = unique_name(call, tools, governor)?;
                         if let Some(name) = name {
-                            sink(StreamEvent::name(index, name, governor)?)?;
+                            StreamEvent::name(index, name, governor)?.publish(sink)?;
                         }
                         let arguments = argument_span(call, governor)?;
                         if let Some(span) = &arguments {
-                            sink(StreamEvent::argument(
-                                index,
-                                span.clone(),
-                                source,
-                                governor,
-                            )?)?;
+                            StreamEvent::argument(index, span.clone(), source, governor)?
+                                .publish(sink)?;
                         }
                         push_scratch(
                             &mut self.calls,
@@ -659,7 +716,7 @@ impl EventCursor {
             before: copy_bytes(&edit.original, governor)?,
             after: copy_bytes(&edit.replacement, governor)?,
             parameter: parameter
-                .map(|pointer| copy_text(pointer, governor))
+                .map(|pointer| ScratchString::copy_from(pointer, governor))
                 .transpose()?,
         };
         push_scratch(&mut self.edits, fact, governor)
@@ -681,18 +738,14 @@ impl EventCursor {
             if start < range.end {
                 let span = start..range.end;
                 let raw = StreamEvent::bytes(span.clone(), source, governor)?;
-                sink(StreamEvent::content(span, raw, governor)?)?;
+                StreamEvent::content(span, raw, governor)?.publish(sink)?;
             }
         }
         for block in &calls.reasoning_blocks {
             governor.charge(Resource::Work, 1)?;
             let start = block.text.start.max(self.reasoning_end);
             if start < block.text.end {
-                sink(StreamEvent::reasoning(
-                    start..block.text.end,
-                    source,
-                    governor,
-                )?)?;
+                StreamEvent::reasoning(start..block.text.end, source, governor)?.publish(sink)?;
             }
         }
         for (index, call) in calls.calls.iter().enumerate() {
@@ -705,25 +758,26 @@ impl EventCursor {
                     ));
                 }
             } else {
-                sink(StreamEvent::started(
+                StreamEvent::started(
                     index,
                     call.span.start,
                     call.candidate_dialects.iter().cloned(),
                     governor,
-                )?)?;
+                )?
+                .publish(sink)?;
             }
             if live.is_none_or(|live| !live.named)
                 && let Some(tool) = &call.tool
             {
-                sink(StreamEvent::name(index, tool, governor)?)?;
+                StreamEvent::name(index, tool, governor)?.publish(sink)?;
             }
             if live.is_none_or(|live| !live.arguments)
                 && let Some(span) = self.final_arguments(&call.span, governor)?
             {
-                sink(StreamEvent::argument(index, span, source, governor)?)?;
+                StreamEvent::argument(index, span, source, governor)?.publish(sink)?;
             }
             self.revisions(index, call, governor, sink)?;
-            sink(StreamEvent::completed(index, &call.outcome, governor)?)?;
+            StreamEvent::completed(index, &call.outcome, governor)?.publish(sink)?;
             // All typed parameter events follow completion, including mutating
             // calls. Ambiguous/unresolved values are not presented as settled.
             if matches!(call.outcome, CallOutcome::Resolved | CallOutcome::BestGuess) {
@@ -732,11 +786,8 @@ impl EventCursor {
         }
         for rejected in &calls.rejected {
             governor.charge(Resource::Work, 1)?;
-            sink(StreamEvent::rejected(
-                rejected.span.clone(),
-                rejected.reason,
-                governor,
-            )?)?;
+            StreamEvent::rejected(rejected.span.clone(), rejected.reason, governor)?
+                .publish(sink)?;
         }
         governor.check()
     }
@@ -794,7 +845,7 @@ impl EventCursor {
                 }
             }
             if shared {
-                sink(StreamEvent::revision(index, edit, parameter, governor)?)?;
+                StreamEvent::revision(index, edit, parameter, governor)?.publish(sink)?;
             }
         }
         Ok(())
@@ -867,12 +918,7 @@ fn parameters(
         {
             continue;
         }
-        sink(StreamEvent::parameter(
-            index,
-            name,
-            &members[position].value,
-            governor,
-        )?)?;
+        StreamEvent::parameter(index, name, &members[position].value, governor)?.publish(sink)?;
     }
     Ok(())
 }
@@ -980,8 +1026,9 @@ impl<'s> ToolCallStream<'s> {
 
     /// Feed raw output bytes and append each newly settled event to `events`.
     /// Empty feeds do not allocate events or charge work. Sink memory belongs
-    /// to the caller; each event admits its portable collector storage before
-    /// the sink receives it, identically to batch's discard path.
+    /// to the caller from inception; each event admits its portable record and
+    /// payload storage through handoff, identically to batch's discard path.
+    /// Producer reservations release after the sink receives each event.
     ///
     /// Refusal stops interpretation, never truncates a successful final result.
     /// Call [`Self::finish`] to obtain its explicit receipt and source identity.
@@ -994,7 +1041,8 @@ impl<'s> ToolCallStream<'s> {
     }
 
     /// Feed bytes and return the newly settled events in a fresh vector.
-    /// The same per-event admission runs with any sink and any chunking;
+    /// The collector is caller-owned storage from inception. The same per-event
+    /// construction and handoff admission runs with any sink and any chunking;
     /// creating an empty collector has no resource charge.
     #[must_use]
     pub fn feed_collect(&mut self, bytes: &[u8]) -> Vec<StreamEvent> {
@@ -1046,8 +1094,9 @@ impl<'s> ToolCallStream<'s> {
     }
 
     /// Finish and return EOF events followed by the final recovery result.
-    /// Collector allocation is fallible within the same per-event admission;
-    /// a refusal is recorded in the returned result, preserving earlier events.
+    /// The collector is caller-owned storage from inception. Allocation is
+    /// fallible during the same per-event handoff admission; a refusal is
+    /// recorded in the returned result, preserving earlier events.
     #[must_use]
     pub fn finish_collect(
         self,

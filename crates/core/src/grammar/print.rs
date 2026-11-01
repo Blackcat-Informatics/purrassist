@@ -474,12 +474,6 @@ fn admit_values(values: Values<'_>, governor: &mut Governor) -> Result<(), StopR
     Ok(())
 }
 
-fn copy_text(text: &str, governor: &mut Governor) -> Result<ScratchString, ScratchPrintError> {
-    governor.charge(Resource::Work, size(text.len()).saturating_add(1))?;
-    let mut output = ScratchString::new(governor);
-    output.push_str(text)?;
-    Ok(output)
-}
 fn unsupported_governed(
     arguments: fmt::Arguments<'_>,
     governor: &mut Governor,
@@ -822,7 +816,7 @@ impl<'g> Printer<'g> {
         }
         if self.cut(delimiters, text.as_bytes(), governor)? {
             return Err(ScratchPrintError::Unrepresentable {
-                text: copy_text(text, governor)?,
+                text: ScratchString::copy_from(text, governor)?,
             });
         }
         self.emit(text.as_bytes(), governor)?;
@@ -1172,7 +1166,7 @@ impl<'g> Printer<'g> {
         }
         admit_text(&class.source, governor)?;
         Err(ScratchPrintError::NoCandidate {
-            class: copy_text(&class.source, governor)?,
+            class: ScratchString::copy_from(&class.source, governor)?,
         })
     }
 }
@@ -1365,7 +1359,7 @@ impl Fill for Canonical<'_> {
             Ok(())
         } else {
             Err(ScratchPrintError::Unrepresentable {
-                text: copy_text(value, governor)?,
+                text: ScratchString::copy_from(value, governor)?,
             })
         }
     }
@@ -1378,13 +1372,17 @@ impl Fill for Canonical<'_> {
     ) -> Result<ScratchString, ScratchPrintError> {
         match capture {
             None => printer.generate_class(id, 0, governor),
-            Some(CaptureKind::ParamName) => copy_text(&self.member(governor)?.key, governor),
+            Some(CaptureKind::ParamName) => {
+                ScratchString::copy_from(&self.member(governor)?.key, governor)
+                    .map_err(ScratchPrintError::from)
+            }
             Some(CaptureKind::Content) => Ok(json::quote_scratch(
                 self.value(CaptureKind::Content, governor)?,
                 governor,
             )?),
             Some(kind @ (CaptureKind::Name | CaptureKind::Id)) => {
-                copy_text(self.value(kind, governor)?, governor)
+                ScratchString::copy_from(self.value(kind, governor)?, governor)
+                    .map_err(ScratchPrintError::from)
             }
             Some(kind) => Err(Self::missing(kind, governor)),
         }
@@ -1404,7 +1402,7 @@ impl Fill for Canonical<'_> {
                     .values
                     .arguments
                     .ok_or_else(|| Self::missing(CaptureKind::Arguments, governor))?;
-                copy_text(value, governor)
+                ScratchString::copy_from(value, governor).map_err(ScratchPrintError::from)
             }
             (Some(CaptureKind::ParamValue), CodecKind::Json | CodecKind::JsonArgs) => {
                 let text = self.member(governor)?.value.to_json_scratch(governor)?;
@@ -1413,7 +1411,9 @@ impl Fill for Canonical<'_> {
             (Some(CaptureKind::ParamValue), CodecKind::Raw) => {
                 let value = &self.member(governor)?.value;
                 match &value.value {
-                    Value::String(text) => copy_text(text, governor),
+                    Value::String(text) => {
+                        ScratchString::copy_from(text, governor).map_err(ScratchPrintError::from)
+                    }
                     _ => Err(ScratchPrintError::Unrepresentable {
                         text: value.to_json_scratch(governor)?,
                     }),
@@ -1471,7 +1471,8 @@ impl Fill for Canonical<'_> {
     ) -> Result<ScratchString, ScratchPrintError> {
         match capture {
             None => Ok(ScratchString::new(governor)),
-            Some(kind) => copy_text(self.value(kind, governor)?, governor),
+            Some(kind) => ScratchString::copy_from(self.value(kind, governor)?, governor)
+                .map_err(ScratchPrintError::from),
         }
     }
 }

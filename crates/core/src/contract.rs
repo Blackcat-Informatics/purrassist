@@ -957,6 +957,18 @@ pub struct ScratchString {
 }
 
 impl ScratchString {
+    /// Copy text after admitting its work, retaining fallible scratch ownership.
+    /// Empty text still admits one unit of work; refusal preserves its cause.
+    pub(crate) fn copy_from(text: &str, governor: &mut Governor) -> Result<Self, StopReason> {
+        governor.charge(
+            Resource::Work,
+            saturating_size(text.len()).saturating_add(1),
+        )?;
+        let mut output = Self::new(governor);
+        output.push_str(text)?;
+        Ok(output)
+    }
+
     /// An empty string charging against `governor`'s scratch meter.
     #[must_use]
     pub fn new(governor: &Governor) -> Self {
