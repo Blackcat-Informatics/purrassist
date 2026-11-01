@@ -6,26 +6,30 @@
 //! Live events follow the history shared by native continuations. Calls subject
 //! to later prose normalization hold numeric call indexing. Finalization flushes
 //! remaining source facts from a unique completed reading, without replaying
-//! input. Longest semantic-prefix equivalence, ambiguous EOF intersection,
-//! settled parameter/completion/revision events, decoding queries and stream
-//! cloning are not implemented yet.
+//! input. Completion events retain final certainty and typed values, while
+//! native revisions retain their actual operator payloads. Longest semantic
+//! prefix equivalence, ambiguous EOF intersection, semantic-search revisions,
+//! decoding queries and stream cloning are not implemented yet.
 
 use super::recover::RecoveryIntake;
 use super::{
-    CallSegment, DialectId, DialectSet, GenerationStop, Piece, RecognizedTurn, Recognizer, Segment,
-    ToolCalls, ToolRecoveryRequest, ToolSet,
+    CallOutcome, CallSegment, DialectId, DialectSet, GenerationStop, Piece, RecognizedTurn,
+    Recognizer, Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest, ToolSet,
+    UnresolvedReason,
 };
 use crate::contract::{
-    AssistResult, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
-    invalid_input, push_scratch, reserve_failure, saturating_size as size,
+    AssistResult, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec,
+    StopReason, invalid_input, push_scratch, reserve_failure, saturating_size as size,
 };
 use crate::grammar::CaptureKind;
+use crate::grammar::edit::{EditOperator, MarkupEdit, OPERATORS};
+use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
 use core::ops::Range;
 
 /// Portable admission per published event, including collector storage.
 /// Four native slots cover even a fresh `Vec` receiving a single event.
-const EVENT_BYTES: u64 = 256;
+const EVENT_BYTES: u64 = 512;
 const _: () = assert!(4 * core::mem::size_of::<StreamEvent>() as u64 <= EVENT_BYTES);
 
 /// An owned notification whose source interpretation is already stable.
@@ -78,6 +82,55 @@ pub enum StreamEvent {
         index: usize,
         /// Original captured bytes, including markup or invalid UTF-8.
         raw: Vec<u8>,
+    },
+    /// A parameter's final typed value in a resolved or best-guess call.
+    /// The preceding `CallComplete` carries its certainty. No parameter event
+    /// is emitted for an ambiguous or unresolved call, or duplicate member name.
+    ParameterComplete {
+        /// Position among the final result's calls.
+        index: usize,
+        /// The canonical top-level parameter name.
+        name: String,
+        /// The exact final typed value, including lexical numbers and spans.
+        value: Node,
+    },
+    /// The call's final outcome, preserving guesses and explicit blockers.
+    /// This does not override the final result's tool-choice usability verdict.
+    CallComplete {
+        /// Position among the final result's calls.
+        index: usize,
+        /// The unchanged final per-call outcome.
+        outcome: CallOutcome,
+    },
+    /// A rejected attempt, identified by its final source span.
+    CallRejected {
+        /// A previously started identity, or `None` when no `CallStarted` was
+        /// emitted for this attempt. Rejected-list positions are never used as
+        /// call indices. The current EOF producer reports unstarted attempts.
+        index: Option<usize>,
+        /// The complete final rejected span, including owned closing markup.
+        span: Range<usize>,
+        /// The final precise rejection reason.
+        reason: Rejection,
+    },
+    /// An authentic grammar edit retained from native recognition and present
+    /// in the selected final ledger. No replacement is inferred from prose.
+    Revision {
+        /// Position among the final result's calls.
+        index: usize,
+        /// Original argument-leaf JSON Pointer when the containing leaves agree,
+        /// otherwise `None` for markup or an uncertain parameter owner.
+        parameter: Option<String>,
+        /// The grammar operator's stable rule id.
+        rule: &'static str,
+        /// Original source range affected by the edit.
+        span: Range<usize>,
+        /// Exact original bytes stored by the edit operator.
+        before: Vec<u8>,
+        /// Exact replacement bytes stored by the edit operator.
+        after: Vec<u8>,
+        /// Whether that operator records a guess inference in the receipt.
+        guess: bool,
     },
 }
 
@@ -168,9 +221,7 @@ impl StreamEvent {
     }
 
     fn name(index: usize, tool: &str, governor: &mut Governor) -> Result<Self, StopReason> {
-        governor.charge(Resource::Work, size(tool.len()).saturating_add(1))?;
-        let mut name = ScratchString::new(governor);
-        name.push_str(tool)?;
+        let name = copy_text(tool, governor)?;
         Self::admit(governor)?;
         Ok(Self::CallName {
             index,
@@ -190,6 +241,205 @@ impl StreamEvent {
             index,
             raw: raw.into_vec(),
         })
+    }
+
+    fn completed(
+        index: usize,
+        outcome: &CallOutcome,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let copied = copy_outcome(outcome, governor)?;
+        Self::admit(governor)?;
+        let OwnedOutcome {
+            value: outcome,
+            lease,
+        } = copied;
+        lease.retain();
+        Ok(Self::CallComplete { index, outcome })
+    }
+
+    fn parameter(
+        index: usize,
+        name: &str,
+        value: &Node,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let name = copy_text(name, governor)?;
+        let value = OwnedDocument::copy_from(value, governor)?;
+        Self::admit(governor)?;
+        Ok(Self::ParameterComplete {
+            index,
+            name: name.into_string(),
+            value: value.into_node(),
+        })
+    }
+
+    fn rejected(
+        span: Range<usize>,
+        reason: Rejection,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        Self::admit(governor)?;
+        Ok(Self::CallRejected {
+            index: None,
+            span,
+            reason,
+        })
+    }
+
+    fn revision(
+        index: usize,
+        edit: &EditFact,
+        parameter: Option<&str>,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let before = copy_bytes(&edit.before, governor)?;
+        let after = copy_bytes(&edit.after, governor)?;
+        let parameter = parameter
+            .map(|pointer| copy_text(pointer, governor))
+            .transpose()?;
+        Self::admit(governor)?;
+        Ok(Self::Revision {
+            index,
+            parameter: parameter.map(ScratchString::into_string),
+            rule: edit.operator.rule().id,
+            span: edit.at..edit.end,
+            before: before.into_vec(),
+            after: after.into_vec(),
+            guess: edit.operator.rule().guess,
+        })
+    }
+}
+
+fn copy_text(text: &str, governor: &mut Governor) -> Result<ScratchString, StopReason> {
+    governor.charge(Resource::Work, size(text.len()).saturating_add(1))?;
+    let mut copied = ScratchString::new(governor);
+    copied.push_str(text)?;
+    Ok(copied)
+}
+
+fn copy_bytes(bytes: &[u8], governor: &mut Governor) -> Result<ScratchVec<u8>, StopReason> {
+    governor.charge(Resource::Work, size(bytes.len()).saturating_add(1))?;
+    let mut copied = ScratchVec::new(governor);
+    copied.reserve(bytes.len())?;
+    copied.extend(bytes.iter().copied())?;
+    Ok(copied)
+}
+
+/// Blocker text remains transient until the whole event has been admitted.
+/// Field order drops the copied value before refunding its storage lease.
+struct OwnedOutcome {
+    value: CallOutcome,
+    lease: ScratchLease,
+}
+
+fn copy_outcome(
+    outcome: &CallOutcome,
+    governor: &mut Governor,
+) -> Result<OwnedOutcome, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let mut lease = ScratchLease::empty(governor);
+    let value = match outcome {
+        CallOutcome::Resolved => CallOutcome::Resolved,
+        CallOutcome::BestGuess => CallOutcome::BestGuess,
+        CallOutcome::Ambiguous => CallOutcome::Ambiguous,
+        CallOutcome::Unresolved { reason } => CallOutcome::Unresolved {
+            reason: copy_reason(reason, governor, &mut lease)?,
+        },
+    };
+    Ok(OwnedOutcome { value, lease })
+}
+
+fn copy_reason(
+    reason: &UnresolvedReason,
+    governor: &mut Governor,
+    lease: &mut ScratchLease,
+) -> Result<UnresolvedReason, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let mut text = |value: &str, governor: &mut Governor| {
+        let (copied, storage) = copy_text(value, governor)?.into_owned_parts();
+        lease.absorb(storage);
+        Ok::<_, StopReason>(copied)
+    };
+    Ok(match reason {
+        UnresolvedReason::MissingName => UnresolvedReason::MissingName,
+        UnresolvedReason::UnknownTool { name } => UnresolvedReason::UnknownTool {
+            name: text(name, governor)?,
+        },
+        UnresolvedReason::RuleNotAdmitted { rule, policy } => UnresolvedReason::RuleNotAdmitted {
+            rule: text(rule, governor)?,
+            policy: *policy,
+        },
+        UnresolvedReason::InvalidArgument { pointer, fault } => UnresolvedReason::InvalidArgument {
+            pointer: text(pointer, governor)?,
+            fault: *fault,
+        },
+        UnresolvedReason::ArgumentsNotObject => UnresolvedReason::ArgumentsNotObject,
+        UnresolvedReason::UnknownParameter { pointer } => UnresolvedReason::UnknownParameter {
+            pointer: text(pointer, governor)?,
+        },
+        UnresolvedReason::MissingRequired { pointer } => UnresolvedReason::MissingRequired {
+            pointer: text(pointer, governor)?,
+        },
+        UnresolvedReason::SchemaValidation => UnresolvedReason::SchemaValidation,
+        UnresolvedReason::Malformed { detail } => UnresolvedReason::Malformed {
+            detail: text(detail, governor)?,
+        },
+        UnresolvedReason::Truncated => UnresolvedReason::Truncated,
+        UnresolvedReason::ToolChoiceNone => UnresolvedReason::ToolChoiceNone,
+        UnresolvedReason::ToolChoiceForced { expected } => UnresolvedReason::ToolChoiceForced {
+            expected: text(expected, governor)?,
+        },
+        UnresolvedReason::ToolChoiceCardinality => UnresolvedReason::ToolChoiceCardinality,
+        UnresolvedReason::RepairNotPermitted { rule } => UnresolvedReason::RepairNotPermitted {
+            rule: text(rule, governor)?,
+        },
+    })
+}
+
+/// Owned transient copies of real operator payloads, never reconstructed from
+/// a human explanation or guessed from the final value tree.
+#[derive(Debug)]
+struct EditFact {
+    call_start: usize,
+    call_end: usize,
+    operator: EditOperator,
+    at: usize,
+    end: usize,
+    before: ScratchVec<u8>,
+    after: ScratchVec<u8>,
+    parameter: Option<ScratchString>,
+}
+
+impl ScratchCharge for EditFact {
+    const CHARGE: usize = 192;
+}
+const _: () = assert!(core::mem::size_of::<EditFact>() <= EditFact::CHARGE);
+
+impl EditFact {
+    fn key(&self) -> (usize, usize, EditOperator, usize, usize) {
+        (
+            self.call_start,
+            self.call_end,
+            self.operator,
+            self.at,
+            self.end,
+        )
+    }
+
+    fn same_payload(&self, other: &Self, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.before.len())
+                .saturating_add(size(self.after.len()))
+                .saturating_add(
+                    self.parameter
+                        .as_ref()
+                        .map_or(0, |pointer| size(pointer.len())),
+                )
+                .saturating_add(1),
+        )?;
+        Ok(self.before == other.before && self.after == other.after)
     }
 }
 
@@ -227,6 +477,7 @@ pub(super) struct EventCursor {
     reasoning_end: usize,
     calls: ScratchVec<LiveCall>,
     arguments: ScratchVec<ArgumentFact>,
+    edits: ScratchVec<EditFact>,
 }
 
 impl EventCursor {
@@ -237,6 +488,7 @@ impl EventCursor {
             reasoning_end: 0,
             calls: ScratchVec::new(governor),
             arguments: ScratchVec::new(governor),
+            edits: ScratchVec::new(governor),
         }
     }
 
@@ -341,6 +593,16 @@ impl EventCursor {
         self.arguments
             .as_mut_slice()
             .sort_unstable_by_key(|fact| (fact.start, fact.end));
+        let levels = usize::BITS - self.edits.len().leading_zeros() + 1;
+        governor.charge(
+            Resource::Work,
+            size(self.edits.len())
+                .saturating_mul(u64::from(levels))
+                .saturating_mul(5),
+        )?;
+        self.edits
+            .as_mut_slice()
+            .sort_unstable_by_key(EditFact::key);
         Ok(())
     }
 
@@ -357,8 +619,50 @@ impl EventCursor {
                 },
                 governor,
             )?;
+            for raw in &call.readings {
+                for edit in &raw.edits {
+                    self.remember_edit(call, raw, edit, governor)?;
+                }
+            }
         }
         Ok(())
+    }
+
+    fn remember_edit(
+        &mut self,
+        call: &CallSegment,
+        raw: &super::RawCall,
+        edit: &MarkupEdit,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if edit.original.is_empty() && edit.replacement.is_empty() {
+            return Ok(());
+        }
+        let mut parameter = None;
+        for leaf in &raw.arguments.leaves {
+            governor.charge(Resource::Work, size(leaf.pointer.len()).saturating_add(1))?;
+            if leaf.raw.start <= edit.span.start && edit.span.end <= leaf.raw.end {
+                if parameter.is_some_and(|known| known != leaf.pointer.as_str()) {
+                    parameter = None;
+                    break;
+                }
+                parameter = Some(leaf.pointer.as_str());
+            }
+        }
+        let fact = EditFact {
+            call_start: call.span.start,
+            call_end: call.span.end,
+            operator: edit.operator,
+            at: edit.span.start,
+            end: edit.span.end,
+            before: copy_bytes(&edit.original, governor)?,
+            after: copy_bytes(&edit.replacement, governor)?,
+            parameter: parameter
+                .map(|pointer| copy_text(pointer, governor))
+                .transpose()?,
+        };
+        push_scratch(&mut self.edits, fact, governor)
     }
 
     /// Flush only facts from a complete, unique whole-message reading. This is
@@ -418,6 +722,80 @@ impl EventCursor {
             {
                 sink(StreamEvent::argument(index, span, source, governor)?)?;
             }
+            self.revisions(index, call, governor, sink)?;
+            sink(StreamEvent::completed(index, &call.outcome, governor)?)?;
+            // All typed parameter events follow completion, including mutating
+            // calls. Ambiguous/unresolved values are not presented as settled.
+            if matches!(call.outcome, CallOutcome::Resolved | CallOutcome::BestGuess) {
+                parameters(index, &call.arguments, governor, sink)?;
+            }
+        }
+        for rejected in &calls.rejected {
+            governor.charge(Resource::Work, 1)?;
+            sink(StreamEvent::rejected(
+                rejected.span.clone(),
+                rejected.reason,
+                governor,
+            )?)?;
+        }
+        governor.check()
+    }
+
+    fn revisions(
+        &self,
+        index: usize,
+        call: &ToolCall,
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> Result<(), StopReason> {
+        for evidence in &call.repairs.evidence {
+            governor.charge(
+                Resource::Work,
+                size(OPERATORS.len()).saturating_mul(size(evidence.rule.len()).saturating_add(1)),
+            )?;
+            let Some(operator) = OPERATORS
+                .iter()
+                .find(|operator| operator.id == evidence.rule)
+            else {
+                continue;
+            };
+            let Some(span) = &evidence.span else {
+                continue;
+            };
+            let key = (
+                call.span.start,
+                call.span.end,
+                operator.operator,
+                span.bytes.start,
+                span.bytes.end,
+            );
+            let levels = usize::BITS - self.edits.len().leading_zeros() + 1;
+            governor.charge(Resource::Work, u64::from(levels).saturating_mul(5))?;
+            let first = self.edits.partition_point(|edit| edit.key() < key);
+            let Some(edit) = self.edits.as_slice().get(first) else {
+                continue;
+            };
+            if edit.key() != key {
+                continue;
+            }
+            let mut shared = true;
+            let mut parameter = edit.parameter.as_ref().map(ScratchString::as_str);
+            for other in &self.edits.as_slice()[first + 1..] {
+                governor.charge(Resource::Work, 5)?;
+                if other.key() != key {
+                    break;
+                }
+                if !edit.same_payload(other, governor)? {
+                    shared = false;
+                    break;
+                }
+                if parameter != other.parameter.as_ref().map(ScratchString::as_str) {
+                    parameter = None;
+                }
+            }
+            if shared {
+                sink(StreamEvent::revision(index, edit, parameter, governor)?)?;
+            }
         }
         Ok(())
     }
@@ -450,6 +828,53 @@ impl EventCursor {
         }
         Ok(fact.capture.map(|(start, end)| start..end))
     }
+}
+
+fn parameters(
+    index: usize,
+    arguments: &Node,
+    governor: &mut Governor,
+    sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+) -> Result<(), StopReason> {
+    let Value::Object(members) = &arguments.value else {
+        return Ok(());
+    };
+    let mut ordered = ScratchVec::new(governor);
+    let mut longest = 0;
+    for (position, member) in members.iter().enumerate() {
+        longest = longest.max(member.key.len());
+        push_scratch(&mut ordered, (position, member.key.as_str()), governor)?;
+    }
+    let levels = usize::BITS - ordered.len().leading_zeros() + 1;
+    governor.charge(
+        Resource::Work,
+        size(ordered.len())
+            .saturating_mul(u64::from(levels))
+            .saturating_mul(size(longest).saturating_add(1)),
+    )?;
+    ordered
+        .as_mut_slice()
+        .sort_unstable_by(|(_, left), (_, right)| left.cmp(right));
+    for (at, &(position, name)) in ordered.iter().enumerate() {
+        governor.charge(
+            Resource::Work,
+            size(name.len()).saturating_add(1).saturating_mul(2),
+        )?;
+        if at
+            .checked_sub(1)
+            .is_some_and(|previous| ordered[previous].1 == name)
+            || ordered.get(at + 1).is_some_and(|next| next.1 == name)
+        {
+            continue;
+        }
+        sink(StreamEvent::parameter(
+            index,
+            name,
+            &members[position].value,
+            governor,
+        )?)?;
+    }
+    Ok(())
 }
 
 fn argument_span(
@@ -510,8 +935,9 @@ fn unique_name<'t>(
 /// publication. Exhaustion and cancellation are reported by the final receipt;
 /// bytes supplied after refusal still contribute to its complete source digest.
 ///
-/// See [`StreamEvent`] for the implemented source facts. Settled parameter,
-/// completion and revision events remain unimplemented.
+/// See [`StreamEvent`] for source facts and EOF completion events. Semantic
+/// search revisions and events common to ambiguous final readings remain
+/// unfinished.
 ///
 /// ```
 /// use purrassist_core::{Budget, tool_call::{GenerationStop, ToolSet, ToolRecoveryRequest}};

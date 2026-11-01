@@ -980,7 +980,7 @@ The same intake also constructs owned `ContentDelta` events for advances
 of the initial native content run, before any call, attempt or reasoning block.
 Each payload copies only the newly exposed source range into a temporary
 `ScratchVec`, admitting its capacity and `K_EVENT` plus one work unit per copied
-byte before notification. Every event additionally admits 256 bytes for its
+byte before notification. Every event additionally admits 512 bytes for its
 record and collector capacity, plus four work units for amortized collector
 insertion and relocation. The record reservation covers four native slots,
 including a fresh collector receiving one event. Payload publication uses
@@ -1012,16 +1012,43 @@ Fuzzy identities wait for final resolution. A unique shared arguments-capture ra
 publishes raw `ArgumentDelta`, including for mutating tools: raw bytes make no
 claim about settled parameter values or permission to execute.
 
-Before resolution consumes the finished native turn, the cursor records only
-governed argument-capture offsets. A charged sort and binary lookup allow EOF
+Before resolution consumes the finished native turn, the cursor records
+governed argument-capture offsets and authentic grammar-edit payloads. A charged sort and binary lookup allow EOF
 events to use captures whose native alternatives agree, without replaying the
 input or decoding arguments again. The completed unique reading fills missing
 call starts, canonical names and raw arguments. EOF names may follow a guessed
 final identity; the final outcome and receipt retain that uncertainty.
+
+The same EOF producer now emits `CallComplete` with the exact final per-call
+outcome, preserving `BestGuess`, `Ambiguous` and every unresolved reason.
+Blocker text is copied fallibly under a transient storage lease and published
+only after the event record is admitted. For resolved or best-guess calls,
+`ParameterComplete` follows `CallComplete`, including for mutating tools.
+Values use `OwnedDocument::copy_from` and transfer their real reservations on
+publication; lexical numbers, typed values and spans are preserved. Parameters
+are emitted in canonical name order. Ambiguous and unresolved calls, and
+duplicate member names, do not publish a supposedly settled parameter value.
+
+`CallRejected` carries each final rejected attempt's complete span and precise
+reason. Its `index` is `None` when no `CallStarted` was emitted for that attempt;
+rejected-list ordinals are never substituted for accepted-call indices. A
+future identity-change event may use `Some` only for that already started
+identity, followed by a new `CallStarted` for its replacement.
+
+Native `Revision` events match retained operator facts against selected ledger
+rule ids and exact source spans. Their original and replacement bytes come
+directly from `MarkupEdit`, and their guess flag comes from that operator's
+registry entry. Multiple native candidates must agree on both payloads. A
+parameter JSON Pointer is carried only when the original argument-leaf owners
+agree; markup or an uncertain owner uses `None`. Neither explanations nor
+serialized diagnostic text are parsed to reconstruct edits. Revisions created
+by semantic search still need structured transformation records at their
+production sites; this native route does not fabricate their missing payloads.
+
 Packed ambiguity and grouped attempts can hold this conservative frontier even
 when later recovery would fold their meanings together. Proving the longest
 semantic stable prefix, ambiguous EOF event intersection, exact held/candidate
-byte accounting, settled parameter/completion/rejection/revision events,
+byte accounting, semantic-search revision events,
 decoding queries, governed cloning and CLI/MCP progress remain
 unfinished under #16.
 
