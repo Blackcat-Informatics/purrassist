@@ -900,6 +900,18 @@ resolution  = one unit per member, option, alternative and validation step,
             + (unparsed-markup scan: one unit per content byte read)
 ```
 
+Codec context keeps one positive name-query memo in the shared history arena.
+Its fallible scratch vector retains the queried immutable history anchor,
+oldest complete name range and nearest chained-call boundary. Later context
+queries can stop at that exact ancestor rather than scanning prior parameter
+history again. Each visited node and memo comparison admits Work. A mutable
+Link disables reuse below it and prevents caching the query; Pack follows only
+its `prev` path. Arena reset clears the memo before history IDs are reused,
+and its buffer releases with the arena. Admission and joined-name partition
+queries retain the original uncached walk. Tool lookup and codec markup remain
+specific to the current caller and grammar. This changes charged computation,
+without claiming measured completion under any budget.
+
 Pythonic's finite-state framing and canonical decimal literal path scan
 linearly. Converting a binary, octal or hexadecimal integer with `n` digits
 to exact decimal uses O(n²) digit work, admitted before each multiplication
