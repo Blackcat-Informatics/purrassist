@@ -57,6 +57,20 @@ content alternatives. An intact native JSON reading also precedes a matching
 projected envelope whose only changes are exact exterior prose or fence
 extractions; each retains its original loss kind and source bytes.
 
+Projected JSON envelopes also retain declaration-shaped counter-evidence.
+Without invocation markers, arguments containing `"type":"object"` and a
+`"properties"` object stay content when the named tool cannot accept them as
+written. This applies through discarded prose and array framing in the Hermes,
+Llama JSON and Mistral v3 projections. An exact name or explicit alias whose
+original arguments already passed the selected tool's schema remains a call,
+including a guess caused only by exterior extraction or example context.
+The resolver reuses its completed validation and compares the original and
+selected arguments semantically; it performs no second schema validation and
+does not claim lexical equality. Mixed native framing, different captures or
+different argument values retain their alternatives. A native invocation marker
+such as `<|python_tag|>` continues to establish a call even when its arguments
+resemble a declaration.
+
 ## Executable coverage
 
 Three first-party [anchor fixtures](../../../crates/core/tests/data/tool-calls/conformance/hermes-stripped.v1)

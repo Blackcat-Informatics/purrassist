@@ -941,27 +941,139 @@ pub fn resolve_forest(
     })
 }
 
-/// Whether a recognized call is content by the counter-evidence of a
-/// `declaration-content` grammar
-/// ([`CompiledGrammar::declaration_content`](crate::grammar::CompiledGrammar::declaration_content)):
-/// its object is bare ([`RawCall::bare`]), its arguments as written have a
-/// tool declaration's parameters shape (an object whose `"type"` is
-/// `"object"` and whose `"properties"` is an object), and the declared tool
-/// does not take them as they are (the call is not
-/// [`CallOutcome::Resolved`]: the named tool is undeclared, or its arguments
-/// schema needs a guess or a loss to accept them).
-fn declaration_content(segment: &CallSegment, call: &ResolvedCall) -> bool {
+/// Declaration-shaped JSON without invocation markers is counter-evidence.
+/// Native grammars retain their existing bare-object policy. Marker-projected
+/// JSON envelopes also apply it through discarded prose and array framing,
+/// while preserving original arguments accepted by an exact or alias-bound tool.
+fn declaration_content(
+    segment: &CallSegment,
+    call: &ResolvedCall,
+    tools: &ToolSet,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
     let raw = &segment.readings[0];
-    if !raw.bare || !raw.dialect.grammar().declaration_content() {
-        return false;
+    let projected = |reading: &RawCall| {
+        let grammar = reading.dialect.grammar();
+        grammar.is_derived() && grammar.json_envelope()
+    };
+    let mut any_projected = false;
+    let mut all_projected = true;
+    for reading in &segment.readings {
+        governor.charge(Resource::Work, 1)?;
+        let applies = projected(reading);
+        any_projected |= applies;
+        all_projected &= applies;
     }
-    let root = &raw.arguments.root;
-    let shaped = matches!(root.get("type").map(|node| &node.value), Some(Value::String(kind)) if kind == "object")
+    if !any_projected {
+        return Ok(raw.bare
+            && raw.dialect.grammar().declaration_content()
+            && declaration_shaped(&raw.arguments.root)
+            && call.outcome != CallOutcome::Resolved);
+    }
+    // Mixed grammar interpretations remain alternatives, including a retained
+    // native invocation marker beside a projected reading of the same segment.
+    if !all_projected || !same_projected_declarations(segment, governor)? {
+        return Ok(false);
+    }
+    Ok(!original_arguments_accepted(raw, call, tools, governor)?)
+}
+
+/// Every raw alternative must describe the same declaration-shaped data and
+/// captured binding before its entire segment can become assistant content.
+fn same_projected_declarations(
+    segment: &CallSegment,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let raw = &segment.readings[0];
+    for reading in &segment.readings {
+        let root = &reading.arguments.root;
+        let members = match &root.value {
+            Value::Object(members) => members.len(),
+            _ => 0,
+        };
+        // Two unique member lookups compare the fixed keys `type` and
+        // `properties`; the `object` value comparison is bounded as well.
+        governor.charge(
+            Resource::Work,
+            size(members).saturating_mul(16).saturating_add(8),
+        )?;
+        if !declaration_shaped(root) {
+            return Ok(false);
+        }
+        governor.charge(
+            Resource::Work,
+            size(reading.name.as_ref().map_or(0, |name| name.value.len()))
+                .saturating_add(size(raw.name.as_ref().map_or(0, |name| name.value.len())))
+                .saturating_add(size(reading.id.as_ref().map_or(0, |id| id.value.len())))
+                .saturating_add(size(raw.id.as_ref().map_or(0, |id| id.value.len())))
+                .saturating_add(size(reading.captures.len()))
+                .saturating_add(4),
+        )?;
+        if reading.name != raw.name || reading.id != raw.id || reading.captures != raw.captures {
+            return Ok(false);
+        }
+        if !core::ptr::eq(reading, raw)
+            && !root.equivalent_governed(&raw.arguments.root, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Reuse final validation only for an exact or alias-bound original argument
+/// value. Exterior extraction and context guesses do not change that acceptance.
+fn original_arguments_accepted(
+    raw: &RawCall,
+    call: &ResolvedCall,
+    tools: &ToolSet,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    // Final schema acceptance belongs to the prepared reading, not its outcome:
+    // exterior extraction or context can make an unchanged valid call a guess.
+    let accepted = call.reading.blocker.is_none()
+        && matches!(call.reading.validations.as_slice(), [validation] if validation.passed);
+    if !accepted {
+        return Ok(false);
+    }
+    let Some(name) = &raw.name else {
+        return Ok(false);
+    };
+    let mut entries = 0usize;
+    for tool in tools.tools() {
+        governor.charge(Resource::Work, 1)?;
+        entries = entries
+            .saturating_add(1)
+            .saturating_add(tool.aliases().len());
+    }
+    // The same comparison bound used for prepared tool-name indexes: each
+    // binary-search step examines at most the query's bytes and terminator.
+    governor.charge(
+        Resource::Work,
+        size(name.value.len())
+            .saturating_add(1)
+            .saturating_mul(super::toolset::sort_factor(entries)),
+    )?;
+    let Some(tool) = tools.lookup_exact(&name.value) else {
+        return Ok(false);
+    };
+    governor.charge(Resource::Work, size(tool.name().len()).saturating_add(1))?;
+    if call.reading.tool.as_deref() != Some(tool.name()) {
+        return Ok(false);
+    }
+    // Semantic equality is sufficient for schema acceptance; this neither
+    // rewrites the arguments nor claims lexical/source-span equivalence.
+    raw.arguments
+        .root
+        .equivalent_governed(&call.reading.arguments, governor)
+}
+
+fn declaration_shaped(root: &Node) -> bool {
+    matches!(root.get("type").map(|node| &node.value), Some(Value::String(kind)) if kind == "object")
         && matches!(
             root.get("properties").map(|node| &node.value),
             Some(Value::Object(_))
-        );
-    shaped && call.outcome != CallOutcome::Resolved
+        )
 }
 
 /// A value with the changes that produced it.
@@ -1075,7 +1187,7 @@ impl<'a> Resolver<'a> {
             }
             Segment::Call(segment) => {
                 let call = self.call(segment, governor)?;
-                if declaration_content(segment, &call) {
+                if declaration_content(segment, &call, self.tools, governor)? {
                     ResolvedSegment::Content(segment.span.clone())
                 } else {
                     governor.charge(Resource::ScratchBytes, CALL_BYTES)?;
