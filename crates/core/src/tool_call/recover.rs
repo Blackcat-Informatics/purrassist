@@ -3693,6 +3693,179 @@ fn native_json_dominates(
         && content_outside(native, &frame).eq(content_outside(projected, &frame)))
 }
 
+/// A projection lost its parent's next-call opener, so only its inserted
+/// object closer was guessed. All invocation facts and source anchors agree.
+fn llama_closer_pair(
+    native: &ResolvedCall,
+    projected: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    use crate::grammar::edit::EditOperator;
+    let exact_rule = rules::of_operator(EditOperator::MissingWrapperClose);
+    let guess_rule = rules::of_operator(EditOperator::MissingWrapperCloseBeforeText);
+    let unique = |call: &ResolvedCall| {
+        call.closure == Closure::Repaired
+            && call.competing == 1
+            && call.alternatives.is_empty()
+            && call.distinguishing.is_empty()
+            && call.reading.blocker.is_none()
+    };
+    if native.dialect != DialectId::Llama3Json
+        || projected.dialect != DialectId::Llama3JsonStripped
+        || !unique(native)
+        || !unique(projected)
+        || native.outcome != CallOutcome::Resolved
+        || native.reading.cost != exact_rule.cost
+        || projected.reading.cost != guess_rule.cost
+        || native.reading.repairs.evidence.len() != 1
+        || projected.reading.repairs.evidence.len() != 1
+        || !native.reading.repairs.losses.is_empty()
+        || !projected.reading.repairs.losses.is_empty()
+        || !native.reading.repairs.inferences.is_empty()
+        || projected.reading.repairs.inferences.len() != 1
+    {
+        return Ok(None);
+    }
+    governor.charge(
+        Resource::Work,
+        reading_bytes(&native.reading)
+            .saturating_add(reading_bytes(&projected.reading))
+            .saturating_mul(2)
+            .saturating_add(size(native.span.len())),
+    )?;
+    if native.span != projected.span
+        || native.order != projected.order
+        || native.id != projected.id
+        || native.name != projected.name
+        || native.reading.tool.is_none()
+        || native.reading.effects.is_none()
+        || native.reading.policy.is_none()
+        || native.reading.tool != projected.reading.tool
+        || native.reading.effects != projected.reading.effects
+        || native.reading.policy != projected.reading.policy
+        || native.reading.blocker != projected.reading.blocker
+        || native.reading.validations != projected.reading.validations
+        || native.reading.arguments != projected.reading.arguments
+    {
+        return Ok(None);
+    }
+    let outcome = match &projected.outcome {
+        CallOutcome::BestGuess => native.reading.policy == Some(RepairPolicy::Tolerant),
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::RuleNotAdmitted { rule, policy },
+        } => rule == guess_rule.id && Some(*policy) == native.reading.policy,
+        _ => false,
+    };
+    let exact = &native.reading.repairs.evidence[0];
+    let guess = &projected.reading.repairs.evidence[0];
+    let inference = &projected.reading.repairs.inferences[0];
+    // Number Eq is mathematical. Both anchored trees came through the same
+    // unchanged JSON codec, and these singleton closer ledgers change nothing
+    // inside the argument span, so their original numeric spellings agree too.
+    let Some(arguments) = &native.reading.arguments.span else {
+        return Ok(None);
+    };
+    let Some(insertion) = &exact.span else {
+        return Ok(None);
+    };
+    Ok((outcome
+        && exact.rule == exact_rule.id
+        && guess.rule == guess_rule.id
+        && insertion.bytes.is_empty()
+        && arguments.end <= insertion.bytes.start
+        && native.span.start <= insertion.bytes.start
+        && insertion.bytes.end <= native.span.end
+        && guess.span.as_ref() == Some(insertion)
+        && exact.destination == guess.destination
+        && context_destination(exact, &native.span)
+        && inference.evidence == *guess
+        && inference.kind == InferenceKind::Guess
+        && inference.value == "}")
+        .then_some(insertion.bytes.start))
+}
+
+/// Prefer this one parent repair only with a corresponding actual native next
+/// call. Source text alone cannot invent the next call or erase another repair.
+fn native_llama_boundary_dominates(
+    native: &[ResolvedSegment],
+    projected: &[ResolvedSegment],
+    following: Option<&ResolvedCall>,
+    output: &[u8],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(native.len()).saturating_add(size(projected.len())),
+    )?;
+    if native.len() != projected.len()
+        || !native.iter().zip(projected).any(|(left, right)| {
+            matches!((left, right), (ResolvedSegment::Call(a), ResolvedSegment::Call(b))
+                if a.dialect == DialectId::Llama3Json
+                    && b.dialect == DialectId::Llama3JsonStripped)
+        })
+    {
+        return Ok(false);
+    }
+    let mut changed = None;
+    for (index, (left, right)) in native.iter().zip(projected).enumerate() {
+        match (left, right) {
+            (ResolvedSegment::Content(a), ResolvedSegment::Content(b)) if a == b => {}
+            (ResolvedSegment::Call(a), ResolvedSegment::Call(b)) => {
+                governor.charge(
+                    Resource::Work,
+                    reading_bytes(&a.reading)
+                        .saturating_add(reading_bytes(&b.reading))
+                        .saturating_add(size(a.span.len()).saturating_add(size(b.span.len())))
+                        .saturating_add(size(a.reading.tool.as_ref().map_or(0, String::len)))
+                        .saturating_add(size(b.reading.tool.as_ref().map_or(0, String::len))),
+                )?;
+                if a == b {
+                    continue;
+                }
+                if changed.is_some() {
+                    return Ok(false);
+                }
+                let Some(at) = llama_closer_pair(a, b, governor)? else {
+                    return Ok(false);
+                };
+                changed = Some((index, at, a.span.end));
+            }
+            _ => return Ok(false),
+        }
+    }
+    let Some((index, at, end)) = changed else {
+        return Ok(false);
+    };
+    let Some(next) = native[index + 1..]
+        .iter()
+        .find_map(resolved_json_call)
+        .or(following)
+    else {
+        return Ok(false);
+    };
+    if next.dialect != DialectId::Llama3Json
+        || next.closure != Closure::Closed
+        || next.outcome != CallOutcome::Resolved
+        || next.competing != 1
+        || !next.alternatives.is_empty()
+        || !next.distinguishing.is_empty()
+        || next.reading.cost != 0
+        || next.reading.repairs.entries() != 0
+        || end > next.span.start
+        || next.span.start > next.span.end
+    {
+        return Ok(false);
+    }
+    let Some(gap) = output.get(at..next.span.start) else {
+        return Ok(false);
+    };
+    let Some(next_source) = output.get(next.span.clone()) else {
+        return Ok(false);
+    };
+    governor.charge(Resource::Work, size(gap.len()).saturating_add(14))?;
+    Ok(gap.iter().all(u8::is_ascii_whitespace) && next_source.starts_with(b"<|python_tag|>"))
+}
+
 impl Reading {
     /// Every ledger of the reading, in output order.
     fn ledgers(&self) -> impl Iterator<Item = &CallLedger> {
@@ -4009,11 +4182,22 @@ impl Recovery<'_> {
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
         let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
-        for piece in &turn.pieces {
+        for (index, piece) in turn.pieces.iter().enumerate() {
             if let ResolvedPiece::Choice(choice) = piece {
+                let next = match turn.pieces.get(index + 1) {
+                    Some(ResolvedPiece::Segment(ResolvedSegment::Content(_))) => {
+                        turn.pieces.get(index + 2)
+                    }
+                    other => other,
+                };
+                let following = match next {
+                    Some(ResolvedPiece::Segment(ResolvedSegment::Call(call))) => Some(&**call),
+                    _ => None,
+                };
                 choices.push(fold_options(
                     &choice.readings,
                     self.output,
+                    following,
                     !matches!(self.request.tool_choice, ToolChoice::ForcedStrict(_)),
                     governor,
                 )?);
@@ -5366,6 +5550,7 @@ pub(crate) fn assign_ids(
 fn fold_options<'t>(
     options: &'t [Vec<ResolvedSegment>],
     output: &[u8],
+    following: Option<&ResolvedCall>,
     prefer_native_json: bool,
     governor: &mut Governor,
 ) -> Result<Vec<Fold<'t>>, StopReason> {
@@ -5426,6 +5611,12 @@ fn fold_options<'t>(
                     )? || native_json_dominates(
                         folds[index].1.segments,
                         folds[projected].1.segments,
+                        output,
+                        governor,
+                    )? || native_llama_boundary_dominates(
+                        folds[index].1.segments,
+                        folds[projected].1.segments,
+                        following,
                         output,
                         governor,
                     )?)

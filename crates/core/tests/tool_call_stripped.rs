@@ -312,7 +312,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     }
     let prefaced = format!("\nFor example:\n```json\n{input}\n```\n");
     let (turn, _) = recognize(&prefaced, DialectId::HermesStripped);
-    assert!(!turn.calls().is_empty());
+    assert_ne!(turn.calls().len(), 0);
     for call in turn.calls() {
         for reading in &call.readings {
             assert!(
