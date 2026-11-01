@@ -1020,7 +1020,9 @@ impl<'s> ToolCallStream<'s> {
     /// No input replay or new governor is used. The result and usage follow the
     /// same batch path for the complete supplied source and final stop reason.
     /// Exhaustion, cancellation and invalid requests return `Unresolved` with
-    /// the explicit reason in the receipt, retaining no partial source.
+    /// the explicit reason in the receipt and the complete admitted source
+    /// or none. A semantic request refusal still permits complete source
+    /// capture while the governor remains healthy.
     /// EOF events are constructed with identical admission and discarded;
     /// use [`Self::finish_with_events`] or [`Self::finish_collect`] to keep them.
     #[must_use]
