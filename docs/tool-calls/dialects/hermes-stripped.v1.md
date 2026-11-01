@@ -47,6 +47,16 @@ exact framing has representative priority within an equal-cost invocation tie. G
 arguments, repairs or segmentations remain alternatives. Selecting a profile
 does not authorize converting an inferred value into a resolved one.
 
+Without strict tool-choice constraints, optional whitespace left by suppressed
+markers has one maximal framing. Grouped calls retain the latest end and then
+the earliest start in call order. This applies only within the
+same derived grammar when the ordered calls, every captured source span,
+arguments, outcome and complete ledgers agree. Different captures or
+non-whitespace boundaries remain distinct. Strict choices retain the original
+content alternatives. An intact native JSON reading also precedes a matching
+projected envelope whose only changes are exact exterior prose or fence
+extractions; each retains its original loss kind and source bytes.
+
 ## Executable coverage
 
 Three first-party [anchor fixtures](../../../crates/core/tests/data/tool-calls/conformance/hermes-stripped.v1)

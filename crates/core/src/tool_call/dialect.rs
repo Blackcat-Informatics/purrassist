@@ -795,10 +795,9 @@ impl DialectSet {
     /// ```
     /// use purrassist_core::tool_call::DialectSet;
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
-    /// // Qwen3-Coder XML, Hermes and GLM open with `<tool_call>`; a Llama 3
-    /// // JSON, an Anthropic `tool_use` and a bare JSON attempt may open at
-    /// // each of the two `{`.
-    /// assert_eq!(DialectSet::built_in().call_openers(output), 9);
+    /// // The complete allow-list includes native literal openers and the
+    /// // projected line-start name and JSON envelope entries.
+    /// assert_eq!(DialectSet::built_in().call_openers(output), 15);
     /// assert_eq!(DialectSet::built_in().call_openers(b"no calls here"), 0);
     /// ```
     #[must_use]

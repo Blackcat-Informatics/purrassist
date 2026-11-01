@@ -843,10 +843,9 @@ impl ToolRecoveryRequest {
     /// use purrassist_core::{Effort, tool_call::{DialectSet, ToolRecoveryRequest}};
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// let request = ToolRecoveryRequest::sized(Effort::Standard, output);
-    /// // Three `<tool_call>` openers (Qwen3-Coder XML, Hermes and GLM) and two `{`
-    /// // where a Llama 3 JSON, an Anthropic `tool_use` and a bare JSON
-    /// // attempt may open.
-    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 9));
+    /// // The complete allow-list counts fifteen possible native/projected
+    /// // entries, including the line-start name and JSON envelope programs.
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 15));
     /// ```
     #[must_use]
     pub fn sized(effort: Effort, output: &[u8]) -> Self {
@@ -3299,6 +3298,58 @@ fn same_captured_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
         && *distinguishing == right.distinguishing
 }
 
+/// Removing markers can leave optional layout as either call framing or
+/// content, or on either side of a grouped call boundary. These are the same
+/// invocations only when every captured fact, including its source spans and
+/// ledger, is unchanged. Prefer the latest end, then earliest start, in call
+/// order. Strict choices retain content alternatives for their constraints.
+fn projected_layout_dominates(
+    left: &[ResolvedSegment],
+    right: &[ResolvedSegment],
+    output: &[u8],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.len()).saturating_add(size(right.len())),
+    )?;
+    if left.iter().chain(right).any(|segment| {
+        !matches!(
+            segment,
+            ResolvedSegment::Call(_) | ResolvedSegment::Content(_)
+        )
+    }) {
+        return Ok(false);
+    }
+    let mut left = left.iter().filter_map(resolved_json_call);
+    let mut right = right.iter().filter_map(resolved_json_call);
+    let mut order = core::cmp::Ordering::Equal;
+    loop {
+        governor.charge(Resource::Work, 1)?;
+        let (a, b) = match (left.next(), right.next()) {
+            (None, None) => return Ok(order.is_gt()),
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(false),
+        };
+        if a.dialect != b.dialect || !a.dialect.grammar().is_derived() || !same_captured_call(a, b)
+        {
+            return Ok(false);
+        }
+        for margin in [
+            a.span.start.min(b.span.start)..a.span.start.max(b.span.start),
+            a.span.end.min(b.span.end)..a.span.end.max(b.span.end),
+        ] {
+            governor.charge(Resource::Work, size(margin.len()))?;
+            if !output[margin].iter().all(u8::is_ascii_whitespace) {
+                return Ok(false);
+            }
+        }
+        order = order
+            .then(a.span.end.cmp(&b.span.end))
+            .then(b.span.start.cmp(&a.span.start));
+    }
+}
+
 fn resolved_json_call(segment: &ResolvedSegment) -> Option<&ResolvedCall> {
     match segment {
         ResolvedSegment::Call(call) => Some(&**call),
@@ -3358,29 +3409,42 @@ fn same_projected_json_invocation(exact: &ResolvedCall, derived: &ResolvedCall) 
         && derived.reading.repairs.inferences.is_empty()
 }
 
-fn only_exterior_prose(exact: &ResolvedCall, derived: &ResolvedCall, output: &[u8]) -> bool {
+fn only_exterior_extraction(exact: &ResolvedCall, derived: &ResolvedCall, output: &[u8]) -> bool {
     let repairs = &derived.reading.repairs;
     let exterior = |evidence: &Evidence| {
-        evidence.rule == "tool_call.extract.prose"
-            && evidence.span.as_ref().is_some_and(|span| {
-                derived.span.start <= span.bytes.start
-                    && span.bytes.end <= derived.span.end
-                    && (span.bytes.end <= exact.span.start || span.bytes.start >= exact.span.end)
-            })
+        matches!(
+            evidence.rule.as_str(),
+            "tool_call.extract.prose" | "tool_call.extract.fence"
+        ) && evidence.span.as_ref().is_some_and(|span| {
+            derived.span.start <= span.bytes.start
+                && span.bytes.end <= derived.span.end
+                && (span.bytes.end <= exact.span.start || span.bytes.start >= exact.span.end)
+        })
     };
     repairs.evidence.iter().all(exterior)
         && repairs.losses.len() == repairs.evidence.len()
         && repairs.losses.iter().all(|loss| {
-            loss.kind == LossKind::Data
+            let kind_matches = match loss.loss.evidence.rule.as_str() {
+                "tool_call.extract.prose" => loss.kind == LossKind::Data,
+                "tool_call.extract.fence" => loss.kind == LossKind::Markup,
+                _ => false,
+            };
+            kind_matches
                 && repairs.evidence.contains(&loss.loss.evidence)
                 && loss.loss.evidence.span.as_ref().is_some_and(|span| {
                     &output[span.bytes.clone()] == loss.loss.original.as_bytes()
                 })
         })
         && derived.reading.cost
-            == size(repairs.evidence.len()).saturating_mul(
-                rules::of_operator(crate::grammar::edit::EditOperator::ExtractProse).cost,
-            )
+            == repairs.evidence.iter().fold(0_u64, |cost, evidence| {
+                use crate::grammar::edit::EditOperator;
+                let operator = if evidence.rule == "tool_call.extract.fence" {
+                    EditOperator::ExtractFence
+                } else {
+                    EditOperator::ExtractProse
+                };
+                cost.saturating_add(rules::of_operator(operator).cost)
+            })
         && (derived.closure == exact.closure || !repairs.evidence.is_empty())
 }
 
@@ -3497,7 +3561,7 @@ fn native_json_dominates(
         if exact.reading.arguments != derived.reading.arguments {
             return Ok(false);
         }
-        if !only_exterior_prose(exact, derived, output) {
+        if !only_exterior_extraction(exact, derived, output) {
             return Ok(false);
         }
         let framing = array.then_some((!changed, exact_calls.peek().is_none()));
@@ -5179,7 +5243,9 @@ pub(crate) fn assign_ids(
 /// most body evidence (see [`Reading::body_evidence`]), the earliest on a tie: the member [`merge`] keeps
 /// among whole readings that differ only in this span.
 /// A proven projected JSON envelope also yields to its intact canonical
-/// native invocation sequence, except under strict tool-choice constraints.
+/// native invocation sequence. Within one derived grammar, equivalent optional
+/// whitespace framing has one maximal representative. Strict tool-choice
+/// constraints retain both kinds of alternatives.
 fn fold_options<'t>(
     options: &'t [Vec<ResolvedSegment>],
     output: &[u8],
@@ -5235,12 +5301,17 @@ fn fold_options<'t>(
             for index in 0..folds.len() {
                 if index != projected
                     && folds[index].1.attempts.is_empty()
-                    && native_json_dominates(
+                    && (projected_layout_dominates(
                         folds[index].1.segments,
                         folds[projected].1.segments,
                         output,
                         governor,
-                    )?
+                    )? || native_json_dominates(
+                        folds[index].1.segments,
+                        folds[projected].1.segments,
+                        output,
+                        governor,
+                    )?)
                 {
                     native = Some(index);
                     break;
@@ -5254,7 +5325,7 @@ fn fold_options<'t>(
             native -= usize::from(native > projected);
             // The proof established the same ordered source-anchored calls.
             // Both maps are in source order; attach each label only to its
-            // proven native invocation, retaining all native spans and ledgers.
+            // proven kept invocation, retaining its chosen spans and ledgers.
             for (dialects, candidates) in folds[native]
                 .1
                 .calls

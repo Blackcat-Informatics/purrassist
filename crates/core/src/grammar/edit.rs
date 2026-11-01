@@ -152,7 +152,7 @@
 //! assert_eq!(stray.id, "tool_call.markup.stray-closer");
 //! assert_eq!(stray.loss, Some(LossKind::Markup));
 //! assert!(!stray.guess && stray.repair);
-//! assert_eq!(OPERATORS.len(), 47);
+//! assert_eq!(OPERATORS.len(), 48);
 //! let framing = EditOperator::FramingNewline.rule();
 //! assert_eq!((framing.loss, framing.repair), (Some(LossKind::Markup), false));
 //! ```
