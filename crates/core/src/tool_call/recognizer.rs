@@ -2594,19 +2594,7 @@ impl Builder<'_> {
             let Some(region) = context else {
                 continue;
             };
-            let edit = MarkupEdit {
-                operator: EditOperator::ContextFencedExample,
-                span: region.clone(),
-                original: Vec::new(),
-                replacement: Vec::new(),
-            };
-            governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
-            let at = call
-                .edits
-                .iter()
-                .position(|other| other.span.start > region.start)
-                .unwrap_or(call.edits.len());
-            call.edits.insert(at, edit);
+            mark_example(call, region, governor)?;
         }
         Ok(())
     }
@@ -2908,6 +2896,28 @@ fn context_extraction(
             && capture.span.start < edit.span.end
             && edit.span.start < capture.span.end
     }))
+}
+
+/// Insert the same source-ordered contextual guess into one raw reading.
+fn mark_example(
+    call: &mut RawCall,
+    region: Range<usize>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let edit = MarkupEdit {
+        operator: EditOperator::ContextFencedExample,
+        span: region.clone(),
+        original: Vec::new(),
+        replacement: Vec::new(),
+    };
+    governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+    let at = call
+        .edits
+        .iter()
+        .position(|other| other.span.start > region.start)
+        .unwrap_or(call.edits.len());
+    call.edits.insert(at, edit);
+    Ok(())
 }
 
 fn push_merged(segments: &mut Vec<Segment>, segment: Segment) {
