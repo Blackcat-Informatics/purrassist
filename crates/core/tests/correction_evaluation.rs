@@ -564,15 +564,26 @@ fn diagnostic_reading(index: usize, calls: &ToolCalls) {
     }
 }
 
-/// At most 64 recoverable canonical misses, with bounded readings and fields.
+/// At most 64 recoverable misses in categories whose measured coverage changed.
 /// Returns the number reported, leaving every score and recovery unchanged.
-fn diagnostic_canonical_miss(
+fn diagnostic_recovery_miss(
     case: &Node,
     result: &AssistResult<ToolCalls>,
     missed: bool,
     reported: usize,
 ) -> usize {
-    if !missed || reported >= 64 || text_field(case, "category") != "canonical" {
+    let category = text_field(case, "category");
+    if !missed
+        || reported >= 64
+        || !matches!(
+            category,
+            "canonical"
+                | "json.syntax.trailing-comma"
+                | "tool_call.context.fenced-example"
+                | "tool_call.markup.missing-wrapper-close"
+                | "tool_call.markup.stray-closer"
+        )
+    {
         return 0;
     }
     let id = text_field(case, "id");
@@ -584,7 +595,7 @@ fn diagnostic_canonical_miss(
         StopReason::InvalidInput(_) => "invalid_input".to_owned(),
     };
     eprintln!(
-        "canonical-abstention: id={:?} printed_family={:?} allowlist={:?} policy={:?} stop={:?} termination={stopped}",
+        "recovery-abstention: category={category:?} id={:?} printed_family={:?} allowlist={:?} policy={:?} stop={:?} termination={stopped}",
         diagnostic_field(id, 192),
         diagnostic_field(id.split('/').next().unwrap_or(id), 96),
         diagnostic_field(text_field(case, "dialect"), 1024),
@@ -653,7 +664,7 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
         unresolved_truth: 0,
         unresolved_abstained: 0,
     };
-    let mut canonical_misses_reported = 0;
+    let mut recovery_misses_reported = 0;
     for case in &cases {
         let (request, dialects) = tool_call_corpus::request(case);
         let set = tool_call_corpus::tools_for(case, &tools, &adapter);
@@ -687,11 +698,11 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
             Outcome::Ambiguous(_) | Outcome::Unresolved => None,
         };
         let truth = tool_call_truth(case);
-        canonical_misses_reported += diagnostic_canonical_miss(
+        recovery_misses_reported += diagnostic_recovery_miss(
             case,
             &result,
             answer.is_none() && truth.as_ref().is_some_and(|calls| !calls.is_empty()),
-            canonical_misses_reported,
+            recovery_misses_reported,
         );
         let mut tally = Tally::default();
         match (&answer, &truth) {
