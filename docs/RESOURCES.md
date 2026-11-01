@@ -912,6 +912,18 @@ admitted work. A governor or capture refusal stops admission at its original
 cause; a semantic request error stops interpretation while admitted source
 capture can continue.
 
+Codec context keeps one positive oldest-name query in the shared history
+arena's fallible scratch vector. A later context query can stop at that exact
+immutable ancestor instead of rescanning earlier parameter history. Every
+visited node and memo comparison admits Work; only positive Link-free queries
+are retained. A mutable Link disables reuse below it and prevents caching the
+query. Pack follows only its `prev` path, as in the original context walk.
+Root and Next still bound the current call. Arena reset clears the memo before
+history IDs are reused; its retained capacity releases with the arena. Tool
+lookup and codec markup remain specific to the current caller and grammar.
+This changes charged computation without claiming measured completion under
+any budget.
+
 Pythonic's finite-state framing and canonical decimal literal path scan
 linearly. Converting a binary, octal or hexadecimal integer with `n` digits
 to exact decimal uses O(n²) digit work, admitted before each multiplication
