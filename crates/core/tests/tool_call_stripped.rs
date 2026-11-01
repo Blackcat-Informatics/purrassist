@@ -310,9 +310,29 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
                 .all(|call| call.outcome != purrassist_core::tool_call::CallOutcome::Resolved)
         );
     }
-    let fenced = format!("```json\n{array}\n```");
+    let prefaced = format!("\nFor example:\n```json\n{input}\n```\n");
+    let (turn, _) = recognize(&prefaced, DialectId::HermesStripped);
+    assert!(!turn.calls().is_empty());
+    for call in turn.calls() {
+        for reading in &call.readings {
+            assert!(
+                reading
+                    .edits
+                    .iter()
+                    .any(|edit| edit.operator == EditOperator::ContextFencedExample),
+                "{reading:?}"
+            );
+        }
+    }
+    for fenced in [format!("```json\n{array}\n```"), prefaced] {
+        assert_fenced_calls_not_usable(&fenced);
+    }
+}
+
+/// Exterior framing cannot turn a possible example into a usable call.
+fn assert_fenced_calls_not_usable(input: &str) {
     let result = tools().recover(
-        fenced.as_bytes(),
+        input.as_bytes(),
         &ToolRecoveryRequest::default(),
         DialectSet::built_in(),
     );

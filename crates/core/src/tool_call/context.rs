@@ -233,12 +233,7 @@ impl ContextTracker {
         let mut blocks = Vec::new();
         let mut open: Option<&FenceLine> = None;
         for line in &self.fences {
-            let position = if self.protocols {
-                line.marker
-            } else {
-                line.start
-            };
-            if line.indent > 3 || inside(excluded, position) {
+            if line.indent > 3 || inside(excluded, line.marker) {
                 continue;
             }
             match open {
@@ -293,11 +288,7 @@ impl ContextTracker {
                     .protocol
                     .push(ProtocolRegion(prior.start..line.start))?;
             }
-            let position = if self.protocols {
-                line.marker
-            } else {
-                line.start
-            };
+            let position = line.marker;
             while let Some(call) = calls.get(next).filter(|call| call.start <= position) {
                 if protocol.is_none() && open.is_none_or(|fence| call.start < fence.start) {
                     protected_end = protected_end.max(call.end);

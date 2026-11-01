@@ -2456,32 +2456,38 @@ impl Builder<'_> {
             reasoning.embedded = embedded;
             return Ok(());
         }
-        let span = segment.span();
-        if !self
-            .context
-            .strict_example(&span, fenced, inline, governor)?
-        {
-            return Ok(());
-        }
         match segment {
             Segment::Call(call) | Segment::Result(call) => {
                 let mut index = 0;
-                call.readings.retain(|reading| {
-                    let keep = !reading.dialect.grammar().examples_content();
-                    if !keep && index < call.derivations.len() {
-                        call.derivations.remove(index);
-                    }
-                    if keep {
+                while index < call.readings.len() {
+                    let reading = &call.readings[index];
+                    let suppress = if reading.dialect.grammar().examples_content() {
+                        let span = retained_context(reading, governor)?;
+                        self.context
+                            .strict_example(&span, fenced, inline, governor)?
+                    } else {
+                        false
+                    };
+                    if suppress {
+                        call.readings.remove(index);
+                        if index < call.derivations.len() {
+                            call.derivations.remove(index);
+                        }
+                    } else {
                         index += 1;
                     }
-                    keep
-                });
+                }
                 if call.readings.is_empty() {
-                    *segment = Segment::Content(span);
+                    *segment = Segment::Content(call.span.clone());
                 }
             }
-            Segment::Rejected { dialect, .. } if dialect.grammar().examples_content() => {
-                *segment = Segment::Content(span);
+            Segment::Rejected { dialect, span, .. }
+                if dialect.grammar().examples_content()
+                    && self
+                        .context
+                        .strict_example(span, fenced, inline, governor)? =>
+            {
+                *segment = Segment::Content(span.clone());
             }
             Segment::Content(_) | Segment::Reasoning(_) | Segment::Rejected { .. } => {}
         }
@@ -2507,7 +2513,9 @@ impl Builder<'_> {
         let mut excluded = Vec::new();
         for (index, segment) in reading.iter().enumerate() {
             match segment {
-                Segment::Call(call) | Segment::Result(call) => excluded.push(call.span.clone()),
+                Segment::Call(call) | Segment::Result(call) => {
+                    excluded.push(retained_context(&call.readings[0], governor)?);
+                }
                 // A rejected attempt's bytes are call markup, not prose: a
                 // fence inside it opens no fenced block. With the whole
                 // output, its markup extends as recovery reads it.
@@ -2559,15 +2567,15 @@ impl Builder<'_> {
             }
         }
         let excluded = merged;
-        let mut calls: Vec<&mut CallSegment> = Vec::new();
+        let mut calls: Vec<&mut RawCall> = Vec::new();
         for piece in pieces.iter_mut() {
             match piece {
-                Piece::Segment(Segment::Call(call)) => calls.push(call),
+                Piece::Segment(Segment::Call(call)) => calls.extend(&mut call.readings),
                 Piece::Choice(choice) => {
                     for reading in &mut choice.readings {
                         for segment in reading {
                             if let Segment::Call(call) = segment {
-                                calls.push(call);
+                                calls.extend(&mut call.readings);
                             }
                         }
                     }
@@ -2575,7 +2583,10 @@ impl Builder<'_> {
                 Piece::Segment(_) => {}
             }
         }
-        let spans: Vec<Range<usize>> = calls.iter().map(|call| call.span.clone()).collect();
+        let mut spans = Vec::with_capacity(calls.len());
+        for call in &calls {
+            spans.push(retained_context(call, governor)?);
+        }
         let contexts = self
             .context
             .examples(&spans, &excluded, self.len, governor)?;
@@ -2583,21 +2594,19 @@ impl Builder<'_> {
             let Some(region) = context else {
                 continue;
             };
-            for reading in &mut call.readings {
-                let edit = MarkupEdit {
-                    operator: EditOperator::ContextFencedExample,
-                    span: region.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                };
-                governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
-                let at = reading
-                    .edits
-                    .iter()
-                    .position(|other| other.span.start > region.start)
-                    .unwrap_or(reading.edits.len());
-                reading.edits.insert(at, edit);
-            }
+            let edit = MarkupEdit {
+                operator: EditOperator::ContextFencedExample,
+                span: region.clone(),
+                original: Vec::new(),
+                replacement: Vec::new(),
+            };
+            governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+            let at = call
+                .edits
+                .iter()
+                .position(|other| other.span.start > region.start)
+                .unwrap_or(call.edits.len());
+            call.edits.insert(at, edit);
         }
         Ok(())
     }
@@ -2831,10 +2840,15 @@ fn example_call(
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     governor.charge(Resource::Work, size(call.readings.len()))?;
-    governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
-    spans.push(call.span.clone());
     let mut own_fence = false;
+    let mut previous = None;
     for reading in &call.readings {
+        let span = retained_context(reading, governor)?;
+        if previous.as_ref() != Some(&span) {
+            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+            spans.push(span.clone());
+            previous = Some(span);
+        }
         let grammar = reading.dialect.grammar();
         *applicable |= grammar.examples_content();
         own_fence |= grammar.protocol_fences();
@@ -2843,6 +2857,57 @@ fn example_call(
         protocol.push(call.span.start)?;
     }
     Ok(())
+}
+
+/// Only exterior extraction can move a context boundary. An enclosing native
+/// protocol still protects every interior byte, including dropped fence text.
+/// Source spans provide identical geometry with or without the whole input.
+fn retained_context(
+    reading: &RawCall,
+    governor: &mut Governor,
+) -> Result<Range<usize>, StopReason> {
+    let mut span = reading.span.clone();
+    for edit in &reading.edits {
+        governor.charge(Resource::Work, 1)?;
+        if edit.span.start == span.start
+            && edit.span.end <= span.end
+            && context_extraction(reading, edit, governor)?
+        {
+            span.start = edit.span.end;
+        }
+    }
+    for edit in reading.edits.iter().rev() {
+        governor.charge(Resource::Work, 1)?;
+        if edit.span.end == span.end
+            && edit.span.start >= span.start
+            && context_extraction(reading, edit, governor)?
+        {
+            span.end = edit.span.start;
+        }
+    }
+    Ok(span)
+}
+
+/// Retained capture bytes cannot be removed from Markdown protection.
+fn context_extraction(
+    reading: &RawCall,
+    edit: &MarkupEdit,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if edit.span.is_empty()
+        || !matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        )
+    {
+        return Ok(false);
+    }
+    governor.charge(Resource::Work, size(reading.captures.len()))?;
+    Ok(!reading.captures.iter().any(|capture| {
+        capture.kind != crate::grammar::CaptureKind::Dropped
+            && capture.span.start < edit.span.end
+            && edit.span.start < capture.span.end
+    }))
 }
 
 fn push_merged(segments: &mut Vec<Segment>, segment: Segment) {

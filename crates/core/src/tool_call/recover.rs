@@ -3389,7 +3389,105 @@ fn canonical_native_json(call: &ResolvedCall) -> bool {
         && call.reading.repairs.inferences.is_empty()
 }
 
-fn same_projected_json_invocation(exact: &ResolvedCall, derived: &ResolvedCall) -> bool {
+const FENCED_EXAMPLE_RULE: &str = "tool_call.context.fenced-example";
+
+/// A context guess remains a context guess when its outer framing changes.
+/// Other repairs, argument refusals and inferred values cannot enter this case.
+fn contextual_native_json(
+    call: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let ledger = &call.reading.repairs;
+    if call.dialect != DialectId::BareJson
+        || call.closure != Closure::Closed
+        || call.competing != 1
+        || !call.alternatives.is_empty()
+        || !call.distinguishing.is_empty()
+        || call.reading.cost != 0
+        || call.reading.blocker.is_some()
+        || call.reading.tool.is_none()
+        || call.reading.effects.is_none()
+        || call.reading.policy.is_none()
+        || ledger.evidence.len() != 1
+        || ledger.inferences.len() != 1
+        || !ledger.losses.is_empty()
+    {
+        return Ok(false);
+    }
+    governor.charge(Resource::Work, ledger_bytes(ledger).saturating_mul(2))?;
+    let evidence = &ledger.evidence[0];
+    let inference = &ledger.inferences[0];
+    let outcome = match &call.outcome {
+        CallOutcome::BestGuess => true,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::RuleNotAdmitted { rule, policy },
+        } => rule == FENCED_EXAMPLE_RULE && Some(*policy) == call.reading.policy,
+        _ => false,
+    };
+    Ok(outcome
+        && evidence.rule == FENCED_EXAMPLE_RULE
+        && evidence
+            .span
+            .as_ref()
+            .is_some_and(|span| span.bytes.contains(&call.span.start))
+        && context_destination(evidence, &call.span)
+        && inference.evidence == *evidence
+        && inference.kind == InferenceKind::Guess
+        && inference.value.is_empty())
+}
+
+/// Accept exactly the canonical frame destination produced by `edit_entries`.
+fn context_destination(evidence: &Evidence, span: &Range<usize>) -> bool {
+    fn coordinate(text: &str, expected: usize) -> bool {
+        !text.is_empty()
+            && (text.len() == 1 || !text.starts_with('0'))
+            && text.bytes().all(|byte| byte.is_ascii_digit())
+            && text.parse::<usize>() == Ok(expected)
+    }
+    evidence
+        .destination
+        .strip_prefix("/turn/")
+        .and_then(|range| range.split_once(".."))
+        .is_some_and(|(start, end)| coordinate(start, span.start) && coordinate(end, span.end))
+}
+
+/// Match complete contextual provenance, allowing only its proven frame address
+/// to differ. The kept native record is never rewritten or reclassified.
+fn same_context_guess(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let left = &exact.reading.repairs;
+    let right = &derived.reading.repairs;
+    governor.charge(Resource::Work, right.entries())?;
+    governor.charge(Resource::Work, ledger_bytes(right).saturating_mul(2))?;
+    if right.inferences.len() != 1 {
+        return Ok(false);
+    }
+    let mut contexts = right
+        .evidence
+        .iter()
+        .filter(|entry| entry.rule == FENCED_EXAMPLE_RULE);
+    let Some(evidence) = contexts.next() else {
+        return Ok(false);
+    };
+    let inference = &right.inferences[0];
+    let original = &left.evidence[0];
+    Ok(contexts.next().is_none()
+        && evidence.explanation == original.explanation
+        && evidence.span == original.span
+        && context_destination(evidence, &derived.span)
+        && inference.evidence == *evidence
+        && inference.kind == left.inferences[0].kind
+        && inference.value == left.inferences[0].value)
+}
+
+fn same_projected_json_invocation(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    contextual: bool,
+) -> bool {
     exact.order == derived.order
         && exact.id == derived.id
         && exact.name == derived.name
@@ -3401,16 +3499,31 @@ fn same_projected_json_invocation(exact: &ResolvedCall, derived: &ResolvedCall) 
         && derived.competing == 1
         && derived.alternatives.is_empty()
         && derived.distinguishing.is_empty()
-        && matches!(
-            derived.outcome,
-            CallOutcome::Resolved | CallOutcome::BestGuess
-        )
+        && if contextual {
+            derived.outcome == exact.outcome
+        } else {
+            matches!(
+                derived.outcome,
+                CallOutcome::Resolved | CallOutcome::BestGuess
+            )
+        }
         && matches!(derived.closure, Closure::Closed | Closure::Repaired)
-        && derived.reading.repairs.inferences.is_empty()
+        && (contextual || derived.reading.repairs.inferences.is_empty())
 }
 
-fn only_exterior_extraction(exact: &ResolvedCall, derived: &ResolvedCall, output: &[u8]) -> bool {
+fn only_exterior_extraction(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    output: &[u8],
+    contextual: bool,
+) -> bool {
     let repairs = &derived.reading.repairs;
+    let extraction_evidence = || {
+        repairs
+            .evidence
+            .iter()
+            .filter(|evidence| !contextual || evidence.rule != FENCED_EXAMPLE_RULE)
+    };
     let exterior = |evidence: &Evidence| {
         matches!(
             evidence.rule.as_str(),
@@ -3421,8 +3534,8 @@ fn only_exterior_extraction(exact: &ResolvedCall, derived: &ResolvedCall, output
                 && (span.bytes.end <= exact.span.start || span.bytes.start >= exact.span.end)
         })
     };
-    repairs.evidence.iter().all(exterior)
-        && repairs.losses.len() == repairs.evidence.len()
+    extraction_evidence().all(exterior)
+        && repairs.losses.len() == extraction_evidence().count()
         && repairs.losses.iter().all(|loss| {
             let kind_matches = match loss.loss.evidence.rule.as_str() {
                 "tool_call.extract.prose" => loss.kind == LossKind::Data,
@@ -3436,7 +3549,7 @@ fn only_exterior_extraction(exact: &ResolvedCall, derived: &ResolvedCall, output
                 })
         })
         && derived.reading.cost
-            == repairs.evidence.iter().fold(0_u64, |cost, evidence| {
+            == extraction_evidence().fold(exact.reading.cost, |cost, evidence| {
                 use crate::grammar::edit::EditOperator;
                 let operator = if evidence.rule == "tool_call.extract.fence" {
                     EditOperator::ExtractFence
@@ -3520,7 +3633,8 @@ fn native_json_dominates(
         let Some(derived) = projected_calls.next() else {
             return Ok(false);
         };
-        if !canonical_native_json(exact) {
+        let contextual = !canonical_native_json(exact);
+        if contextual && !contextual_native_json(exact, governor)? {
             return Ok(false);
         }
         if same_call(exact, derived) {
@@ -3541,7 +3655,7 @@ fn native_json_dominates(
             || derived.span.start > exact.span.start
             || derived.span.end < exact.span.end
             || derived.span.end > next_start
-            || !same_projected_json_invocation(exact, derived)
+            || !same_projected_json_invocation(exact, derived, contextual)
         {
             return Ok(false);
         }
@@ -3561,7 +3675,10 @@ fn native_json_dominates(
         if exact.reading.arguments != derived.reading.arguments {
             return Ok(false);
         }
-        if !only_exterior_extraction(exact, derived, output) {
+        if contextual && !same_context_guess(exact, derived, governor)? {
+            return Ok(false);
+        }
+        if !only_exterior_extraction(exact, derived, output, contextual) {
             return Ok(false);
         }
         let framing = array.then_some((!changed, exact_calls.peek().is_none()));
