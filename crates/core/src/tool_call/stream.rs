@@ -240,7 +240,7 @@ impl StreamEvent {
                 push_scratch(&mut dialects, dialect, governor)?;
             }
         }
-        let levels = usize::BITS - dialects.len().leading_zeros() + 1;
+        let levels = dialects.len().bit_width() + 1;
         governor.charge(
             Resource::Work,
             size(dialects.len())
@@ -480,7 +480,7 @@ impl ScratchCharge for EditFact {
 const _: () = assert!(core::mem::size_of::<EditFact>() <= EditFact::CHARGE);
 
 impl EditFact {
-    fn key(&self) -> (usize, usize, EditOperator, usize, usize) {
+    const fn key(&self) -> (usize, usize, EditOperator, usize, usize) {
         (
             self.call_start,
             self.call_end,
@@ -654,7 +654,7 @@ impl EventCursor {
                 }
             }
         }
-        let levels = usize::BITS - self.arguments.len().leading_zeros() + 1;
+        let levels = self.arguments.len().bit_width() + 1;
         governor.charge(
             Resource::Work,
             size(self.arguments.len()).saturating_mul(u64::from(levels)),
@@ -662,7 +662,7 @@ impl EventCursor {
         self.arguments
             .as_mut_slice()
             .sort_unstable_by_key(|fact| (fact.start, fact.end));
-        let levels = usize::BITS - self.edits.len().leading_zeros() + 1;
+        let levels = self.edits.len().bit_width() + 1;
         governor.charge(
             Resource::Work,
             size(self.edits.len())
@@ -832,7 +832,7 @@ impl EventCursor {
                 span.bytes.start,
                 span.bytes.end,
             );
-            let levels = usize::BITS - self.edits.len().leading_zeros() + 1;
+            let levels = self.edits.len().bit_width() + 1;
             governor.charge(Resource::Work, u64::from(levels).saturating_mul(5))?;
             let first = self.edits.partition_point(|edit| edit.key() < key);
             let Some(edit) = self.edits.as_slice().get(first) else {
@@ -869,7 +869,7 @@ impl EventCursor {
         governor: &mut Governor,
     ) -> Result<Option<Range<usize>>, StopReason> {
         let key = (span.start, span.end);
-        let levels = usize::BITS - self.arguments.len().leading_zeros() + 1;
+        let levels = self.arguments.len().bit_width() + 1;
         governor.charge(Resource::Work, u64::from(levels))?;
         let first = self
             .arguments
@@ -908,7 +908,7 @@ fn parameters(
         longest = longest.max(member.key.len());
         push_scratch(&mut ordered, (position, member.key.as_str()), governor)?;
     }
-    let levels = usize::BITS - ordered.len().leading_zeros() + 1;
+    let levels = ordered.len().bit_width() + 1;
     governor.charge(
         Resource::Work,
         size(ordered.len())
@@ -917,7 +917,7 @@ fn parameters(
     )?;
     ordered
         .as_mut_slice()
-        .sort_unstable_by(|(_, left), (_, right)| left.cmp(right));
+        .sort_unstable_by_key(|(_, left)| *left);
     for (at, &(position, name)) in ordered.iter().enumerate() {
         governor.charge(
             Resource::Work,
@@ -961,7 +961,7 @@ fn unique_name<'t>(
     governor: &mut Governor,
 ) -> Result<Option<&'t str>, StopReason> {
     let mut common = None;
-    let levels = usize::BITS - tools.name_index_len().leading_zeros() + 1;
+    let levels = tools.name_index_len().bit_width() + 1;
     for raw in &call.readings {
         let Some(name) = &raw.name else {
             return Ok(None);

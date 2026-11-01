@@ -819,7 +819,7 @@ impl ToolSet {
 
     /// Cardinality of the canonical-name and alias index searched by
     /// `lookup_exact`, for admission of its logarithmic comparison work.
-    pub(crate) fn name_index_len(&self) -> usize {
+    pub(crate) const fn name_index_len(&self) -> usize {
         self.index.len()
     }
 

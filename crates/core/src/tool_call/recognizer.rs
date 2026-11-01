@@ -190,11 +190,11 @@ const PENDING_ORIGIN_BYTES: u64 = 256;
 /// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
 /// proving semantic equivalence and the longest stable prefix remains separate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ContinuationFrontier {
-    pub(crate) prefix_end: usize,
-    pub(crate) content: Option<(usize, usize)>,
+pub(super) struct ContinuationFrontier {
+    pub(super) prefix_end: usize,
+    pub(super) content: Option<(usize, usize)>,
     /// Conservative ownership barrier, not the D7 candidate-byte count.
-    pub(crate) blocked_from: Option<usize>,
+    pub(super) blocked_from: Option<usize>,
 }
 
 /// One next node of the structurally shared native history. Source content has
@@ -410,12 +410,12 @@ impl Turn {
         while left != right {
             governor.charge(Resource::Work, K_CAPTURE)?;
             let (a, b) = (self.nodes[left as usize], self.nodes[right as usize]);
-            if a.jump != b.jump {
-                left = a.jump;
-                right = b.jump;
-            } else {
+            if a.jump == b.jump {
                 left = a.prev;
                 right = b.prev;
+            } else {
+                left = a.jump;
+                right = b.jump;
             }
         }
         Ok(left)
@@ -1260,7 +1260,7 @@ impl<'s> Recognizer<'s> {
         self.engine.fed()
     }
 
-    pub(crate) const fn continuation_frontier(&self) -> ContinuationFrontier {
+    pub(super) const fn continuation_frontier(&self) -> ContinuationFrontier {
         self.frontier
     }
 
@@ -1360,7 +1360,7 @@ impl<'s> Recognizer<'s> {
             for interpretation in interpretations {
                 match interpretation {
                     Interp::Top(base) => {
-                        self.turn.include_plain(&mut common, base.hist, governor)?
+                        self.turn.include_plain(&mut common, base.hist, governor)?;
                     }
                     Interp::Embedded(start) => {
                         barrier = Some(barrier.map_or(*start, |known| known.min(*start)));
@@ -1386,8 +1386,7 @@ impl<'s> Recognizer<'s> {
             .turn
             .prefix_before(common.unwrap_or(0), limit, governor)?;
         self.settled_history = node;
-        let mut prefix_end = content.map_or(self.turn.nodes[node as usize].end, |(_, end)| end);
-        if let Some(top) = self.turn.top
+        let prefix_end = if let Some(top) = self.turn.top
             && self.turn.think.is_none()
             && self.turn.interps.is_empty()
             && node == top.hist
@@ -1395,8 +1394,10 @@ impl<'s> Recognizer<'s> {
             && top.boundary < limit
         {
             content = Some((top.boundary, limit));
-            prefix_end = limit;
-        }
+            limit
+        } else {
+            content.map_or(self.turn.nodes[node as usize].end, |(_, end)| end)
+        };
         self.frontier = ContinuationFrontier {
             prefix_end,
             content,
@@ -1492,7 +1493,7 @@ impl<'s> Recognizer<'s> {
     /// minimum refresh. A node search compares at most 11 keys per level;
     /// binary height bounds conservatively cover the native B-tree's height.
     fn admit_source_index(&self, governor: &mut Governor) -> Result<(), StopReason> {
-        let levels = usize::BITS - self.pending_sources.len().leading_zeros() + 1;
+        let levels = self.pending_sources.len().bit_width() + 1;
         governor.charge(Resource::Work, u64::from(levels).saturating_mul(33))
     }
 

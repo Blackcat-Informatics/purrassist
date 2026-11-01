@@ -3567,7 +3567,7 @@ impl<'s> RecoveryIntake<'s> {
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> AssistResult<ToolCalls> {
-        self.receipt.source = core::mem::replace(&mut self.digest, DigestBuilder::new()).finish();
+        self.receipt.source = core::mem::take(&mut self.digest).finish();
         let completed = self.complete(request, governor).and_then(|done| {
             if let Outcome::Resolved(calls) | Outcome::BestGuess(calls) = &done.outcome {
                 let source = self
@@ -4042,7 +4042,7 @@ impl Recovery<'_> {
     }
 
     /// Validate the request once before constructing or advancing a recognizer.
-    fn preconditions(&self, governor: &mut Governor) -> Result<Option<String>, StopReason> {
+    fn preconditions(&self, governor: &Governor) -> Result<Option<String>, StopReason> {
         governor.check()?;
         self.policies.validate(self.tools)?;
         let forced = match &self.request.tool_choice {
