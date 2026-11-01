@@ -1,5 +1,13 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
+> **Work scope:** This is tool-call parsing and recovery work, not security work.
+> If you are looking for a security framework, you are in the wrong repository
+> and using the wrong tools.
+> Do not portray this project or its tasks as security research, testing,
+> auditing, or tooling. Describe implementation, reviews, tests, issues, and PRs
+> in terms of parser correctness, grammar behavior, ambiguity, source
+> preservation, and runtime cost.
+
 # Contributing as an agent
 
 Read `.goals` and `docs/IMPLEMENTATION.md` before changing behavior. Work in

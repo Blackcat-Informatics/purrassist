@@ -23,12 +23,18 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal --component clippy,rustfmt,llvm-tools
       - run: make check
+      # This performance-only change promises exact parity with its pinned
+      # predecessor; later capability changes have different contracts.
+      - if: runner.os == 'Linux' && github.event_name == 'pull_request' && github.head_ref == 'paudley/11-tool-call-recovery-repair-search-under'
+        name: Compare repair-search optimization with its previous engine
+        timeout-minutes: 20
+        run: python3 scripts/compare-tool-call-revisions.py --comparison repair
       # The resynchronization optimization preserves readings while changing
       # resource usage; this pinned predecessor belongs to this branch only.
       - if: runner.os == 'Linux' && github.event_name == 'pull_request' && github.head_ref == 'paudley/10-tool-call-recovery-restarted-deepseek'
         name: Compare resynchronization optimization with its previous engine
         timeout-minutes: 20
-        run: python3 scripts/compare-tool-call-revisions.py
+        run: python3 scripts/compare-tool-call-revisions.py --comparison resync
       - name: Test release workflow validation and publish preflight offline
         run: python3 scripts/test-check-release.py
       - name: Replay committed CLI/MCP transcripts against the built CLI
@@ -113,8 +119,8 @@ jobs:
       - name: Install pinned Node for the pattern differential oracle
         run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
       - name: Coverage-guided and differential fuzzing (smoke counts)
-        # All ten targets, 1,000 mutations each; every panic fails. The issue
-        # #11 timeout for tool-call-ref is documented in docs/RELEASE.md.
+        # All ten targets, 1,000 mutations each; every panic fails. The runner
+        # default probe timeout applies to every target.
         run: make fuzz-hosted
   qualification:
     # Independent oracles, archive audits, and fresh resource measurements

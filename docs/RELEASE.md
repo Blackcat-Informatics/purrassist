@@ -287,10 +287,10 @@ For the exact `main` commit to be tagged:
    conformance, syntax-oracle, fuzz, performance, and package checks listed
    in `QUALIFICATION.md`. Every job must pass. The hosted `fuzz` job runs
    `make fuzz-hosted`: all ten targets at the smoke count, stopping at every
-   probe panic, with `tool-call-ref` using the 120 s probe timeout for the
-   issue #11 slow input ([FUZZING.md](FUZZING.md#known-limitations)). Before
-   tagging, run `make fuzz-hosted` locally on the same commit. The default
-   `make fuzz` retains its default timeout and can stop on that slow input.
+   probe panic and using the default 10 s probe timeout for every target,
+   including the exact issue #11 request. Before tagging, run
+   `make fuzz-hosted` locally on the same commit. The default `make fuzz`
+   uses that same per-probe timeout.
 3. Re-confirm all six trusted publishers through the crates.io API (see
    "Trusted publishing"); each must still match the values recorded there.
 4. Tag `rust-vVERSION`. Tagging requires explicit authorization, because

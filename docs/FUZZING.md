@@ -892,8 +892,8 @@ are not comparable coverage percentages across toolchain versions.
 
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
 runs): `make fuzz-hosted` runs the corpus-feedback test once and all ten
-targets with the runner's default 1,000 mutations each, passing
-`--timeout 120` to `tool-call-ref` (see "Known slow input (issue #11)").
+targets with the runner's default 1,000 mutations each and default 10 s
+probe timeout, including `tool-call-ref` and its exact issue #11 request.
 Every probe panic stops the campaign. `TARGET` and `FUZZ_ARGS`
 apply only to a selected-target invocation. **Qualification** (evidence committed under `docs/qualification/`): 10,000
 iterations for each target that has a recorded baseline, matching the sample size
@@ -918,7 +918,7 @@ add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
 provide separate final-integration evidence; hosted smoke (`make fuzz-hosted`)
 must execute 1,000 mutations for each of all ten targets, failing on every
-probe panic and giving `tool-call-ref` the 120 s timeout below for issue #11.
+probe panic and applying the default 10 s probe timeout to every target.
 
 ### Replaying coverage evidence
 
@@ -950,15 +950,25 @@ its executions reach none of them, which is why `tool-call-ref` exists.
 
 ### Known slow input (issue #11)
 
+The current grammar repair search carries cost in its internal proposal ledger
+and keeps actual provenance in the original parser history. It no longer clones
+throwaway evidence for every successor, shares one lazily computed successor
+digest within each replay, and borrows pending bytes while computing repair
+eligibility. The exact issue
+reproduction is appended to `tool-call-ref` seeds under standard and deep sized
+budgets and with its original four-byte probe prefix, preserving earlier
+seed/header associations. The hosted timeout exception is removed; current
+default-timeout and performance evidence remains pending automatic CI. The measurements below are
+historical observations of the earlier implementation.
+
 The recorded `tool-call-ref` campaign at the default seed reached, at execution 682, a
 192-byte turn (free-form-object items with mutated closers) on which the repair
 search spends about 240 to 280 ns per charged work unit, several times the
 ordinary rate. With the probe's request it takes about 5 s in a release build,
-on `main`, so under the coverage build it exceeds the default
-10 s `--timeout` and `make fuzz` fails there. Under the CLI and MCP sized budget
-the same turn ends explicitly (`BudgetExceeded`) in 0.3 s. Issue #11 tracks the
-fix. Until then, run `tool-call-ref` campaigns with a larger `--timeout`; the #8
-campaign used `--timeout 120`.
+on the earlier `main`, so under that coverage build it exceeded the default
+10 s `--timeout` and stopped `make fuzz`. Under the CLI and MCP sized budget
+the same turn ended explicitly (`BudgetExceeded`) in 0.3 s. The historical #8
+campaign used `--timeout 120`; that exception is not part of the current gate.
 
 ### Recorded 10,000-mutation baselines
 
