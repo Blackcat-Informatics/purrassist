@@ -1445,13 +1445,15 @@ impl<'s> Step<'_, 's> {
             unreachable!("class configurations only")
         };
         let pos = thread.pos;
-        let literal_boundary = if self.program.name_followers.is_empty() {
+        let literal_boundary = if self.program.name_follower_index.is_empty() {
             false
         } else {
-            governor.charge(Resource::Work, size(self.program.name_followers.len()))?;
-            self.program.name_followers.iter().any(|&(pc, lit)| {
-                pc == thread.pc && self.grammar.literals[lit as usize].bytes.first() == Some(&byte)
-            })
+            governor.charge(Resource::Work, 1)?;
+            let row = self.program.name_follower_index[thread.pc as usize];
+            row != u32::MAX
+                && self.program.name_follower_bytes[row as usize + usize::from(byte >> 6)]
+                    & (1 << (byte & 63))
+                    != 0
         };
         let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;

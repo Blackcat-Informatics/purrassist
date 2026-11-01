@@ -95,9 +95,12 @@ pub(crate) struct Program {
     /// Retained evidence may establish those commits, never a sibling's
     /// pre-commit location. Surviving native commits remain authoritative.
     pub(crate) projected_entry_commit: ScratchVec<bool>,
-    /// Retained literals directly after a projected maximal name class.
-    /// The original class reading remains beside these native continuations.
-    pub(crate) name_followers: ScratchVec<(u32, u32)>,
+    /// Per-PC offsets into `name_follower_bytes`, or `u32::MAX` for no row.
+    /// Empty when no projected name class has a retained literal follower.
+    pub(crate) name_follower_index: ScratchVec<u32>,
+    /// Four-word first-byte masks of retained literals after projected name
+    /// classes. The original class reading remains beside these continuations.
+    pub(crate) name_follower_bytes: ScratchVec<u64>,
     pub(crate) origin: GrammarOrigin,
     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
     pub(crate) first: [u64; 4],
@@ -1465,18 +1468,21 @@ fn split_keys(
 
 struct ProjectedControls {
     entry_commit: ScratchVec<bool>,
-    name_followers: ScratchVec<(u32, u32)>,
+    name_follower_index: ScratchVec<u32>,
+    name_follower_bytes: ScratchVec<u64>,
 }
 
 fn projected_controls(
     insts: &mut ScratchVec<Inst>,
     start: u32,
     derived: bool,
+    literals: &[Literal],
     governor: &mut Governor,
 ) -> Result<ProjectedControls, GrammarError> {
     let mut controls = ProjectedControls {
         entry_commit: ScratchVec::new(governor),
-        name_followers: ScratchVec::new(governor),
+        name_follower_index: ScratchVec::new(governor),
+        name_follower_bytes: ScratchVec::new(governor),
     };
     if !derived {
         return Ok(controls);
@@ -1527,12 +1533,30 @@ fn projected_controls(
             continue;
         }
         for &follower in &epsilon_closure(insts, next, governor)? {
+            governor.charge(Resource::Work, 1)?;
             if let Inst::Lit { lit, .. } = insts[follower as usize] {
-                crate::contract::push_scratch(
-                    &mut controls.name_followers,
-                    (index_u32(pc), lit),
-                    governor,
-                )?;
+                let Some(&byte) = literals[lit as usize].bytes.first() else {
+                    continue;
+                };
+                if controls.name_follower_index.is_empty() {
+                    work_for(insts.len(), 1, 1, governor)?;
+                    controls
+                        .name_follower_index
+                        .extend(core::iter::repeat_n(u32::MAX, insts.len()))?;
+                }
+                let row = &mut controls.name_follower_index.as_mut_slice()[pc];
+                if *row == u32::MAX {
+                    let offset = u32::try_from(controls.name_follower_bytes.len())
+                        .ok()
+                        .filter(|offset| offset.checked_add(3).is_some())
+                        .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+                    governor.charge(Resource::Work, 4)?;
+                    controls.name_follower_bytes.extend([0; 4])?;
+                    *row = offset;
+                }
+                governor.charge(Resource::Work, 1)?;
+                controls.name_follower_bytes.as_mut_slice()
+                    [*row as usize + usize::from(byte >> 6)] |= 1 << (byte & 63);
             }
         }
     }
@@ -1565,7 +1589,8 @@ fn compile_program(
         };
         *lit = copy;
     }
-    let controls = projected_controls(&mut insts, start, tables.derived, governor)?;
+    let controls =
+        projected_controls(&mut insts, start, tables.derived, tables.literals, governor)?;
     let openers = epsilon_closure(&insts, start, governor)?;
     let mut first = [0_u64; 4];
     for &pc in &openers {
@@ -1616,7 +1641,8 @@ fn compile_program(
         protocol: None,
         argument_anchor: tables.argument_anchor,
         projected_entry_commit: controls.entry_commit,
-        name_followers: controls.name_followers,
+        name_follower_index: controls.name_follower_index,
+        name_follower_bytes: controls.name_follower_bytes,
         origin: GrammarOrigin::from_derived(tables.derived),
         first,
         bound,
