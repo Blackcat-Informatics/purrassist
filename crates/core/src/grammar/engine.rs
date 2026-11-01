@@ -5012,24 +5012,24 @@ impl<'s> Engine<'s> {
         let mut spawned = None;
         let line_blank = self.line_blank;
         let grammar = self.grammars[self.tables[table].grammar].grammar;
-        let opener_allowed = |pc: &u32| {
+        let opener_allowed = |pc: &u32, governor: &mut Governor| {
             // Start a projected call at its first retained byte. An attempt
             // on indentation could overlap the preceding call's trailing
             // whitespace and absorb the later, non-overlapping attempt.
             if program.line_start_openers.contains(pc)
                 && (!line_blank || (grammar.is_derived() && byte.is_ascii_whitespace()))
             {
-                return false;
+                return Ok(false);
             }
             // Class-leading programs are admitted only by the derived compiler.
             if matches!(program.insts[*pc as usize], Inst::Class { .. }) {
-                return true;
+                return program.class_starts_with(*pc, byte, governor);
             }
             let Inst::Lit { lit, .. } = program.insts[*pc as usize] else {
-                return false;
+                return Ok(false);
             };
             let repairs = &grammar.literal_tables[lit as usize];
-            grammar.literals[lit as usize].bytes.first() == Some(&byte)
+            Ok(grammar.literals[lit as usize].bytes.first() == Some(&byte)
                 || repairs
                     .variants
                     .trie
@@ -5041,9 +5041,17 @@ impl<'s> Engine<'s> {
                             .iter()
                             .flat_map(|table| table.trie.first_bytes()),
                     )
-                    .any(|first| first == byte)
+                    .any(|first| first == byte))
         };
-        if program.starts_with(byte) && program.openers.iter().any(opener_allowed) {
+        if program.starts_with(byte)
+            && program.openers.iter().try_fold(false, |found, pc| {
+                if found {
+                    Ok(true)
+                } else {
+                    opener_allowed(pc, governor)
+                }
+            })?
+        {
             let id = self.next_attempt;
             self.next_attempt += 1;
             self.tables[table].attempts.push(Attempt {
@@ -5079,7 +5087,7 @@ impl<'s> Engine<'s> {
                 spawned = Some(thread);
             } else {
                 for &pc in &program.openers {
-                    if opener_allowed(&pc) {
+                    if opener_allowed(&pc, governor)? {
                         self.tables[table].threads.push(Thread { pc, ..thread })?;
                     }
                 }

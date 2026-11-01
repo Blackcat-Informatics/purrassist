@@ -28,7 +28,8 @@ use super::{
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, format_scratch_governed,
+    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, format_output_governed,
+    format_scratch_governed,
 };
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
@@ -79,6 +80,21 @@ pub(crate) struct ProtocolFence {
     pub(crate) body: Option<u32>,
 }
 
+/// Native first-step survival for one projected class opener, not a proof
+/// that every retained byte has an accepting continuation.
+#[derive(Debug, PartialEq, Eq)]
+struct ClassOpener {
+    pc: u32,
+    first: [u64; 4],
+}
+
+impl ScratchCharge for ClassOpener {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 40);
+        40
+    };
+}
+
 /// The recognizer program of one production.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program {
@@ -87,6 +103,8 @@ pub(crate) struct Program {
     pub(crate) start: u32,
     /// The literal instructions reachable from the start without input.
     pub(crate) openers: ScratchVec<u32>,
+    /// First-step masks prepared through the original class automata.
+    class_openers: ScratchVec<ClassOpener>,
     /// Initial opener PCs admitted only at a blank line prefix.
     pub(crate) line_start_openers: ScratchVec<u32>,
     pub(crate) protocol: Option<ProtocolFence>,
@@ -145,6 +163,27 @@ const _: () = assert!(
 );
 
 impl Program {
+    /// A missing descriptor is a compiler invariant failure, never a non-match.
+    pub(crate) fn class_starts_with(
+        &self,
+        pc: u32,
+        byte: u8,
+        governor: &mut Governor,
+    ) -> Result<bool, crate::contract::StopReason> {
+        governor.charge(Resource::Work, size(self.class_openers.len()))?;
+        let Some(opener) = self.class_openers.iter().find(|opener| opener.pc == pc) else {
+            return Err(crate::contract::StopReason::InvalidInput(
+                format_output_governed(
+                    format_args!(
+                        "compiled class opener at program location {pc} has no first-step dispatch mask"
+                    ),
+                    governor,
+                )?,
+            ));
+        };
+        Ok(opener.first[usize::from(byte >> 6)] & (1 << (byte & 63)) != 0)
+    }
+
     /// Whether the program's attempts open at a `commit` rather than at
     /// their opener literal.
     #[inline]
@@ -1592,14 +1631,19 @@ fn compile_program(
     let controls =
         projected_controls(&mut insts, start, tables.derived, tables.literals, governor)?;
     let openers = epsilon_closure(&insts, start, governor)?;
+    let mut class_openers = ScratchVec::new(governor);
     let mut first = [0_u64; 4];
     for &pc in &openers {
         governor.charge(Resource::Work, 1)?;
-        if tables.derived && matches!(insts[pc as usize], Inst::Class { .. }) {
-            // The class automaton admits the real byte under the caller governor.
-            // The conservative dispatch mask never rejects a valid class prefix.
+        if tables.derived
+            && let Inst::Class { class, .. } = insts[pc as usize]
+        {
+            let mask = class_first_bytes(&tables.classes[class as usize], governor)?;
             governor.charge(Resource::Work, 4)?;
-            first = [u64::MAX; 4];
+            for (word, additional) in first.iter_mut().zip(mask) {
+                *word |= additional;
+            }
+            class_openers.push(ClassOpener { pc, first: mask })?;
             continue;
         }
         let Inst::Lit { lit, .. } = insts[pc as usize] else {
@@ -1637,6 +1681,7 @@ fn compile_program(
         insts,
         start,
         openers,
+        class_openers,
         line_start_openers: ScratchVec::new(governor),
         protocol: None,
         argument_anchor: tables.argument_anchor,
@@ -1653,6 +1698,26 @@ fn compile_program(
         call_openers,
         insert_alternatives,
     })
+}
+
+/// Enumerate the existing first-step predicate in one temporary native session.
+/// Its caches only memoize pure transitions and viability; every byte starts
+/// from the unchanged initial state, including incomplete UTF-8 lead prefixes.
+fn class_first_bytes(
+    class: &ClassTerminal,
+    governor: &mut Governor,
+) -> Result<[u64; 4], GrammarError> {
+    let mut dfa = class.automaton.dfa(governor)?;
+    let start = dfa.start();
+    let mut first = [0_u64; 4];
+    for byte in 0..=u8::MAX {
+        governor.charge(Resource::Work, 1)?;
+        let stepped = dfa.step(start, byte, governor)?;
+        if !dfa.is_dead(stepped, governor)? {
+            first[usize::from(byte >> 6)] |= 1 << (byte & 63);
+        }
+    }
+    Ok(first)
 }
 
 fn program_bound(
@@ -1734,6 +1799,7 @@ impl LiteralTables {
 
 struct Tables<'a> {
     literals: &'a [Literal],
+    classes: &'a [ClassTerminal],
     repairs: &'a [LiteralTables],
     stray_nodes: u64,
     derived: bool,
@@ -1744,6 +1810,7 @@ struct Tables<'a> {
 /// tables that a `json-envelope` grammar rebuilds once.
 struct Programs<'p> {
     productions: &'p [Production],
+    classes: &'p [ClassTerminal],
     closer_ids: &'p [u32],
     offsets: &'p [usize],
     stray_nodes: u64,
@@ -1831,6 +1898,7 @@ impl Programs<'_> {
         let mut program = |index: usize| {
             let tables = Tables {
                 literals,
+                classes: self.classes,
                 repairs,
                 stray_nodes: self.stray_nodes,
                 derived: index == 0 && self.derived,
@@ -2392,6 +2460,7 @@ fn compile_policy(
     let delimiters = delimiter_sets(sets, &confusables, governor)?;
     let source = Programs {
         productions: &productions,
+        classes: &classes,
         closer_ids: &closer_ids,
         offsets: &production_offsets,
         stray_nodes: stray.bytes(governor)?,
@@ -3174,6 +3243,7 @@ result = "<r>"; declaration = "<d>";"#;
             Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
         let tables = Tables {
             literals: &grammar.literals,
+            classes: &grammar.classes,
             repairs: &grammar.literal_tables,
             stray_nodes: 0,
             derived: false,
