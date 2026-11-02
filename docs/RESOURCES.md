@@ -980,6 +980,20 @@ its final report leaves the queue. Index updates admit lookup and update work
 before mutation; frontier updates read the cached minimum without scanning the
 pending queue.
 
+A successful native projection retains an exact memo of its engine and
+pending-source floors, final ownership barrier and effective cutoff. Every byte
+still scans the engine owners with their original admissions, then admits one
+work unit for a fixed-key lookup. With both floors unchanged and no processed
+turn report, the memo is reused only when the advancing lexical cutoff capped
+by its saved barrier equals the prior effective cutoff. A stationary candidate
+can therefore avoid repeated interpretation scans and ancestry intersections;
+ordinary content still advances when its cutoff changes. Skipped traversals do
+not run or charge their former work. Any processed report invalidates the memo
+before changing turn histories, interpretations, reasoning or late embedded
+segments. A missed refresh clears the old memo before fallible projection and
+records a replacement only after success. No owner minimum or semantic choice
+is approximated, and feed boundaries do not participate in this key.
+
 The shared intake can notify a private callback when that frontier changes.
 It caps the reported range before incomplete UTF-8 and charges `K_EVENT` work
 per notification. Every reported end also checks its admitted source boundary:

@@ -197,6 +197,16 @@ pub(super) struct ContinuationFrontier {
     pub(super) blocked_from: Option<usize>,
 }
 
+/// Exact inputs of the last successful native projection. Any processed
+/// report invalidates this memo before changing the turn state it summarizes.
+#[derive(Clone, Copy, Debug)]
+struct FrontierMemo {
+    engine_floor: Option<usize>,
+    report_floor: Option<usize>,
+    barrier: Option<usize>,
+    limit: usize,
+}
+
 /// One next node of the structurally shared native history. Source content has
 /// no stored segment; callers still advance its history cursor exactly once.
 #[derive(Debug)]
@@ -1102,6 +1112,7 @@ pub struct Recognizer<'s> {
     turn: Turn,
     context: ContextTracker,
     frontier: ContinuationFrontier,
+    frontier_memo: Option<FrontierMemo>,
     settled_history: u32,
     failed: Option<StopReason>,
 }
@@ -1236,6 +1247,7 @@ impl<'s> Recognizer<'s> {
             turn,
             context,
             frontier: ContinuationFrontier::default(),
+            frontier_memo: None,
             settled_history: 0,
             failed: None,
         })
@@ -1345,11 +1357,23 @@ impl<'s> Recognizer<'s> {
         self.update_frontier(governor)
     }
 
-    /// Intersect all native continuation bases once per byte. The result is
-    /// deliberately structural: a packed disagreement is not resolved here.
+    /// Refresh the structural projection after each byte, reusing a successful
+    /// result only while its owner floors, turn state and effective cutoff agree.
+    /// A packed disagreement is not resolved here.
     fn update_frontier(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         let engine_floor = self.engine.continuation_floor(governor)?;
         let report_floor = self.pending_source_floor;
+        let lexical = self.engine.fed().saturating_sub(self.set.lookbehind);
+        governor.charge(Resource::Work, 1)?;
+        if let Some(memo) = self.frontier_memo
+            && memo.engine_floor == engine_floor
+            && memo.report_floor == report_floor
+            && memo.limit == memo.barrier.map_or(lexical, |floor| lexical.min(floor))
+        {
+            return Ok(());
+        }
+        // A failed refresh must not leave an older projection marked reusable.
+        self.frontier_memo = None;
         let mut barrier = engine_floor.into_iter().chain(report_floor).min();
         let mut common = None;
         if let Some(top) = self.turn.top {
@@ -1380,7 +1404,6 @@ impl<'s> Recognizer<'s> {
         {
             self.turn.include_plain(&mut common, base.hist, governor)?;
         }
-        let lexical = self.engine.fed().saturating_sub(self.set.lookbehind);
         let limit = barrier.map_or(lexical, |floor| lexical.min(floor));
         let (node, mut content) = self
             .turn
@@ -1403,6 +1426,12 @@ impl<'s> Recognizer<'s> {
             content,
             blocked_from: barrier,
         };
+        self.frontier_memo = Some(FrontierMemo {
+            engine_floor,
+            report_floor,
+            barrier,
+            limit,
+        });
         Ok(())
     }
 
@@ -1581,6 +1610,11 @@ impl<'s> Recognizer<'s> {
         group: Vec<Pending>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        // Every live turn mutation is dispatched here: history/top/interps,
+        // open or promoted reasoning, last_kill and late embedded segments.
+        // Marker tables appended by step are not projection inputs; their
+        // queued reports arrive here before affecting the projected turn.
+        self.frontier_memo = None;
         governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
         let mut frame = Frame {
             top: self.turn.top,
