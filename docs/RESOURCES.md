@@ -912,6 +912,18 @@ admitted work. A governor or capture refusal stops admission at its original
 cause; a semantic request error stops interpretation while admitted source
 capture can continue.
 
+Revision facts prepare one borrowed leaf interval index per raw reading with
+operator payloads. Original leaf positions sort by source interval; balanced
+subtree maximum ends prune leaves that cannot enclose an edit. Every enclosing
+leaf must agree on its parameter pointer. Different overlapping pointers remain
+unknown, including adjacent leaves sharing an empty insertion's endpoint. The
+index copies neither argument trees nor pointer text. Construction, sorting,
+traversal and pointer comparisons admit Work; its fallible scratch storage
+releases after that reading's facts are prepared, including on refusal. The
+existing comparison of matching edit facts across alternatives stays unchanged.
+Disjoint leaf ranges avoid a full leaf scan for every edit; this does not claim
+a measured budget pass or a linear bound for arbitrary overlapping intervals.
+
 Pythonic's finite-state framing and canonical decimal literal path scan
 linearly. Converting a binary, octal or hexadecimal integer with `n` digits
 to exact decimal uses O(n²) digit work, admitted before each multiplication

@@ -13,9 +13,9 @@
 
 use super::recover::RecoveryIntake;
 use super::{
-    CallOutcome, CallSegment, DialectId, DialectSet, GenerationStop, Piece, RecognizedTurn,
-    Recognizer, Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest, ToolSet,
-    UnresolvedReason,
+    ArgLeaf, CallOutcome, CallSegment, DialectId, DialectSet, GenerationStop, Piece,
+    RecognizedTurn, Recognizer, Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest,
+    ToolSet, UnresolvedReason,
 };
 use crate::contract::{
     AssistResult, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec,
@@ -460,6 +460,125 @@ fn copy_reason(
     })
 }
 
+/// One original leaf position and the greatest end in its balanced subtree.
+#[derive(Clone, Copy)]
+struct LeafInterval {
+    original: usize,
+    max_end: usize,
+}
+
+impl ScratchCharge for LeafInterval {
+    const CHARGE: usize = 16;
+}
+const _: () = assert!(core::mem::size_of::<LeafInterval>() <= LeafInterval::CHARGE);
+
+/// Borrowed source intervals prepared once per raw reading with edit payloads.
+/// Every enclosing leaf must agree; overlapping different pointers stay unknown.
+struct LeafPointers<'a> {
+    leaves: &'a [ArgLeaf],
+    intervals: ScratchVec<LeafInterval>,
+}
+
+impl<'a> LeafPointers<'a> {
+    fn new(leaves: &'a [ArgLeaf], governor: &mut Governor) -> Result<Self, StopReason> {
+        let mut intervals = ScratchVec::new(governor);
+        intervals.reserve(leaves.len())?;
+        for (original, leaf) in leaves.iter().enumerate() {
+            push_scratch(
+                &mut intervals,
+                LeafInterval {
+                    original,
+                    max_end: leaf.raw.end,
+                },
+                governor,
+            )?;
+        }
+        let levels = intervals.len().bit_width() + 1;
+        governor.charge(
+            Resource::Work,
+            size(intervals.len())
+                .saturating_mul(u64::from(levels))
+                .saturating_mul(3),
+        )?;
+        intervals.as_mut_slice().sort_unstable_by_key(|interval| {
+            let leaf = &leaves[interval.original];
+            (leaf.raw.start, leaf.raw.end, interval.original)
+        });
+        let mut index = Self { leaves, intervals };
+        index.prepare(0, index.intervals.len(), governor)?;
+        Ok(index)
+    }
+
+    /// Halving the index range bounds native recursion by the index's bit width.
+    fn prepare(
+        &mut self,
+        low: usize,
+        high: usize,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if low == high {
+            return Ok(0);
+        }
+        let middle = low + (high - low) / 2;
+        let end = self.intervals[middle].max_end;
+        let left = self.prepare(low, middle, governor)?;
+        let right = self.prepare(middle + 1, high, governor)?;
+        let end = end.max(left).max(right);
+        self.intervals.as_mut_slice()[middle].max_end = end;
+        Ok(end)
+    }
+
+    fn parameter(
+        &self,
+        span: &Range<usize>,
+        governor: &mut Governor,
+    ) -> Result<Option<&'a str>, StopReason> {
+        let mut found = None;
+        let unanimous = self.enclosing(0, self.intervals.len(), span, &mut found, governor)?;
+        Ok(if unanimous { found } else { None })
+    }
+
+    fn enclosing(
+        &self,
+        low: usize,
+        high: usize,
+        span: &Range<usize>,
+        found: &mut Option<&'a str>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if low == high {
+            return Ok(true);
+        }
+        let middle = low + (high - low) / 2;
+        let interval = self.intervals[middle];
+        let first = &self.leaves[self.intervals[low].original];
+        // Strict comparisons preserve inclusive empty-span endpoints: leaves
+        // ending and beginning at an insertion can both enclose that insertion.
+        if interval.max_end < span.end || first.raw.start > span.start {
+            return Ok(true);
+        }
+        if !self.enclosing(low, middle, span, found, governor)? {
+            return Ok(false);
+        }
+        let leaf = &self.leaves[interval.original];
+        if leaf.raw.start <= span.start && span.end <= leaf.raw.end {
+            if let Some(known) = *found {
+                governor.charge(
+                    Resource::Work,
+                    size(known.len().min(leaf.pointer.len())).saturating_add(1),
+                )?;
+                if known != leaf.pointer.as_str() {
+                    return Ok(false);
+                }
+            }
+            *found = Some(leaf.pointer.as_str());
+        }
+        self.enclosing(middle + 1, high, span, found, governor)
+    }
+}
+
 /// Owned transient copies of real operator payloads, never reconstructed from
 /// a human explanation or guessed from the final value tree.
 #[derive(Debug)]
@@ -689,8 +808,17 @@ impl EventCursor {
                 governor,
             )?;
             for raw in &call.readings {
+                governor.charge(Resource::Work, size(raw.edits.len()))?;
+                if !raw
+                    .edits
+                    .iter()
+                    .any(|edit| !edit.original.is_empty() || !edit.replacement.is_empty())
+                {
+                    continue;
+                }
+                let leaves = LeafPointers::new(&raw.arguments.leaves, governor)?;
                 for edit in &raw.edits {
-                    self.remember_edit(call, raw, edit, governor)?;
+                    self.remember_edit(call, &leaves, edit, governor)?;
                 }
             }
         }
@@ -700,7 +828,7 @@ impl EventCursor {
     fn remember_edit(
         &mut self,
         call: &CallSegment,
-        raw: &super::RawCall,
+        leaves: &LeafPointers<'_>,
         edit: &MarkupEdit,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
@@ -708,17 +836,7 @@ impl EventCursor {
         if edit.original.is_empty() && edit.replacement.is_empty() {
             return Ok(());
         }
-        let mut parameter = None;
-        for leaf in &raw.arguments.leaves {
-            governor.charge(Resource::Work, size(leaf.pointer.len()).saturating_add(1))?;
-            if leaf.raw.start <= edit.span.start && edit.span.end <= leaf.raw.end {
-                if parameter.is_some_and(|known| known != leaf.pointer.as_str()) {
-                    parameter = None;
-                    break;
-                }
-                parameter = Some(leaf.pointer.as_str());
-            }
-        }
+        let parameter = leaves.parameter(&edit.span, governor)?;
         let fact = EditFact {
             call_start: call.span.start,
             call_end: call.span.end,
