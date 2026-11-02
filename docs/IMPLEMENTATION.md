@@ -986,3 +986,21 @@ captured as dropped text or retained as prose/fence extraction edits. These
 spans cannot turn an ordinary heading into protocol evidence. Actual retained
 literals still count; adjacent name/JSON forms and declared names, aliases and
 joint name/ID partitions keep their existing admission paths.
+
+A canonical native Mistral V3 opening report now carries the end of its
+physically consumed `[TOOL_CALLS]` marker. The recognizer retains the earliest
+such frame per weak owner in governed storage until that owner's Ended report.
+Native reports precede affected completions in offset/phase/arrival order.
+Each materialized Hermes stripped completion independently proves the full
+marker lies inside a leading Dropped capture with its matching ExtractProse
+edit, before every raw name, ID and argument capture. Every raw reading must
+prove it; otherwise the entire completion remains. The attempt and its future
+configurations stay alive. Same-start suppression remains unchanged, and later
+calls with distinct source prefixes retain their own interpretations.
+Native malformed group members and cut-off tails keep their recovery and
+provenance. Pending reports move into position groups without payload clones.
+Suppression or proof refusal drops the current payload before refunding its
+recorded admission; unprocessed ready/group payloads drop and refund their own
+recorded admissions on refusal. The original refusal takes precedence over
+cleanup errors. No scratch delta is refunded. This correction has not been
+executed.

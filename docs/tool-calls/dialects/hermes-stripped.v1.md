@@ -57,6 +57,18 @@ content alternatives. An intact native JSON reading also precedes a matching
 projected envelope whose only changes are exact exterior prose or fence
 extractions; each retains its original loss kind and source bytes.
 
+A physically consumed canonical native Mistral V3 `[TOOL_CALLS]` marker keeps
+its grouped attempt when a projected completion discards that marker as leading
+prose. The recognizer remembers the earliest native frame within each weak
+header and checks every materialized completion independently. Every raw
+Hermes reading must contain the whole marker in a leading `Dropped` capture
+with a matching `ExtractProse` edit, before every name, ID and argument capture.
+Missing proof retains the entire completion. The weak attempt stays alive for
+future configurations and completions; later calls with their own source
+prefixes remain represented. The native attempt keeps its inherited
+interpretation, malformed group members and cut-off tails. Repaired or
+recipe-suppressed markers supply no physical frame proof.
+
 Projected JSON envelopes also retain declaration-shaped counter-evidence.
 Without invocation markers, arguments containing `"type":"object"` and a
 `"properties"` object stay content when the named tool cannot accept them as

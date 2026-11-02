@@ -612,6 +612,7 @@ pub(crate) struct Out {
     pub(crate) completed: ScratchVec<Thread>,
     pub(crate) opened: ScratchVec<(u64, usize)>,
     headers: ScratchVec<(u64, usize)>,
+    native_frames: ScratchVec<(u64, usize)>,
 }
 
 impl Out {
@@ -622,6 +623,7 @@ impl Out {
             completed: ScratchVec::new(governor),
             opened: ScratchVec::new(governor),
             headers: ScratchVec::new(governor),
+            native_frames: ScratchVec::new(governor),
         }
     }
 
@@ -631,6 +633,7 @@ impl Out {
         self.completed.clear();
         self.opened.clear();
         self.headers.clear();
+        self.native_frames.clear();
     }
 }
 
@@ -2580,6 +2583,20 @@ impl<'s> Step<'_, 's> {
         if !thread.opened && !self.program.deferred() && self.program.openers.contains(&thread.pc) {
             thread.opened = true;
             out.opened.push((thread.attempt, at))?;
+            // This evidence is emitted only by the physically consumed native
+            // opener, before any call payload or grouped recovery exists.
+            if self.kind == ProductionKind::Call
+                && !self.program.origin.is_projected()
+                && thread.cost == 0
+                && thread.entry == thread.start
+                && matches!(self.program.insts[thread.pc as usize], Inst::Lit { lit, .. }
+                    if self.grammar.literals[lit as usize].bytes.as_slice() == b"[TOOL_CALLS]")
+            {
+                governor.charge(Resource::Work, size(at - thread.start))?;
+                if self.bytes(thread.start..at) == b"[TOOL_CALLS]" {
+                    out.native_frames.push((thread.attempt, at))?;
+                }
+            }
         }
         self.closure(thread, next, at, stack, out, governor)
     }
@@ -4518,6 +4535,9 @@ pub(crate) enum Event {
         /// Derived header boundary in original absolute source coordinates.
         /// Exact attempts have no weak header from which another may inherit.
         weak_header: Option<usize>,
+        /// End of a physically consumed canonical native Mistral V3 marker.
+        /// Its grouped body may still complete, reject or be cut off.
+        native_frame_end: Option<usize>,
     },
     /// Attempt `attempt` matched `parts` (one call segment, or one per
     /// call of a production with `next`, each with its cost), ending at
@@ -5754,6 +5774,8 @@ impl<'s> Engine<'s> {
         )?;
         let mut opened: Vec<(u64, usize)> = self.out.opened.as_slice().to_vec();
         opened.sort_unstable();
+        let native_mistral =
+            self.grammars[self.tables[table].grammar].dialect == DialectId::MistralV3;
         let mut latest = None;
         for (attempt, position) in opened {
             let attempts = self.tables[table].attempts.as_mut_slice();
@@ -5763,17 +5785,31 @@ impl<'s> Engine<'s> {
                 record.opened = true;
                 self.newest_open = self.newest_open.max(record.start);
                 latest = latest.max(Some(record.start));
+                governor.charge(Resource::Work, size(self.out.headers.len()))?;
+                let weak_header = self
+                    .out
+                    .headers
+                    .iter()
+                    .filter(|(owner, _)| *owner == attempt)
+                    .map(|(_, end)| *end)
+                    .min();
+                let native_frame_end = if native_mistral {
+                    governor.charge(Resource::Work, size(self.out.native_frames.len()))?;
+                    self.out
+                        .native_frames
+                        .iter()
+                        .filter(|(owner, _)| *owner == attempt)
+                        .map(|(_, end)| *end)
+                        .min()
+                } else {
+                    None
+                };
                 self.events.push(Event::Opened {
                     attempt,
                     start: record.start,
                     at: position,
-                    weak_header: self
-                        .out
-                        .headers
-                        .iter()
-                        .filter(|(owner, _)| *owner == attempt)
-                        .map(|(_, end)| *end)
-                        .min(),
+                    weak_header,
+                    native_frame_end,
                 });
             }
         }

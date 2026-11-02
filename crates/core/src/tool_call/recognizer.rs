@@ -80,10 +80,11 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, ScratchVec,
-    SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMap, ScratchMeter,
+    ScratchVec, SourceSpan, StopReason,
 };
 use crate::digest::{Digest, DigestBuilder};
+use crate::grammar::CaptureKind;
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
 use crate::grammar::engine::{Engine, Event, Part, Salvaged};
@@ -228,7 +229,7 @@ impl Drop for Queued {
 // The portable per-report charge never undercounts a report's own size.
 const _: () = assert!(core::mem::size_of::<Pending>() as u64 <= QUEUED_REPORT);
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum Pending {
     Engine(Event),
     Marker {
@@ -245,6 +246,26 @@ impl Pending {
             Self::Engine(event) => event.at(),
             Self::Marker { end, .. } => *end,
         }
+    }
+
+    /// Drop unprocessed owned payloads before refunding their admissions.
+    fn discard_all(
+        entries: impl Iterator<Item = Self>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut bytes = 0_u64;
+        for entry in entries {
+            bytes = bytes.saturating_add(match &entry {
+                Self::Engine(Event::Completed { charged, .. }) => *charged,
+                Self::Engine(Event::Ended {
+                    salvage: Some(salvage),
+                    ..
+                }) => salvage.charged,
+                _ => 0,
+            });
+            drop(entry);
+        }
+        governor.release_scratch(bytes)
     }
 
     /// Order within one offset: openers before revivals.
@@ -284,6 +305,9 @@ struct Turn {
     interps: BTreeMap<u64, (usize, Vec<Interp>)>,
     /// Absolute raw OPEN barriers for interpreted derived headers only.
     weak_headers: BTreeMap<u64, usize>,
+    /// Earliest physically consumed native Mistral frame within each weak header.
+    /// The weak attempt remains alive; every completion supplies its own proof.
+    native_frames: ScratchMap<u64, (usize, usize)>,
     /// The base of the last opener start that ended a content run.
     last_kill: Option<(usize, Base)>,
     /// Every stored reasoning segment: its end and store index, by its
@@ -1053,6 +1077,7 @@ impl<'s> Recognizer<'s> {
             }),
             interps: BTreeMap::new(),
             weak_headers: BTreeMap::new(),
+            native_frames: ScratchMap::new(governor),
             last_kill: None,
             blocks: BTreeMap::new(),
             blocked: Vec::new(),
@@ -1194,14 +1219,13 @@ impl<'s> Recognizer<'s> {
     /// Process every pending report at an offset up to `limit`, releasing
     /// each one's queue charge.
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
+        let mut ready = Vec::new();
         // Stable order: offset, then phase, then arrival.
         while let Some(entry) = self.pending.first_entry() {
             if entry.key().0 > limit {
                 break;
             }
-            let pending = entry.remove();
-            ready.push((ready.len(), pending.at(), pending));
+            ready.push(entry.remove());
         }
         if ready.is_empty() {
             return Ok(());
@@ -1209,19 +1233,17 @@ impl<'s> Recognizer<'s> {
         let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
         governor.release_scratch(released)?;
         self.queued.bytes -= released;
-        let mut start = 0;
-        while start < ready.len() {
-            let at = ready[start].1;
-            let end = ready[start..]
-                .iter()
-                .position(|(_, other, _)| *other != at)
-                .map_or(ready.len(), |offset| start + offset);
-            let group: Vec<Pending> = ready[start..end]
-                .iter()
-                .map(|(_, _, pending)| pending.clone())
-                .collect();
-            self.position(at, group, governor)?;
-            start = end;
+        let mut ready = ready.into_iter().peekable();
+        while let Some(pending) = ready.next() {
+            let at = pending.at();
+            let mut group = vec![pending];
+            while ready.peek().is_some_and(|pending| pending.at() == at) {
+                group.push(ready.next().expect("peeked report"));
+            }
+            if let Err(reason) = self.position(at, group, governor) {
+                let _ = Pending::discard_all(ready, governor);
+                return Err(reason);
+            }
         }
         Ok(())
     }
@@ -1235,90 +1257,115 @@ impl<'s> Recognizer<'s> {
         group: Vec<Pending>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
-        let mut frame = Frame {
-            top: self.turn.top,
-            kill: false,
-            candidates: Vec::new(),
-            think: None,
-            closed: false,
-        };
-        for pending in group {
-            match pending {
-                Pending::Engine(Event::Opened {
+        let mut group = group.into_iter();
+        let result = (|| {
+            governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
+            let mut frame = Frame {
+                top: self.turn.top,
+                kill: false,
+                candidates: Vec::new(),
+                think: None,
+                closed: false,
+            };
+            for pending in group.by_ref() {
+                self.report(&mut frame, at, pending, governor)?;
+            }
+            if frame.kill {
+                self.turn.top = None;
+            }
+            if frame.closed {
+                self.turn.think = None;
+            }
+            if let Some(think) = frame.think
+                && self
+                    .turn
+                    .think
+                    .as_ref()
+                    .is_none_or(|existing| think.cost < existing.cost)
+            {
+                self.turn.think = Some(think);
+            }
+            self.turn.revive(frame.candidates, at, governor)
+        })();
+        let cleanup = Pending::discard_all(group, governor);
+        result.and(cleanup)
+    }
+
+    /// Consume one report, moving each owned payload to its handler.
+    fn report(
+        &mut self,
+        frame: &mut Frame,
+        at: usize,
+        pending: Pending,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        match pending {
+            Pending::Engine(Event::Opened {
+                attempt,
+                start,
+                weak_header,
+                native_frame_end,
+                ..
+            }) => {
+                self.opened(
+                    frame,
                     attempt,
-                    start,
+                    start..at,
                     weak_header,
-                    ..
-                }) => {
-                    self.opened(&mut frame, attempt, start..at, weak_header, governor)?;
-                }
-                Pending::Marker {
-                    start,
-                    end,
-                    pair,
-                    open: true,
-                } => self.think_opened(&mut frame, start, end, pair, governor)?,
-                Pending::Engine(Event::Completed {
+                    native_frame_end,
+                    governor,
+                )?;
+            }
+            Pending::Marker {
+                start,
+                end,
+                pair,
+                open: true,
+            } => self.think_opened(frame, start, end, pair, governor)?,
+            Pending::Engine(Event::Completed {
+                table,
+                attempt,
+                parts,
+                charged,
+                ..
+            }) => {
+                let kind = self.engine.kind(table);
+                let dialect = self.engine.dialect(table).clone();
+                let parts = parts
+                    .into_iter()
+                    .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
+                    .collect();
+                self.completed(frame, attempt, parts, charged, governor)?;
+            }
+            Pending::Engine(Event::Ended {
+                table,
+                attempt,
+                start,
+                completed,
+                reason,
+                salvage,
+                outread,
+                ..
+            }) => {
+                let ended = Ended {
                     table,
                     attempt,
-                    parts,
-                    charged,
-                    ..
-                }) => {
-                    let kind = self.engine.kind(table);
-                    let dialect = self.engine.dialect(table).clone();
-                    let parts = parts
-                        .into_iter()
-                        .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
-                        .collect();
-                    self.completed(&mut frame, attempt, parts, charged, governor)?;
-                }
-                Pending::Engine(Event::Ended {
-                    table,
-                    attempt,
                     start,
+                    at,
                     completed,
                     reason,
-                    salvage,
                     outread,
-                    ..
-                }) => {
-                    let ended = Ended {
-                        table,
-                        attempt,
-                        start,
-                        at,
-                        completed,
-                        reason,
-                        outread,
-                    };
-                    self.ended(&mut frame, ended, salvage, governor)?;
-                }
-                Pending::Marker {
-                    start,
-                    pair,
-                    open: false,
-                    ..
-                } => self.think_closed(&mut frame, at, start, pair, governor)?,
+                };
+                self.ended(frame, ended, salvage, governor)?;
             }
+            Pending::Marker {
+                start,
+                pair,
+                open: false,
+                ..
+            } => self.think_closed(frame, at, start, pair, governor)?,
         }
-        if frame.kill {
-            self.turn.top = None;
-        }
-        if frame.closed {
-            self.turn.think = None;
-        }
-        if let Some(think) = frame.think
-            && self
-                .turn
-                .think
-                .as_ref()
-                .is_none_or(|existing| think.cost < existing.cost)
-        {
-            self.turn.think = Some(think);
-        }
-        self.turn.revive(frame.candidates, at, governor)
+        Ok(())
     }
 
     /// An attempt's opener completed: give it a base on every state that
@@ -1329,6 +1376,7 @@ impl<'s> Recognizer<'s> {
         attempt: u64,
         prefix: Range<usize>,
         weak_header: Option<usize>,
+        native_frame_end: Option<usize>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let start = prefix.start;
@@ -1420,7 +1468,7 @@ impl<'s> Recognizer<'s> {
             self.engine.abandon(attempt, governor)?;
         } else {
             if weak_header.is_none() && prefix.len() > 1 {
-                self.suppress_weak_prefix(start, governor)?;
+                self.suppress_weak_prefix(start, native_frame_end, governor)?;
             }
             if let Some(barrier) = weak_header {
                 governor.charge(Resource::ScratchBytes, 64)?;
@@ -1434,9 +1482,11 @@ impl<'s> Recognizer<'s> {
     /// A written native opener owns its prefix. A projected preamble at
     /// that same prefix must not turn the framing into lossy prose and
     /// revive a path that omits earlier calls from the native group.
+    /// Interior native frames are remembered for per-completion proof only.
     fn suppress_weak_prefix(
         &mut self,
         start: usize,
+        native_frame_end: Option<usize>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
@@ -1452,11 +1502,135 @@ impl<'s> Recognizer<'s> {
             }
         }
         for &owner in &suppressed {
+            self.forget_native_frame(owner, governor)?;
             self.turn.weak_headers.remove(&owner);
             self.turn.interps.remove(&owner);
             self.engine.abandon(owner, governor)?;
         }
+        self.remember_native_frame(start, native_frame_end, governor)
+    }
+
+    /// Remember source framing without stopping any weak configuration.
+    fn remember_native_frame(
+        &mut self,
+        start: usize,
+        end: Option<usize>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Some(end) = end else { return Ok(()) };
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        for (&owner, &barrier) in &self.turn.weak_headers {
+            let Some((prefix, _)) = self.turn.interps.get(&owner) else {
+                continue;
+            };
+            if *prefix < start && start < barrier {
+                governor.charge(
+                    Resource::Work,
+                    size(self.turn.native_frames.len())
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                )?;
+                if self
+                    .turn
+                    .native_frames
+                    .get(&owner)
+                    .is_none_or(|&(prior, _)| start < prior)
+                {
+                    self.turn.native_frames.insert(owner, (start, end))?;
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// The frame survives native completion and ends with its weak owner.
+    fn forget_native_frame(
+        &mut self,
+        owner: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.turn.native_frames.len()).saturating_mul(2),
+        )?;
+        self.turn.native_frames.remove(&owner);
+        Ok(())
+    }
+
+    /// Each materialized reading must discard the full native marker in its
+    /// leading prose capture, before every name, ID and argument capture.
+    fn discards_native_frame(
+        &self,
+        attempt: u64,
+        parts: &[(Segment, u64)],
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if self.turn.native_frames.is_empty() {
+            return Ok(false);
+        }
+        governor.charge(Resource::Work, size(self.turn.native_frames.len()))?;
+        let Some(&(start, end)) = self.turn.native_frames.get(&attempt) else {
+            return Ok(false);
+        };
+        let Some((prefix, _)) = self.turn.interps.get(&attempt) else {
+            return Ok(false);
+        };
+        let [(Segment::Call(call), _)] = parts else {
+            return Ok(false);
+        };
+        if call.span.start != *prefix || call.readings.is_empty() || !call.derivations.is_empty() {
+            return Ok(false);
+        }
+        for reading in &call.readings {
+            governor.charge(Resource::Work, 1)?;
+            if reading.dialect != DialectId::HermesStripped
+                || reading.kind != ProductionKind::Call
+                || reading.span != call.span
+            {
+                return Ok(false);
+            }
+            governor.charge(
+                Resource::Work,
+                size(reading.captures.len())
+                    .saturating_mul(2)
+                    .saturating_add(size(reading.edits.len())),
+            )?;
+            let (mut name, mut arguments, mut first) = (false, false, usize::MAX);
+            for capture in &reading.captures {
+                if matches!(
+                    capture.kind,
+                    CaptureKind::Name | CaptureKind::Id | CaptureKind::Arguments
+                ) {
+                    if capture.span.start < end {
+                        return Ok(false);
+                    }
+                    first = first.min(capture.span.start);
+                    name |= capture.kind == CaptureKind::Name;
+                    arguments |= capture.kind == CaptureKind::Arguments;
+                }
+            }
+            let Some(dropped) = reading.captures.iter().find(|capture| {
+                capture.kind == CaptureKind::Dropped
+                    && capture.span.start == *prefix
+                    && capture.span.start <= start
+                    && end <= capture.span.end
+                    && capture.span.end <= first
+            }) else {
+                return Ok(false);
+            };
+            if !name
+                || !arguments
+                || !reading.edits.iter().any(|edit| {
+                    edit.operator == EditOperator::ExtractProse
+                        && edit.span == dropped.span
+                        && edit.replacement.is_empty()
+                        && edit.original.len() == dropped.span.len()
+                })
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Weak framing cannot reopen the committed span of a native attempt.
@@ -1561,6 +1735,14 @@ impl<'s> Recognizer<'s> {
             drop(parts);
             return governor.release_scratch(charged);
         };
+        match self.discards_native_frame(attempt, &parts, governor) {
+            Ok(false) => {}
+            disposition => {
+                drop(parts);
+                let cleanup = governor.release_scratch(charged);
+                return disposition.and(cleanup);
+            }
+        }
         // An opening reasoning marker a call read over as markup, not as
         // the data of a string value, cuts it (see `marker_cut`).
         let cut = self.marker_cut(&parts, governor)?;
@@ -1646,6 +1828,12 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if let Err(reason) = self.forget_native_frame(ended.attempt, governor) {
+            let charged = salvage.as_ref().map_or(0, |salvage| salvage.charged);
+            drop(salvage);
+            let _ = governor.release_scratch(charged);
+            return Err(reason);
+        }
         self.turn.weak_headers.remove(&ended.attempt);
         let removed = self.turn.interps.remove(&ended.attempt);
         // An opening reasoning marker the attempt read over cuts it: the
