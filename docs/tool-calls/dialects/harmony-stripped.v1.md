@@ -47,6 +47,17 @@ exact framing has representative priority within an equal-cost invocation tie. G
 arguments, repairs or segmentations remain alternatives. Selecting a profile
 does not authorize converting an inferred value into a resolved one.
 
+The multiple-call anchor retains two whole-turn interpretations: resolved
+calls `f` then `g`, or one best-guess call `f` whose trailing text contains the
+second apparent invocation. The latter records `tool_call.extract.prose` with
+the exact second-line source span and original bytes as a data loss. It does
+not invent a guess inference for that non-guess operator. The complete input
+remains available, and a mutating best guess remains unusable even when guesses
+are accepted. The Standard result is ambiguous; neither reading is discarded.
+The unchanged Exact preset allows one candidate, so this competing segmentation
+returns explicit candidate exhaustion instead of choosing or truncating a
+reading.
+
 ## Executable coverage
 
 Three first-party [anchor fixtures](../../../crates/core/tests/data/tool-calls/conformance/harmony-stripped.v1)

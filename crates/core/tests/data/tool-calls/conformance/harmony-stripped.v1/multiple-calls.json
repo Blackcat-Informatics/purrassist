@@ -1,5 +1,5 @@
 {
-  "description": "First-party multiple calls anchor for the governed harmony-stripped.v1 projection; retained source boundaries and typed values are explicit.",
+  "description": "Two retained readings of marker-stripped Harmony: calls f and g, or f with the second line recorded as a trailing-prose data loss.",
   "markup": "commentary to=functions.f json{\"text\":\"first\"}\ncommentary to=functions.g json{\"text\":\"second\"}",
   "tools": [
     {
@@ -67,6 +67,7 @@
       }
     }
   ],
+  "expected_recovery": "two-calls-or-trailing-extraction",
   "expected_calls": [
     {
       "name": "f",
