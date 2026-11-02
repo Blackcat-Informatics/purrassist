@@ -858,7 +858,10 @@ fn same_embedded_invocation(
         let root = &exact.arguments.root;
         if let crate::json::Value::Object(members) = &root.value {
             for member in members {
-                governor.charge(Resource::Work, size(member.key.len()).saturating_mul(2))?;
+                governor.charge(
+                    Resource::Work,
+                    size(member.key.len()).saturating_add(1).saturating_mul(2),
+                )?;
             }
             governor.charge(Resource::Work, 16)?;
             if matches!(root.get("type").map(|node| &node.value), Some(crate::json::Value::String(kind)) if kind == "object")
