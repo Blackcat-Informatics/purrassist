@@ -139,10 +139,12 @@
 //! working set to the same governor before allocating it.
 //! [`ToolRecoveryRequest::sized`] sizes a budget for an output: its length
 //! and its call openers.
+use super::StreamEvent;
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
-use super::recognizer::{edit_entries, escaped};
+use super::recognizer::{ContinuationFrontier, edit_entries, escaped};
 use super::resolve::loss_kind;
+use super::stream::{EventCursor, PreparedEvent};
 use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
     FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
@@ -152,14 +154,14 @@ use super::{
 use crate::contract::saturating_size as size;
 use crate::contract::{
     AlternativeReceipt, AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind,
-    Loss, Outcome, Receipt, Resource, ScratchVec, SourceSpan, StopReason, Validation,
-    invalid_input,
+    Loss, Outcome, Receipt, Resource, ScratchLease, ScratchVec, SourceDocument, SourceSpan,
+    StopReason, Validation, invalid_input, push_scratch, reserve_failure,
 };
-use crate::digest::Digest;
+use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CallEnd;
 use crate::grammar::cost::{
-    RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR, RECOVER_SCRATCH_PER_BYTE,
-    RECOVER_WORK_PER_BYTE,
+    K_EVENT, RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR,
+    RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
 };
 use crate::grammar::edit::LossKind;
 use crate::json::{Node, Value, pointer_segment};
@@ -2989,8 +2991,15 @@ impl ToolSet {
     /// [`StopReason::Cancelled`], or [`StopReason::InvalidInput`] (an
     /// effects override or a forced tool choice naming an undeclared tool,
     /// or an [`IdGenerator`] returning one id twice), with empty ledgers.
-    /// The receipt always names the output's digest, and retains the output
-    /// whenever its retention charge succeeded.
+    /// The receipt always names the complete supplied output's digest.
+    /// Source metadata is admitted before request validation and recognizer
+    /// construction. Each byte then admits input, source copying, encoding
+    /// classification and recognition in that order. A semantic request
+    /// refusal stops interpretation while source capture continues under the
+    /// same healthy governor. A governor or capture refusal stops copying and
+    /// admission; remaining bytes contribute only to the identity. The receipt
+    /// retains either the complete admitted source or no source, including
+    /// when a later stage refuses after full capture.
     ///
     /// ```
     /// use purrassist_core::tool_call::{Effects, ToolDefinition, ToolRecoveryRequest, ToolSet};
@@ -3005,9 +3014,10 @@ impl ToolSet {
     /// assert!(result.receipt.sources.is_empty());
     ///
     /// let request = ToolRecoveryRequest::default().effects("rm", Effects::ReadOnly);
-    /// let result = tools.recover_governed(b"", &request, purrassist_core::tool_call::DialectSet::built_in(), &mut Governor::new(Budget::default()));
+    /// let input = b"original output retained despite invalid request";
+    /// let result = tools.recover_governed(input, &request, purrassist_core::tool_call::DialectSet::built_in(), &mut Governor::new(Budget::default()));
     /// assert!(matches!(result.receipt.stopped, StopReason::InvalidInput(_)));
-    /// assert_eq!(result.receipt.sources.len(), 1);
+    /// assert_eq!(result.receipt.sources[0].bytes.as_slice(), input.as_slice());
     /// ```
     #[must_use]
     pub fn recover_governed(
@@ -3017,44 +3027,583 @@ impl ToolSet {
         dialects: &DialectSet,
         governor: &mut Governor,
     ) -> AssistResult<ToolCalls> {
-        let mut receipt = Receipt::new(
-            output,
-            RECOVER_OPERATION,
-            request.effort,
-            *governor.limits(),
-        );
-        let recovery = Recovery {
-            tools: self,
-            request,
+        let mut intake = RecoveryIntake::new(self, request, dialects, governor);
+        intake.feed(output, governor);
+        intake.finish(request, governor)
+    }
+}
+
+/// One admitted source owner. Its publication vector is reserved before intake,
+/// so publishing a complete source after a later refusal needs no allocation.
+struct SourceCapture {
+    bytes: ScratchVec<u8>,
+    documents: Vec<SourceDocument>,
+    metadata: ScratchLease,
+}
+
+impl SourceCapture {
+    fn new(governor: &mut Governor) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(128)?;
+        let mut documents = Vec::new();
+        documents
+            .try_reserve_exact(1)
+            .map_err(|error| reserve_failure(&error))?;
+        Ok(Self {
+            bytes: ScratchVec::new(governor),
+            documents,
+            metadata,
+        })
+    }
+
+    fn publish(mut self, digest: Digest) -> Vec<SourceDocument> {
+        self.documents.push(SourceDocument {
+            digest,
+            bytes: self.bytes.into_vec(),
+        });
+        self.metadata.retain();
+        self.documents
+    }
+}
+
+/// Incremental equivalent of `utf8_chunks`, retaining only invalid-run ranges.
+/// At most three incomplete scalar bytes survive a byte step.
+struct EncodingCursor {
+    pending: [u8; 4],
+    len: usize,
+    start: usize,
+    bad: Option<Range<usize>>,
+    invalid: ScratchVec<(usize, usize)>,
+}
+
+impl EncodingCursor {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            pending: [0; 4],
+            len: 0,
+            start: 0,
+            bad: None,
+            invalid: ScratchVec::new(governor),
+        }
+    }
+
+    fn flush_bad(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        if let Some(range) = self.bad.take() {
+            push_scratch(&mut self.invalid, (range.start, range.end), governor)?;
+        }
+        Ok(())
+    }
+
+    fn mark_bad(&mut self, end: usize) {
+        let start = self.bad.as_ref().map_or(self.start, |range| range.start);
+        self.bad = Some(start..end);
+    }
+
+    fn step(&mut self, byte: u8, at: usize, governor: &mut Governor) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if self.len == 0 {
+            self.start = at;
+        }
+        self.pending[self.len] = byte;
+        self.len += 1;
+        loop {
+            match core::str::from_utf8(&self.pending[..self.len]) {
+                Ok(_) => {
+                    self.flush_bad(governor)?;
+                    self.len = 0;
+                    return Ok(());
+                }
+                Err(error) => {
+                    let Some(width) = error.error_len() else {
+                        return Ok(());
+                    };
+                    // The cursor starts at one scalar: a valid scalar was
+                    // flushed on its final byte, so no valid prefix precedes it.
+                    debug_assert_eq!(error.valid_up_to(), 0);
+                    self.mark_bad(self.start + width);
+                    self.pending.copy_within(width..self.len, 0);
+                    self.len -= width;
+                    self.start += width;
+                    if self.len == 0 {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    fn finish(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        if self.len != 0 {
+            self.mark_bad(self.start + self.len);
+            self.len = 0;
+        }
+        self.flush_bad(governor)
+    }
+}
+
+struct IntakeSetup<'s> {
+    recognizer: Recognizer<'s>,
+    policies: Policies,
+    forced: Option<String>,
+}
+
+struct RecognizedInput {
+    turn: super::RecognizedTurn,
+    encoding: CallLedger,
+    policies: Policies,
+    forced: Option<String>,
+}
+
+/// The two independently normalized source cutoffs.
+#[derive(Clone, Copy)]
+enum BoundaryKind {
+    Prefix,
+    Content,
+}
+
+/// Shared byte intake for batch recovery and the live stream facade.
+/// It owns source storage without lending it to its live recognizer. Every
+/// method uses the original governor. Interpretation failure does not discard
+/// admissible source; capture refusal stops admission but never source identity.
+pub(super) struct RecoveryIntake<'s> {
+    tools: &'s ToolSet,
+    dialects: &'s DialectSet,
+    receipt: Receipt,
+    digest: DigestBuilder,
+    received: usize,
+    capture: Option<SourceCapture>,
+    encoding: EncodingCursor,
+    setup: Option<IntakeSetup<'s>>,
+    failed: Option<StopReason>,
+    progress: ContinuationFrontier,
+    /// Successful normalization of each UTF-8-capped cutoff. Source appends
+    /// cannot change a scalar boundary already behind the encoding cursor.
+    prefix_boundary: Option<(usize, usize)>,
+    content_boundary: Option<(usize, usize)>,
+    /// Only the contiguous native content prefix is published so far. Later
+    /// content can still be removed by rejection/stray-closer normalization.
+    content_end: usize,
+    events: EventCursor,
+}
+
+impl<'s> RecoveryIntake<'s> {
+    pub(super) fn new(
+        tools: &'s ToolSet,
+        request: &ToolRecoveryRequest,
+        dialects: &'s DialectSet,
+        governor: &mut Governor,
+    ) -> Self {
+        let mut intake = Self {
+            tools,
             dialects,
-            output,
-            source: receipt.source,
-            policies: Policies {
-                selection: request.policy,
-                effects: request.effects.clone(),
-                exact: request.effort == Effort::Exact,
-            },
+            receipt: Receipt::new(&[], RECOVER_OPERATION, request.effort, *governor.limits()),
+            digest: DigestBuilder::new(),
+            received: 0,
+            capture: None,
+            encoding: EncodingCursor::new(governor),
+            setup: None,
+            failed: None,
+            progress: ContinuationFrontier::default(),
+            prefix_boundary: None,
+            content_boundary: None,
+            content_end: 0,
+            events: EventCursor::new(governor),
         };
-        let outcome = match receipt
-            .retain_source_bytes(output, governor)
-            .and_then(|()| recovery.run(governor))
+        let result = (|| {
+            intake.capture = Some(SourceCapture::new(governor)?);
+            let recovery = Recovery {
+                tools,
+                request,
+                dialects,
+                output: &[],
+                source: intake.receipt.source,
+                policies: Policies {
+                    selection: request.policy,
+                    effects: request.effects.clone(),
+                    exact: request.effort == Effort::Exact,
+                },
+            };
+            let forced = recovery.preconditions(governor)?;
+            intake.setup = Some(IntakeSetup {
+                recognizer: Recognizer::with_tools(dialects, tools, request.reasoning, governor)?,
+                policies: recovery.policies,
+                forced,
+            });
+            Ok(())
+        })();
+        if let Err(reason) = result {
+            intake.failed = Some(reason);
+        }
+        intake
+    }
+
+    /// Hash all supplied bytes, even after refusal. An interpretation error
+    /// leaves source capture independent; capture or governor failure stops
+    /// admission without retrying an allocation or publishing a retained prefix.
+    pub(super) fn feed(&mut self, bytes: &[u8], governor: &mut Governor) {
+        self.feed_with(bytes, governor, &mut |_| {}, &mut |_| Ok(()));
+    }
+
+    /// Native frontier notifications use the same byte fold and event charges
+    /// as batch's discard sink. Live content currently covers only the initial
+    /// native run; shared native segments also produce call and reasoning facts.
+    /// The source range and copied raw payload have byte-derived boundaries,
+    /// independent of the caller's feed boundaries. The payload is admitted and
+    /// built under temporary ownership through sink handoff, including batch's
+    /// discard sink. Producer reservations release after the sink returns;
+    /// caller retention cannot affect recovery resource usage.
+    pub(super) fn feed_with(
+        &mut self,
+        bytes: &[u8],
+        governor: &mut Governor,
+        progress: &mut impl FnMut(ContinuationFrontier),
+        content: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) {
+        self.digest.update(bytes);
+        for &byte in bytes {
+            if self.capture.is_none() {
+                continue;
+            }
+            if self
+                .failed
+                .as_ref()
+                .is_some_and(|reason| !matches!(reason, StopReason::InvalidInput(_)))
+            {
+                self.capture = None;
+                continue;
+            }
+            if let Err(reason) = self.capture_byte(byte, governor) {
+                // Source refusal takes precedence over a semantic request
+                // error: the complete input could not be retained.
+                self.capture = None;
+                self.setup = None;
+                self.failed = Some(reason);
+                continue;
+            }
+            if self.failed.is_none()
+                && let Err(reason) = self
+                    .interpret_byte(byte, governor)
+                    .and_then(|()| self.report_progress(governor, progress, content))
+            {
+                self.setup = None;
+                self.failed = Some(reason);
+            }
+        }
+    }
+
+    fn report_progress(
+        &mut self,
+        governor: &mut Governor,
+        progress: &mut impl FnMut(ContinuationFrontier),
+        content: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> Result<(), StopReason> {
+        let mut frontier = self
+            .setup
+            .as_ref()
+            .expect("live interpretation owns a recognizer")
+            .recognizer
+            .continuation_frontier();
+        let utf8 = if self.encoding.len == 0 {
+            self.received
+        } else {
+            self.encoding.start
+        };
+        let prefix = frontier.prefix_end.min(utf8);
+        frontier.prefix_end =
+            self.cached_source_boundary(prefix, BoundaryKind::Prefix, governor)?;
+        frontier.content = match frontier.content {
+            Some((start, end)) => {
+                let end = end.min(utf8);
+                let end = if end == prefix {
+                    frontier.prefix_end
+                } else {
+                    self.cached_source_boundary(end, BoundaryKind::Content, governor)?
+                };
+                (start < end).then_some((start, end))
+            }
+            None => None,
+        };
+        if frontier != self.progress {
+            governor.charge(Resource::Work, K_EVENT)?;
+            let delta = self.content_delta(frontier, governor)?;
+            self.progress = frontier;
+            progress(frontier);
+            if let Some(delta) = delta {
+                self.content_end = delta.content_end(governor)?;
+                delta.publish(content)?;
+            }
+        }
+        let source = self
+            .capture
+            .as_ref()
+            .expect("live event production owns admitted source")
+            .bytes
+            .as_slice();
+        self.events.advance(
+            &self
+                .setup
+                .as_ref()
+                .expect("live event production owns its recognizer")
+                .recognizer,
+            source,
+            self.tools,
+            frontier.prefix_end,
+            governor,
+            content,
+        )?;
+        Ok(())
+    }
+
+    /// Cache only cutoffs already capped before a viable incomplete scalar.
+    /// Future input cannot complete a scalar across such a cutoff: malformed
+    /// subparts stay malformed, and complete source scalars are append-only.
+    fn cached_source_boundary(
+        &mut self,
+        end: usize,
+        kind: BoundaryKind,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let cached = match kind {
+            BoundaryKind::Prefix => self.prefix_boundary,
+            BoundaryKind::Content => self.content_boundary,
+        };
+        if let Some((known, normalized)) = cached
+            && known == end
         {
+            return Ok(normalized);
+        }
+        let normalized = self.source_boundary(end, governor)?;
+        let cached = Some((end, normalized));
+        match kind {
+            BoundaryKind::Prefix => self.prefix_boundary = cached,
+            BoundaryKind::Content => self.content_boundary = cached,
+        }
+        Ok(normalized)
+    }
+
+    /// A lexical holdback can cut an earlier, already complete scalar even
+    /// when the encoding cursor has no pending bytes. Inspect only the scalar
+    /// crossing this cutoff; invalid sequences retain their original boundary.
+    fn source_boundary(&self, end: usize, governor: &mut Governor) -> Result<usize, StopReason> {
+        // A constant bound covers the cutoff lookup, at most three backward
+        // byte probes, leading-byte classification and validation of four bytes.
+        governor.charge(Resource::Work, 12)?;
+        let source = self
+            .capture
+            .as_ref()
+            .map(|capture| capture.bytes.as_slice())
+            .ok_or_else(|| invalid_input("content frontier has no admitted source"))?;
+        if end > source.len() {
+            return Err(invalid_input("content frontier exceeds admitted source"));
+        }
+        if end == 0 || source.get(end).is_none_or(|byte| byte & 0xc0 != 0x80) {
+            return Ok(end);
+        }
+        let mut start = end;
+        for _ in 0..3 {
+            start -= 1;
+            let first = source[start];
+            if first & 0xc0 != 0x80 {
+                let width = match first {
+                    0xc2..=0xdf => 2,
+                    0xe0..=0xef => 3,
+                    0xf0..=0xf4 => 4,
+                    _ => return Ok(end),
+                };
+                let Some(scalar) = source.get(start..start.saturating_add(width)) else {
+                    return Ok(end);
+                };
+                return Ok(
+                    if start.saturating_add(width) > end && core::str::from_utf8(scalar).is_ok() {
+                        start
+                    } else {
+                        end
+                    },
+                );
+            }
+            if start == 0 {
+                break;
+            }
+        }
+        Ok(end)
+    }
+
+    /// Initial content precedes every native call, attempt and reasoning block.
+    /// Final recovery can only add unsupported-markup reports over these bytes:
+    /// those reports keep their bytes as content. Rejection extension and stray
+    /// closer removal start after a structural segment, so later native content
+    /// is deliberately withheld until those owners have an incremental form.
+    fn content_delta(
+        &self,
+        frontier: ContinuationFrontier,
+        governor: &mut Governor,
+    ) -> Result<Option<PreparedEvent>, StopReason> {
+        let Some((0, end)) = frontier.content else {
+            return Ok(None);
+        };
+        if end <= self.content_end {
+            return Ok(None);
+        }
+        let span = self.content_end..end;
+        let source = self
+            .capture
+            .as_ref()
+            .and_then(|capture| capture.bytes.as_slice().get(span.clone()))
+            .ok_or_else(|| invalid_input("content frontier exceeds admitted source"))?;
+        governor.charge(Resource::Work, K_EVENT.saturating_add(size(source.len())))?;
+        let mut raw = ScratchVec::new(governor);
+        raw.reserve(source.len())?;
+        raw.extend(source.iter().copied())?;
+        StreamEvent::content(span, raw, governor).map(Some)
+    }
+
+    fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
+        // A sticky governor refusal is observed before any further charge or
+        // copy, including when interpretation failed on the preceding byte.
+        governor.check()?;
+        let Some(received) = self.received.checked_add(1) else {
+            self.capture = None;
+            return Err(invalid_input(
+                "tool-call source length exceeds the native offset domain",
+            ));
+        };
+        self.received = received;
+        governor.charge(Resource::InputBytes, size(self.received))?;
+        let capture = self
+            .capture
+            .as_mut()
+            .expect("capture admission requires an existing source owner");
+        push_scratch(&mut capture.bytes, byte, governor)
+    }
+
+    fn interpret_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
+        self.encoding.step(byte, self.received - 1, governor)?;
+        self.setup
+            .as_mut()
+            .expect("healthy intake owns a recognizer")
+            .recognizer
+            .push(core::slice::from_ref(&byte), governor)
+    }
+
+    fn recognize(
+        &mut self,
+        request: &ToolRecoveryRequest,
+        governor: &mut Governor,
+    ) -> Result<RecognizedInput, StopReason> {
+        if let Some(reason) = &self.failed {
+            return Err(reason.clone());
+        }
+        governor.check()?;
+        self.encoding.finish(governor)?;
+        let IntakeSetup {
+            recognizer,
+            policies,
+            forced,
+        } = self.setup.take().expect("healthy intake owns a recognizer");
+        let output = self
+            .capture
+            .as_ref()
+            .expect("healthy intake owns source storage")
+            .bytes
+            .as_slice();
+        let recovery = Recovery {
+            tools: self.tools,
+            request,
+            dialects: self.dialects,
+            output,
+            source: self.receipt.source,
+            policies,
+        };
+        let encoding = recovery.encoding(self.encoding.invalid.as_slice(), governor)?;
+        let turn = recognizer.finish_over(request.stop.clone(), Some(output), governor)?;
+        Ok(RecognizedInput {
+            turn,
+            encoding,
+            policies: recovery.policies,
+            forced,
+        })
+    }
+
+    fn complete(
+        &mut self,
+        request: &ToolRecoveryRequest,
+        governor: &mut Governor,
+    ) -> Result<Done, StopReason> {
+        let RecognizedInput {
+            turn,
+            encoding,
+            policies,
+            forced,
+        } = self.recognize(request, governor)?;
+        self.events.remember_final(&turn, governor)?;
+        let recovery = Recovery {
+            tools: self.tools,
+            request,
+            dialects: self.dialects,
+            output: self
+                .capture
+                .as_ref()
+                .expect("complete intake owns source storage")
+                .bytes
+                .as_slice(),
+            source: self.receipt.source,
+            policies,
+        };
+        let readings = recovery.resolve_turn(turn, &encoding, forced.as_deref(), governor)?;
+        recovery.conclude(readings, governor)
+    }
+
+    pub(super) fn finish(
+        self,
+        request: &ToolRecoveryRequest,
+        governor: &mut Governor,
+    ) -> AssistResult<ToolCalls> {
+        self.finish_with_events(request, governor, &mut |_| Ok(()))
+    }
+
+    pub(super) fn finish_with_events(
+        mut self,
+        request: &ToolRecoveryRequest,
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> AssistResult<ToolCalls> {
+        self.receipt.source = core::mem::take(&mut self.digest).finish();
+        let completed = self.complete(request, governor).and_then(|done| {
+            if let Outcome::Resolved(calls) | Outcome::BestGuess(calls) = &done.outcome {
+                let source = self
+                    .capture
+                    .as_ref()
+                    .expect("completed recovery owns admitted source")
+                    .bytes
+                    .as_slice();
+                self.events
+                    .finish(calls, self.content_end, source, governor, sink)?;
+            }
+            Ok(done)
+        });
+        let outcome = match completed {
             Ok(done) => {
-                receipt.evidence = done.evidence;
-                receipt.losses = done.losses;
-                receipt.inferences = done.inferences;
-                receipt.validations = done.validations;
-                receipt.alternatives = done.alternatives;
-                receipt.stopped = done.stopped;
+                self.receipt.evidence = done.evidence;
+                self.receipt.losses = done.losses;
+                self.receipt.inferences = done.inferences;
+                self.receipt.validations = done.validations;
+                self.receipt.alternatives = done.alternatives;
+                self.receipt.stopped = done.stopped;
                 done.outcome
             }
             Err(reason) => {
-                receipt.stopped = reason;
+                self.receipt.stopped = reason;
                 Outcome::Unresolved
             }
         };
-        receipt.usage = governor.usage();
-        AssistResult { outcome, receipt }
+        if let Some(capture) = self.capture.take() {
+            self.receipt.sources = capture.publish(self.receipt.source);
+        }
+        self.receipt.usage = governor.usage();
+        AssistResult {
+            outcome,
+            receipt: self.receipt,
+        }
     }
 }
 
@@ -3476,14 +4025,24 @@ struct Recovery<'a> {
 }
 
 impl Recovery<'_> {
-    fn run(&self, governor: &mut Governor) -> Result<Done, StopReason> {
-        let readings = self.recognized(governor)?;
-        self.conclude(readings, governor)
-    }
-
     /// Every whole-message reading of the output, before they are compared
     /// ([`Self::conclude`]).
+    #[cfg(test)]
     fn recognized(&self, governor: &mut Governor) -> Result<Vec<Reading>, StopReason> {
+        let mut intake = RecoveryIntake::new(self.tools, self.request, self.dialects, governor);
+        intake.feed(self.output, governor);
+        intake.receipt.source = self.source;
+        let RecognizedInput {
+            turn,
+            encoding,
+            forced,
+            ..
+        } = intake.recognize(self.request, governor)?;
+        self.resolve_turn(turn, &encoding, forced.as_deref(), governor)
+    }
+
+    /// Validate the request once before constructing or advancing a recognizer.
+    fn preconditions(&self, governor: &Governor) -> Result<Option<String>, StopReason> {
         governor.check()?;
         self.policies.validate(self.tools)?;
         let forced = match &self.request.tool_choice {
@@ -3514,47 +4073,35 @@ impl Recovery<'_> {
                     .to_owned(),
             ));
         }
-        let encoding = self.encoding(governor)?;
-        let mut recognizer =
-            Recognizer::with_tools(self.dialects, self.tools, self.request.reasoning, governor)?;
-        recognizer.push(self.output, governor)?;
-        let turn =
-            recognizer.finish_over(self.request.stop.clone(), Some(self.output), governor)?;
+        Ok(forced)
+    }
+
+    /// Resolve an already finished recognizer without reading the input again.
+    /// Callers retain the original source and its encoding ledger throughout.
+    fn resolve_turn(
+        &self,
+        turn: super::RecognizedTurn,
+        encoding: &CallLedger,
+        forced: Option<&str>,
+        governor: &mut Governor,
+    ) -> Result<Vec<Reading>, StopReason> {
         let resolved = resolve_forest(self.tools, &turn, &self.policies, governor)?;
         let attempted = turn.rejected_attempts().to_vec();
         drop(turn);
-        let readings = self.readings(
-            &resolved,
-            &encoding,
-            &attempted,
-            forced.as_deref(),
-            governor,
-        )?;
+        let readings = self.readings(&resolved, encoding, &attempted, forced, governor)?;
         drop(resolved);
         Ok(readings)
     }
 
-    /// The `tool_call.input.invalid-utf8` losses of the output.
-    fn encoding(&self, governor: &mut Governor) -> Result<CallLedger, StopReason> {
-        governor.charge(Resource::Work, size(self.output.len()))?;
+    /// Publish the invalid runs found by the shared incremental UTF-8 cursor.
+    fn encoding(
+        &self,
+        invalid: &[(usize, usize)],
+        governor: &mut Governor,
+    ) -> Result<CallLedger, StopReason> {
         let mut ledger = CallLedger::default();
-        let mut at = 0;
-        let mut run: Option<Range<usize>> = None;
-        for chunk in self.output.utf8_chunks() {
-            if !chunk.valid().is_empty()
-                && let Some(range) = run.take()
-            {
-                self.invalid(range, &mut ledger, governor)?;
-            }
-            at += chunk.valid().len();
-            if !chunk.invalid().is_empty() {
-                let end = at + chunk.invalid().len();
-                run = Some(run.map_or(at, |range| range.start)..end);
-                at = end;
-            }
-        }
-        if let Some(range) = run {
-            self.invalid(range, &mut ledger, governor)?;
+        for &(start, end) in invalid {
+            self.invalid(start..end, &mut ledger, governor)?;
         }
         Ok(ledger)
     }

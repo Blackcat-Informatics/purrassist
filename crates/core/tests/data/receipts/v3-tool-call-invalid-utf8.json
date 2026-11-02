@@ -21,10 +21,10 @@
     "helper_calls": 0
   },
   "usage": {
-    "work": 10239,
+    "work": 12935,
     "candidates": 0,
-    "peak_scratch_bytes": 167217,
-    "total_scratch_charged": 548800,
+    "peak_scratch_bytes": 166511,
+    "total_scratch_charged": 552850,
     "evidence_entries": 10,
     "helper_calls": 0
   },

@@ -4450,6 +4450,28 @@ impl<'s> Engine<'s> {
         self.fed
     }
 
+    /// Earliest source origin any live engine continuation can still own.
+    /// Attempts retain their record while live threads, held completions or
+    /// trails need it; deferred end reports retain their own origin afterward.
+    pub(crate) fn continuation_floor(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<Option<usize>, StopReason> {
+        let mut earliest = None;
+        for table in &self.tables {
+            governor.charge(Resource::Work, size(table.attempts.len()))?;
+            for attempt in &table.attempts {
+                earliest =
+                    Some(earliest.map_or(attempt.start, |known: usize| known.min(attempt.start)));
+            }
+        }
+        governor.charge(Resource::Work, size(self.deferred.len()))?;
+        for (start, _) in &self.deferred {
+            earliest = Some(earliest.map_or(*start, |known| known.min(*start)));
+        }
+        Ok(earliest)
+    }
+
     pub(crate) fn dialect(&self, table: u32) -> &DialectId {
         &self.grammars[self.tables[table as usize].grammar].dialect
     }

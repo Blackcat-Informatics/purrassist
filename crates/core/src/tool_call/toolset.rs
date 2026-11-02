@@ -817,6 +817,12 @@ impl ToolSet {
             .map(|position| &self.tools[self.index[position].1])
     }
 
+    /// Cardinality of the canonical-name and alias index searched by
+    /// `lookup_exact`, for admission of its logarithmic comparison work.
+    pub(crate) const fn name_index_len(&self) -> usize {
+        self.index.len()
+    }
+
     /// The canonical compact JSON Schema of a tool's arguments, by canonical
     /// name; see [`CompiledTool::json_schema`].
     ///

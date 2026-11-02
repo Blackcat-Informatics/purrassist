@@ -80,8 +80,8 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, ScratchVec,
-    SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchMeter,
+    ScratchVec, SourceSpan, StopReason, invalid_input,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
@@ -174,6 +174,44 @@ struct TurnNode {
     prev: u32,
     end: usize,
     kind: TurnKind,
+    /// Last structurally unambiguous prefix, before any packed alternatives.
+    plain: u32,
+    /// Depth and skip ancestor in the unambiguous-prefix tree.
+    depth: u32,
+    jump: u32,
+}
+
+const TURN_NODE_BYTES: u64 = 48;
+const _: () = assert!(core::mem::size_of::<TurnNode>() as u64 <= TURN_NODE_BYTES);
+
+/// A conservative native continuation boundary, not a resolved stream event.
+/// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
+/// proving semantic equivalence and the longest stable prefix remains separate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ContinuationFrontier {
+    pub(super) prefix_end: usize,
+    pub(super) content: Option<(usize, usize)>,
+    /// Conservative ownership barrier, not the D7 candidate-byte count.
+    pub(super) blocked_from: Option<usize>,
+}
+
+/// Exact inputs of the last successful native projection. Any processed
+/// report invalidates this memo before changing the turn state it summarizes.
+#[derive(Clone, Copy, Debug)]
+struct FrontierMemo {
+    engine_floor: Option<usize>,
+    report_floor: Option<usize>,
+    barrier: Option<usize>,
+    limit: usize,
+}
+
+/// One next node of the structurally shared native history. Source content has
+/// no stored segment; callers still advance its history cursor exactly once.
+#[derive(Debug)]
+pub(super) struct SettledStep<'a> {
+    pub(super) history: u32,
+    pub(super) end: usize,
+    pub(super) segment: Option<&'a Segment>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -247,6 +285,19 @@ impl Pending {
         }
     }
 
+    fn source_start(&self) -> usize {
+        match self {
+            Self::Engine(Event::Opened { start, .. } | Event::Ended { start, .. })
+            | Self::Marker { start, .. } => *start,
+            Self::Engine(Event::Completed { at, parts, .. }) => {
+                parts.first().map_or(*at, |(part, _)| match part {
+                    Part::Call(call) => call.span.start,
+                    Part::Rejected { span, .. } => span.start,
+                })
+            }
+        }
+    }
+
     /// Order within one offset: openers before revivals.
     const fn phase(&self) -> u8 {
         match self {
@@ -256,6 +307,329 @@ impl Pending {
             Self::Engine(Event::Ended { .. }) => 3,
             Self::Marker { open: false, .. } => 4,
         }
+    }
+}
+
+/// Six source-coordinate bits per occupancy level, covering the native domain.
+const SOURCE_LEVELS: usize = usize::BITS.div_ceil(6) as usize;
+/// Portable admission for planning, validation, minimum descent and application.
+/// Eight record operations per level plus sixteen fixed operations cover the
+/// maximum eleven levels of a 64-bit source domain, including the root read.
+/// Fixed operations include count-page inspection and prepared-page handoff;
+/// initializing directory entries and page slots is admitted as growth below.
+/// Keep this admission identical on 32-bit targets with fewer stored levels.
+const SOURCE_UPDATE_WORK: u64 = 8 * 11 + 16;
+
+type SourceWords = [Option<(usize, u64)>; SOURCE_LEVELS];
+
+/// An admitted update, fully planned before the dispatch queue changes.
+struct SourceUpdate {
+    source: usize,
+    count: usize,
+    active: usize,
+    floor: Option<usize>,
+    words: SourceWords,
+    page: Option<ScratchVec<usize>>,
+}
+
+impl SourceUpdate {
+    /// Consume the prepared owner only after queue admission has succeeded.
+    fn apply(self, sources: &mut PendingSources) {
+        let Self {
+            source,
+            count,
+            active,
+            floor,
+            words,
+            page,
+        } = self;
+        if let Some(page) = page {
+            sources.counts.as_mut_slice()[source / 64] = page;
+        }
+        sources.counts.as_mut_slice()[source / 64].as_mut_slice()[source % 64] = count;
+        for (level, changed) in sources.occupancy.iter_mut().zip(words) {
+            if let Some((index, word)) = changed {
+                level.as_mut_slice()[index] = word;
+            }
+        }
+        sources.active = active;
+        sources.floor = floor;
+    }
+}
+
+/// Exact pending-source multiplicities and their minimum in a lazy source
+/// universe. Every level exists from the first origin; growth only appends
+/// zeros, so an existing low path already reaches the fixed singleton root.
+struct PendingSources {
+    /// Empty inner owners are absent pages; allocated pages have 64 counts.
+    counts: ScratchVec<ScratchVec<usize>>,
+    occupancy: [ScratchVec<u64>; SOURCE_LEVELS],
+    active: usize,
+    floor: Option<usize>,
+}
+
+impl PendingSources {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            counts: ScratchVec::new(governor),
+            occupancy: core::array::from_fn(|_| ScratchVec::new(governor)),
+            active: 0,
+            floor: None,
+        }
+    }
+
+    const fn floor(&self) -> Option<usize> {
+        self.floor
+    }
+
+    /// Admit initialization and possible relocation independently of updates.
+    fn reserve_slots<T: ScratchCharge>(
+        values: &mut ScratchVec<T>,
+        needed: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if needed <= values.len() {
+            return Ok(());
+        }
+        let missing = needed - values.len();
+        let relocated = if needed > values.capacity() {
+            values.len()
+        } else {
+            0
+        };
+        governor.charge(
+            Resource::Work,
+            size(missing).saturating_add(size(relocated)),
+        )?;
+        values.reserve(missing)
+    }
+
+    fn grow(&mut self, source: usize, governor: &mut Governor) -> Result<(), StopReason> {
+        // Division first permits the inclusive EOF coordinate usize::MAX.
+        let needed = source / 64 + 1;
+        Self::reserve_slots(&mut self.counts, needed, governor)?;
+        let mut lengths = [0; SOURCE_LEVELS];
+        let mut coordinate = source;
+        for (level, length) in self.occupancy.iter_mut().zip(&mut lengths) {
+            coordinate /= 64;
+            // Division happens first, so this addition cannot overflow.
+            *length = coordinate + 1;
+            Self::reserve_slots(level, *length, governor)?;
+        }
+        // Every reservation succeeded before directory/occupancy lengths grow.
+        // Appending empty owners and zero words fits admitted capacities.
+        for _ in self.counts.len()..needed {
+            self.counts.push(ScratchVec::new(governor))?;
+        }
+        for (level, length) in self.occupancy.iter_mut().zip(lengths) {
+            let missing = length.saturating_sub(level.len());
+            level.extend(core::iter::repeat_n(0, missing))?;
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), StopReason> {
+        let root = &self.occupancy[SOURCE_LEVELS - 1];
+        let word = match root.as_slice() {
+            [] if self.active == 0 => 0,
+            [word] => *word,
+            _ => return Err(invalid_input("pending source root is not a singleton")),
+        };
+        if (self.active == 0) != (word == 0) || (self.active == 0) != self.floor.is_none() {
+            return Err(invalid_input("pending source root and minimum disagree"));
+        }
+        if let Some(floor) = self.floor
+            && self.count_at(floor)? == 0
+        {
+            return Err(invalid_input("pending source minimum has no live count"));
+        }
+        Ok(())
+    }
+
+    fn count_at(&self, source: usize) -> Result<usize, StopReason> {
+        let page = self
+            .counts
+            .as_slice()
+            .get(source / 64)
+            .ok_or_else(|| invalid_input("live pending source has no count page"))?;
+        if page.len() != 64 {
+            return Err(invalid_input(
+                "live pending source count page is not complete",
+            ));
+        }
+        Ok(page[source % 64])
+    }
+
+    fn changed_words(&self, source: usize, adding: bool) -> Result<SourceWords, StopReason> {
+        let mut words = [None; SOURCE_LEVELS];
+        let mut coordinate = source;
+        for (level, changed) in self.occupancy.iter().zip(&mut words) {
+            let index = coordinate / 64;
+            let mask = 1_u64 << (coordinate % 64);
+            let old = *level
+                .as_slice()
+                .get(index)
+                .ok_or_else(|| invalid_input("pending source occupancy word is missing"))?;
+            if (old & mask != 0) == adding {
+                return Err(invalid_input(
+                    "pending source occupancy transition is inconsistent",
+                ));
+            }
+            let new = if adding { old | mask } else { old & !mask };
+            *changed = Some((index, new));
+            if (adding && old != 0) || (!adding && new != 0) {
+                break;
+            }
+            coordinate = index;
+        }
+        Ok(words)
+    }
+
+    fn minimum_after(&self, update: &SourceUpdate) -> Result<Option<usize>, StopReason> {
+        let mut coordinate = 0_usize;
+        for level in (0..SOURCE_LEVELS).rev() {
+            let stored = self.occupancy[level]
+                .as_slice()
+                .get(coordinate)
+                .ok_or_else(|| invalid_input("pending source minimum path is missing"))?;
+            let word = match update.words[level] {
+                Some((index, word)) if index == coordinate => word,
+                _ => *stored,
+            };
+            if level == SOURCE_LEVELS - 1 && update.active == 0 {
+                return if word == 0 {
+                    Ok(None)
+                } else {
+                    Err(invalid_input(
+                        "empty pending source index has a nonempty root",
+                    ))
+                };
+            }
+            if word == 0 {
+                return Err(invalid_input(
+                    "nonempty pending source path has an empty word",
+                ));
+            }
+            coordinate = coordinate
+                .checked_mul(64)
+                .and_then(|base| base.checked_add(word.trailing_zeros() as usize))
+                .ok_or_else(|| invalid_input("pending source minimum exceeds the offset domain"))?;
+        }
+        let count = if coordinate == update.source {
+            update.count
+        } else {
+            self.count_at(coordinate)?
+        };
+        if count == 0 {
+            return Err(invalid_input(
+                "pending source minimum points to an empty count",
+            ));
+        }
+        Ok(Some(coordinate))
+    }
+
+    fn prepare_add(
+        &mut self,
+        source: usize,
+        fed: usize,
+        governor: &mut Governor,
+    ) -> Result<SourceUpdate, StopReason> {
+        governor.charge(Resource::Work, SOURCE_UPDATE_WORK)?;
+        if source > fed {
+            return Err(invalid_input("queued source origin exceeds admitted input"));
+        }
+        self.grow(source, governor)?;
+        self.validate()?;
+        let stored = &self.counts[source / 64];
+        let (old, page) = if stored.is_empty() {
+            let word = self.occupancy[0]
+                .as_slice()
+                .get(source / 64)
+                .ok_or_else(|| invalid_input("pending source page has no occupancy word"))?;
+            if *word != 0 {
+                return Err(invalid_input(
+                    "absent pending source page has live occupancy",
+                ));
+            }
+            let mut page = ScratchVec::new(governor);
+            Self::reserve_slots(&mut page, 64, governor)?;
+            page.extend(core::iter::repeat_n(0, 64))?;
+            (0, Some(page))
+        } else {
+            (self.count_at(source)?, None)
+        };
+        let count = old
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let active = self
+            .active
+            .checked_add(usize::from(old == 0))
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let words = if old == 0 {
+            self.changed_words(source, true)?
+        } else {
+            self.check_occupied(source)?;
+            [None; SOURCE_LEVELS]
+        };
+        Ok(SourceUpdate {
+            source,
+            count,
+            active,
+            floor: Some(self.floor.map_or(source, |known| known.min(source))),
+            words,
+            page,
+        })
+    }
+
+    fn check_occupied(&self, source: usize) -> Result<(), StopReason> {
+        let word = self.occupancy[0]
+            .as_slice()
+            .get(source / 64)
+            .ok_or_else(|| invalid_input("live pending source has no occupancy word"))?;
+        if word & (1_u64 << (source % 64)) == 0 {
+            return Err(invalid_input("live pending source has no occupancy bit"));
+        }
+        Ok(())
+    }
+
+    fn prepare_remove(
+        &self,
+        source: usize,
+        governor: &mut Governor,
+    ) -> Result<SourceUpdate, StopReason> {
+        governor.charge(Resource::Work, SOURCE_UPDATE_WORK)?;
+        self.validate()?;
+        let count = self
+            .count_at(source)?
+            .checked_sub(1)
+            .ok_or_else(|| invalid_input("queued source origin has no live count"))?;
+        if self.floor.is_none_or(|floor| floor > source) {
+            return Err(invalid_input(
+                "queued source origin precedes the cached minimum",
+            ));
+        }
+        let active = self
+            .active
+            .checked_sub(usize::from(count == 0))
+            .ok_or_else(|| invalid_input("pending source origin count underflows"))?;
+        let words = if count == 0 {
+            self.changed_words(source, false)?
+        } else {
+            self.check_occupied(source)?;
+            [None; SOURCE_LEVELS]
+        };
+        let mut update = SourceUpdate {
+            source,
+            count,
+            active,
+            floor: self.floor,
+            words,
+            page: None,
+        };
+        if count == 0 && self.floor == Some(source) {
+            update.floor = self.minimum_after(&update)?;
+        }
+        Ok(update)
     }
 }
 
@@ -308,9 +682,120 @@ impl Turn {
         kind: TurnKind,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        governor.charge(Resource::ScratchBytes, 32)?;
-        self.nodes.push(TurnNode { prev, end, kind });
-        Ok(u32::try_from(self.nodes.len() - 1).unwrap_or(u32::MAX))
+        let index = u32::try_from(self.nodes.len())
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        let parent = self.nodes[prev as usize];
+        let (plain, depth, jump) = if let TurnKind::Pack(other) = kind {
+            (self.common_plain(prev, other, governor)?, 0, 0)
+        } else if parent.plain == prev {
+            let depth = parent
+                .depth
+                .checked_add(1)
+                .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+            let first = self.nodes[parent.jump as usize];
+            let second = self.nodes[first.jump as usize];
+            let jump = if parent.depth - first.depth == first.depth - second.depth {
+                first.jump
+            } else {
+                prev
+            };
+            (index, depth, jump)
+        } else {
+            (parent.plain, 0, 0)
+        };
+        governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
+        self.nodes.push(TurnNode {
+            prev,
+            end,
+            kind,
+            plain,
+            depth,
+            jump,
+        });
+        Ok(index)
+    }
+
+    /// Intersect cached prefix trees using one logarithmic skip link per node.
+    /// Histories behind a packed disagreement are never enumerated or replayed.
+    fn common_plain(
+        &self,
+        left: u32,
+        right: u32,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let mut left = self.nodes[left as usize].plain;
+        let mut right = self.nodes[right as usize].plain;
+        if self.nodes[left as usize].depth < self.nodes[right as usize].depth {
+            core::mem::swap(&mut left, &mut right);
+        }
+        let target = self.nodes[right as usize].depth;
+        while self.nodes[left as usize].depth > target {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let node = self.nodes[left as usize];
+            left = if self.nodes[node.jump as usize].depth >= target {
+                node.jump
+            } else {
+                node.prev
+            };
+        }
+        while left != right {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let (a, b) = (self.nodes[left as usize], self.nodes[right as usize]);
+            if a.jump == b.jump {
+                left = a.prev;
+                right = b.prev;
+            } else {
+                left = a.jump;
+                right = b.jump;
+            }
+        }
+        Ok(left)
+    }
+
+    fn prefix_before(
+        &self,
+        mut node: u32,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(u32, Option<(usize, usize)>), StopReason> {
+        let mut crossing = None;
+        while self.nodes[node as usize].end > at {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let current = self.nodes[node as usize];
+            node = if self.nodes[current.jump as usize].end > at {
+                current.jump
+            } else {
+                crossing = Some(node);
+                current.prev
+            };
+        }
+        let content = crossing
+            .and_then(|index| match self.nodes[index as usize].kind {
+                TurnKind::Content(start) if start < at => Some((start, at)),
+                _ => None,
+            })
+            .or_else(|| {
+                let current = self.nodes[node as usize];
+                match current.kind {
+                    TurnKind::Content(start) => Some((start, current.end)),
+                    _ => None,
+                }
+            });
+        Ok((node, content))
+    }
+
+    fn include_plain(
+        &self,
+        common: &mut Option<u32>,
+        hist: u32,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, K_CAPTURE)?;
+        *common = Some(match *common {
+            Some(previous) => self.common_plain(previous, hist, governor)?,
+            None => self.nodes[hist as usize].plain,
+        });
+        Ok(())
     }
 
     fn store(&mut self, segment: Segment, governor: &mut Governor) -> Result<u32, StopReason> {
@@ -939,10 +1424,16 @@ pub struct Recognizer<'s> {
     marker: u32,
     /// The queued reports, by offset, phase and arrival.
     pending: BTreeMap<(usize, u8, u64), Pending>,
+    /// Report offsets and source origins have different orders. Keep their
+    /// counted source index and cached minimum separate from dispatch order.
+    pending_sources: PendingSources,
     arrivals: u64,
     queued: Queued,
     turn: Turn,
     context: ContextTracker,
+    frontier: ContinuationFrontier,
+    frontier_memo: Option<FrontierMemo>,
+    settled_history: u32,
     failed: Option<StopReason>,
 }
 
@@ -1031,7 +1522,11 @@ impl<'s> Recognizer<'s> {
             prev: 0,
             end: 0,
             kind: TurnKind::Root,
+            plain: 0,
+            depth: 0,
+            jump: 0,
         };
+        governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
         let turn = Turn {
             nodes: vec![root],
             store: Vec::new(),
@@ -1062,6 +1557,7 @@ impl<'s> Recognizer<'s> {
             digest: DigestBuilder::new(),
             marker: 0,
             pending: BTreeMap::new(),
+            pending_sources: PendingSources::new(governor),
             arrivals: 0,
             queued: Queued {
                 meter: governor.scratch_meter(),
@@ -1069,6 +1565,9 @@ impl<'s> Recognizer<'s> {
             },
             turn,
             context,
+            frontier: ContinuationFrontier::default(),
+            frontier_memo: None,
+            settled_history: 0,
             failed: None,
         })
     }
@@ -1090,6 +1589,17 @@ impl<'s> Recognizer<'s> {
     #[must_use]
     pub const fn fed(&self) -> usize {
         self.engine.fed()
+    }
+
+    pub(super) const fn continuation_frontier(&self) -> ContinuationFrontier {
+        self.frontier
+    }
+
+    /// Immutable ancestry identity of the current structurally settled prefix.
+    /// Stored reasoning may gain embedded calls later; event traversal reads
+    /// only its unchanged text range, not that mutable embedded projection.
+    pub(super) const fn settled_history_id(&self) -> u32 {
+        self.settled_history
     }
 
     /// Consume the next chunk of output.
@@ -1163,7 +1673,133 @@ impl<'s> Recognizer<'s> {
                 .map_or(limit, |floor| limit.min(floor.saturating_sub(1)));
             self.settle(limit, governor)?;
         }
+        self.update_frontier(governor)
+    }
+
+    /// Refresh the structural projection after each byte, reusing a successful
+    /// result only while its owner floors, turn state and effective cutoff agree.
+    /// A packed disagreement is not resolved here.
+    fn update_frontier(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        let engine_floor = self.engine.continuation_floor(governor)?;
+        let report_floor = self.pending_sources.floor();
+        let lexical = self.engine.fed().saturating_sub(self.set.lookbehind);
+        governor.charge(Resource::Work, 1)?;
+        if let Some(memo) = self.frontier_memo
+            && memo.engine_floor == engine_floor
+            && memo.report_floor == report_floor
+            && memo.limit == memo.barrier.map_or(lexical, |floor| lexical.min(floor))
+        {
+            return Ok(());
+        }
+        // A failed refresh must not leave an older projection marked reusable.
+        self.frontier_memo = None;
+        let mut barrier = engine_floor.into_iter().chain(report_floor).min();
+        let mut common = None;
+        if let Some(top) = self.turn.top {
+            self.turn.include_plain(&mut common, top.hist, governor)?;
+        }
+        for (_, interpretations) in self.turn.interps.values() {
+            governor.charge(Resource::Work, size(interpretations.len()))?;
+            for interpretation in interpretations {
+                match interpretation {
+                    Interp::Top(base) => {
+                        self.turn.include_plain(&mut common, base.hist, governor)?;
+                    }
+                    Interp::Embedded(start) => {
+                        barrier = Some(barrier.map_or(*start, |known| known.min(*start)));
+                    }
+                }
+            }
+        }
+        if let Some(think) = &self.turn.think {
+            self.turn.include_plain(&mut common, think.hist, governor)?;
+            if let Some((_, base)) = think.promoted {
+                self.turn.include_plain(&mut common, base.hist, governor)?;
+            }
+            barrier = Some(barrier.map_or(think.start, |known| known.min(think.start)));
+        }
+        if let Some((start, base)) = self.turn.last_kill
+            && barrier.is_some_and(|floor| floor <= start)
+        {
+            self.turn.include_plain(&mut common, base.hist, governor)?;
+        }
+        let limit = barrier.map_or(lexical, |floor| lexical.min(floor));
+        let (node, mut content) = self
+            .turn
+            .prefix_before(common.unwrap_or(0), limit, governor)?;
+        self.settled_history = node;
+        let prefix_end = if let Some(top) = self.turn.top
+            && self.turn.think.is_none()
+            && self.turn.interps.is_empty()
+            && node == top.hist
+            && self.turn.nodes[top.hist as usize].plain == top.hist
+            && top.boundary < limit
+        {
+            content = Some((top.boundary, limit));
+            limit
+        } else {
+            content.map_or(self.turn.nodes[node as usize].end, |(_, end)| end)
+        };
+        self.frontier = ContinuationFrontier {
+            prefix_end,
+            content,
+            blocked_from: barrier,
+        };
+        self.frontier_memo = Some(FrontierMemo {
+            engine_floor,
+            report_floor,
+            barrier,
+            limit,
+        });
         Ok(())
+    }
+
+    /// Visit only the next shared native node, never rebuilding a prefix turn.
+    /// Skip ancestry bounds each lookup by the history depth rather than by
+    /// source length. A packed disagreement cannot enter this history.
+    pub(super) fn settled_step(
+        &self,
+        previous: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<SettledStep<'_>>, StopReason> {
+        governor.charge(Resource::Work, K_CAPTURE)?;
+        let mut node = self.settled_history;
+        let target = self.turn.nodes[previous as usize]
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        if self.turn.nodes[node as usize].depth < target {
+            return Ok(None);
+        }
+        while self.turn.nodes[node as usize].depth > target {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let current = self.turn.nodes[node as usize];
+            node = if self.turn.nodes[current.jump as usize].depth >= target {
+                current.jump
+            } else {
+                current.prev
+            };
+        }
+        let current = self.turn.nodes[node as usize];
+        if current.prev != previous {
+            return Err(crate::contract::invalid_input(
+                "settled native event history diverged from its published prefix",
+            ));
+        }
+        let segment = match current.kind {
+            TurnKind::Stored(index, _) => Some(&self.turn.store[index as usize]),
+            TurnKind::Content(_) => None,
+            TurnKind::Root | TurnKind::Pack(_) => {
+                return Err(crate::contract::invalid_input(
+                    "settled native event history contains a non-segment node",
+                ));
+            }
+        };
+        Ok(Some(SettledStep {
+            history: node,
+            end: current.end,
+            segment,
+        }))
     }
 
     /// Queue one report, charging [`QUEUED_REPORT`] scratch bytes until it
@@ -1171,9 +1807,18 @@ impl<'s> Recognizer<'s> {
     /// whose inserted wrapper closer is still being decided, and a queue too
     /// long for the budget is `BudgetExceeded(ScratchBytes)`.
     fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
+        let source = pending.source_start();
+        let update = self
+            .pending_sources
+            .prepare_add(source, self.engine.fed(), governor)?;
+        let arrival = self
+            .arrivals
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
         governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
+        update.apply(&mut self.pending_sources);
         self.queued.bytes += QUEUED_REPORT;
-        self.arrivals += 1;
+        self.arrivals = arrival;
         self.pending
             .insert((pending.at(), pending.phase(), self.arrivals), pending);
         Ok(())
@@ -1193,11 +1838,20 @@ impl<'s> Recognizer<'s> {
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
         let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
         // Stable order: offset, then phase, then arrival.
-        while let Some(entry) = self.pending.first_entry() {
-            if entry.key().0 > limit {
+        while let Some((&key, pending)) = self.pending.first_key_value() {
+            if key.0 > limit {
                 break;
             }
-            let pending = entry.remove();
+            // Admit before removing either index entry, so work refusal
+            // leaves both orders and their ownership intact.
+            let update = self
+                .pending_sources
+                .prepare_remove(pending.source_start(), governor)?;
+            let (_, pending) = self
+                .pending
+                .pop_first()
+                .expect("pending minimum was just read");
+            update.apply(&mut self.pending_sources);
             ready.push((ready.len(), pending.at(), pending));
         }
         if ready.is_empty() {
@@ -1232,6 +1886,11 @@ impl<'s> Recognizer<'s> {
         group: Vec<Pending>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        // Every live turn mutation is dispatched here: history/top/interps,
+        // open or promoted reasoning, last_kill and late embedded segments.
+        // Marker tables appended by step are not projection inputs; their
+        // queued reports arrive here before affecting the projected turn.
+        self.frontier_memo = None;
         governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
         let mut frame = Frame {
             top: self.turn.top,

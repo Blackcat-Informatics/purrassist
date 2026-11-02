@@ -891,7 +891,8 @@ governor, with the named constants of `purrassist_core::grammar::cost`.
 Recovering `n` output bytes charges exactly
 
 ```text
-recover     = 2·n (retaining the output, the encoding scan) + recognition + resolution
+recover     = W_intake + recognition + resolution
+W_intake    = 2·n (source insertion, encoding scan) + G_source(n) + r + G_ranges(r)
 recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment events)
             + K_CAPTURE·(captured bytes and history nodes materialized)
             + K_ERR·(error configurations explored)
@@ -901,6 +902,27 @@ resolution  = one unit per member, option, alternative and validation step,
               plus the recovered value, ids, checks and ledger entries
             + (unparsed-markup scan: one unit per content byte read)
 ```
+
+Here `r` is the number of maximal invalid UTF-8 runs. `G_source` and
+`G_ranges` sum the occupied lengths charged before each capacity growth of
+the source and invalid-range vectors. The shared doubling growth policy gives
+`G_source(n) ≤ 2·n`, `G_ranges(r) ≤ 2·r` and `r ≤ n`, so intake work is at most
+`7·n`. Empty vectors contribute zero relocation work. These terms describe
+admitted work. A governor or capture refusal stops admission at its original
+cause; a semantic request error stops interpretation while admitted source
+capture can continue.
+
+Revision facts prepare one borrowed leaf interval index per raw reading with
+operator payloads. Original leaf positions sort by source interval; balanced
+subtree maximum ends prune leaves that cannot enclose an edit. Every enclosing
+leaf must agree on its parameter pointer. Different overlapping pointers remain
+unknown, including adjacent leaves sharing an empty insertion's endpoint. The
+index copies neither argument trees nor pointer text. Construction, sorting,
+traversal and pointer comparisons admit Work; its fallible scratch storage
+releases after that reading's facts are prepared, including on refusal. The
+existing comparison of matching edit facts across alternatives stays unchanged.
+Disjoint leaf ranges avoid a full leaf scan for every edit; this does not claim
+a measured budget pass or a linear bound for arbitrary overlapping intervals.
 
 Pythonic's finite-state framing and canonical decimal literal path scan
 linearly. Converting a binary, octal or hexadecimal integer with `n` digits
@@ -918,6 +940,219 @@ anchor (at most 29.5 units per byte, for `to=functions.` on every line),
 linear within 1.05x and under 32 units per byte. A turn that is a single
 call has no content to scan.
 
+Tool-call recovery now uses one incremental intake path. It admits the source
+document's metadata before validating the request and constructing the
+recognizer. Each input byte then admits the cumulative input length, source
+storage and copying, UTF-8 classification, and recognition, in that order.
+Source and invalid-range vectors admit insertion and relocation work before
+growth; their capacity schedule depends on the byte sequence, never the number
+or size of caller chunks. The pending UTF-8 scalar holds at most three bytes
+between byte steps. Invalid runs retain their original ranges and receive the
+existing loss records once the complete source digest is available.
+
+This intentionally replaces the earlier ordering that retained the whole
+source and scanned its encoding before recognition began. Usage counters and
+the first refusal may therefore differ from that ordering. A semantic invalid
+request stops interpretation but keeps capturing the original source under the
+same healthy governor. If source admission then fails, that explicit refusal
+takes precedence over the semantic error and no retained prefix is published.
+After a governor or capture refusal, remaining supplied bytes contribute only
+to the source digest: no further source copying, admission or interpretation
+occurs. Failed source allocation is never retried. A receipt retains the
+complete admitted source or no source; a fully captured source remains
+available when a later stage refuses. The metadata vector is reserved before
+intake, so publishing a complete source after refusal moves existing storage
+without allocating.
+
+Batch recovery runs this path now. Its recognizer also maintains a conservative
+native continuation frontier after each byte. The frontier intersects the
+content state, every active attempt's turn interpretations, open reasoning and
+promoted bases, and pending and engine ownership barriers. Turn histories cache
+their unambiguous structural prefix with one skip link per node; prefix
+intersection visits those links rather than enumerating or replaying histories.
+The portable history-node reservation is 48 bytes. Traversals admit work before
+each visited step, and scanning live owners admits work for their records.
+Pending reports keep their dispatch order separately from a counted source
+index. Paged source-offset counts and hierarchical occupancy bitsets retain the
+exact minimum, including a later-ending report whose source begins earlier.
+Each occupancy level marks nonempty words of the level below it; all levels
+exist from the first origin through one fixed root word. Updates and minimum
+descent visit at most eleven levels on 64-bit targets, or six on 32-bit targets,
+without assuming source origins arrive or leave in order. Every prepared update
+admits 104 Work on either target for bounded planning, validation and writes,
+including the root read and page bookkeeping. Growth separately admits newly
+initialized directory entries, count slots and bitmap words, and live slots
+potentially relocated by a capacity increase. Directory and bitmap capacities
+are reserved before their lengths grow. Each touched page reserves exactly 64
+native-width counts, while an empty inner owner represents an unallocated page.
+A prepared update owns a newly initialized page until queue admission succeeds;
+refusal drops that page without installing it. Live counts, occupancy and the
+cached minimum change only after the complete update and queue admission
+succeed. Removal is planned before a report leaves the dispatch queue, with no
+fallible charge between that removal and applying the source update. Invalid
+source offsets, count overflow
+and inconsistent occupancy paths fail explicitly.
+
+The index grows only to the largest queued origin, which must not exceed the
+fed byte count, including an empty completion's EOF offset. Dividing the source
+coordinate into a page and slot avoids an overflowing `source + 1` at the native
+offset limit. Scratch vectors own and charge their reserved capacity until the
+recognizer drops; the old 256-byte reservation per distinct origin is removed.
+The directory stores 40-byte inner owners with geometric growth, while page
+capacity stays at 64 counts. Together with the occupancy buffers this reserves
+less than 9.504 bytes per indexed source position plus rounding and fixed level
+overhead. A late origin after a large source gap needs the directory and its own
+page, without allocating count pages for the gap. Hermes JSON strings followed
+by `}` can queue such a late origin: their closing quote and brace also match an
+Anthropic reasoning closer, which is queued before ownership interpretation.
+These source-derived storage and update bounds do not establish whether a
+workload fits its Work or scratch budget. Frontier updates read the cached exact
+minimum without scanning the pending
+queue.
+
+A successful native projection retains an exact memo of its engine and
+pending-source floors, final ownership barrier and effective cutoff. Every byte
+still scans the engine owners with their original admissions, then admits one
+work unit for a fixed-key lookup. With both floors unchanged and no processed
+turn report, the memo is reused only when the advancing lexical cutoff capped
+by its saved barrier equals the prior effective cutoff. A stationary candidate
+can therefore avoid repeated interpretation scans and ancestry intersections;
+ordinary content still advances when its cutoff changes. Skipped traversals do
+not run or charge their former work. Any processed report invalidates the memo
+before changing turn histories, interpretations, reasoning or late embedded
+segments. A missed refresh clears the old memo before fallible projection and
+records a replacement only after success. No owner minimum or semantic choice
+is approximated, and feed boundaries do not participate in this key.
+
+The shared intake can notify a private callback when that frontier changes.
+It caps the reported range before incomplete UTF-8 and charges `K_EVENT` work
+per notification. Every reported end also checks its admitted source boundary:
+at most three backward byte probes and one scalar validation of at most four
+bytes move a cutoff inside valid UTF-8 back to the scalar's start. This admits
+12 work units per normalization. Separate fixed prefix/content caches admit
+one work unit per lookup and retain only successful results keyed by the
+UTF-8-capped cutoff integer. An unchanged cutoff skips normalization and its
+charge; matching content and prefix ends still share one result. A capped
+cutoff cannot later fall inside a newly completed valid scalar because the
+encoding cursor withholds every viable incomplete scalar at its start.
+Malformed subparts cannot become valid through later appends. Invalid byte
+sequences retain their exact boundaries. Batch uses the
+same producer with a discard sink. Feed count and chunk boundaries do not
+decide notification boundaries. These notifications
+carry native ownership metadata, not resolved calls or permission to execute.
+The same intake also constructs owned `ContentDelta` events for advances
+of the initial native content run, before any call, attempt or reasoning block.
+Each payload copies only the newly exposed source range into a temporary
+`ScratchVec`, admitting its capacity and `K_EVENT` plus one work unit per copied
+byte before notification. Every event additionally admits 512 bytes for its
+record and per-event collector insertion, plus four work units for amortized
+collector insertion and relocation. The record reservation covers four native
+slots, including a fresh collector receiving one event. A prepared event owns
+that temporary reservation and every payload reservation through sink handoff.
+Vectors, strings, typed parameter trees and copied outcome text transfer their
+reservations into this owner without permanent retention. The producer releases
+its reservations after the sink returns, including a refused collector insertion.
+Batch discard, external sinks and convenience collectors run the same admission
+and release schedule. Performed work and cumulative scratch charges remain;
+discarded event payloads no longer become permanent live scratch debt.
+
+Sink and collector storage belongs to the caller from inception, independently
+of the producer's temporary handoff ownership. Caller retention, collector
+capacity and feed boundaries do not change recovery admissions or releases.
+The convenience collectors reserve fallibly during handoff; allocation failure
+stops interpretation with an explicit refusal. Empty feeds allocate
+no events, and input chunks do not set event boundaries. A closed
+native content node contributes its full settled range, including when the
+lexical boundary lands exactly on its end.
+
+Live content after a structural segment is still withheld: final rejection extension
+and stray-closer handling can remove such bytes from native content. Unsupported
+markup reports over the initial content run preserve its content bytes. This
+producer never replays source. At EOF, one completed whole-message reading
+flushes its remaining content and reasoning ranges from the existing result.
+Both batch discard and streaming sinks run that same final producer.
+
+A native event cursor follows the structurally shared history exactly once.
+Its direct fixed-key lookup admits one work unit. A successful traversal is
+cached by settled native history identity and normalized end; an unchanged key
+skips repeated ancestry traversal and its charges. A changed end reconsiders a
+step held beyond the earlier cutoff. Stored native ancestry is immutable;
+late reasoning embedding changes neither the text ranges nor the call readings
+this event cursor inspects. Progress and content callbacks still precede this
+traversal, and feed boundaries do not affect either cache.
+The next-node lookup uses existing skip ancestry and admits every traversal;
+it does not rebuild or resolve prefix turns. Stored reasoning segments publish
+their exact marker-free text. Calls publish `CallStarted` only when every native
+reading is immune to examples-as-content and declaration-as-content suppression.
+A potentially suppressible call blocks subsequent live call indexing. Canonical
+tool-name or explicit-alias agreement across every reading publishes `CallName`;
+its lookup admission uses the actual canonical-name and alias index cardinality.
+Fuzzy identities wait for final resolution. A unique shared arguments-capture range
+publishes raw `ArgumentDelta`, including for mutating tools: raw bytes make no
+claim about settled parameter values or permission to execute.
+
+Before resolution consumes the finished native turn, the cursor records
+governed argument-capture offsets and authentic grammar-edit payloads. A charged sort and binary lookup allow EOF
+events to use captures whose native alternatives agree, without replaying the
+input or decoding arguments again. The completed unique reading fills missing
+call starts, canonical names and raw arguments. EOF names may follow a guessed
+final identity; the final outcome and receipt retain that uncertainty.
+
+The same EOF producer now emits `CallComplete` with the exact final per-call
+outcome, preserving `BestGuess`, `Ambiguous` and every unresolved reason.
+Blocker text is copied fallibly under a transient storage lease and published
+only after the event record is admitted. For resolved or best-guess calls,
+`ParameterComplete` follows `CallComplete`, including for mutating tools.
+Values use `OwnedDocument::copy_from`; their real reservations stay with the
+prepared event through handoff, preserving lexical numbers, typed values and
+spans. Parameters are emitted in canonical name order. Ambiguous and unresolved calls, and
+duplicate member names, do not publish a supposedly settled parameter value.
+
+`CallRejected` carries each final rejected attempt's complete span and precise
+reason. Its `index` is `None` when no `CallStarted` was emitted for that attempt;
+rejected-list ordinals are never substituted for accepted-call indices. A
+future identity-change event may use `Some` only for that already started
+identity, followed by a new `CallStarted` for its replacement.
+
+Native `Revision` events match retained operator facts against selected ledger
+rule ids and exact source spans. Their original and replacement bytes come
+directly from `MarkupEdit`, and their guess flag comes from that operator's
+registry entry. Multiple native candidates must agree on both payloads. A
+parameter JSON Pointer is carried only when the original argument-leaf owners
+agree; markup or an uncertain owner uses `None`. Neither explanations nor
+serialized diagnostic text are parsed to reconstruct edits. Revisions created
+by semantic search still need structured transformation records at their
+production sites; this native route does not fabricate their missing payloads.
+
+Revision rule lookup uses a static ordinal index sorted at compile time from
+the operator registry. Equal identifiers keep their original registry order,
+so the first matching operator remains the same. An explicit lower-bound loop
+halves its exclusive search interval on every comparison. Each string comparison
+admits the queried identifier's byte length plus one Work before it runs,
+including the final equality check when an indexed entry exists. A lookup uses
+at most the registry count's bit width plus one comparisons: at most seven
+for the current 47 operators. This index adds no heap storage and preserves
+evidence and event order; these source bounds do not establish where the
+restarted DeepSeek workload exhausts or whether it fits its Work budget.
+
+Packed ambiguity and grouped attempts can hold this conservative frontier even
+when later recovery would fold their meanings together. Proving the longest
+semantic stable prefix, ambiguous EOF event intersection, exact held/candidate
+byte accounting, semantic-search revision events,
+decoding queries, governed cloning and CLI/MCP progress remain
+unfinished under #16.
+
+`ToolSet::stream` and `stream_governed` now own the request and original governor
+while borrowing the tools and static built-in dialect set. Explicit dialect
+constructors borrow a prepared set instead, without a self-reference or clone.
+`ToolCallStream::feed` extends a caller's event sink, and `feed_collect` returns
+newly published events. `cancel` marks the original governor; `finish(stop)`
+checks refusal before completing and resolving the live recognizer.
+`finish_with_events` and `finish_collect` preserve EOF events; plain `finish`
+delegates to the same producer with a discard sink. Allocation refusal during
+EOF collection is explicit in the returned result. This facade implements the
+source facts described above, not the complete streaming event contract.
+
 Each dialect `d` of the explicit prepared allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is
 `CompiledGrammar::configuration_bound()` (one per program location plus one
@@ -927,16 +1162,21 @@ colonless JSON spellings of its envelope literals); `K_d = K_THREAD·B_d` is its
 per-byte term. The published bound is
 
 ```text
-work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E,   K_d = K_THREAD·B_d
+work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux,   K_d = K_THREAD·B_d
 ```
 
-where `E` is the number of error configurations the repair search explores,
+Here `W_aux` includes the separately admitted class-automaton construction,
+segment events, captured history, codec and JSON-recovery work, search keys,
+and resolution listed in the exact decomposition above. The configuration
+term bounds finite-state framing, not arbitrary codec/schema computation or
+materialization of competing readings. `E` is the number of error configurations the repair search explores,
 capped by the effort's `Work` budget (explicit `BudgetExceeded` beyond it).
-The configuration term is an upper bound per byte: on the fast path only a
+Current intake counters have not been measured; historical throughput rows
+do not qualify the new byte-fold costs. The configuration term is an upper bound per byte: on the fast path only a
 handful of the `B_d` configurations are live at any byte, and the remaining
 linear terms (segment events, captured bytes, codec scans, JSON recovery
-units, resolution) are each a small constant per byte: whole recoveries
-measure 10 to 26 units per byte in total (the throughput table below), far
+units, resolution) are each a small constant per byte: recorded baseline recoveries
+measured 10 to 26 units per byte in total (the throughput table below), far
 inside the slack of any built-in `K_d`.
 `crates/core/tests/tool_call_scale.rs` (`make corpus`) checks the bound on
 64 KiB and 1 MiB Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3, Mistral v11,

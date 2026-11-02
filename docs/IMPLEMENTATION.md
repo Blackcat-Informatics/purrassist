@@ -84,6 +84,19 @@ unchanged; usage reflects the additional admitted computation. General
 recovery/search ownership and graph loading remain separate.
 These changes do not complete the full contracts of parent issues #33 and #36.
 
+Property evaluation now reuses the compiled child index when its prepared child
+keys were unique. Compilation derives that flag from the entry count before
+and after existing last-value map assembly, without another name index. One
+governed optional lookup then supplies both property membership and the child
+schema, including boolean children and the compiled dialect and reference
+context. Locations with duplicate prepared keys retain the existing raw
+unique-member check, so duplicate property names still do not select the map's
+last occurrence. Child-map contents, applicability and reference resolution are
+unchanged. The flag fits the existing portable location admission, guarded by
+layout assertions. This implementation is source-inspected and formatted;
+validation cost and behavior have not been executed. It does not complete #33
+or #36.
+
 Witness canonicalization, requirement merging and the existing branch driver
 share the caller's governor. Immutable schema operands and pattern names remain
 borrowed; synthesized canonical lists, requirement snapshots, child obligations,

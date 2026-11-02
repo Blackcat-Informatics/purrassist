@@ -65,6 +65,7 @@ pub mod resolve;
 pub mod rules;
 mod scope;
 mod shape;
+mod stream;
 mod toolset;
 
 pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
@@ -108,6 +109,7 @@ pub use shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,
 };
+pub use stream::{StreamEvent, ToolCallStream};
 pub use toolset::{CompiledTool, ToolSet, ToolSetError, collision_key, is_valid_name};
 
 /// The entry of `items`, sorted by the name `key` gives, whose name is
