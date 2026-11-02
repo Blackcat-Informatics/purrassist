@@ -870,14 +870,27 @@ impl Evaluator<'_, '_> {
                 self.governor,
             )?;
         }
-        if let Some(properties) = body.get_governed("properties", self.governor)?
+        reference::work(self.governor, 2)?;
+        let property = if schema.index.locations[id].children_unique {
+            // Compilation admits only applicable children. Unique prepared keys
+            // make this one lookup both membership evidence and child authority.
+            let key = index::pointer("properties", &member.key, self.governor)?;
+            schema.index.locations[id]
+                .children
+                .get_governed(key.as_str(), self.governor)?
+                .copied()
+        } else if let Some(properties) = body.get_governed("properties", self.governor)?
             && super::compile::member(properties, &member.key, self.governor)?.is_some()
         {
+            // A duplicate property name is absent under unique-member semantics,
+            // even though the child map preserves its last compiled occurrence.
+            let key = index::pointer("properties", &member.key, self.governor)?;
+            Some(index::child(schema, id, &key, self.governor)?)
+        } else {
+            None
+        };
+        if let Some(child) = property {
             matched = true;
-            let child = {
-                let key = index::pointer("properties", &member.key, self.governor)?;
-                index::child(schema, id, &key, self.governor)?
-            };
             let branch = self.eval(child, &member.value, &child_path, depth + 1)?;
             result.merge_child(branch, self.governor)?;
         }

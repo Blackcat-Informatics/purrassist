@@ -171,6 +171,7 @@ fn register_location(
         Location {
             document,
             vocabularies,
+            children_unique: true,
             route: index::route(route, context.governor)?,
             pointer: reference::copy(pointer, context.governor)?,
             base: reference::copy(base, context.governor)?,
@@ -639,7 +640,13 @@ fn compile_children(
             )?,
         }
     }
-    index.locations[id].children = index::Map::from_entries(pending.entries, context.governor)?;
+    reference::work(context.governor, 5)?;
+    let entries = pending.entries.len();
+    let children = index::Map::from_entries(pending.entries, context.governor)?;
+    // Last-value assembly loses an entry exactly when a prepared key repeats.
+    // Retain that fact without changing child or reference resolution.
+    index.locations[id].children_unique = children.len() == entries;
+    index.locations[id].children = children;
     Ok(())
 }
 
