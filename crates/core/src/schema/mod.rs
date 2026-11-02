@@ -359,7 +359,10 @@ impl Schema {
     ///
     /// Evaluator control, annotation and report storage is admitted before
     /// allocation. `Work` covers visited schema locations and admitted
-    /// operations; `Depth` bounds nesting. `ScratchBytes` covers collections
+    /// operations; caller `Depth` bounds nesting, counting the root at zero
+    /// and each reference or applicator crossing as another level. Evaluation
+    /// uses native recursion; callers raising the limit must provide enough
+    /// stack. `ScratchBytes` covers collections
     /// at portable element sizes, member names, pattern keys, transient child
     /// keys and instance paths, and held applicator branches. Temporary owners
     /// release their storage when the evaluation drops them. The

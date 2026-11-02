@@ -251,11 +251,13 @@ Integer tests and numeric/count comparisons also use admitted operations. Count
 text is allocated only for present bounds, through a temporary owner; diagnostic
 messages and serialized expected types retain temporary owners until collection.
 Active keys and dynamic scopes unwind unconditionally after recursive evaluation
-or scope-entry refusal. Caller `Depth` and an independent native ceiling of 256
-bound live recursion, even when callers supply larger limits. This ceiling counts
-reference and applicator frames, not just nested data: a recursive object/array
-schema can require several frames per data level. It is distinct from the ordinary
-caller preset of 128 and preserves the existing deep mandatory-wrap recovery case.
+or scope-entry refusal. Caller `Depth` bounds live evaluator recursion, with
+the root at zero. Reference and applicator frames count too: a recursive
+object/array schema can require several frames per data level. The ordinary
+caller preset remains 128. Raising it requires enough native stack for recursive
+evaluation; core does not provision stack or impose a separate fixed ceiling.
+Private depth counters use a wider integer than the public limit so the first
+frame beyond even the maximum caller limit refuses without arithmetic overflow.
 
 Registered host output validation has a separate automatic Work policy: the
 standard base plus 256 units per returned node. A fixed cursor stack counts

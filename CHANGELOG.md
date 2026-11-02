@@ -119,6 +119,11 @@ crates share one version.
 
 ### Fixed
 
+- Schema evaluation honors the caller's depth limit above 256, preserving
+  reference and applicator frame counting. The default limit remains 128;
+  callers raising it must provide enough native stack for recursive evaluation.
+  Private depth counters prevent overflow before refusing an excessive frame.
+
 - Schema compilation retains fallible, release-owned indexes and location
   metadata. Balanced indexes admit actual lookup and insertion paths; initial
   ordered routes and child tables are assembled directly. Temporary buffers
