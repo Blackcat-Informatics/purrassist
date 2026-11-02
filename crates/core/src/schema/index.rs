@@ -123,6 +123,10 @@ impl<K: Key, V: ScratchCharge> Map<K, V> {
             root: None,
         }
     }
+    /// Number of distinct keys retained after duplicate replacement.
+    pub(super) fn len(&self) -> usize {
+        self.nodes.len()
+    }
     /// Consume strictly increasing keys and link their balanced tree once.
     /// Invalid ordering is an invariant failure, never an insertion fallback.
     pub(super) fn from_sorted(
@@ -547,9 +551,10 @@ impl ScratchCharge for crate::pattern::Pattern {
     };
 }
 impl ScratchCharge for super::Location {
-    // Dialect/document (16), route (40), pointer/base (80), two maps (112),
+    // Dialect/child uniqueness/document (16), route (40), pointer/base (80), two maps (112),
     // optional dynamic-anchor owner (40), including portable field padding.
     const CHARGE: usize = {
+        assert!(size_of::<(super::Vocabularies, bool)>() <= 8);
         assert!(size_of::<Self>() <= 288);
         288
     };

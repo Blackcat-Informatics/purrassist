@@ -75,6 +75,8 @@ impl Index {
 #[derive(Debug)]
 struct Location {
     vocabularies: Vocabularies,
+    /// Every prepared child key was unique before last-value map assembly.
+    children_unique: bool,
     document: usize,
     route: ScratchVec<usize>,
     pointer: ScratchString,
