@@ -67,7 +67,9 @@ use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
 use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason};
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason, format_output_governed,
+};
 use crate::digest::Digest;
 use crate::pattern::{DerivativeDfa, DfaState};
 use crate::search::Ledger;
@@ -3426,6 +3428,84 @@ fn lead_split(parts: &mut Parts, lead: &[MarkupEdit]) {
 /// No chain: the parts closed so far are none.
 const NO_CHAIN: u32 = u32::MAX;
 
+/// The retained fence/type syntax makes the boundary's Markdown meaning
+/// independent of which neighboring call owns its uncaptured whitespace.
+fn canonical_deepseek_part(call: &CallSegment) -> bool {
+    if call.readings.len() != 1 || !call.derivations.is_empty() {
+        return false;
+    }
+    let reading = &call.readings[0];
+    reading.span == call.span
+        && reading.dialect == DialectId::DeepSeekV3Stripped
+        && reading.kind == ProductionKind::Call
+        && reading.closure == Closure::Closed
+        && reading.cost == 0
+        && reading.edits.is_empty()
+        && !reading.bare
+        && reading.name.is_some()
+        && reading.arguments.root.span.is_some()
+}
+
+/// Move a shared separator to the first retained byte, preserving all payload
+/// and capture anchors. This is the late layout preference, applied before
+/// equivalent turn paths would otherwise consume separate candidates.
+fn deepseek_layout_boundary(
+    left: &CallSegment,
+    right: &CallSegment,
+    source: &[u8],
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    let boundary = left.span.end - left.span.start;
+    let mut moved = 0;
+    for byte in &source[boundary..] {
+        governor.charge(Resource::Work, 1)?;
+        if !byte.is_ascii_whitespace() {
+            break;
+        }
+        moved += 1;
+    }
+    if moved == 0 {
+        return Ok(None);
+    }
+    governor.charge(Resource::Work, 11)?;
+    // The previous retained closing fence stays protected. The next retained
+    // type is not a Markdown marker, and its `bare` fact remains false. An
+    // inline closing run cannot begin at a call end already ending in ticks:
+    // adjacent ticks would be one run, so inline membership cannot change.
+    if boundary < 3
+        || &source[boundary - 3..boundary] != b"```"
+        || !source[boundary + moved..].starts_with(b"function")
+    {
+        return Ok(None);
+    }
+    let end = left.span.end + moved;
+    for call in [left, right] {
+        let reading = &call.readings[0];
+        governor.charge(
+            Resource::Work,
+            size(reading.captures.len()).saturating_add(4),
+        )?;
+        let touches = |span: &Range<usize>| {
+            span.start < end && span.end > left.span.end
+                || span.is_empty() && left.span.end <= span.start && span.start < end
+        };
+        if reading
+            .captures
+            .iter()
+            .any(|capture| touches(&capture.span))
+            || reading
+                .name
+                .as_ref()
+                .is_some_and(|name| touches(&name.span))
+            || reading.id.as_ref().is_some_and(|id| touches(&id.span))
+            || reading.arguments.root.span.as_ref().is_some_and(touches)
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(end))
+}
+
 /// Scratch bytes charged for each closed part's node and memo entry, on top
 /// of what reading the part charged.
 const CHAIN_BYTES: u64 = 192;
@@ -4803,6 +4883,24 @@ enum HeldBody {
     /// completions before it; materialized only if no later completion
     /// dominates it.
     Chain(Chained),
+}
+
+impl HeldBody {
+    /// The independently owned payload admission, excluding shared chains.
+    const fn owned_bytes(&self) -> u64 {
+        match self {
+            Self::Event(Event::Completed { charged, .. }, _) => *charged,
+            Self::Event(_, _) => 0,
+            Self::Chain(chained) => chained.last_bytes(),
+        }
+    }
+
+    /// Drop the payload before releasing its exact admission.
+    fn discard(self, governor: &mut Governor) -> Result<(), StopReason> {
+        let bytes = self.owned_bytes();
+        drop(self);
+        governor.release_scratch(bytes)
+    }
 }
 
 /// A completed configuration held while closer spellings of its grammar
@@ -6390,91 +6488,205 @@ impl<'s> Engine<'s> {
         attempt: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let mine = self.tables[table].held.take(attempt);
-        if mine.is_empty() {
+        let mut mine = self.tables[table].held.take(attempt).into_iter();
+        if mine.as_slice().is_empty() {
             return Ok(());
         }
-        let count = mine.len();
-        let _vectors = governor.lease_scratch(size(count).saturating_mul(RELEASE_VECTOR_BYTES))?;
-        // Latest end first: the completion that dominates the rest is almost
-        // always the one that read the most.
-        let mut order: Vec<usize> = (0..count).collect();
-        order.sort_by_key(|&index| Reverse((mine[index].at, mine[index].calls)));
-        governor.charge(
-            Resource::Work,
-            size(count).saturating_mul(size(usize::BITS as usize - count.leading_zeros() as usize)),
-        )?;
-        // The cost of the first calls of a completion, built when asked.
-        let mut tables: Vec<Option<Vec<u64>>> = vec![None; count];
+        let mut tables: Vec<Option<Vec<u64>>> = Vec::new();
         let mut table_bytes = 0_u64;
-        let mut keep = vec![true; count];
-        for (index, entry) in mine.iter().enumerate() {
-            for &other in &order {
-                if other == index {
-                    continue;
-                }
-                governor.charge(Resource::Work, 1)?;
-                let other_entry = &mine[other];
-                let later = other_entry.at > entry.at;
-                let more = other_entry.calls > entry.calls;
-                let dominated = if other_entry.dangling {
-                    // Cut off while writing a further call's arguments.
-                    later && more && other_entry.arguments
-                } else if entry.dangling {
-                    // A cut-off reading of no more calls than a completion
-                    // reads, or one whose last call never began its
-                    // arguments, or one that reaches no further.
-                    !entry.arguments
-                        || other_entry.at >= entry.at
-                        || (other_entry.calls >= entry.calls
+        let mut vectors = None;
+        let result = (|| {
+            let count = mine.len();
+            vectors =
+                Some(governor.lease_scratch(size(count).saturating_mul(RELEASE_VECTOR_BYTES))?);
+            // Latest end first: the completion that dominates the rest is almost
+            // always the one that read the most.
+            let mut order: Vec<usize> = (0..count).collect();
+            order.sort_by_key(|&index| {
+                Reverse((mine.as_slice()[index].at, mine.as_slice()[index].calls))
+            });
+            governor.charge(
+                Resource::Work,
+                size(count)
+                    .saturating_mul(size(usize::BITS as usize - count.leading_zeros() as usize)),
+            )?;
+            // The cost of the first calls of a completion, built when asked.
+            tables = vec![None; count];
+            let mut keep = vec![true; count];
+            for (index, entry) in mine.as_slice().iter().enumerate() {
+                for &other in &order {
+                    if other == index {
+                        continue;
+                    }
+                    governor.charge(Resource::Work, 1)?;
+                    let other_entry = &mine.as_slice()[other];
+                    let later = other_entry.at > entry.at;
+                    let more = other_entry.calls > entry.calls;
+                    let dominated = if other_entry.dangling {
+                        // Cut off while writing a further call's arguments.
+                        later && more && other_entry.arguments
+                    } else if entry.dangling {
+                        // A cut-off reading of no more calls than a completion
+                        // reads, or one whose last call never began its
+                        // arguments, or one that reaches no further.
+                        !entry.arguments
+                            || other_entry.at >= entry.at
+                            || (other_entry.calls >= entry.calls
+                                && self.prefix(
+                                    other_entry,
+                                    &mut tables[other],
+                                    &mut table_bytes,
+                                    entry.calls,
+                                    governor,
+                                )? <= entry.total)
+                    } else {
+                        // The same calls read no worse, and further ones.
+                        later
+                            && more
                             && self.prefix(
                                 other_entry,
                                 &mut tables[other],
                                 &mut table_bytes,
                                 entry.calls,
                                 governor,
-                            )? <= entry.total)
-                } else {
-                    // The same calls read no worse, and further ones.
-                    later
-                        && more
-                        && self.prefix(
-                            other_entry,
-                            &mut tables[other],
-                            &mut table_bytes,
-                            entry.calls,
-                            governor,
-                        )? <= entry.total
-                };
-                if dominated {
-                    keep[index] = false;
-                    break;
+                            )? <= entry.total
+                    };
+                    if dominated {
+                        keep[index] = false;
+                        break;
+                    }
                 }
+            }
+            drop(core::mem::take(&mut tables));
+            governor.release_scratch(core::mem::take(&mut table_bytes))?;
+            for keep in keep {
+                let entry = mine.next().expect("one decision per held completion");
+                if keep {
+                    self.release_body(table, entry.body, governor)?;
+                } else {
+                    entry.body.discard(governor)?;
+                }
+            }
+            Ok(())
+        })();
+        // A refusal abandons every remaining owner, including prefix tables.
+        // Preserve that refusal even if a cleanup reports an imbalance.
+        drop(tables);
+        let prefix_cleanup = governor.release_scratch(table_bytes);
+        let mut bytes = 0_u64;
+        for entry in mine {
+            bytes = bytes.saturating_add(entry.body.owned_bytes());
+            drop(entry);
+        }
+        let held_cleanup = governor.release_scratch(bytes);
+        drop(vectors);
+        result.and(prefix_cleanup).and(held_cleanup)
+    }
+
+    /// Transfer one owned held payload to the outgoing events, or drop its
+    /// physical buffers before releasing their admissions on refusal.
+    fn release_body(
+        &mut self,
+        table: usize,
+        body: HeldBody,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        match body {
+            HeldBody::Event(mut event, costs) => {
+                if let Event::Completed { parts, .. } = &mut event
+                    && let Err(reason) = self.normalize_deepseek_layout(table, parts, governor)
+                {
+                    let _ = HeldBody::Event(event, costs).discard(governor);
+                    return Err(reason);
+                }
+                self.events.push(event);
+            }
+            HeldBody::Chain(chained) => {
+                let materialized = self.arena.parts(&chained, governor);
+                let (mut parts, charged) = match materialized {
+                    Ok(materialized) => materialized,
+                    Err(reason) => {
+                        let _ = HeldBody::Chain(chained).discard(governor);
+                        return Err(reason);
+                    }
+                };
+                if let Err(reason) = self.normalize_deepseek_layout(table, &mut parts, governor) {
+                    drop(parts);
+                    let _ = governor.release_scratch(charged);
+                    let _ = HeldBody::Chain(chained).discard(governor);
+                    return Err(reason);
+                }
+                let event = Event::Completed {
+                    table: chained.table,
+                    attempt: chained.attempt,
+                    at: chained.at,
+                    parts,
+                    charged,
+                };
+                if let Err(reason) = HeldBody::Chain(chained).discard(governor) {
+                    drop(event);
+                    let _ = governor.release_scratch(charged);
+                    return Err(reason);
+                }
+                self.events.push(event);
             }
         }
-        governor.release_scratch(table_bytes)?;
-        for (entry, keep) in mine.into_iter().zip(keep) {
-            if !keep {
-                if let HeldBody::Chain(chained) = &entry.body {
-                    governor.release_scratch(chained.last_bytes())?;
-                }
+        Ok(())
+    }
+
+    /// Canonicalize only owned outgoing copies, before turn-path candidate
+    /// admission. Shared histories and cached chain parts remain immutable.
+    fn normalize_deepseek_layout(
+        &self,
+        table: usize,
+        parts: &mut [(Part, u64)],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if self.tables[table].kind != ProductionKind::Call
+            || self.grammars[self.tables[table].grammar].dialect != DialectId::DeepSeekV3Stripped
+        {
+            return Ok(());
+        }
+        for index in 1..parts.len() {
+            governor.charge(Resource::Work, 1)?;
+            let (before, after) = parts.split_at_mut(index);
+            let (Part::Call(left), left_cost) = &mut before[index - 1] else {
+                continue;
+            };
+            let (Part::Call(right), right_cost) = &mut after[0] else {
+                continue;
+            };
+            if *left_cost != 0
+                || *right_cost != 0
+                || !canonical_deepseek_part(left)
+                || !canonical_deepseek_part(right)
+                || left.span.end != right.span.start
+            {
                 continue;
             }
-            match entry.body {
-                HeldBody::Event(event, _) => self.events.push(event),
-                HeldBody::Chain(chained) => {
-                    let (parts, charged) = self.arena.parts(&chained, governor)?;
-                    // The shared last part's charge is the copy's now.
-                    governor.release_scratch(chained.last_bytes())?;
-                    self.events.push(Event::Completed {
-                        table: chained.table,
-                        attempt: chained.attempt,
-                        at: chained.at,
-                        parts,
-                        charged,
-                    });
-                }
-            }
+            let source = left
+                .span
+                .start
+                .checked_sub(self.base)
+                .zip(right.span.end.checked_sub(self.base))
+                .and_then(|(start, end)| self.buffer.as_slice().get(start..end));
+            let Some(source) = source else {
+                return Err(StopReason::InvalidInput(format_output_governed(
+                    format_args!(
+                        "completed DeepSeek source range {}..{} is outside the retained input window",
+                        left.span.start, right.span.end
+                    ),
+                    governor,
+                )?));
+            };
+            let Some(boundary) = deepseek_layout_boundary(left, right, source, governor)? else {
+                continue;
+            };
+            governor.charge(Resource::Work, 4)?;
+            left.span.end = boundary;
+            left.readings[0].span.end = boundary;
+            right.span.start = boundary;
+            right.readings[0].span.start = boundary;
         }
         Ok(())
     }

@@ -50,6 +50,20 @@ exact framing has representative priority within an equal-cost invocation tie. G
 arguments, repairs or segmentations remain alternatives. Selecting a profile
 does not authorize converting an inferred value into a resolved one.
 
+For canonical grouped calls, uncaptured ASCII whitespace between a retained
+closing fence and the next retained `function` belongs to the preceding call.
+The engine applies the same preference for the latest boundary to owned
+outgoing parts before admitting turn paths as candidates. It changes no argument or capture
+span, numeric spelling, ledger, content or native grammar. Repaired, locally
+ambiguous and rejected boundaries, and boundaries that overlap captured data,
+retain their alternatives.
+Shared histories and cached chains stay immutable, and the original engine
+input window supplies the byte checks for both incremental and batch callers.
+If normalization refuses, the engine preserves that refusal, drops the owned
+payloads and refunds their recorded scratch admissions. This includes copied
+parts, each original chain's last part and the remaining held completions;
+shared cached chains retain their admissions.
+
 ## Executable coverage
 
 Three first-party [anchor fixtures](../../../crates/core/tests/data/tool-calls/conformance/deepseek-v3-stripped.v1)
