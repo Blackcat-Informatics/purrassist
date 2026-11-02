@@ -44,6 +44,7 @@
         "city": "Oslo"
       },
       "candidate_dialects": [
+        "llama3-json-stripped.v1",
         "llama3-json.v1"
       ],
       "outcome": "resolved",

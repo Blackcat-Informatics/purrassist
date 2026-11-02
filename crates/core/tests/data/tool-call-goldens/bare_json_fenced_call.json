@@ -49,6 +49,44 @@
   "policy": "tolerant",
   "stop": "stop",
   "input": "Calling the tool:\n```json\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}}\n```\n",
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [
+      {
+        "tool": "get_weather",
+        "arguments": {
+          "city": "Oslo"
+        },
+        "candidate_dialects": [
+          "bare-json.v1",
+          "hermes-stripped.v1"
+        ],
+        "outcome": "best_guess",
+        "rules": [
+          "tool_call.context.fenced-example"
+        ]
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [
+      "Calling the tool:\n```json\n",
+      "\n```\n"
+    ],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.context.fenced-example"
+    ]
+  },
   "outcome": "best_guess",
   "stopped": "completed",
   "finish": "unresolved",
