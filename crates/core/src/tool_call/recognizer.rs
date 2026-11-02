@@ -75,7 +75,7 @@ use super::context::{ContextTracker, RECORD_BYTES};
 use super::dialect::{DialectId, DialectSet};
 use super::ir::{
     ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
-    RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment,
+    RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment, Spanned,
 };
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
@@ -243,7 +243,7 @@ impl Interp {
     }
 
     /// Preserve a top interpretation's promotion origin when extending content.
-    const fn rebase(self, base: Base) -> Self {
+    fn rebase(self, base: Base) -> Self {
         match self {
             Self::Top(_) => Self::Top(base),
             Self::NativePromoted(_) => Self::NativePromoted(base),
@@ -289,7 +289,7 @@ enum LastKill {
 }
 
 impl LastKill {
-    const fn new(start: usize, top: Interp) -> Self {
+    fn new(start: usize, top: Interp) -> Self {
         match top {
             Interp::Top(base) => Self::Top(start, base),
             Interp::NativePromoted(base) => Self::NativePromoted(start, base),
@@ -576,42 +576,11 @@ impl Turn {
             if segment.span.end > end {
                 continue;
             }
-            let Some(mut segment) = cut_at_marker(segment, marker) else {
+            let Some(segment) = cut_at_marker(segment, marker) else {
                 continue;
             };
-            for reading in &mut segment.readings {
-                reading.edits.push(MarkupEdit {
-                    operator: EditOperator::ReasoningEmbeddedCall,
-                    span: segment.span.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                });
-            }
-            embedded.push(segment);
+            insert_embedded(&mut embedded, segment, governor)?;
         }
-        // A call another embedded call contains (the bare function element
-        // inside a wrapped Qwen3-Coder XML call, say) is part of that call,
-        // as it would be outside reasoning.
-        governor.charge(
-            Resource::Work,
-            size(embedded.len()).saturating_mul(size(embedded.len())),
-        )?;
-        let spans: Vec<Range<usize>> = embedded
-            .iter()
-            .map(|segment| segment.span.clone())
-            .collect();
-        embedded.retain(|segment| {
-            !spans.iter().any(|outer| {
-                *outer != segment.span
-                    && outer.start <= segment.span.start
-                    && segment.span.end <= outer.end
-            })
-        });
-        // One call per span, in span order: two attempts that read the same
-        // call (a call of an attempt reading several, and the attempt its
-        // own opener began) offer it once, the first one completed.
-        embedded.sort_by_key(|segment| (segment.span.start, segment.span.end));
-        embedded.dedup_by(|later, first| later.span == first.span);
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
@@ -659,40 +628,11 @@ impl Turn {
             let Some(call) = cut_at_marker(&whole, marker) else {
                 continue;
             };
-            let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
-                continue;
-            };
-            governor.charge(Resource::Work, size(reasoning.embedded.len()))?;
-            // A call another embedded call contains is part of that call,
-            // and a call already offered (another attempt read it) is not
-            // offered again.
-            if reasoning
-                .embedded
-                .iter()
-                .any(|outer| outer.span.start <= call.span.start && call.span.end <= outer.span.end)
-            {
-                continue;
-            }
             let before = segment_bytes(&self.store[index as usize]);
             let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
                 continue;
             };
-            reasoning.embedded.retain(|inner| {
-                !(call.span.start <= inner.span.start && inner.span.end <= call.span.end)
-            });
-            let mut segment = call.clone();
-            for reading in &mut segment.readings {
-                reading.edits.push(MarkupEdit {
-                    operator: EditOperator::ReasoningEmbeddedCall,
-                    span: segment.span.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                });
-            }
-            let at = reasoning.embedded.partition_point(|other| {
-                (other.span.start, other.span.end) < (segment.span.start, segment.span.end)
-            });
-            reasoning.embedded.insert(at, segment);
+            insert_embedded(&mut reasoning.embedded, call, governor)?;
             let after = segment_bytes(&self.store[index as usize]);
             governor.charge(Resource::ScratchBytes, after.saturating_sub(before))?;
         }
@@ -700,14 +640,427 @@ impl Turn {
     }
 }
 
-/// `segment` cut at a reasoning block's closing marker at `marker`
-/// (`tool_call.reasoning.marker-cut`): unchanged when it ends before the
-/// marker (or no marker closed the block), `None` when it begins inside it.
-/// A cut reading keeps what it read before the marker: a name, id or
-/// capture reaching into the marker is dropped, and arguments read from the
-/// marker's bytes are not arguments (the reading's arguments are then
-/// unresolved at the marker), so a call whose arguments came from the
-/// marker is never usable.
+/// Pairwise selection after source framing, before geometric containment.
+enum EmbeddedRelation {
+    Geometry,
+    Both,
+    Left,
+    Right,
+}
+
+/// Plan every removal before changing the list: a refusal or an enclosing
+/// candidate must not leave a partially normalized reasoning block.
+fn insert_embedded(
+    embedded: &mut Vec<CallSegment>,
+    mut incoming: CallSegment,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let mut remove = ScratchVec::new(governor);
+    for (index, existing) in embedded.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        match embedded_relation(existing, &incoming, governor)? {
+            EmbeddedRelation::Left => return Ok(()),
+            EmbeddedRelation::Right => remove.push(index)?,
+            EmbeddedRelation::Both => {}
+            EmbeddedRelation::Geometry => {
+                if existing.span.start <= incoming.span.start
+                    && incoming.span.end <= existing.span.end
+                {
+                    return Ok(());
+                }
+                if incoming.span.start <= existing.span.start
+                    && existing.span.end <= incoming.span.end
+                {
+                    remove.push(index)?;
+                }
+            }
+        }
+    }
+    for reading in &mut incoming.readings {
+        reading.edits.push(MarkupEdit {
+            operator: EditOperator::ReasoningEmbeddedCall,
+            span: incoming.span.clone(),
+            original: Vec::new(),
+            replacement: Vec::new(),
+        });
+    }
+    // Retention, ordered search and insertion relocation each visit or move
+    // at most the original length; admit the complete mutation before it starts.
+    governor.charge(
+        Resource::Work,
+        size(embedded.len()).saturating_mul(3).saturating_add(1),
+    )?;
+    let mut index = 0;
+    let mut removals = remove.as_slice().iter().peekable();
+    embedded.retain(|_| {
+        let keep = removals.peek().copied().copied() != Some(index);
+        if !keep {
+            let _ = removals.next();
+        }
+        index += 1;
+        keep
+    });
+    let at = embedded.partition_point(|other| {
+        (other.span.start, other.span.end) < (incoming.span.start, incoming.span.end)
+    });
+    embedded.insert(at, incoming);
+    Ok(())
+}
+
+fn embedded_relation(
+    left: &CallSegment,
+    right: &CallSegment,
+    governor: &mut Governor,
+) -> Result<EmbeddedRelation, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.readings.len()).saturating_add(size(right.readings.len())),
+    )?;
+    let native = |segment: &CallSegment| {
+        !segment.readings.is_empty()
+            && segment.readings.iter().all(|reading| {
+                matches!(
+                    reading.dialect,
+                    DialectId::BareJson | DialectId::AnthropicToolUse
+                ) && reading.span == segment.span
+            })
+    };
+    let shadow = |segment: &CallSegment| {
+        !segment.readings.is_empty()
+            && segment.readings.iter().all(|reading| {
+                reading.dialect == DialectId::HermesStripped && reading.span == segment.span
+            })
+    };
+    let (native, shadow, preference) = if native(left) && shadow(right) {
+        (left, right, EmbeddedRelation::Left)
+    } else if native(right) && shadow(left) {
+        (right, left, EmbeddedRelation::Right)
+    } else {
+        return Ok(EmbeddedRelation::Geometry);
+    };
+    // A native object inside the arguments of a genuinely enclosing call is
+    // data. Protect alternatives only after proving the same lexical envelope.
+    for reading in &shadow.readings {
+        if !same_embedded_envelope(reading, &native.span, governor)? {
+            return Ok(EmbeddedRelation::Geometry);
+        }
+    }
+    let ([exact], [derived]) = (native.readings.as_slice(), shadow.readings.as_slice()) else {
+        return Ok(EmbeddedRelation::Both);
+    };
+    if same_embedded_invocation(exact, derived, governor)? {
+        Ok(preference)
+    } else {
+        Ok(EmbeddedRelation::Both)
+    }
+}
+
+/// Exterior extraction must describe the same dropped source on both sides
+/// of its ledger; no retained capture may be trimmed from the native frame.
+fn same_embedded_envelope(
+    shadow: &RawCall,
+    frame: &Range<usize>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if shadow.span.start > frame.start
+        || shadow.span.end < frame.end
+        || retained_context(shadow, governor)? != *frame
+    {
+        return Ok(false);
+    }
+    let exterior = |span: &Range<usize>| {
+        shadow.span.start <= span.start
+            && span.end <= shadow.span.end
+            && (span.end <= frame.start || frame.end <= span.start)
+    };
+    for capture in &shadow.captures {
+        governor.charge(Resource::Work, 1)?;
+        if capture.kind == CaptureKind::Dropped {
+            if !exterior(&capture.span) {
+                return Ok(false);
+            }
+            governor.charge(Resource::Work, size(shadow.edits.len()))?;
+            if !shadow.edits.iter().any(|edit| {
+                matches!(
+                    edit.operator,
+                    EditOperator::ExtractProse | EditOperator::ExtractFence
+                ) && edit.span == capture.span
+            }) {
+                return Ok(false);
+            }
+        } else if capture.span.start < frame.start || capture.span.end > frame.end {
+            return Ok(false);
+        }
+    }
+    for edit in &shadow.edits {
+        governor.charge(Resource::Work, 1)?;
+        if matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        ) {
+            governor.charge(Resource::Work, size(shadow.captures.len()))?;
+            if !exterior(&edit.span)
+                || !edit.replacement.is_empty()
+                || edit.span.len() != edit.original.len()
+                || !shadow.captures.iter().any(|capture| {
+                    capture.kind == CaptureKind::Dropped && capture.span == edit.span
+                })
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn embedded_annotation(edit: &MarkupEdit, span: &Range<usize>) -> bool {
+    edit.operator == EditOperator::ReasoningEmbeddedCall
+        && edit.span == *span
+        && edit.original.is_empty()
+        && edit.replacement.is_empty()
+}
+
+fn same_embedded_invocation(
+    exact: &RawCall,
+    shadow: &RawCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, size(exact.edits.len()))?;
+    if exact.cost != 0
+        || !exact.bare
+        || exact.name.is_none()
+        || exact.closure != Closure::Closed
+        || shadow.closure != Closure::Closed
+        || exact
+            .edits
+            .iter()
+            .any(|edit| !embedded_annotation(edit, &exact.span))
+        || exact.kind != ProductionKind::Call
+        || exact.kind != shadow.kind
+        || exact.order != shadow.order
+        || !same_embedded_binding(&exact.name, &shadow.name, governor)?
+        || !same_embedded_binding(&exact.id, &shadow.id, governor)?
+    {
+        return Ok(false);
+    }
+    let native_grammar = exact.dialect.grammar();
+    let projected_grammar = shadow.dialect.grammar();
+    if (exact.id.is_none()
+        && native_grammar.call_carries_ids() != projected_grammar.call_carries_ids())
+        || native_grammar.examples_content() != projected_grammar.examples_content()
+        || native_grammar.protocol_fences() != projected_grammar.protocol_fences()
+    {
+        return Ok(false);
+    }
+    // Projected JSON applies declaration-shaped counter-evidence as BareJson
+    // does. Anthropic does not, so conservatively retain that alternative.
+    if exact.dialect == DialectId::AnthropicToolUse {
+        let root = &exact.arguments.root;
+        if let crate::json::Value::Object(members) = &root.value {
+            for member in members {
+                governor.charge(Resource::Work, size(member.key.len()).saturating_mul(2))?;
+            }
+            governor.charge(Resource::Work, 16)?;
+            if matches!(root.get("type").map(|node| &node.value), Some(crate::json::Value::String(kind)) if kind == "object")
+                && matches!(
+                    root.get("properties").map(|node| &node.value),
+                    Some(crate::json::Value::Object(_))
+                )
+            {
+                return Ok(false);
+            }
+        }
+    }
+    governor.charge(
+        Resource::Work,
+        size(exact.captures.len()).saturating_add(size(shadow.captures.len())),
+    )?;
+    if !exact.captures.iter().eq(shadow
+        .captures
+        .iter()
+        .filter(|capture| capture.kind != CaptureKind::Dropped))
+        || !same_embedded_arguments(&exact.arguments, &shadow.arguments, governor)?
+    {
+        return Ok(false);
+    }
+    let mut cost = 0_u64;
+    for edit in &shadow.edits {
+        governor.charge(Resource::Work, edit.estimated_bytes())?;
+        if embedded_annotation(edit, &shadow.span) {
+            continue;
+        }
+        if !matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        ) {
+            // Only the declared Anthropic input-header alias is source-proven.
+            if exact.dialect != DialectId::AnthropicToolUse
+                || edit.operator != EditOperator::TerminalConfusable
+                || edit.original != b"\"input\""
+                || edit.replacement != b"\"arguments\""
+                || edit.span.len() != edit.original.len()
+                || edit.span.start < exact.span.start
+                || edit.span.end > exact.span.end
+            {
+                return Ok(false);
+            }
+            governor.charge(Resource::Work, size(shadow.captures.len()))?;
+            if shadow.captures.iter().any(|capture| {
+                capture.kind != CaptureKind::Dropped
+                    && capture.span.start < edit.span.end
+                    && edit.span.start < capture.span.end
+            }) {
+                return Ok(false);
+            }
+        }
+        cost = cost.saturating_add(edit.rule().cost);
+    }
+    Ok(cost == shadow.cost)
+}
+
+fn same_embedded_text(
+    left: &str,
+    right: &str,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.len())
+            .saturating_add(size(right.len()))
+            .saturating_add(1),
+    )?;
+    Ok(left == right)
+}
+
+fn same_embedded_binding(
+    left: &Option<Spanned<String>>,
+    right: &Option<Spanned<String>>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    match (left, right) {
+        (None, None) => Ok(true),
+        (Some(left), Some(right)) => {
+            Ok(left.span == right.span && same_embedded_text(&left.value, &right.value, governor)?)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn same_embedded_arguments(
+    left: &ArgTree,
+    right: &ArgTree,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if !left.unresolved.is_empty()
+        || !right.unresolved.is_empty()
+        || !left.collected.is_empty()
+        || !right.collected.is_empty()
+        || left.arguments_were_stringified != right.arguments_were_stringified
+        || left.leaves.len() != right.leaves.len()
+    {
+        return Ok(false);
+    }
+    match (&left.tool, &right.tool) {
+        (None, None) => {}
+        (Some(left), Some(right)) if same_embedded_text(left, right, governor)? => {}
+        _ => return Ok(false),
+    }
+    for (left, right) in left.leaves.iter().zip(&right.leaves) {
+        governor.charge(Resource::Work, 1)?;
+        if left.raw != right.raw
+            || left.origin != right.origin
+            || !same_embedded_text(&left.pointer, &right.pointer, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    same_embedded_tree(&left.root, &right.root, governor)
+}
+
+struct EmbeddedNode<'a> {
+    left: &'a crate::json::Node,
+    right: &'a crate::json::Node,
+    depth: u64,
+}
+
+impl ScratchCharge for EmbeddedNode<'_> {
+    const CHARGE: usize = 24;
+}
+const _: () = assert!(core::mem::size_of::<EmbeddedNode<'_>>() <= EmbeddedNode::CHARGE);
+
+/// Source identity is stricter than semantic JSON equality: preserve every
+/// occurrence, source range and exact number spelling without numeric work.
+fn same_embedded_tree(
+    left: &crate::json::Node,
+    right: &crate::json::Node,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    use crate::json::Value;
+    let mut stack = ScratchVec::new(governor);
+    stack.push(EmbeddedNode {
+        left,
+        right,
+        depth: 0,
+    })?;
+    while let Some(EmbeddedNode { left, right, depth }) = stack.pop() {
+        governor.charge(Resource::Work, 1)?;
+        governor.charge(Resource::Depth, depth)?;
+        if left.span != right.span {
+            return Ok(false);
+        }
+        match (&left.value, &right.value) {
+            (Value::Null, Value::Null) => {}
+            (Value::Bool(a), Value::Bool(b)) if a == b => {}
+            (Value::String(a), Value::String(b)) => {
+                if !same_embedded_text(a, b, governor)? {
+                    return Ok(false);
+                }
+            }
+            (Value::Number(a), Value::Number(b)) => {
+                if !same_embedded_text(a.as_str(), b.as_str(), governor)? {
+                    return Ok(false);
+                }
+            }
+            (Value::Array(a), Value::Array(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (left, right) in a.iter().zip(b).rev() {
+                    governor.charge(Resource::Work, 1)?;
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    stack.push(EmbeddedNode {
+                        left,
+                        right,
+                        depth: depth.saturating_add(1),
+                    })?;
+                }
+            }
+            (Value::Object(a), Value::Object(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (left, right) in a.iter().zip(b).rev() {
+                    governor.charge(Resource::Work, 1)?;
+                    if left.key_span != right.key_span
+                        || !same_embedded_text(&left.key, &right.key, governor)?
+                    {
+                        return Ok(false);
+                    }
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    stack.push(EmbeddedNode {
+                        left: &left.value,
+                        right: &right.value,
+                        depth: depth.saturating_add(1),
+                    })?;
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    governor.check()?;
+    Ok(true)
+}
+
 /// The turn-level segment of one part of a completed attempt of `dialect`.
 fn part_segment(kind: ProductionKind, dialect: &DialectId, part: Part) -> Segment {
     match part {
@@ -735,6 +1088,14 @@ struct Ended {
     outread: bool,
 }
 
+/// `segment` cut at a reasoning block's closing marker at `marker`
+/// (`tool_call.reasoning.marker-cut`): unchanged when it ends before the
+/// marker (or no marker closed the block), `None` when it begins inside it.
+/// A cut reading keeps what it read before the marker: a name, id or
+/// capture reaching into the marker is dropped, and arguments read from the
+/// marker's bytes are not arguments (the reading's arguments are then
+/// unresolved at the marker), so a call whose arguments came from the
+/// marker is never usable.
 fn cut_at_marker(segment: &CallSegment, marker: Option<usize>) -> Option<CallSegment> {
     let Some(marker) = marker.filter(|marker| segment.span.end > *marker) else {
         return Some(segment.clone());

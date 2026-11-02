@@ -76,9 +76,25 @@ follows the cached base, inherited interpretations and same-start reuse, so the
 weak base cannot become ordinary content on the native path. This replacement
 requires the cached weak promotion's issuing attempt and its own first-OPEN
 barrier. Another profile sharing its prefix or base cannot supply that proof.
-First-opener behavior within each origin and later calls remain intact. Raw call spans, extraction edits,
-ranking and closed embedded-call containment stay unchanged. Distinct weak
+First-opener behavior within each origin and later calls remain intact. Raw
+call spans, extraction edits and ranking stay unchanged. Distinct weak
 partitions remain alternatives; this does not establish a unique turn outcome.
+
+Inside closed reasoning, containment alone does not replace a native Bare JSON
+or Anthropic invocation with a projected Hermes reading of the same JSON
+frame. The projected reading must first prove that trimming only exterior
+`Dropped` captures and their matching extraction edits leaves the native whole
+frame. A native JSON object nested inside another call's arguments does not
+meet this condition and remains data within that call.
+
+For the same frame, folding requires a single canonical native reading, equal
+source captures, ordered argument values and source spans, exact number
+spellings, argument metadata, and equivalent ID and context behavior. Both
+readings must be `Closed`. Exterior extraction currently makes the Hermes
+reading `Repaired`, so that case preserves both embedded candidates. Other
+unproved readings of the same frame also remain alternatives; this does not
+establish a unique result. The initial and late-completion paths use the same
+selection policy and retain the existing embedded-call guess annotation.
 
 Projected JSON envelopes also retain declaration-shaped counter-evidence.
 Without invocation markers, arguments containing `"type":"object"` and a

@@ -1020,6 +1020,25 @@ first-opener policy. Earlier projected interpretations keep their own bases,
 raw spans and extraction provenance. No ranking, repair cost, raw-call trimming
 or closed embedded-call containment changes accompany this unit.
 
+Closed-reasoning embedded selection now uses one shared insertion policy for
+initial and late completions. Before overriding geometric containment, a
+native Bare JSON or Anthropic frame must equal the projected Hermes frame
+remaining after proven exterior `Dropped` captures and matching extraction
+edits. Payload-nested native objects keep the existing containment behavior.
+Within that source relation, native preference requires singleton canonical
+readings with matching invocation captures, ordered argument nodes, member and
+node source spans, exact number spellings, leaf provenance, public argument
+metadata, and effective ID and context behavior. Unresolved or collected
+arguments are conservatively retained as alternatives. The comparison admits
+work, depth and temporary traversal storage and propagates refusal.
+
+Both readings must be `Closed` before folding. Extraction edits currently make
+a Hermes shadow `Repaired`, so these same-frame candidates remain together;
+unproved source, closure or interpretation equivalence also keeps both. The
+existing embedded-call guess annotation and its cost are preserved. This
+implementation has been source-inspected and formatted; its behavior has not
+been executed.
+
 Persistent interpretation buffers and fallible copies use ScratchVec with a
 portable 32-byte element admission. Copies reserve before copying; pushes admit
 relocation. Copy refusal drops the current completion payload before refunding
