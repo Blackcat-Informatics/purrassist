@@ -80,21 +80,6 @@ use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One positive codec-context query over a stable name-capture projection.
-/// A later history can reuse its oldest complete name at this exact ancestor.
-#[derive(Debug)]
-struct NameContextMemo {
-    hist: u32,
-    name: Range<usize>,
-}
-
-impl ScratchCharge for NameContextMemo {
-    const CHARGE: usize = {
-        assert!(core::mem::size_of::<Self>() <= 24);
-        24
-    };
-}
-
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
 /// the reading that ended there (see `Step::step_body`).
@@ -360,8 +345,6 @@ pub(crate) struct Arena {
     /// What each `next` node of a history closes: its chain of parts, the
     /// rejection that ended it, or that it must be segmented whole.
     memo: BTreeMap<u32, Closed>,
-    /// One release-owned codec name query shared across grammar tables.
-    name_context: ScratchVec<NameContextMemo>,
 }
 
 impl Drop for Arena {
@@ -393,7 +376,6 @@ impl Arena {
             chains: Vec::new(),
             leads: Vec::new(),
             memo: BTreeMap::new(),
-            name_context: ScratchVec::new(governor),
         })
     }
 
@@ -487,8 +469,6 @@ impl Arena {
     }
 
     fn reset(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
-        // History IDs are reused below; the old anchor must not survive.
-        self.name_context.clear();
         self.nodes.clear();
         self.nodes.push(HistNode {
             prev: ROOT,
@@ -1812,10 +1792,6 @@ impl<'s> Step<'_, 's> {
             governor,
         )? {
             Ok((top, cost)) => {
-                // Both closer_note and codec_value append only Edit, Value
-                // and prev-following Pack nodes rooted at the former prev.
-                // No name capture or Root/Next boundary changes, so cached
-                // context-name queries remain valid across this Link update.
                 self.arena.nodes.as_mut_slice()[deferred.node as usize].prev = top;
                 Reading::Read(cost)
             }
@@ -2027,7 +2003,7 @@ impl<'s> Step<'_, 's> {
     /// argument shape of the declared tool named by the reading's first
     /// `name:` capture, when the recognizer has a tool set.
     fn context(
-        &mut self,
+        &self,
         kind: CodecKind,
         hist: u32,
         governor: &mut Governor,
@@ -2035,69 +2011,18 @@ impl<'s> Step<'_, 's> {
         if !kind.uses_context() {
             return Ok(CodecContext::default());
         }
-        let grammar = self.grammar;
         let markup = CodecContext {
             shape: None,
-            openers: &grammar.call_markup[0],
-            closers: &grammar.call_markup[1],
+            openers: &self.grammar.call_markup[0],
+            closers: &self.grammar.call_markup[1],
         };
         let Some(tools) = self.tools else {
             return Ok(markup);
         };
-        let Some(name) = self.context_name_range(hist, governor)? else {
-            return Ok(markup);
-        };
-        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
-        let shape = core::str::from_utf8(self.bytes(name))
-            .ok()
-            .and_then(|name| tools.lookup_exact(name))
-            .map(CompiledTool::argument_shape);
-        Ok(CodecContext { shape, ..markup })
-    }
-
-    /// A positive query's name projection survives value-only Link updates.
-    /// A newer complete name cannot supersede the oldest one at its ancestor.
-    fn context_name_range(
-        &mut self,
-        hist: u32,
-        governor: &mut Governor,
-    ) -> Result<Option<Range<usize>>, StopReason> {
-        governor.charge(Resource::Work, 1)?;
-        let cached = self.arena.name_context.as_slice().first();
-        let name = self.find_context_name(hist, cached, governor)?;
-        if let Some(name) = &name {
-            governor.charge(Resource::Work, 1)?;
-            let memo = NameContextMemo {
-                hist,
-                name: name.clone(),
-            };
-            if self.arena.name_context.is_empty() {
-                self.arena.name_context.push(memo)?;
-            } else {
-                self.arena.name_context.as_mut_slice()[0] = memo;
-            }
-        }
-        Ok(name)
-    }
-
-    /// Preserve the original oldest-name walk along `prev`, including Pack.
-    /// Link resolution inserts no name capture or call boundary on that path.
-    fn find_context_name(
-        &self,
-        hist: u32,
-        cached: Option<&NameContextMemo>,
-        governor: &mut Governor,
-    ) -> Result<Option<Range<usize>>, StopReason> {
         let nodes = self.arena.nodes.as_slice();
         let (mut node, mut close, mut name) = (hist, None, None);
         loop {
             governor.charge(Resource::Work, K_CODEC)?;
-            if let Some(cached) = cached {
-                governor.charge(Resource::Work, 1)?;
-                if node == cached.hist {
-                    return Ok(Some(cached.name.clone()));
-                }
-            }
             let HistNode { prev, kind } = nodes[node as usize];
             match kind {
                 // The name of the call this slot belongs to: no earlier
@@ -2113,7 +2038,15 @@ impl<'s> Step<'_, 's> {
             }
             node = prev;
         }
-        Ok(name)
+        let Some(name) = name else {
+            return Ok(markup);
+        };
+        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
+        let shape = core::str::from_utf8(self.bytes(name))
+            .ok()
+            .and_then(|name| tools.lookup_exact(name))
+            .map(CompiledTool::argument_shape);
+        Ok(CodecContext { shape, ..markup })
     }
 
     fn protocol_spelling(&self, range: Range<usize>) -> bool {
