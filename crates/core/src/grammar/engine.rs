@@ -4457,6 +4457,17 @@ impl ScratchCharge for Attempt {
     };
 }
 
+/// Admission facts captured before the attempt can retire.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Opening {
+    /// Derived header boundary in original absolute source coordinates.
+    pub(crate) weak_header: Option<usize>,
+    /// End of a physically consumed canonical native Mistral V3 marker.
+    pub(crate) native_frame_end: Option<usize>,
+    /// The actual compiled program origin, independent of retained literals.
+    pub(crate) projected: bool,
+}
+
 /// A notification to the turn-level segmentation.
 #[derive(Clone, Debug)]
 pub(crate) enum Event {
@@ -4465,12 +4476,7 @@ pub(crate) enum Event {
         attempt: u64,
         start: usize,
         at: usize,
-        /// Derived header boundary in original absolute source coordinates.
-        /// Exact attempts have no weak header from which another may inherit.
-        weak_header: Option<usize>,
-        /// End of a physically consumed canonical native Mistral V3 marker.
-        /// Its grouped body may still complete, reject or be cut off.
-        native_frame_end: Option<usize>,
+        opening: Opening,
     },
     /// Attempt `attempt` matched `parts` (one call segment, or one per
     /// call of a production with `next`, each with its cost), ending at
@@ -5707,6 +5713,7 @@ impl<'s> Engine<'s> {
         )?;
         let mut opened: Vec<(u64, usize)> = self.out.opened.as_slice().to_vec();
         opened.sort_unstable();
+        let projected = self.tables[table].program.origin.is_projected();
         let native_mistral =
             self.grammars[self.tables[table].grammar].dialect == DialectId::MistralV3;
         let mut latest = None;
@@ -5741,8 +5748,11 @@ impl<'s> Engine<'s> {
                     attempt,
                     start: record.start,
                     at: position,
-                    weak_header,
-                    native_frame_end,
+                    opening: Opening {
+                        weak_header,
+                        native_frame_end,
+                        projected,
+                    },
                 });
             }
         }

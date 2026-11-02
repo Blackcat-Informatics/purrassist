@@ -69,6 +69,17 @@ prefixes remain represented. The native attempt keeps its inherited
 interpretation, malformed group members and cut-off tails. Repaired or
 recipe-suppressed markers supply no physical frame proof.
 
+For unclosed reasoning, a projected header retains its own guess-flagged
+promotion and loss-bearing source partition. A native opener admitted inside
+that header can also retain its actual reasoning boundary. Promotion origin
+follows the cached base, inherited interpretations and same-start reuse, so the
+weak base cannot become ordinary content on the native path. This replacement
+requires the cached weak promotion's issuing attempt and its own first-OPEN
+barrier. Another profile sharing its prefix or base cannot supply that proof.
+First-opener behavior within each origin and later calls remain intact. Raw call spans, extraction edits,
+ranking and closed embedded-call containment stay unchanged. Distinct weak
+partitions remain alternatives; this does not establish a unique turn outcome.
+
 Projected JSON envelopes also retain declaration-shaped counter-evidence.
 Without invocation markers, arguments containing `"type":"object"` and a
 `"properties"` object stay content when the named tool cannot accept them as

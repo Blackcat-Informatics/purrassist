@@ -1004,3 +1004,36 @@ recorded admission; unprocessed ready/group payloads drop and refund their own
 recorded admissions on refusal. The original refusal takes precedence over
 cleanup errors. No scratch delta is refunded. This correction has not been
 executed.
+
+Unclosed-reasoning promotion records the actual compiled program origin in
+opening metadata before an attempt retires. The promotion cache, top
+interpretations and same-start cache retain native or projected origin and the
+issuing weak owner's identity. A native attempt admitted inside that exact
+owner's header can retain its actual reasoning prefix. A sibling profile's
+later first-OPEN barrier cannot authorize replacing the first weak promotion,
+even when both profiles share a source prefix and promoted base. Same-boundary
+reuse retains the issuing owner, and replacement rechecks that identity.
+Native admission bypasses weak promoted bases instead of turning them into
+content. Ordinary top histories containing earlier calls remain available.
+Native-versus-native and projected-versus-projected admission keep the
+first-opener policy. Earlier projected interpretations keep their own bases,
+raw spans and extraction provenance. No ranking, repair cost, raw-call trimming
+or closed embedded-call containment changes accompany this unit.
+
+Persistent interpretation buffers and fallible copies use ScratchVec with a
+portable 32-byte element admission. Copies reserve before copying; pushes admit
+relocation. Copy refusal drops the current completion payload before refunding
+its recorded admission and preserves the original refusal. Removed buffers
+retain their own reservations until dropped. Think has a 104-byte inline bound;
+promotion and same-start caches have 40-byte bounds each, adding one word to
+each previous cache. The temporary owner-bearing header-origin buffer uses
+ScratchVec with a 64-byte admission per capacity slot, releases its reservation
+on every exit and admits deduplication scans and relocation. The existing
+BTreeMap topology and node-accounting policy remain outside this ownership
+correction; it does not complete the
+broader recovery-storage contract. The queued-report size assertion continues
+to guard opening metadata. No budget limit changes accompany these owners.
+Extraction cost enters raw-call ranking after materialization and does not
+prove a unique whole-turn result. Native reasoning-source preservation,
+remaining alternatives and the static bounds still require compilation and
+execution evidence.

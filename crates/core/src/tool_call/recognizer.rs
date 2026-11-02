@@ -80,14 +80,14 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMap, ScratchMeter,
-    ScratchVec, SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchMap,
+    ScratchMeter, ScratchVec, SourceSpan, StopReason,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
-use crate::grammar::engine::{Engine, Event, Part, Salvaged};
+use crate::grammar::engine::{Engine, Event, Opening, Part, Salvaged};
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
@@ -193,9 +193,9 @@ struct Think {
     /// `0` for a block the turn starts in (no opener).
     text_start: usize,
     pair: Option<u32>,
-    /// The opener start and promoted base, once the block was closed at its
-    /// first opener.
-    promoted: Option<(usize, Base)>,
+    /// The first promotion's origin, boundary and base. A native opener
+    /// nested in that weak header can retain its own reasoning boundary.
+    promoted: Option<Promotion>,
     embedded: Vec<u32>,
 }
 
@@ -208,8 +208,115 @@ struct Base {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Interp {
     Top(Base),
+    NativePromoted(Base),
+    WeakPromoted(u64, Base),
     Embedded(usize),
 }
+
+impl ScratchCharge for Interp {
+    const CHARGE: usize = 32;
+}
+
+/// One owner-specific source of a pre-header interpretation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeaderOrigin {
+    owner: u64,
+    prefix: usize,
+    interp: Interp,
+}
+
+impl ScratchCharge for HeaderOrigin {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 64);
+        64
+    };
+}
+
+impl Interp {
+    const fn base(self) -> Option<Base> {
+        match self {
+            Self::Top(base) | Self::NativePromoted(base) | Self::WeakPromoted(_, base) => {
+                Some(base)
+            }
+            Self::Embedded(_) => None,
+        }
+    }
+
+    /// Preserve a top interpretation's promotion origin when extending content.
+    const fn rebase(self, base: Base) -> Self {
+        match self {
+            Self::Top(_) => Self::Top(base),
+            Self::NativePromoted(_) => Self::NativePromoted(base),
+            Self::WeakPromoted(owner, _) => Self::WeakPromoted(owner, base),
+            Self::Embedded(_) => unreachable!("embedded interpretations have no top base"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Promotion {
+    Native(usize, Base),
+    Weak(u64, usize, Base),
+}
+
+impl Promotion {
+    const fn start(self) -> usize {
+        match self {
+            Self::Native(start, _) | Self::Weak(_, start, _) => start,
+        }
+    }
+
+    const fn base(self) -> Base {
+        match self {
+            Self::Native(_, base) | Self::Weak(_, _, base) => base,
+        }
+    }
+
+    const fn interpretation(self) -> Interp {
+        match self {
+            Self::Native(_, base) => Interp::NativePromoted(base),
+            Self::Weak(owner, _, base) => Interp::WeakPromoted(owner, base),
+        }
+    }
+}
+
+/// A same-start cache keeps the origin of the interpretation it reuses.
+#[derive(Clone, Copy, Debug)]
+enum LastKill {
+    Top(usize, Base),
+    NativePromoted(usize, Base),
+    WeakPromoted(usize, u64, Base),
+}
+
+impl LastKill {
+    const fn new(start: usize, top: Interp) -> Self {
+        match top {
+            Interp::Top(base) => Self::Top(start, base),
+            Interp::NativePromoted(base) => Self::NativePromoted(start, base),
+            Interp::WeakPromoted(owner, base) => Self::WeakPromoted(start, owner, base),
+            Interp::Embedded(_) => unreachable!("embedded interpretations cannot end content"),
+        }
+    }
+
+    const fn at(self, start: usize) -> Option<Interp> {
+        let (at, top) = match self {
+            Self::Top(at, base) => (at, Interp::Top(base)),
+            Self::NativePromoted(at, base) => (at, Interp::NativePromoted(base)),
+            Self::WeakPromoted(at, owner, base) => (at, Interp::WeakPromoted(owner, base)),
+        };
+        if at == start { Some(top) } else { None }
+    }
+}
+
+// Owner identity adds one inline word to each promotion/same-start cache.
+// Interpretation buffers own their actual portable 32-byte element charge;
+// Header-origin capacity slots retain their separate 64-byte admission.
+const _: () = {
+    assert!(core::mem::size_of::<Think>() <= 104);
+    assert!(core::mem::size_of::<Option<Promotion>>() <= 40);
+    assert!(core::mem::size_of::<Option<LastKill>>() <= 40);
+    assert!(core::mem::size_of::<Interp>() <= Interp::CHARGE);
+};
 
 /// The scratch held by queued reports ([`QUEUED_REPORT`] each), released
 /// as they are processed; what is still held when the recognizer is dropped
@@ -302,14 +409,15 @@ struct Turn {
     think: Option<Think>,
     /// Each attempt with an interpretation, until its end is reported:
     /// where it began, and its interpretations.
-    interps: BTreeMap<u64, (usize, Vec<Interp>)>,
+    interps: BTreeMap<u64, (usize, ScratchVec<Interp>)>,
     /// Absolute raw OPEN barriers for interpreted derived headers only.
     weak_headers: BTreeMap<u64, usize>,
     /// Earliest physically consumed native Mistral frame within each weak header.
     /// The weak attempt remains alive; every completion supplies its own proof.
     native_frames: ScratchMap<u64, (usize, usize)>,
-    /// The base of the last opener start that ended a content run.
-    last_kill: Option<(usize, Base)>,
+    /// The last opener start and its source interpretation, including any
+    /// reasoning-promotion origin, when it ended a content run.
+    last_kill: Option<LastKill>,
     /// Every stored reasoning segment: its end and store index, by its
     /// block's start. A call an attempt began inside the block may complete
     /// after the segment is stored (an attempt holding several calls ends
@@ -1303,18 +1411,10 @@ impl<'s> Recognizer<'s> {
             Pending::Engine(Event::Opened {
                 attempt,
                 start,
-                weak_header,
-                native_frame_end,
+                opening,
                 ..
             }) => {
-                self.opened(
-                    frame,
-                    attempt,
-                    start..at,
-                    weak_header,
-                    native_frame_end,
-                    governor,
-                )?;
+                self.opened(frame, attempt, start..at, opening, governor)?;
             }
             Pending::Marker {
                 start,
@@ -1375,89 +1475,60 @@ impl<'s> Recognizer<'s> {
         frame: &mut Frame,
         attempt: u64,
         prefix: Range<usize>,
-        weak_header: Option<usize>,
-        native_frame_end: Option<usize>,
+        opening: Opening,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let start = prefix.start;
-        let mut interps = Vec::new();
-        match (frame.top, self.turn.last_kill) {
+        let weak_header = opening.weak_header;
+        let mut interps = ScratchVec::new(governor);
+        let last = self
+            .turn
+            .last_kill
+            .and_then(|last| last.at(start))
+            .filter(|top| opening.projected || !matches!(top, Interp::WeakPromoted(..)));
+        match (frame.top, last) {
             (Some(top), last) if top.boundary <= start => {
-                let base = match last {
-                    Some((kill_start, base)) if kill_start == start => base,
-                    _ => {
+                let inherited = match last {
+                    Some(inherited) => inherited,
+                    None => {
                         let base = Base {
                             cost: top.cost,
                             hist: self.turn.close(top, start, governor)?,
                         };
-                        self.turn.last_kill = Some((start, base));
-                        base
+                        let inherited = Interp::Top(base);
+                        self.turn.last_kill = Some(LastKill::new(start, inherited));
+                        inherited
                     }
                 };
-                interps.push(Interp::Top(base));
+                crate::contract::push_scratch(&mut interps, inherited, governor)?;
                 frame.kill = true;
             }
-            (_, Some((kill_start, base))) if kill_start == start => interps.push(Interp::Top(base)),
+            (_, Some(inherited)) => {
+                crate::contract::push_scratch(&mut interps, inherited, governor)?;
+            }
             _ => {}
         }
-        // An exact envelope inside a weak header inherits the pre-header
-        // interpretations unless a native outer attempt already owns this
-        // span. Raw name/ID/argument OPEN equality is forbidden: an
-        // exact-looking value there is data of the outer call.
-        if interps.is_empty() && weak_header.is_none() && !self.has_exact_outer(start, governor)? {
-            governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
-            let mut origins = Vec::new();
-            for (&owner, &barrier) in &self.turn.weak_headers {
-                let Some((prefix, inherited)) = self.turn.interps.get(&owner) else {
-                    continue;
-                };
-                if *prefix < start && start < barrier {
-                    for &interp in inherited {
-                        governor.charge(Resource::Work, 1)?;
-                        let origin = (*prefix, interp);
-                        if !origins.contains(&origin) {
-                            governor.charge(Resource::ScratchBytes, 64)?;
-                            origins.push(origin);
-                        }
-                    }
-                }
-            }
-            for (prefix, interp) in origins {
-                match interp {
-                    Interp::Top(base) => {
-                        let hist = self.turn.close(
-                            Top {
-                                cost: base.cost,
-                                hist: base.hist,
-                                boundary: prefix,
-                            },
-                            start,
-                            governor,
-                        )?;
-                        let base = Base {
-                            cost: base.cost,
-                            hist,
-                        };
-                        if !interps.contains(&Interp::Top(base)) {
-                            interps.push(Interp::Top(base));
-                        }
-                        self.turn.last_kill = Some((start, base));
-                        frame.kill = true;
-                    }
-                    Interp::Embedded(block) => {
-                        if !interps.contains(&Interp::Embedded(block)) {
-                            interps.push(Interp::Embedded(block));
-                        }
-                    }
-                }
-            }
-        }
+        let replace_weak = if interps.is_empty()
+            && weak_header.is_none()
+            && !self.has_exact_outer(start, governor)?
+        {
+            self.inherit_header(frame, start, opening.projected, &mut interps, governor)?
+        } else {
+            None
+        };
         if let Some(think) = self.turn.think.clone()
             && think.start <= start
         {
-            interps.push(Interp::Embedded(think.start));
-            if let Some(base) = self.promote(&think, start, governor)? {
-                interps.push(Interp::Top(base));
+            crate::contract::push_scratch(&mut interps, Interp::Embedded(think.start), governor)?;
+            if let Some(promoted) = self.promote(
+                &think,
+                attempt,
+                start,
+                opening.projected,
+                replace_weak,
+                governor,
+            )? {
+                crate::contract::push_scratch(&mut interps, promoted, governor)?;
             }
         }
         if interps.is_empty() {
@@ -1468,7 +1539,7 @@ impl<'s> Recognizer<'s> {
             self.engine.abandon(attempt, governor)?;
         } else {
             if weak_header.is_none() && prefix.len() > 1 {
-                self.suppress_weak_prefix(start, native_frame_end, governor)?;
+                self.suppress_weak_prefix(start, opening.native_frame_end, governor)?;
             }
             if let Some(barrier) = weak_header {
                 governor.charge(Resource::ScratchBytes, 64)?;
@@ -1477,6 +1548,95 @@ impl<'s> Recognizer<'s> {
             self.turn.interps.insert(attempt, (start, interps));
         }
         Ok(())
+    }
+
+    /// Inherit pre-header origins without reclassifying a weak reasoning
+    /// promotion as ordinary content on a nested native path.
+    fn inherit_header(
+        &mut self,
+        frame: &mut Frame,
+        start: usize,
+        projected: bool,
+        interps: &mut ScratchVec<Interp>,
+        governor: &mut Governor,
+    ) -> Result<Option<u64>, StopReason> {
+        let weak_promotion = self
+            .turn
+            .think
+            .as_ref()
+            .and_then(|think| match think.promoted {
+                Some(Promotion::Weak(owner, start, base)) => Some((owner, start, base)),
+                _ => None,
+            });
+        let mut replace_weak = None;
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        let mut origins = ScratchVec::new(governor);
+        for (&owner, &barrier) in &self.turn.weak_headers {
+            let Some((prefix, inherited)) = self.turn.interps.get(&owner) else {
+                continue;
+            };
+            if *prefix < start && start < barrier {
+                for &interp in inherited {
+                    governor.charge(Resource::Work, 1)?;
+                    let origin = HeaderOrigin {
+                        owner,
+                        prefix: *prefix,
+                        interp,
+                    };
+                    governor.charge(Resource::Work, size(origins.len()))?;
+                    if !origins.contains(&origin) {
+                        crate::contract::push_scratch(&mut origins, origin, governor)?;
+                    }
+                }
+            }
+        }
+        for HeaderOrigin {
+            owner,
+            prefix,
+            interp,
+        } in origins.iter().copied()
+        {
+            match interp {
+                Interp::WeakPromoted(origin, base) if !projected => {
+                    // A sibling profile's later barrier cannot authorize replacing
+                    // the first weak promotion, even when its prefix/base agree.
+                    if owner == origin && weak_promotion == Some((owner, prefix, base)) {
+                        replace_weak = Some(owner);
+                    }
+                }
+                top @ (Interp::Top(base)
+                | Interp::NativePromoted(base)
+                | Interp::WeakPromoted(_, base)) => {
+                    let hist = self.turn.close(
+                        Top {
+                            cost: base.cost,
+                            hist: base.hist,
+                            boundary: prefix,
+                        },
+                        start,
+                        governor,
+                    )?;
+                    let base = Base {
+                        cost: base.cost,
+                        hist,
+                    };
+                    let inherited = top.rebase(base);
+                    governor.charge(Resource::Work, size(interps.len()))?;
+                    if !interps.contains(&inherited) {
+                        crate::contract::push_scratch(interps, inherited, governor)?;
+                    }
+                    self.turn.last_kill = Some(LastKill::new(start, inherited));
+                    frame.kill = true;
+                }
+                Interp::Embedded(block) => {
+                    governor.charge(Resource::Work, size(interps.len()))?;
+                    if !interps.contains(&Interp::Embedded(block)) {
+                        crate::contract::push_scratch(interps, Interp::Embedded(block), governor)?;
+                    }
+                }
+            }
+        }
+        Ok(replace_weak)
     }
 
     /// A written native opener owns its prefix. A projected preamble at
@@ -1641,16 +1801,35 @@ impl<'s> Recognizer<'s> {
         }))
     }
 
-    /// The base of a call that closes the unclosed reasoning block `think`
-    /// at its first opener (`start`), by the guess-flagged rule.
+    /// Promote the first opener within one origin. A native opener inside
+    /// the cached weak promotion's own header may retain its source boundary.
+    /// Existing weak interpretations keep their original bases and provenance.
     fn promote(
         &mut self,
         think: &Think,
+        owner: u64,
         start: usize,
+        projected: bool,
+        replace_weak: Option<u64>,
         governor: &mut Governor,
-    ) -> Result<Option<Base>, StopReason> {
-        if let Some((promoted_start, base)) = think.promoted {
-            return Ok((promoted_start == start).then_some(base));
+    ) -> Result<Option<Interp>, StopReason> {
+        if let Some(cached) = think.promoted {
+            if cached.start() == start {
+                let promotion = if !projected {
+                    Promotion::Native(start, cached.base())
+                } else {
+                    cached
+                };
+                if let Some(think) = self.turn.think.as_mut() {
+                    think.promoted = Some(promotion);
+                }
+                return Ok(Some(promotion.interpretation()));
+            }
+            if projected
+                || !matches!(cached, Promotion::Weak(origin, _, _) if replace_weak == Some(origin))
+            {
+                return Ok(None);
+            }
         }
         // A call opener inside the block's own opening marker leaves no
         // text to close: the block does not close there.
@@ -1683,10 +1862,15 @@ impl<'s> Recognizer<'s> {
             .turn
             .append(prior, segment, REASONING_UNCLOSED, start, governor)?;
         let base = Base { cost, hist };
+        let promotion = if projected {
+            Promotion::Weak(owner, start, base)
+        } else {
+            Promotion::Native(start, base)
+        };
         if let Some(think) = self.turn.think.as_mut() {
-            think.promoted = Some((start, base));
+            think.promoted = Some(promotion);
         }
-        Ok(Some(base))
+        Ok(Some(promotion.interpretation()))
     }
 
     /// A reasoning opener completed at `start`.
@@ -1718,6 +1902,22 @@ impl<'s> Recognizer<'s> {
         Ok(())
     }
 
+    /// A fallible owned copy of the attempt's live interpretations.
+    fn copy_interps(
+        &self,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<Option<ScratchVec<Interp>>, StopReason> {
+        let Some((_, live)) = self.turn.interps.get(&attempt) else {
+            return Ok(None);
+        };
+        governor.charge(Resource::Work, size(live.len()))?;
+        let mut copied = ScratchVec::new(governor);
+        copied.reserve(live.len())?;
+        copied.extend(live.iter().copied())?;
+        Ok(Some(copied))
+    }
+
     /// The segments of `attempt` ended: one call (or result), or each
     /// call of an attempt whose production separates calls with `next`,
     /// in order, each with its cost.
@@ -1729,11 +1929,17 @@ impl<'s> Recognizer<'s> {
         charged: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some((_, interps)) = self.turn.interps.get(&attempt).cloned() else {
-            // An attempt with no interpretation (it began inside another
-            // attempt's committed span): its parts are dropped unread.
-            drop(parts);
-            return governor.release_scratch(charged);
+        let interps = match self.copy_interps(attempt, governor) {
+            Ok(Some(interps)) => interps,
+            Ok(None) => {
+                drop(parts);
+                return governor.release_scratch(charged);
+            }
+            Err(reason) => {
+                drop(parts);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
         };
         match self.discards_native_frame(attempt, &parts, governor) {
             Ok(false) => {}
@@ -1763,9 +1969,11 @@ impl<'s> Recognizer<'s> {
             let end = segment.span().end;
             stored.push((self.turn.store(segment, governor)?, cost, end));
         }
-        for interp in interps {
+        for &interp in &interps {
             match interp {
-                Interp::Top(base) => {
+                Interp::Top(base)
+                | Interp::NativePromoted(base)
+                | Interp::WeakPromoted(_, base) => {
                     let mut chain = base;
                     let (kept, open) = match (cut, cut_part) {
                         (Some((part, marker, pair)), Some(trimmed)) => {
@@ -1916,8 +2124,8 @@ impl<'s> Recognizer<'s> {
         if outread {
             return Ok(());
         }
-        for interp in interps {
-            if let Interp::Top(base) = interp {
+        for &interp in &interps {
+            if let Some(base) = interp.base() {
                 frame
                     .candidates
                     .push(self.turn.append(base, index, REJECT, ended.at, governor)?);
@@ -2037,7 +2245,7 @@ impl<'s> Recognizer<'s> {
         };
         let index = self.turn.store(segment, governor)?;
         for &interp in interps {
-            if let Interp::Top(base) = interp {
+            if let Some(base) = interp.base() {
                 let (cost, mut hist) = self.turn.append(base, index, REJECT, end, governor)?;
                 if end < marker {
                     hist = self
@@ -2168,7 +2376,9 @@ impl<'s> Recognizer<'s> {
             }
             for interp in interps {
                 match *interp {
-                    Interp::Top(base) => {
+                    Interp::Top(base)
+                    | Interp::NativePromoted(base)
+                    | Interp::WeakPromoted(_, base) => {
                         let mut chain = base;
                         for &(index, cost, end) in &stored {
                             let (cost, hist) =
