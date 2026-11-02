@@ -838,8 +838,8 @@ fn same_embedded_invocation(
         || exact.kind != ProductionKind::Call
         || exact.kind != shadow.kind
         || exact.order != shadow.order
-        || !same_embedded_binding(&exact.name, &shadow.name, governor)?
-        || !same_embedded_binding(&exact.id, &shadow.id, governor)?
+        || !same_embedded_binding(exact.name.as_ref(), shadow.name.as_ref(), governor)?
+        || !same_embedded_binding(exact.id.as_ref(), shadow.id.as_ref(), governor)?
     {
         return Ok(false);
     }
@@ -936,8 +936,8 @@ fn same_embedded_text(
 }
 
 fn same_embedded_binding(
-    left: &Option<Spanned<String>>,
-    right: &Option<Spanned<String>>,
+    left: Option<&Spanned<String>>,
+    right: Option<&Spanned<String>>,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
     match (left, right) {
@@ -1852,17 +1852,16 @@ impl<'s> Recognizer<'s> {
             .filter(|top| opening.projected || !matches!(top, Interp::WeakPromoted(..)));
         match (frame.top, last) {
             (Some(top), last) if top.boundary <= start => {
-                let inherited = match last {
-                    Some(inherited) => inherited,
-                    None => {
-                        let base = Base {
-                            cost: top.cost,
-                            hist: self.turn.close(top, start, governor)?,
-                        };
-                        let inherited = Interp::Top(base);
-                        self.turn.last_kill = Some(LastKill::new(start, inherited));
-                        inherited
-                    }
+                let inherited = if let Some(inherited) = last {
+                    inherited
+                } else {
+                    let base = Base {
+                        cost: top.cost,
+                        hist: self.turn.close(top, start, governor)?,
+                    };
+                    let inherited = Interp::Top(base);
+                    self.turn.last_kill = Some(LastKill::new(start, inherited));
+                    inherited
                 };
                 crate::contract::push_scratch(&mut interps, inherited, governor)?;
                 frame.kill = true;
@@ -2179,10 +2178,10 @@ impl<'s> Recognizer<'s> {
     ) -> Result<Option<Interp>, StopReason> {
         if let Some(cached) = think.promoted {
             if cached.start() == start {
-                let promotion = if !projected {
-                    Promotion::Native(start, cached.base())
-                } else {
+                let promotion = if projected {
                     cached
+                } else {
+                    Promotion::Native(start, cached.base())
                 };
                 if let Some(think) = self.turn.think.as_mut() {
                     think.promoted = Some(promotion);
