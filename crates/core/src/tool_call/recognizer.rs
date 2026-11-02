@@ -921,7 +921,7 @@ fn same_embedded_invocation(
     Ok(cost == shadow.cost)
 }
 
-fn same_embedded_text(
+pub(super) fn same_source_text(
     left: &str,
     right: &str,
     governor: &mut Governor,
@@ -943,7 +943,7 @@ fn same_embedded_binding(
     match (left, right) {
         (None, None) => Ok(true),
         (Some(left), Some(right)) => {
-            Ok(left.span == right.span && same_embedded_text(&left.value, &right.value, governor)?)
+            Ok(left.span == right.span && same_source_text(&left.value, &right.value, governor)?)
         }
         _ => Ok(false),
     }
@@ -965,47 +965,47 @@ fn same_embedded_arguments(
     }
     match (&left.tool, &right.tool) {
         (None, None) => {}
-        (Some(left), Some(right)) if same_embedded_text(left, right, governor)? => {}
+        (Some(left), Some(right)) if same_source_text(left, right, governor)? => {}
         _ => return Ok(false),
     }
     for (left, right) in left.leaves.iter().zip(&right.leaves) {
         governor.charge(Resource::Work, 1)?;
         if left.raw != right.raw
             || left.origin != right.origin
-            || !same_embedded_text(&left.pointer, &right.pointer, governor)?
+            || !same_source_text(&left.pointer, &right.pointer, governor)?
         {
             return Ok(false);
         }
     }
-    same_embedded_tree(&left.root, &right.root, governor)
+    same_source_tree(&left.root, &right.root, governor)
 }
 
-struct EmbeddedNode<'a> {
+struct SourceNode<'a> {
     left: &'a crate::json::Node,
     right: &'a crate::json::Node,
     depth: u64,
 }
 
-impl ScratchCharge for EmbeddedNode<'_> {
+impl ScratchCharge for SourceNode<'_> {
     const CHARGE: usize = 24;
 }
-const _: () = assert!(core::mem::size_of::<EmbeddedNode<'_>>() <= EmbeddedNode::CHARGE);
+const _: () = assert!(core::mem::size_of::<SourceNode<'_>>() <= SourceNode::CHARGE);
 
 /// Source identity is stricter than semantic JSON equality: preserve every
 /// occurrence, source range and exact number spelling without numeric work.
-fn same_embedded_tree(
+pub(super) fn same_source_tree(
     left: &crate::json::Node,
     right: &crate::json::Node,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
     use crate::json::Value;
     let mut stack = ScratchVec::new(governor);
-    stack.push(EmbeddedNode {
+    stack.push(SourceNode {
         left,
         right,
         depth: 0,
     })?;
-    while let Some(EmbeddedNode { left, right, depth }) = stack.pop() {
+    while let Some(SourceNode { left, right, depth }) = stack.pop() {
         governor.charge(Resource::Work, 1)?;
         governor.charge(Resource::Depth, depth)?;
         if left.span != right.span {
@@ -1015,12 +1015,12 @@ fn same_embedded_tree(
             (Value::Null, Value::Null) => {}
             (Value::Bool(a), Value::Bool(b)) if a == b => {}
             (Value::String(a), Value::String(b)) => {
-                if !same_embedded_text(a, b, governor)? {
+                if !same_source_text(a, b, governor)? {
                     return Ok(false);
                 }
             }
             (Value::Number(a), Value::Number(b)) => {
-                if !same_embedded_text(a.as_str(), b.as_str(), governor)? {
+                if !same_source_text(a.as_str(), b.as_str(), governor)? {
                     return Ok(false);
                 }
             }
@@ -1031,7 +1031,7 @@ fn same_embedded_tree(
                 for (left, right) in a.iter().zip(b).rev() {
                     governor.charge(Resource::Work, 1)?;
                     governor.charge(Resource::Depth, depth.saturating_add(1))?;
-                    stack.push(EmbeddedNode {
+                    stack.push(SourceNode {
                         left,
                         right,
                         depth: depth.saturating_add(1),
@@ -1045,12 +1045,12 @@ fn same_embedded_tree(
                 for (left, right) in a.iter().zip(b).rev() {
                     governor.charge(Resource::Work, 1)?;
                     if left.key_span != right.key_span
-                        || !same_embedded_text(&left.key, &right.key, governor)?
+                        || !same_source_text(&left.key, &right.key, governor)?
                     {
                         return Ok(false);
                     }
                     governor.charge(Resource::Depth, depth.saturating_add(1))?;
-                    stack.push(EmbeddedNode {
+                    stack.push(SourceNode {
                         left: &left.value,
                         right: &right.value,
                         depth: depth.saturating_add(1),

@@ -50,10 +50,15 @@ does not authorize converting an inferred value into a resolved one.
 Without strict tool-choice constraints, optional whitespace left by suppressed
 markers has one maximal framing. Grouped calls retain the latest end and then
 the earliest start in call order. This applies only within the
-same derived grammar when the ordered calls, every captured source span,
-arguments, outcome and complete ledgers agree. Different captures or
-non-whitespace boundaries remain distinct. Strict choices retain the original
-content alternatives. An intact native JSON reading also precedes a matching
+same derived grammar for each changed frame when the ordered calls, every
+retained source span, arguments, outcome and complete provenance agree. A
+repair destination may differ only when each address is exactly its own
+whole-call frame; source edits, loss bytes and inference values must still
+match. The kept representative retains its original ledger. Unchanged calls,
+including native calls beside a projected call, pass through only after full
+source and interpretation comparison. Different captures or non-whitespace
+boundaries remain distinct. Strict choices retain the original content
+alternatives. An intact native JSON reading also precedes a matching
 projected envelope whose only changes are exact exterior prose or fence
 extractions; each retains its original loss kind and source bytes.
 

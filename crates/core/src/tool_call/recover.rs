@@ -141,7 +141,7 @@
 //! and its call openers.
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
-use super::recognizer::{edit_entries, escaped};
+use super::recognizer::{edit_entries, escaped, same_source_text, same_source_tree};
 use super::resolve::loss_kind;
 use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, Closure, DialectId, DialectSet, Effects,
@@ -3300,8 +3300,9 @@ fn same_captured_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
 
 /// Removing markers can leave optional layout as either call framing or
 /// content, or on either side of a grouped call boundary. These are the same
-/// invocations only when every captured fact, including its source spans and
-/// ledger, is unchanged. Prefer the latest end, then earliest start, in call
+/// invocations only when every captured fact and source span is unchanged;
+/// ledger destinations may differ only by their proven enclosing frame.
+/// Prefer the latest end, then earliest start, in call
 /// order. Strict choices retain content alternatives for their constraints.
 fn projected_layout_dominates(
     left: &[ResolvedSegment],
@@ -3331,8 +3332,7 @@ fn projected_layout_dominates(
             (Some(a), Some(b)) => (a, b),
             _ => return Ok(false),
         };
-        if a.dialect != b.dialect || !a.dialect.grammar().is_derived() || !same_captured_call(a, b)
-        {
+        if a.dialect != b.dialect || (a.span != b.span && !a.dialect.grammar().is_derived()) {
             return Ok(false);
         }
         for margin in [
@@ -3344,9 +3344,242 @@ fn projected_layout_dominates(
                 return Ok(false);
             }
         }
+        // Only after proving inert margins may canonical frame addresses vary.
+        // An unchanged native pair still needs every source/interpretation fact.
+        if !same_layout_call(a, b, governor)? {
+            return Ok(false);
+        }
         order = order
             .then(a.span.end.cmp(&b.span.end))
             .then(b.span.start.cmp(&a.span.start));
+    }
+}
+
+/// Compare every resolved fact while retaining the chosen record unchanged.
+/// The caller has already proved that differing frame margins are whitespace.
+fn same_layout_call(
+    left: &ResolvedCall,
+    right: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    // Fixed call fields, collection lengths and scalar enum discriminants.
+    governor.charge(Resource::Work, 32)?;
+    let outcome = match (&left.outcome, &right.outcome) {
+        (CallOutcome::Unresolved { reason: left }, CallOutcome::Unresolved { reason: right }) => {
+            same_layout_reason(Some(left), Some(right), governor)?
+        }
+        (left, right) => left == right,
+    };
+    if left.order != right.order
+        || left.closure != right.closure
+        || left.competing != right.competing
+        || left.alternatives.len() != right.alternatives.len()
+        || left.distinguishing.len() != right.distinguishing.len()
+        || !outcome
+    {
+        return Ok(false);
+    }
+    for (left, right) in [(&left.name, &right.name), (&left.id, &right.id)] {
+        match (left, right) {
+            (None, None) => {}
+            (Some(left), Some(right))
+                if left.span == right.span
+                    && same_source_text(&left.value, &right.value, governor)? => {}
+            _ => return Ok(false),
+        }
+    }
+    let frames = (&left.span, &right.span);
+    if !same_layout_reading(&left.reading, &right.reading, frames, governor)? {
+        return Ok(false);
+    }
+    for (left, right) in left.alternatives.iter().zip(&right.alternatives) {
+        if !same_layout_reading(left, right, frames, governor)? {
+            return Ok(false);
+        }
+    }
+    for (left, right) in left.distinguishing.iter().zip(&right.distinguishing) {
+        governor.charge(Resource::Work, 4)?;
+        let same = match (left, right) {
+            (ProvenanceNode::Evidence(left), ProvenanceNode::Evidence(right)) => {
+                same_layout_evidence(left, right, frames, governor)?
+            }
+            (ProvenanceNode::Loss(left), ProvenanceNode::Loss(right)) => {
+                same_layout_loss(left, right, frames, governor)?
+            }
+            (ProvenanceNode::Inference(left), ProvenanceNode::Inference(right)) => {
+                same_layout_inference(left, right, frames, governor)?
+            }
+            (ProvenanceNode::Validation(a, b), ProvenanceNode::Validation(c, d)) => {
+                a == c && b == d
+            }
+            _ => false,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    governor.check()?;
+    Ok(true)
+}
+
+fn same_layout_reading(
+    left: &CallReading,
+    right: &CallReading,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    // Fixed reading fields and lengths; variable payloads admit their own scans.
+    governor.charge(Resource::Work, 24)?;
+    if left.effects != right.effects
+        || left.policy != right.policy
+        || left.cost != right.cost
+        || left.validations.len() != right.validations.len()
+        || left.repairs.evidence.len() != right.repairs.evidence.len()
+        || left.repairs.losses.len() != right.repairs.losses.len()
+        || left.repairs.inferences.len() != right.repairs.inferences.len()
+        || !same_layout_reason(left.blocker.as_ref(), right.blocker.as_ref(), governor)?
+    {
+        return Ok(false);
+    }
+    match (&left.tool, &right.tool) {
+        (None, None) => {}
+        (Some(left), Some(right)) if same_source_text(left, right, governor)? => {}
+        _ => return Ok(false),
+    }
+    if !same_source_tree(&left.arguments, &right.arguments, governor)? {
+        return Ok(false);
+    }
+    for (left, right) in left.validations.iter().zip(&right.validations) {
+        governor.charge(Resource::Work, 4)?;
+        if left.passed != right.passed
+            || left.diagnostics.len() != right.diagnostics.len()
+            || !same_source_text(&left.validator, &right.validator, governor)?
+            || !same_source_text(&left.constraint, &right.constraint, governor)?
+        {
+            return Ok(false);
+        }
+        for (left, right) in left.diagnostics.iter().zip(&right.diagnostics) {
+            if !same_source_text(left, right, governor)? {
+                return Ok(false);
+            }
+        }
+    }
+    for (left, right) in left.repairs.evidence.iter().zip(&right.repairs.evidence) {
+        if !same_layout_evidence(left, right, frames, governor)? {
+            return Ok(false);
+        }
+    }
+    for (left, right) in left.repairs.losses.iter().zip(&right.repairs.losses) {
+        governor.charge(Resource::Work, 1)?;
+        if left.kind != right.kind || !same_layout_loss(&left.loss, &right.loss, frames, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    for (left, right) in left
+        .repairs
+        .inferences
+        .iter()
+        .zip(&right.repairs.inferences)
+    {
+        if !same_layout_inference(left, right, frames, governor)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_layout_evidence(
+    left: &Evidence,
+    right: &Evidence,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    // The optional source digest and range are fixed-size comparison work.
+    governor.charge(Resource::Work, 40)?;
+    if left.span != right.span
+        || !same_source_text(&left.rule, &right.rule, governor)?
+        || !same_source_text(&left.explanation, &right.explanation, governor)?
+    {
+        return Ok(false);
+    }
+    if same_source_text(&left.destination, &right.destination, governor)? {
+        return Ok(true);
+    }
+    // Prefix, split, ASCII-digit scans and integer parsing for both addresses.
+    // Only edit_entries' exact whole-frame target is permitted to differ.
+    governor.charge(
+        Resource::Work,
+        size(left.destination.len())
+            .saturating_add(size(right.destination.len()))
+            .saturating_add(1)
+            .saturating_mul(4),
+    )?;
+    Ok(context_destination(left, frames.0) && context_destination(right, frames.1))
+}
+
+fn same_layout_loss(
+    left: &Loss,
+    right: &Loss,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    Ok(
+        same_layout_evidence(&left.evidence, &right.evidence, frames, governor)?
+            && same_source_text(&left.original, &right.original, governor)?,
+    )
+}
+
+fn same_layout_inference(
+    left: &Inference,
+    right: &Inference,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    Ok(left.kind == right.kind
+        && same_layout_evidence(&left.evidence, &right.evidence, frames, governor)?
+        && same_source_text(&left.value, &right.value, governor)?)
+}
+
+fn same_layout_reason(
+    left: Option<&UnresolvedReason>,
+    right: Option<&UnresolvedReason>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    fn text(reason: &UnresolvedReason) -> Option<&str> {
+        match reason {
+            UnresolvedReason::UnknownTool { name }
+            | UnresolvedReason::RuleNotAdmitted { rule: name, .. }
+            | UnresolvedReason::InvalidArgument { pointer: name, .. }
+            | UnresolvedReason::UnknownParameter { pointer: name }
+            | UnresolvedReason::MissingRequired { pointer: name }
+            | UnresolvedReason::Malformed { detail: name }
+            | UnresolvedReason::ToolChoiceForced { expected: name }
+            | UnresolvedReason::RepairNotPermitted { rule: name } => Some(name),
+            UnresolvedReason::MissingName
+            | UnresolvedReason::ArgumentsNotObject
+            | UnresolvedReason::SchemaValidation
+            | UnresolvedReason::Truncated
+            | UnresolvedReason::ToolChoiceNone
+            | UnresolvedReason::ToolChoiceCardinality => None,
+        }
+    }
+    governor.charge(Resource::Work, 8)?;
+    match (left, right) {
+        (None, None) => Ok(true),
+        (Some(left), Some(right)) => {
+            match (text(left), text(right)) {
+                (None, None) => {}
+                (Some(left), Some(right)) if same_source_text(left, right, governor)? => {}
+                _ => return Ok(false),
+            }
+            // Admitting both text lengths covers the first comparison and
+            // derived equality's repeated string scan. The other fields are
+            // fixed discriminants, policy and argument-fault coordinates.
+            Ok(left == right)
+        }
+        _ => Ok(false),
     }
 }
 

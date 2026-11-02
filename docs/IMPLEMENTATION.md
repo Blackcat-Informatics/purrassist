@@ -970,6 +970,19 @@ their checks. This selects the intact native reading without upgrading the
 projected fallback's guess or loss status. Other invocation differences remain
 distinct. Current corrections have not been executed.
 
+Optional layout representatives compare the complete resolved call, every
+alternative and distinguishing provenance node with governed text and strict
+source-tree comparisons. Argument occurrence order, node and key spans, and
+exact number spellings must match. Only whitespace may cross a changed frame
+boundary, and every changed pair must retain the same derived dialect.
+Unchanged native calls can accompany such a pair only when all their source and
+interpretation fields agree. Evidence, losses, inference kinds and values,
+validations and blockers remain equal; a differing destination is accepted only
+as the canonical whole-frame address of its own call. The selected record is
+kept intact. Strict forced tool choices retain the original alternatives. This
+source-inspected change has been formatted but has not been executed; it does
+not establish new corpus totals.
+
 
 Projected entry admission retains the original program-location commit map
 before an erased marker's commit is replaced. Only those locations can regain

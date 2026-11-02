@@ -124,7 +124,7 @@ impl<K: Key, V: ScratchCharge> Map<K, V> {
         }
     }
     /// Number of distinct keys retained after duplicate replacement.
-    pub(super) fn len(&self) -> usize {
+    pub(super) const fn len(&self) -> usize {
         self.nodes.len()
     }
     /// Consume strictly increasing keys and link their balanced tree once.
