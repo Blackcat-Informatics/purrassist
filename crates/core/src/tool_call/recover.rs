@@ -141,13 +141,14 @@
 //! and its call openers.
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
-use super::recognizer::{edit_entries, escaped};
+use super::recognizer::{edit_entries, escaped, same_source_text, same_source_tree};
 use super::resolve::loss_kind;
 use super::{
-    CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
-    FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
-    Recognizer, Rejection, RepairPolicy, ResolvedCall, ResolvedPiece, ResolvedSegment,
-    ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, detect_unparsed, resolve_forest, rules,
+    CallLedger, CallLoss, CallOutcome, CallReading, Closure, DialectId, DialectSet, Effects,
+    FromNode, FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy,
+    ReasoningSegment, Recognizer, Rejection, RepairPolicy, ResolvedCall, ResolvedPiece,
+    ResolvedSegment, ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, detect_unparsed,
+    resolve_forest, rules,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
@@ -842,10 +843,9 @@ impl ToolRecoveryRequest {
     /// use purrassist_core::{Effort, tool_call::{DialectSet, ToolRecoveryRequest}};
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
     /// let request = ToolRecoveryRequest::sized(Effort::Standard, output);
-    /// // Three `<tool_call>` openers (Qwen3-Coder XML, Hermes and GLM) and two `{`
-    /// // where a Llama 3 JSON, an Anthropic `tool_use` and a bare JSON
-    /// // attempt may open.
-    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 9));
+    /// // The complete allow-list counts fifteen possible native/projected
+    /// // entries, including the line-start name and JSON envelope programs.
+    /// assert_eq!(request.budget, ToolRecoveryRequest::sized_budget(Effort::Standard, output.len(), 15));
     /// ```
     #[must_use]
     pub fn sized(effort: Effort, output: &[u8]) -> Self {
@@ -3268,8 +3268,14 @@ fn equivalent_options(
 
 /// Whether two resolved calls are the same call, whichever dialect read it.
 fn same_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
+    left.span == right.span && same_captured_call(left, right)
+}
+
+/// Compare every resolved field except the enclosing span and dialect.
+/// This alone never establishes that two different frames are equivalent.
+fn same_captured_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
     let ResolvedCall {
-        span,
+        span: _,
         dialect: _,
         order,
         id,
@@ -3281,8 +3287,7 @@ fn same_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
         alternatives,
         distinguishing,
     } = left;
-    *span == right.span
-        && *order == right.order
+    *order == right.order
         && *id == right.id
         && *name == right.name
         && *closure == right.closure
@@ -3291,6 +3296,807 @@ fn same_call(left: &ResolvedCall, right: &ResolvedCall) -> bool {
         && *competing == right.competing
         && *alternatives == right.alternatives
         && *distinguishing == right.distinguishing
+}
+
+/// Removing markers can leave optional layout as either call framing or
+/// content, or on either side of a grouped call boundary. These are the same
+/// invocations only when every captured fact and source span is unchanged;
+/// ledger destinations may differ only by their proven enclosing frame.
+/// Prefer the latest end, then earliest start, in call
+/// order. Strict choices retain content alternatives for their constraints.
+fn projected_layout_dominates(
+    left: &[ResolvedSegment],
+    right: &[ResolvedSegment],
+    output: &[u8],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.len()).saturating_add(size(right.len())),
+    )?;
+    if left.iter().chain(right).any(|segment| {
+        !matches!(
+            segment,
+            ResolvedSegment::Call(_) | ResolvedSegment::Content(_)
+        )
+    }) {
+        return Ok(false);
+    }
+    let mut left = left.iter().filter_map(resolved_json_call);
+    let mut right = right.iter().filter_map(resolved_json_call);
+    let mut order = core::cmp::Ordering::Equal;
+    loop {
+        governor.charge(Resource::Work, 1)?;
+        let (a, b) = match (left.next(), right.next()) {
+            (None, None) => return Ok(order.is_gt()),
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(false),
+        };
+        if a.dialect != b.dialect || (a.span != b.span && !a.dialect.grammar().is_derived()) {
+            return Ok(false);
+        }
+        for margin in [
+            a.span.start.min(b.span.start)..a.span.start.max(b.span.start),
+            a.span.end.min(b.span.end)..a.span.end.max(b.span.end),
+        ] {
+            governor.charge(Resource::Work, size(margin.len()))?;
+            if !output[margin].iter().all(u8::is_ascii_whitespace) {
+                return Ok(false);
+            }
+        }
+        // Only after proving inert margins may canonical frame addresses vary.
+        // An unchanged native pair still needs every source/interpretation fact.
+        if !same_layout_call(a, b, governor)? {
+            return Ok(false);
+        }
+        order = order
+            .then(a.span.end.cmp(&b.span.end))
+            .then(b.span.start.cmp(&a.span.start));
+    }
+}
+
+/// Compare every resolved fact while retaining the chosen record unchanged.
+/// The caller has already proved that differing frame margins are whitespace.
+fn same_layout_call(
+    left: &ResolvedCall,
+    right: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    // Fixed call fields, collection lengths and scalar enum discriminants.
+    governor.charge(Resource::Work, 32)?;
+    let outcome = match (&left.outcome, &right.outcome) {
+        (CallOutcome::Unresolved { reason: left }, CallOutcome::Unresolved { reason: right }) => {
+            same_layout_reason(Some(left), Some(right), governor)?
+        }
+        (left, right) => left == right,
+    };
+    if left.order != right.order
+        || left.closure != right.closure
+        || left.competing != right.competing
+        || left.alternatives.len() != right.alternatives.len()
+        || left.distinguishing.len() != right.distinguishing.len()
+        || !outcome
+    {
+        return Ok(false);
+    }
+    for (left, right) in [(&left.name, &right.name), (&left.id, &right.id)] {
+        match (left, right) {
+            (None, None) => {}
+            (Some(left), Some(right))
+                if left.span == right.span
+                    && same_source_text(&left.value, &right.value, governor)? => {}
+            _ => return Ok(false),
+        }
+    }
+    let frames = (&left.span, &right.span);
+    if !same_layout_reading(&left.reading, &right.reading, frames, governor)? {
+        return Ok(false);
+    }
+    for (left, right) in left.alternatives.iter().zip(&right.alternatives) {
+        if !same_layout_reading(left, right, frames, governor)? {
+            return Ok(false);
+        }
+    }
+    for (left, right) in left.distinguishing.iter().zip(&right.distinguishing) {
+        governor.charge(Resource::Work, 4)?;
+        let same = match (left, right) {
+            (ProvenanceNode::Evidence(left), ProvenanceNode::Evidence(right)) => {
+                same_layout_evidence(left, right, frames, governor)?
+            }
+            (ProvenanceNode::Loss(left), ProvenanceNode::Loss(right)) => {
+                same_layout_loss(left, right, frames, governor)?
+            }
+            (ProvenanceNode::Inference(left), ProvenanceNode::Inference(right)) => {
+                same_layout_inference(left, right, frames, governor)?
+            }
+            (ProvenanceNode::Validation(a, b), ProvenanceNode::Validation(c, d)) => {
+                a == c && b == d
+            }
+            _ => false,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    governor.check()?;
+    Ok(true)
+}
+
+fn same_layout_reading(
+    left: &CallReading,
+    right: &CallReading,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    // Fixed reading fields and lengths; variable payloads admit their own scans.
+    governor.charge(Resource::Work, 24)?;
+    if left.effects != right.effects
+        || left.policy != right.policy
+        || left.cost != right.cost
+        || left.validations.len() != right.validations.len()
+        || left.repairs.evidence.len() != right.repairs.evidence.len()
+        || left.repairs.losses.len() != right.repairs.losses.len()
+        || left.repairs.inferences.len() != right.repairs.inferences.len()
+        || !same_layout_reason(left.blocker.as_ref(), right.blocker.as_ref(), governor)?
+    {
+        return Ok(false);
+    }
+    match (&left.tool, &right.tool) {
+        (None, None) => {}
+        (Some(left), Some(right)) if same_source_text(left, right, governor)? => {}
+        _ => return Ok(false),
+    }
+    if !same_source_tree(&left.arguments, &right.arguments, governor)? {
+        return Ok(false);
+    }
+    for (left, right) in left.validations.iter().zip(&right.validations) {
+        governor.charge(Resource::Work, 4)?;
+        if left.passed != right.passed
+            || left.diagnostics.len() != right.diagnostics.len()
+            || !same_source_text(&left.validator, &right.validator, governor)?
+            || !same_source_text(&left.constraint, &right.constraint, governor)?
+        {
+            return Ok(false);
+        }
+        for (left, right) in left.diagnostics.iter().zip(&right.diagnostics) {
+            if !same_source_text(left, right, governor)? {
+                return Ok(false);
+            }
+        }
+    }
+    for (left, right) in left.repairs.evidence.iter().zip(&right.repairs.evidence) {
+        if !same_layout_evidence(left, right, frames, governor)? {
+            return Ok(false);
+        }
+    }
+    for (left, right) in left.repairs.losses.iter().zip(&right.repairs.losses) {
+        governor.charge(Resource::Work, 1)?;
+        if left.kind != right.kind || !same_layout_loss(&left.loss, &right.loss, frames, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    for (left, right) in left
+        .repairs
+        .inferences
+        .iter()
+        .zip(&right.repairs.inferences)
+    {
+        if !same_layout_inference(left, right, frames, governor)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_layout_evidence(
+    left: &Evidence,
+    right: &Evidence,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    // The optional source digest and range are fixed-size comparison work.
+    governor.charge(Resource::Work, 40)?;
+    if left.span != right.span
+        || !same_source_text(&left.rule, &right.rule, governor)?
+        || !same_source_text(&left.explanation, &right.explanation, governor)?
+    {
+        return Ok(false);
+    }
+    if same_source_text(&left.destination, &right.destination, governor)? {
+        return Ok(true);
+    }
+    // Prefix, split, ASCII-digit scans and integer parsing for both addresses.
+    // Only edit_entries' exact whole-frame target is permitted to differ.
+    governor.charge(
+        Resource::Work,
+        size(left.destination.len())
+            .saturating_add(size(right.destination.len()))
+            .saturating_add(1)
+            .saturating_mul(4),
+    )?;
+    Ok(context_destination(left, frames.0) && context_destination(right, frames.1))
+}
+
+fn same_layout_loss(
+    left: &Loss,
+    right: &Loss,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    Ok(
+        same_layout_evidence(&left.evidence, &right.evidence, frames, governor)?
+            && same_source_text(&left.original, &right.original, governor)?,
+    )
+}
+
+fn same_layout_inference(
+    left: &Inference,
+    right: &Inference,
+    frames: (&Range<usize>, &Range<usize>),
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    Ok(left.kind == right.kind
+        && same_layout_evidence(&left.evidence, &right.evidence, frames, governor)?
+        && same_source_text(&left.value, &right.value, governor)?)
+}
+
+fn same_layout_reason(
+    left: Option<&UnresolvedReason>,
+    right: Option<&UnresolvedReason>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    fn text(reason: &UnresolvedReason) -> Option<&str> {
+        match reason {
+            UnresolvedReason::UnknownTool { name }
+            | UnresolvedReason::RuleNotAdmitted { rule: name, .. }
+            | UnresolvedReason::InvalidArgument { pointer: name, .. }
+            | UnresolvedReason::UnknownParameter { pointer: name }
+            | UnresolvedReason::MissingRequired { pointer: name }
+            | UnresolvedReason::Malformed { detail: name }
+            | UnresolvedReason::ToolChoiceForced { expected: name }
+            | UnresolvedReason::RepairNotPermitted { rule: name } => Some(name),
+            UnresolvedReason::MissingName
+            | UnresolvedReason::ArgumentsNotObject
+            | UnresolvedReason::SchemaValidation
+            | UnresolvedReason::Truncated
+            | UnresolvedReason::ToolChoiceNone
+            | UnresolvedReason::ToolChoiceCardinality => None,
+        }
+    }
+    governor.charge(Resource::Work, 8)?;
+    match (left, right) {
+        (None, None) => Ok(true),
+        (Some(left), Some(right)) => {
+            match (text(left), text(right)) {
+                (None, None) => {}
+                (Some(left), Some(right)) if same_source_text(left, right, governor)? => {}
+                _ => return Ok(false),
+            }
+            // Admitting both text lengths covers the first comparison and
+            // derived equality's repeated string scan. The other fields are
+            // fixed discriminants, policy and argument-fault coordinates.
+            Ok(left == right)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn resolved_json_call(segment: &ResolvedSegment) -> Option<&ResolvedCall> {
+    match segment {
+        ResolvedSegment::Call(call) => Some(&**call),
+        _ => None,
+    }
+}
+
+fn content_outside<'a>(
+    segments: &'a [ResolvedSegment],
+    frame: &'a Range<usize>,
+) -> impl Iterator<Item = Range<usize>> + 'a {
+    segments
+        .iter()
+        .filter_map(|segment| match segment {
+            ResolvedSegment::Content(span) => Some(span),
+            _ => None,
+        })
+        .flat_map(move |span| {
+            [
+                span.start..span.end.min(frame.start),
+                span.start.max(frame.end)..span.end,
+            ]
+        })
+        .filter(|span| span.start < span.end)
+}
+
+fn canonical_native_json(call: &ResolvedCall) -> bool {
+    call.dialect == DialectId::BareJson
+        && call.closure == Closure::Closed
+        && call.outcome == CallOutcome::Resolved
+        && call.competing == 1
+        && call.alternatives.is_empty()
+        && call.distinguishing.is_empty()
+        && call.reading.cost == 0
+        && call.reading.repairs.evidence.is_empty()
+        && call.reading.repairs.losses.is_empty()
+        && call.reading.repairs.inferences.is_empty()
+}
+
+const FENCED_EXAMPLE_RULE: &str = "tool_call.context.fenced-example";
+
+/// A context guess remains a context guess when its outer framing changes.
+/// Other repairs, argument refusals and inferred values cannot enter this case.
+fn contextual_native_json(
+    call: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let ledger = &call.reading.repairs;
+    if call.dialect != DialectId::BareJson
+        || call.closure != Closure::Closed
+        || call.competing != 1
+        || !call.alternatives.is_empty()
+        || !call.distinguishing.is_empty()
+        || call.reading.cost != 0
+        || call.reading.blocker.is_some()
+        || call.reading.tool.is_none()
+        || call.reading.effects.is_none()
+        || call.reading.policy.is_none()
+        || ledger.evidence.len() != 1
+        || ledger.inferences.len() != 1
+        || !ledger.losses.is_empty()
+    {
+        return Ok(false);
+    }
+    governor.charge(Resource::Work, ledger_bytes(ledger).saturating_mul(2))?;
+    let evidence = &ledger.evidence[0];
+    let inference = &ledger.inferences[0];
+    let outcome = match &call.outcome {
+        CallOutcome::BestGuess => true,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::RuleNotAdmitted { rule, policy },
+        } => rule == FENCED_EXAMPLE_RULE && Some(*policy) == call.reading.policy,
+        _ => false,
+    };
+    Ok(outcome
+        && evidence.rule == FENCED_EXAMPLE_RULE
+        && evidence
+            .span
+            .as_ref()
+            .is_some_and(|span| span.bytes.contains(&call.span.start))
+        && context_destination(evidence, &call.span)
+        && inference.evidence == *evidence
+        && inference.kind == InferenceKind::Guess
+        && inference.value.is_empty())
+}
+
+/// Accept exactly the canonical frame destination produced by `edit_entries`.
+fn context_destination(evidence: &Evidence, span: &Range<usize>) -> bool {
+    fn coordinate(text: &str, expected: usize) -> bool {
+        !text.is_empty()
+            && (text.len() == 1 || !text.starts_with('0'))
+            && text.bytes().all(|byte| byte.is_ascii_digit())
+            && text.parse::<usize>() == Ok(expected)
+    }
+    evidence
+        .destination
+        .strip_prefix("/turn/")
+        .and_then(|range| range.split_once(".."))
+        .is_some_and(|(start, end)| coordinate(start, span.start) && coordinate(end, span.end))
+}
+
+/// Match complete contextual provenance, allowing only its proven frame address
+/// to differ. The kept native record is never rewritten or reclassified.
+fn same_context_guess(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let left = &exact.reading.repairs;
+    let right = &derived.reading.repairs;
+    governor.charge(Resource::Work, right.entries())?;
+    governor.charge(Resource::Work, ledger_bytes(right).saturating_mul(2))?;
+    if right.inferences.len() != 1 {
+        return Ok(false);
+    }
+    let mut contexts = right
+        .evidence
+        .iter()
+        .filter(|entry| entry.rule == FENCED_EXAMPLE_RULE);
+    let Some(evidence) = contexts.next() else {
+        return Ok(false);
+    };
+    let inference = &right.inferences[0];
+    let original = &left.evidence[0];
+    Ok(contexts.next().is_none()
+        && evidence.explanation == original.explanation
+        && evidence.span == original.span
+        && context_destination(evidence, &derived.span)
+        && inference.evidence == *evidence
+        && inference.kind == left.inferences[0].kind
+        && inference.value == left.inferences[0].value)
+}
+
+fn same_projected_json_invocation(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    contextual: bool,
+) -> bool {
+    exact.order == derived.order
+        && exact.id == derived.id
+        && exact.name == derived.name
+        && exact.reading.tool == derived.reading.tool
+        && exact.reading.effects == derived.reading.effects
+        && exact.reading.policy == derived.reading.policy
+        && exact.reading.blocker == derived.reading.blocker
+        && exact.reading.validations == derived.reading.validations
+        && derived.competing == 1
+        && derived.alternatives.is_empty()
+        && derived.distinguishing.is_empty()
+        && if contextual {
+            derived.outcome == exact.outcome
+        } else {
+            matches!(
+                derived.outcome,
+                CallOutcome::Resolved | CallOutcome::BestGuess
+            )
+        }
+        && matches!(derived.closure, Closure::Closed | Closure::Repaired)
+        && (contextual || derived.reading.repairs.inferences.is_empty())
+}
+
+fn only_exterior_extraction(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    output: &[u8],
+    contextual: bool,
+) -> bool {
+    let repairs = &derived.reading.repairs;
+    let extraction_evidence = || {
+        repairs
+            .evidence
+            .iter()
+            .filter(|evidence| !contextual || evidence.rule != FENCED_EXAMPLE_RULE)
+    };
+    let exterior = |evidence: &Evidence| {
+        matches!(
+            evidence.rule.as_str(),
+            "tool_call.extract.prose" | "tool_call.extract.fence"
+        ) && evidence.span.as_ref().is_some_and(|span| {
+            derived.span.start <= span.bytes.start
+                && span.bytes.end <= derived.span.end
+                && (span.bytes.end <= exact.span.start || span.bytes.start >= exact.span.end)
+        })
+    };
+    extraction_evidence().all(exterior)
+        && repairs.losses.len() == extraction_evidence().count()
+        && repairs.losses.iter().all(|loss| {
+            let kind_matches = match loss.loss.evidence.rule.as_str() {
+                "tool_call.extract.prose" => loss.kind == LossKind::Data,
+                "tool_call.extract.fence" => loss.kind == LossKind::Markup,
+                _ => false,
+            };
+            kind_matches
+                && repairs.evidence.contains(&loss.loss.evidence)
+                && loss.loss.evidence.span.as_ref().is_some_and(|span| {
+                    &output[span.bytes.clone()] == loss.loss.original.as_bytes()
+                })
+        })
+        && derived.reading.cost
+            == extraction_evidence().fold(exact.reading.cost, |cost, evidence| {
+                use crate::grammar::edit::EditOperator;
+                let operator = if evidence.rule == "tool_call.extract.fence" {
+                    EditOperator::ExtractFence
+                } else {
+                    EditOperator::ExtractProse
+                };
+                cost.saturating_add(rules::of_operator(operator).cost)
+            })
+        && (derived.closure == exact.closure || !repairs.evidence.is_empty())
+}
+
+fn native_json_margins(
+    exact: &ResolvedCall,
+    derived: &ResolvedCall,
+    output: &[u8],
+    array: Option<(bool, bool)>,
+) -> bool {
+    let before = derived.span.start..exact.span.start;
+    let after = exact.span.end..derived.span.end;
+    if let Some((first, last)) = array {
+        let opening: &[u8] = if first { b"[" } else { b"" };
+        let closing: &[u8] = if last { b"]" } else { b"," };
+        return output[before].trim_ascii() == opening && output[after].trim_ascii() == closing;
+    }
+    // Every non-layout margin byte is retained in an exterior extraction
+    // loss; the native segmentation instead preserves that source as content.
+    [before, after].into_iter().all(|range| {
+        output[range.clone()]
+            .iter()
+            .enumerate()
+            .all(|(offset, byte)| {
+                byte.is_ascii_whitespace()
+                    || derived.reading.repairs.losses.iter().any(|loss| {
+                        loss.loss
+                            .evidence
+                            .span
+                            .as_ref()
+                            .is_some_and(|span| span.bytes.contains(&(range.start + offset)))
+                    })
+            })
+    })
+}
+
+/// An intact native JSON invocation dominates only the same source-anchored
+/// invocation sequence under a known projected envelope. Never infer identity
+/// from values alone or discard an alternative argument or source partition.
+fn native_json_dominates(
+    native: &[ResolvedSegment],
+    projected: &[ResolvedSegment],
+    output: &[u8],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(native.len()).saturating_add(size(projected.len())),
+    )?;
+    if native.iter().chain(projected).any(|segment| {
+        !matches!(
+            segment,
+            ResolvedSegment::Call(_) | ResolvedSegment::Content(_)
+        )
+    }) {
+        return Ok(false);
+    }
+    let (Some(first), Some(last)) = (
+        projected.iter().find_map(resolved_json_call),
+        projected.iter().rev().find_map(resolved_json_call),
+    ) else {
+        return Ok(false);
+    };
+    let array = projected
+        .iter()
+        .filter_map(resolved_json_call)
+        .any(|call| call.dialect == DialectId::MistralV3Stripped);
+    let frame = first.span.start..last.span.end;
+    let mut exact_calls = native.iter().filter_map(resolved_json_call).peekable();
+    let mut projected_calls = projected.iter().filter_map(resolved_json_call);
+    let mut previous_end = frame.start;
+    let mut changed = false;
+    while let Some(exact) = exact_calls.next() {
+        let Some(derived) = projected_calls.next() else {
+            return Ok(false);
+        };
+        let contextual = !canonical_native_json(exact);
+        if contextual && !contextual_native_json(exact, governor)? {
+            return Ok(false);
+        }
+        if same_call(exact, derived) {
+            if array {
+                return Ok(false);
+            }
+            previous_end = exact.span.end;
+            continue;
+        }
+        let supported = if array {
+            derived.dialect == DialectId::MistralV3Stripped
+        } else {
+            derived.dialect == DialectId::HermesStripped
+        };
+        let next_start = exact_calls.peek().map_or(frame.end, |call| call.span.start);
+        if !supported
+            || derived.span.start < previous_end
+            || derived.span.start > exact.span.start
+            || derived.span.end < exact.span.end
+            || derived.span.end > next_start
+            || !same_projected_json_invocation(exact, derived, contextual)
+        {
+            return Ok(false);
+        }
+        governor.charge(
+            Resource::Work,
+            exact
+                .reading
+                .arguments
+                .estimated_bytes()
+                .saturating_add(derived.reading.arguments.estimated_bytes())
+                .saturating_add(
+                    size(derived.span.len()).saturating_mul(
+                        size(derived.reading.repairs.losses.len()).saturating_add(1),
+                    ),
+                ),
+        )?;
+        if exact.reading.arguments != derived.reading.arguments {
+            return Ok(false);
+        }
+        if contextual && !same_context_guess(exact, derived, governor)? {
+            return Ok(false);
+        }
+        if !only_exterior_extraction(exact, derived, output, contextual) {
+            return Ok(false);
+        }
+        let framing = array.then_some((!changed, exact_calls.peek().is_none()));
+        if !native_json_margins(exact, derived, output, framing) {
+            return Ok(false);
+        }
+        previous_end = exact.span.end;
+        changed = true;
+    }
+    Ok(changed
+        && projected_calls.next().is_none()
+        && content_outside(native, &frame).eq(content_outside(projected, &frame)))
+}
+
+/// A projection lost its parent's next-call opener, so only its inserted
+/// object closer was guessed. All invocation facts and source anchors agree.
+fn llama_closer_pair(
+    native: &ResolvedCall,
+    projected: &ResolvedCall,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    use crate::grammar::edit::EditOperator;
+    let exact_rule = rules::of_operator(EditOperator::MissingWrapperClose);
+    let guess_rule = rules::of_operator(EditOperator::MissingWrapperCloseBeforeText);
+    let unique = |call: &ResolvedCall| {
+        call.closure == Closure::Repaired
+            && call.competing == 1
+            && call.alternatives.is_empty()
+            && call.distinguishing.is_empty()
+            && call.reading.blocker.is_none()
+    };
+    if native.dialect != DialectId::Llama3Json
+        || projected.dialect != DialectId::Llama3JsonStripped
+        || !unique(native)
+        || !unique(projected)
+        || native.outcome != CallOutcome::Resolved
+        || native.reading.cost != exact_rule.cost
+        || projected.reading.cost != guess_rule.cost
+        || native.reading.repairs.evidence.len() != 1
+        || projected.reading.repairs.evidence.len() != 1
+        || !native.reading.repairs.losses.is_empty()
+        || !projected.reading.repairs.losses.is_empty()
+        || !native.reading.repairs.inferences.is_empty()
+        || projected.reading.repairs.inferences.len() != 1
+    {
+        return Ok(None);
+    }
+    governor.charge(
+        Resource::Work,
+        reading_bytes(&native.reading)
+            .saturating_add(reading_bytes(&projected.reading))
+            .saturating_mul(2)
+            .saturating_add(size(native.span.len())),
+    )?;
+    if native.span != projected.span
+        || native.order != projected.order
+        || native.id != projected.id
+        || native.name != projected.name
+        || native.reading.tool.is_none()
+        || native.reading.effects.is_none()
+        || native.reading.policy.is_none()
+        || native.reading.tool != projected.reading.tool
+        || native.reading.effects != projected.reading.effects
+        || native.reading.policy != projected.reading.policy
+        || native.reading.blocker != projected.reading.blocker
+        || native.reading.validations != projected.reading.validations
+        || native.reading.arguments != projected.reading.arguments
+    {
+        return Ok(None);
+    }
+    let outcome = match &projected.outcome {
+        CallOutcome::BestGuess => native.reading.policy == Some(RepairPolicy::Tolerant),
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::RuleNotAdmitted { rule, policy },
+        } => rule == guess_rule.id && Some(*policy) == native.reading.policy,
+        _ => false,
+    };
+    let exact = &native.reading.repairs.evidence[0];
+    let guess = &projected.reading.repairs.evidence[0];
+    let inference = &projected.reading.repairs.inferences[0];
+    // Number Eq is mathematical. Both anchored trees came through the same
+    // unchanged JSON codec, and these singleton closer ledgers change nothing
+    // inside the argument span, so their original numeric spellings agree too.
+    let Some(arguments) = &native.reading.arguments.span else {
+        return Ok(None);
+    };
+    let Some(insertion) = &exact.span else {
+        return Ok(None);
+    };
+    Ok((outcome
+        && exact.rule == exact_rule.id
+        && guess.rule == guess_rule.id
+        && insertion.bytes.is_empty()
+        && arguments.end <= insertion.bytes.start
+        && native.span.start <= insertion.bytes.start
+        && insertion.bytes.end <= native.span.end
+        && guess.span.as_ref() == Some(insertion)
+        && exact.destination == guess.destination
+        && context_destination(exact, &native.span)
+        && inference.evidence == *guess
+        && inference.kind == InferenceKind::Guess
+        && inference.value == "}")
+        .then_some(insertion.bytes.start))
+}
+
+/// Prefer this one parent repair only with a corresponding actual native next
+/// call. Source text alone cannot invent the next call or erase another repair.
+fn native_llama_boundary_dominates(
+    native: &[ResolvedSegment],
+    projected: &[ResolvedSegment],
+    following: Option<&ResolvedCall>,
+    output: &[u8],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(native.len()).saturating_add(size(projected.len())),
+    )?;
+    if native.len() != projected.len()
+        || !native.iter().zip(projected).any(|(left, right)| {
+            matches!((left, right), (ResolvedSegment::Call(a), ResolvedSegment::Call(b))
+                if a.dialect == DialectId::Llama3Json
+                    && b.dialect == DialectId::Llama3JsonStripped)
+        })
+    {
+        return Ok(false);
+    }
+    let mut changed = None;
+    for (index, (left, right)) in native.iter().zip(projected).enumerate() {
+        match (left, right) {
+            (ResolvedSegment::Content(a), ResolvedSegment::Content(b)) if a == b => {}
+            (ResolvedSegment::Call(a), ResolvedSegment::Call(b)) => {
+                governor.charge(
+                    Resource::Work,
+                    reading_bytes(&a.reading)
+                        .saturating_add(reading_bytes(&b.reading))
+                        .saturating_add(size(a.span.len()).saturating_add(size(b.span.len())))
+                        .saturating_add(size(a.reading.tool.as_ref().map_or(0, String::len)))
+                        .saturating_add(size(b.reading.tool.as_ref().map_or(0, String::len))),
+                )?;
+                if a == b {
+                    continue;
+                }
+                if changed.is_some() {
+                    return Ok(false);
+                }
+                let Some(at) = llama_closer_pair(a, b, governor)? else {
+                    return Ok(false);
+                };
+                changed = Some((index, at, a.span.end));
+            }
+            _ => return Ok(false),
+        }
+    }
+    let Some((index, at, end)) = changed else {
+        return Ok(false);
+    };
+    let Some(next) = native[index + 1..]
+        .iter()
+        .find_map(resolved_json_call)
+        .or(following)
+    else {
+        return Ok(false);
+    };
+    if next.dialect != DialectId::Llama3Json
+        || next.closure != Closure::Closed
+        || next.outcome != CallOutcome::Resolved
+        || next.competing != 1
+        || !next.alternatives.is_empty()
+        || !next.distinguishing.is_empty()
+        || next.reading.cost != 0
+        || next.reading.repairs.entries() != 0
+        || end > next.span.start
+        || next.span.start > next.span.end
+    {
+        return Ok(false);
+    }
+    let Some(gap) = output.get(at..next.span.start) else {
+        return Ok(false);
+    };
+    let Some(next_source) = output.get(next.span.clone()) else {
+        return Ok(false);
+    };
+    governor.charge(Resource::Work, size(gap.len()).saturating_add(14))?;
+    Ok(gap.iter().all(u8::is_ascii_whitespace) && next_source.starts_with(b"<|python_tag|>"))
 }
 
 impl Reading {
@@ -3609,9 +4415,25 @@ impl Recovery<'_> {
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
         let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
-        for piece in &turn.pieces {
+        for (index, piece) in turn.pieces.iter().enumerate() {
             if let ResolvedPiece::Choice(choice) = piece {
-                choices.push(fold_options(&choice.readings, self.output, governor)?);
+                let next = match turn.pieces.get(index + 1) {
+                    Some(ResolvedPiece::Segment(ResolvedSegment::Content(_))) => {
+                        turn.pieces.get(index + 2)
+                    }
+                    other => other,
+                };
+                let following = match next {
+                    Some(ResolvedPiece::Segment(ResolvedSegment::Call(call))) => Some(&**call),
+                    _ => None,
+                };
+                choices.push(fold_options(
+                    &choice.readings,
+                    self.output,
+                    following,
+                    !matches!(self.request.tool_choice, ToolChoice::ForcedStrict(_)),
+                    governor,
+                )?);
             }
         }
         if !choices.is_empty() {
@@ -4024,7 +4846,15 @@ impl Recovery<'_> {
                 raw: self.output[span.clone()].to_vec(),
                 span,
                 dialect: family.dialect(),
-                candidate_dialects: Vec::new(),
+                candidate_dialects: if family.dialect().is_none() {
+                    governor.charge(
+                        Resource::ScratchBytes,
+                        size(family.dialects().len()).saturating_mul(ENTRY_BYTES),
+                    )?;
+                    family.dialects().to_vec()
+                } else {
+                    Vec::new()
+                },
                 reason: Rejection::UnsupportedDialect { family },
                 repairs,
             });
@@ -4700,20 +5530,7 @@ impl Recovery<'_> {
         if let Some(reading) = readings.iter().find(|reading| !reading.inexact.is_empty()) {
             // No exact reading of the message exists: nothing is reported
             // as a value, and no repair reaches the receipt.
-            return Ok(Done {
-                outcome: Outcome::Unresolved,
-                evidence: Vec::new(),
-                losses: Vec::new(),
-                inferences: Vec::new(),
-                validations: vec![Validation {
-                    validator: TOOL_CALL_VALIDATOR.into(),
-                    constraint: "effort=exact".into(),
-                    passed: false,
-                    diagnostics: reading.inexact.clone(),
-                }],
-                alternatives: Vec::new(),
-                stopped: StopReason::NoCandidate,
-            });
+            return Ok(exact_effort_refusal(reading));
         }
         let mut readings = same_calls(self, readings, governor)?;
         let reject = self.request.ambiguity == AmbiguityPolicy::Reject;
@@ -4750,7 +5567,15 @@ impl Recovery<'_> {
             }
             derivations
         };
-        let published = forest.publish(&derivations, governor)?;
+        let mut published = forest.publish(&derivations, governor)?;
+        if readings.len() > 1 {
+            prefer_exact_ties(
+                &readings,
+                &mut published.order,
+                &mut published.alternatives,
+                governor,
+            )?;
+        }
         debug_assert!(
             published.order.windows(2).all(|pair| !forest
                 .distinguishing(&derivations[pair[0]], &derivations[pair[1]])
@@ -4802,6 +5627,24 @@ impl Recovery<'_> {
             alternatives: published.alternatives,
             stopped,
         })
+    }
+}
+
+/// An inexact reading cannot publish a value under exact effort.
+fn exact_effort_refusal(reading: &Reading) -> Done {
+    Done {
+        outcome: Outcome::Unresolved,
+        evidence: Vec::new(),
+        losses: Vec::new(),
+        inferences: Vec::new(),
+        validations: vec![Validation {
+            validator: TOOL_CALL_VALIDATOR.into(),
+            constraint: "effort=exact".into(),
+            passed: false,
+            diagnostics: reading.inexact.clone(),
+        }],
+        alternatives: Vec::new(),
+        stopped: StopReason::NoCandidate,
     }
 }
 
@@ -4933,9 +5776,15 @@ pub(crate) fn assign_ids(
 /// segmentations. The kept segmentation of a group is its member with the
 /// most body evidence (see [`Reading::body_evidence`]), the earliest on a tie: the member [`merge`] keeps
 /// among whole readings that differ only in this span.
+/// A proven projected JSON envelope also yields to its intact canonical
+/// native invocation sequence. Within one derived grammar, equivalent optional
+/// whitespace framing has one maximal representative. Strict tool-choice
+/// constraints retain both kinds of alternatives.
 fn fold_options<'t>(
     options: &'t [Vec<ResolvedSegment>],
     output: &[u8],
+    following: Option<&ResolvedCall>,
+    prefer_native_json: bool,
     governor: &mut Governor,
 ) -> Result<Vec<Fold<'t>>, StopReason> {
     // Each group: its member indices, in option order.
@@ -4958,9 +5807,13 @@ fn fold_options<'t>(
     for members in &groups {
         let mut kept = members[0];
         for &member in &members[1..] {
-            if Fold::body_evidence(&options[member], output)
-                > Fold::body_evidence(&options[kept], output)
-            {
+            let preference = |index: usize| {
+                let exact = options[index].iter().filter(|segment| {
+                    matches!(segment, ResolvedSegment::Call(call) if !call.dialect.grammar().is_derived())
+                }).count();
+                (exact, Fold::body_evidence(&options[index], output))
+            };
+            if preference(member) > preference(kept) {
                 kept = member;
             }
         }
@@ -4969,6 +5822,65 @@ fn fold_options<'t>(
             fold.absorb(&options[member], governor)?;
         }
         folds.push((kept, fold));
+    }
+    // Do this after ordinary equivalence grouping: dialect ordering must not
+    // determine whether the native object and its enclosing projection meet.
+    // Strict choices retain both readings because native exterior content
+    // can affect an allow_content=false check.
+    if prefer_native_json {
+        for projected in (0..folds.len()).rev() {
+            if !folds[projected].1.attempts.is_empty() {
+                continue;
+            }
+            let mut native = None;
+            for index in 0..folds.len() {
+                if index != projected
+                    && folds[index].1.attempts.is_empty()
+                    && (projected_layout_dominates(
+                        folds[index].1.segments,
+                        folds[projected].1.segments,
+                        output,
+                        governor,
+                    )? || native_json_dominates(
+                        folds[index].1.segments,
+                        folds[projected].1.segments,
+                        output,
+                        governor,
+                    )? || native_llama_boundary_dominates(
+                        folds[index].1.segments,
+                        folds[projected].1.segments,
+                        following,
+                        output,
+                        governor,
+                    )?)
+                {
+                    native = Some(index);
+                    break;
+                }
+            }
+            let Some(mut native) = native else {
+                continue;
+            };
+            governor.charge(Resource::Work, size(folds.len() - projected))?;
+            let (_, projected_fold) = folds.remove(projected);
+            native -= usize::from(native > projected);
+            // The proof established the same ordered source-anchored calls.
+            // Both maps are in source order; attach each label only to its
+            // proven kept invocation, retaining its chosen spans and ledgers.
+            for (dialects, candidates) in folds[native]
+                .1
+                .calls
+                .values_mut()
+                .zip(projected_fold.calls.values())
+            {
+                for candidate in candidates {
+                    governor.charge(Resource::Work, size(dialects.len()).saturating_add(1))?;
+                    if dialects.insert(candidate.clone()) {
+                        governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
+                    }
+                }
+            }
+        }
     }
     // The readings' order is the order of the kept segmentations.
     folds.sort_unstable_by_key(|(kept, _)| *kept);
@@ -5225,7 +6137,17 @@ fn merge(
     for group in groups {
         let mut best = group[0];
         for &member in &group[1..] {
-            let evidence = |at: usize| slots[at].as_ref().map(Reading::body_evidence);
+            let evidence = |at: usize| {
+                slots[at].as_ref().map(|reading| {
+                    let exact = reading
+                        .value
+                        .calls
+                        .iter()
+                        .filter(|call| !call.dialect.grammar().is_derived())
+                        .count();
+                    (exact, reading.body_evidence())
+                })
+            };
             if evidence(member) > evidence(best) {
                 best = member;
             }
@@ -5498,6 +6420,87 @@ fn call_derivations(
         }
     }
     Ok(derivations)
+}
+
+/// Refine the wire-digest tie order only for equal-cost readings of the same
+/// nonempty ordered invocations. Exact framing precedes projected framing;
+/// costs, distinct invocations, ledgers and native-only relative order remain.
+/// Both value indices and complete receipt records move together.
+fn prefer_exact_ties(
+    readings: &[Reading],
+    order: &mut [usize],
+    alternatives: &mut [AlternativeReceipt],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    fn projected(reading: &Reading) -> usize {
+        reading
+            .value
+            .calls
+            .iter()
+            .filter(|call| call.dialect.grammar().is_derived())
+            .count()
+    }
+    fn same_invocations(
+        left: &Reading,
+        right: &Reading,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if left.value.calls.is_empty() || left.value.calls.len() != right.value.calls.len() {
+            return Ok(false);
+        }
+        for (left, right) in left.value.calls.iter().zip(&right.value.calls) {
+            governor.charge(
+                Resource::Work,
+                left.arguments
+                    .estimated_bytes()
+                    .saturating_add(right.arguments.estimated_bytes())
+                    .saturating_add(size(left.id.len() + right.id.len()))
+                    .saturating_add(size(
+                        left.name.as_ref().map_or(0, String::len)
+                            + right.name.as_ref().map_or(0, String::len),
+                    )),
+            )?;
+            if left.name != right.name
+                || left.tool != right.tool
+                || left.id != right.id
+                || left.source_id != right.source_id
+                || left.arguments != right.arguments
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    let mut at = 0;
+    while at < order.len() {
+        let priority = projected(&readings[order[at]]);
+        if priority == 0 {
+            at += 1;
+            continue;
+        }
+        let mut through = at;
+        for later in at + 1..order.len() {
+            governor.charge(Resource::Work, 1)?;
+            if alternatives[later].cost != alternatives[at].cost {
+                break;
+            }
+            if projected(&readings[order[later]]) < priority
+                && same_invocations(&readings[order[at]], &readings[order[later]], governor)?
+            {
+                through = later;
+            }
+        }
+        if through == at {
+            at += 1;
+            continue;
+        }
+        // Move only the projected alternative. Native alternatives never swap
+        // with one another, even when unrelated invocations lie between them.
+        governor.charge(Resource::Work, size(through - at + 1))?;
+        order[at..=through].rotate_left(1);
+        alternatives[at..=through].rotate_left(1);
+    }
+    Ok(())
 }
 
 /// The diagnostics of the `tool_call.ambiguity` validation.

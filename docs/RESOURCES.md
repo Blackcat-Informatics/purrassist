@@ -1007,22 +1007,32 @@ every value below to equal the code's.
 | --- | ---: | ---: |
 | `anthropic-tool-use.v1` | 3391 | 3391 |
 | `bare-json.v1` | 378 | 378 |
+| `deepseek-v3-stripped.v1` | 522 | 522 |
+| `deepseek-v3.1-stripped.v1` | 306 | 306 |
 | `deepseek-v3.1.v1` | 2945 | 2945 |
 | `deepseek-v3.v1` | 4793 | 4793 |
 | `gemma3-tool-code.v1` | 97 | 97 |
 | `glm-4.5.v1` | 107 | 107 |
+| `harmony-stripped.v1` | 658 | 658 |
 | `harmony.v1` | 3890 | 3890 |
+| `hermes-stripped.v1` | 301 | 301 |
 | `hermes.v1` | 1137 | 1137 |
+| `kimi-k2-stripped.v1` | 217 | 217 |
 | `kimi-k2.v1` | 2436 | 2436 |
+| `llama3-json-stripped.v1` | 971 | 971 |
 | `llama3-json.v1` | 986 | 986 |
+| `mistral-v11-stripped.v1` | 67 | 67 |
 | `mistral-v11.v1` | 136 | 136 |
+| `mistral-v3-stripped.v1` | 2214 | 2214 |
 | `mistral-v3.v1` | 2228 | 2228 |
 | `openai-tool-calls.v1` | 6665 | 6665 |
 | `pythonic.v1` | 129 | 129 |
 | `qwen3-coder-xml.v1` | 971 | 971 |
 
-The default request allows all fifteen built-in dialects. Their combined bound is
-`(2 + 1 + 30289)·n + 8·E = 30292·n + 8·E`.
+The default request allows all twenty-three built-in dialects. Their combined bound is
+`(2 + 1 + 35545)·n + 8·E = 35548·n + 8·E`.
+The table is generated from compiled metadata by the `grammar-bounds` example;
+it does not report recovery timings or observed resource consumption.
 
 The `kv-pairs` codec scans argument fields forward with a bounded tag
 comparison at each byte. Typed JSON boundaries use the native JSON cursor,
@@ -1197,8 +1207,7 @@ and Anthropic) would still have run out of the preset's flat
 one_mib_dense_markup_fits_published_budget` (`make corpus`) now recovers each of these shapes at 1 MiB under plain
 `sized(Effort::Standard, output)` with the stop `Completed` and every unit
 recovered; `tool_call_cost::dense_markup_fits_published_budget` (`make
-check`) runs the same shapes at 64 KiB. The Gemma row uses the current
-fifteen-dialect request. The Pythonic row uses the fourteen-dialect request. The GLM row uses the thirteen-dialect request captured before Pythonic;
+check`) runs the same shapes at 64 KiB. The Gemma row uses the recorded request with fifteen dialects. The Pythonic row uses the fourteen-dialect request. The GLM row uses the thirteen-dialect request captured before Pythonic;
 the other recorded rows use the twelve-dialect request before GLM.
 
 | Dense shape (1 MiB) | Units | Work per byte | Peak scratch per byte | Evidence per byte |

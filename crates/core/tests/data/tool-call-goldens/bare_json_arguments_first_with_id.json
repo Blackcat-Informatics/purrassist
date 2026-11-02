@@ -48,6 +48,37 @@
   ],
   "stop": "stop",
   "input": "{\"arguments\": {\"path\": \"a.txt\"}, \"name\": \"read_file\", \"id\": \"call_42\"}",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "calls",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 1,
+      "accepting_guesses": 1
+    },
+    "calls": [
+      {
+        "tool": "read_file",
+        "arguments": {
+          "path": "a.txt"
+        },
+        "candidate_dialects": [
+          "bare-json.v1",
+          "llama3-json-stripped.v1"
+        ],
+        "outcome": "resolved",
+        "rules": []
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "calls",

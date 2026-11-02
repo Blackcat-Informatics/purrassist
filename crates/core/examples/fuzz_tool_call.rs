@@ -400,8 +400,8 @@ fn check_disjoint(mut ranges: Vec<(Range<usize>, &str)>) {
 }
 
 /// Every rejected attempt keeps its exact bytes; an attempt a parser made
-/// names its dialect among its sorted candidates, and unparsed markup has no
-/// candidate and lies inside one content range.
+/// names its dialect among its sorted candidates. Unparsed shared shapes retain
+/// every family candidate and remain inside one content range.
 fn check_rejected(output: &[u8], calls: &ToolCalls) {
     for rejected in &calls.rejected {
         check_range(output, &rejected.span, "rejected");
@@ -416,7 +416,15 @@ fn check_rejected(output: &[u8], calls: &ToolCalls) {
         if let Rejection::UnsupportedDialect { family } = rejected.reason {
             // Unparsed markup: no allowed dialect attempted it, and its
             // bytes stay content.
-            assert!(rejected.candidate_dialects.is_empty(), "{rejected:?}");
+            if family.dialect().is_some() {
+                assert!(rejected.candidate_dialects.is_empty(), "{rejected:?}");
+            } else {
+                assert_eq!(
+                    rejected.candidate_dialects,
+                    family.dialects(),
+                    "{rejected:?}"
+                );
+            }
             assert_eq!(rejected.dialect, family.dialect(), "{rejected:?}");
             assert!(
                 calls

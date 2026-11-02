@@ -11,7 +11,7 @@ use purrassist_core::grammar::{CaptureKind, Grammar};
 use purrassist_core::json::{self, Node, Value};
 use purrassist_core::tool_call::{
     ArgOrigin, Closure, CompiledTool, DeclarationForm, DialectId, DialectSet, GenerationStop,
-    ProductionKind, RawCall, ReasoningPolicy, RecognizedTurn, Recognizer, Segment, ToolSet,
+    Piece, ProductionKind, RawCall, ReasoningPolicy, RecognizedTurn, Recognizer, Segment, ToolSet,
 };
 use purrassist_core::{Budget, Governor};
 use std::path::PathBuf;
@@ -118,7 +118,9 @@ fn calls(turn: &RecognizedTurn) -> Vec<&RawCall> {
     turn.calls()
         .into_iter()
         .map(|segment| {
-            assert_eq!(segment.readings.len(), 1, "one reading per call");
+            if !segment.readings[0].dialect.grammar().is_derived() {
+                assert_eq!(segment.readings.len(), 1, "one reading per native call");
+            }
             &segment.readings[0]
         })
         .collect()
@@ -162,14 +164,77 @@ fn assert_expected(
     dialect: &DialectId,
     context: &str,
 ) {
-    assert!(!turn.is_ambiguous(), "{context}");
-    for segment in turn.selected() {
-        assert!(
-            !matches!(segment, Segment::Rejected { .. }),
-            "{context}: rejected attempt {segment:?}"
-        );
+    if !dialect.grammar().is_derived() {
+        assert!(!turn.is_ambiguous(), "{context}");
     }
-    let calls = calls(turn);
+    let calls = if dialect.grammar().is_derived() {
+        // Marker deletion can preserve several whole-turn segmentations.
+        // Validate the declared fixture reading without erasing its competitors.
+        let mut paths = vec![Vec::new()];
+        for piece in turn.pieces() {
+            match piece {
+                Piece::Segment(segment) => {
+                    for path in &mut paths {
+                        path.push(segment);
+                    }
+                }
+                Piece::Choice(choice) => {
+                    paths = paths
+                        .into_iter()
+                        .flat_map(|path| {
+                            choice.readings.iter().map(move |reading| {
+                                let mut path = path.clone();
+                                path.extend(reading);
+                                path
+                            })
+                        })
+                        .collect();
+                }
+            }
+        }
+        paths
+            .iter()
+            .find_map(|path| {
+                if path
+                    .iter()
+                    .any(|segment| matches!(segment, Segment::Rejected { .. }))
+                {
+                    return None;
+                }
+                let segments: Vec<_> = path
+                    .iter()
+                    .filter_map(|segment| match segment {
+                        Segment::Call(call) => Some(call),
+                        _ => None,
+                    })
+                    .collect();
+                if segments.len() != expected.len() {
+                    return None;
+                }
+                segments
+                    .iter()
+                    .zip(expected)
+                    .map(|(segment, expected)| {
+                        segment.readings.iter().find(|call| {
+                            call.name.as_ref().map(|name| name.value.as_str())
+                                == Some(expected.name.as_str())
+                                && call.id.as_ref().map(|id| id.value.as_str())
+                                    == expected.id.as_deref()
+                                && call.arguments.root.equivalent(&expected.arguments)
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()
+            })
+            .unwrap_or_else(|| panic!("{context}: declared reading missing: {:#?}", turn.pieces()))
+    } else {
+        for segment in turn.selected() {
+            assert!(
+                !matches!(segment, Segment::Rejected { .. }),
+                "{context}: rejected attempt {segment:?}"
+            );
+        }
+        calls(turn)
+    };
     assert_eq!(
         calls.len(),
         expected.len(),
@@ -177,50 +242,60 @@ fn assert_expected(
         turn.pieces()
     );
     for (order, (call, expected)) in calls.iter().zip(expected).enumerate() {
-        let context = format!("{context} call {order}");
-        assert_eq!(&call.dialect, dialect, "{context}");
-        assert_eq!(call.kind, ProductionKind::Call, "{context}");
-        assert_eq!(call.order, order, "{context}");
-        assert_eq!(
-            call.name.as_ref().map(|name| name.value.as_str()),
-            Some(expected.name.as_str()),
-            "{context}"
-        );
-        assert_eq!(
-            call.id.as_ref().map(|id| id.value.as_str()),
-            expected.id.as_deref(),
-            "{context}"
-        );
-        assert!(
-            call.arguments.root.equivalent(&expected.arguments),
-            "{context}: {} != {}",
-            call.arguments.root.to_json(),
-            expected.arguments.to_json()
-        );
-        // Exact spellings and member order too.
-        assert_eq!(
-            call.arguments.root.to_json(),
-            expected.arguments.to_json(),
-            "{context}"
-        );
-        // The codec types the arguments by the declared tool when the name
-        // precedes them.
-        let arguments = call
-            .captures
-            .iter()
-            .find(|capture| capture.kind == CaptureKind::Arguments)
-            .expect("arguments capture");
-        let named_first = call
-            .name
-            .as_ref()
-            .is_some_and(|name| name.span.end <= arguments.span.start);
-        assert_eq!(
-            call.arguments.tool.as_deref(),
-            named_first.then_some(expected.name.as_str()),
-            "{context}: decoded against the declared tool"
-        );
-        assert_canonical(call, &context);
+        assert_expected_call(call, expected, dialect, order, context);
     }
+}
+
+fn assert_expected_call(
+    call: &RawCall,
+    expected: &Expected,
+    dialect: &DialectId,
+    order: usize,
+    context: &str,
+) {
+    let context = format!("{context} call {order}");
+    assert_eq!(&call.dialect, dialect, "{context}");
+    assert_eq!(call.kind, ProductionKind::Call, "{context}");
+    assert_eq!(call.order, order, "{context}");
+    assert_eq!(
+        call.name.as_ref().map(|name| name.value.as_str()),
+        Some(expected.name.as_str()),
+        "{context}"
+    );
+    assert_eq!(
+        call.id.as_ref().map(|id| id.value.as_str()),
+        expected.id.as_deref(),
+        "{context}"
+    );
+    assert!(
+        call.arguments.root.equivalent(&expected.arguments),
+        "{context}: {} != {}",
+        call.arguments.root.to_json(),
+        expected.arguments.to_json()
+    );
+    // Exact spellings and member order too.
+    assert_eq!(
+        call.arguments.root.to_json(),
+        expected.arguments.to_json(),
+        "{context}"
+    );
+    // The codec types the arguments by the declared tool when the name
+    // precedes them.
+    let arguments = call
+        .captures
+        .iter()
+        .find(|capture| capture.kind == CaptureKind::Arguments)
+        .expect("arguments capture");
+    let named_first = call
+        .name
+        .as_ref()
+        .is_some_and(|name| name.span.end <= arguments.span.start);
+    assert_eq!(
+        call.arguments.tool.as_deref(),
+        named_first.then_some(expected.name.as_str()),
+        "{context}: decoded against the declared tool"
+    );
+    assert_canonical(call, &context);
 }
 
 #[test]
@@ -231,19 +306,27 @@ fn all_registered_dialects_have_anchor_fixtures() {
         [
             "anthropic-tool-use.v1",
             "bare-json.v1",
+            "deepseek-v3-stripped.v1",
+            "deepseek-v3.1-stripped.v1",
             "deepseek-v3.1.v1",
             "deepseek-v3.v1",
             "gemma3-tool-code.v1",
             "glm-4.5.v1",
+            "harmony-stripped.v1",
             "harmony.v1",
+            "hermes-stripped.v1",
             "hermes.v1",
+            "kimi-k2-stripped.v1",
             "kimi-k2.v1",
+            "llama3-json-stripped.v1",
             "llama3-json.v1",
+            "mistral-v11-stripped.v1",
             "mistral-v11.v1",
+            "mistral-v3-stripped.v1",
             "mistral-v3.v1",
             "openai-tool-calls.v1",
             "pythonic.v1",
-            "qwen3-coder-xml.v1"
+            "qwen3-coder-xml.v1",
         ]
     );
     for dialect in DialectId::BUILT_IN {
@@ -544,9 +627,26 @@ fn ir_spans_slice_back_to_source() {
                 at = segment.span().end;
             }
             assert_eq!(at, source.len(), "{}", fixture.file);
-            for call in calls(&turn) {
+            for call in turn
+                .calls()
+                .into_iter()
+                .flat_map(|segment| &segment.readings)
+            {
                 let raw = &source[call.span.clone()];
-                if dialect == DialectId::OpenAiToolCalls {
+                if dialect.grammar().is_derived() {
+                    let capture = call
+                        .captures
+                        .iter()
+                        .find(|capture| capture.kind == CaptureKind::Arguments)
+                        .expect("arguments");
+                    let arguments = json::parse(&source[capture.span.clone()])
+                        .expect("retained JSON arguments");
+                    assert!(
+                        arguments.equivalent(&call.arguments.root),
+                        "{}",
+                        fixture.file
+                    );
+                } else if dialect == DialectId::OpenAiToolCalls {
                     // A whole tool_calls element: one JSON object.
                     let element = json::parse(raw).expect("element JSON");
                     assert_eq!(
@@ -606,31 +706,34 @@ fn ir_spans_slice_back_to_source() {
                     assert!(raw.starts_with("<tool_call>"), "{}: {raw:?}", fixture.file);
                     assert!(raw.ends_with("</tool_call>"), "{}: {raw:?}", fixture.file);
                 }
-                let name = call.name.as_ref().expect("name");
-                assert_eq!(&source[name.span.clone()], name.value);
-                if let Some(id) = &call.id {
-                    assert_eq!(&source[id.span.clone()], id.value);
-                }
-                for capture in &call.captures {
-                    assert!(
-                        call.span.start <= capture.span.start && capture.span.end <= call.span.end,
-                        "{}: capture outside its call",
-                        fixture.file
-                    );
-                }
-                assert!(!call.arguments.leaves.is_empty(), "{}", fixture.file);
-                for leaf in &call.arguments.leaves {
-                    let value = call
-                        .arguments
-                        .root
-                        .pointer(&leaf.pointer)
-                        .expect("leaf pointer resolves");
-                    let raw = &source[leaf.raw.clone()];
-                    let context = format!("{} {} {raw:?}", fixture.file, leaf.pointer);
-                    assert_leaf_source(value, raw, leaf.origin, &context);
-                }
+                assert_call_source_spans(source, call, &fixture.file);
             }
         }
+    }
+}
+
+fn assert_call_source_spans(source: &str, call: &RawCall, context: &str) {
+    let name = call.name.as_ref().expect("name");
+    assert_eq!(&source[name.span.clone()], name.value);
+    if let Some(id) = &call.id {
+        assert_eq!(&source[id.span.clone()], id.value);
+    }
+    for capture in &call.captures {
+        assert!(
+            call.span.start <= capture.span.start && capture.span.end <= call.span.end,
+            "{context}: capture outside its call"
+        );
+    }
+    assert!(!call.arguments.leaves.is_empty(), "{context}");
+    for leaf in &call.arguments.leaves {
+        let value = call
+            .arguments
+            .root
+            .pointer(&leaf.pointer)
+            .expect("leaf pointer resolves");
+        let raw = &source[leaf.raw.clone()];
+        let context = format!("{context} {} {raw:?}", leaf.pointer);
+        assert_leaf_source(value, raw, leaf.origin, &context);
     }
 }
 
@@ -677,8 +780,12 @@ fn mixed_dialects_in_one_message() {
 
 #[test]
 fn all_dialects_allowed_no_cross_talk() {
-    let all = dialect_set(&DialectId::BUILT_IN);
-    for dialect in DialectId::BUILT_IN {
+    let native: Vec<_> = DialectId::BUILT_IN
+        .into_iter()
+        .filter(|dialect| !dialect.grammar().is_derived())
+        .collect();
+    let all = dialect_set(&native);
+    for dialect in native {
         let alone = dialect_set(core::slice::from_ref(&dialect));
         for fixture in fixtures(&dialect) {
             let own = recognize(&alone, &fixture.tools, &fixture.markup);
@@ -699,7 +806,7 @@ fn dialect_ids_round_trip() {
         // same dialect.
         let source = dialect.source().expect("built-in source");
         let mut governor = Governor::new(Budget::default());
-        let compiled = Grammar::compile_governed(source, &mut governor).expect("compiles");
+        let compiled = source.compile_governed(&mut governor).expect("compiles");
         assert!(governor.usage().work > 0);
         assert_eq!(DialectId::custom(compiled), dialect);
         // No delta production: streaming deltas are not part of v1.
@@ -1051,6 +1158,7 @@ fn declaration_reader(dialect: &DialectId) -> DialectSet {
     let source = dialect
         .source()
         .expect("built-in source")
+        .base_text()
         .replace("\ncall = ", "\nprinted-call = ")
         .replace("\nresult = ", "\nprinted-result = ")
         .replace("\ndeclaration = ", "\ncall = ")
@@ -1173,9 +1281,9 @@ fn declaration_productions_match_tool_declarations() {
     assert_eq!(found[0].name.as_ref().expect("name").value, "read_file");
 }
 
-/// The canonical single-call fixture of every built-in dialect, written one
-/// after another in one turn and recovered under the default allow-list
-/// (every built-in dialect): every call is `Resolved`, in order, read by
+/// The canonical single-call fixture of every native built-in dialect, written
+/// after another in one turn and recovered under the native allow-list:
+/// every call is `Resolved`, in order, read by
 /// its own dialect alone (single-dialect `candidate_dialects`), with no
 /// rejected attempt.
 #[test]
@@ -1184,7 +1292,11 @@ fn every_canonical_fixture_in_one_mixed_turn() {
     use purrassist_core::{Effort, Outcome};
     let mut markup = String::new();
     let mut expected = Vec::new();
-    for dialect in DialectId::BUILT_IN {
+    let native: Vec<_> = DialectId::BUILT_IN
+        .into_iter()
+        .filter(|dialect| !dialect.grammar().is_derived())
+        .collect();
+    for dialect in native.iter().cloned() {
         let fixture = fixtures(&dialect)
             .into_iter()
             .find(|fixture| {
@@ -1209,11 +1321,7 @@ fn every_canonical_fixture_in_one_mixed_turn() {
         .tools;
     let request = ToolRecoveryRequest::sized(Effort::Standard, markup.as_bytes());
     assert_eq!(DialectSet::built_in().dialects(), DialectId::BUILT_IN);
-    let result = tools.recover(
-        markup.as_bytes(),
-        &request,
-        purrassist_core::tool_call::DialectSet::built_in(),
-    );
+    let result = tools.recover(markup.as_bytes(), &request, &dialect_set(&native));
     let Outcome::Resolved(calls) = &result.outcome else {
         panic!("{:?}", result.outcome)
     };
@@ -1234,5 +1342,52 @@ fn every_canonical_fixture_in_one_mixed_turn() {
             "{}",
             dialect.id()
         );
+    }
+}
+
+/// Default recovery must retain the intended call sequence for every stripped
+/// anchor, including when other built-ins produce distinct honest alternatives.
+#[test]
+fn every_stripped_anchor_retains_its_calls_under_the_default_policy() {
+    use purrassist_core::tool_call::ToolRecoveryRequest;
+    use purrassist_core::{Effort, Outcome};
+    for dialect in DialectId::BUILT_IN
+        .into_iter()
+        .filter(|dialect| dialect.grammar().is_derived())
+    {
+        for fixture in fixtures(&dialect) {
+            let input = fixture.markup.as_bytes();
+            let request = ToolRecoveryRequest::sized(Effort::Standard, input);
+            let result = fixture
+                .tools
+                .recover(input, &request, DialectSet::built_in());
+            let alternatives = match &result.outcome {
+                Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
+                    core::slice::from_ref(calls)
+                }
+                Outcome::Ambiguous(alternatives) => alternatives.as_slice(),
+                other @ Outcome::Unresolved => panic!("{}: {other:?}", fixture.file),
+            };
+            assert!(
+                alternatives.iter().any(|reading| {
+                    reading.rejected.is_empty()
+                        && reading.calls.len() == fixture.expected.len()
+                        && reading
+                            .calls
+                            .iter()
+                            .zip(&fixture.expected)
+                            .all(|(call, expected)| {
+                                call.tool.as_deref() == Some(expected.name.as_str())
+                                    && call.source_id == expected.id
+                                    && call.arguments.equivalent(&expected.arguments)
+                                    && call.candidate_dialects.contains(&dialect)
+                            })
+                }),
+                "{}: intended derived reading missing: {:?}",
+                fixture.file,
+                result.outcome
+            );
+            assert_eq!(result.receipt.sources[0].bytes, input, "{}", fixture.file);
+        }
     }
 }

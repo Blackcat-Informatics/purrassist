@@ -142,9 +142,11 @@ pub(crate) mod automaton;
 pub mod codec;
 mod compile;
 pub mod cost;
+mod derivation;
 pub mod edit;
 pub(crate) mod engine;
 pub(crate) mod misspelling;
+mod partition;
 pub mod print;
 mod repair;
 mod syntax;
@@ -157,6 +159,7 @@ use codec::CodecKind;
 use core::fmt;
 
 pub(crate) use compile::{Inst, LiteralTables, Program};
+pub use derivation::{CallAnchor, DerivedRecipe, GrammarRecipe, Suppression};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LineSuffix {
@@ -815,6 +818,8 @@ impl CallEnd {
 pub struct CompiledGrammar {
     pub(crate) id: String,
     pub(crate) digest: Digest,
+    pub(crate) origin: GrammarOrigin,
+    joint_captures: crate::contract::ScratchVec<partition::JointCapture>,
     pub(crate) literals: crate::contract::ScratchVec<Literal>,
     pub(crate) literal_tables: crate::contract::ScratchVec<LiteralTables>,
     pub(crate) closers: crate::contract::ScratchVec<CloserClass>,
@@ -851,6 +856,27 @@ pub struct CompiledGrammar {
     pub(crate) layouts: crate::contract::ScratchVec<Option<crate::contract::ScratchVec<u8>>>,
 }
 
+/// Whether recognition uses the original grammar or its marker projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GrammarOrigin {
+    Native,
+    Projected,
+}
+
+impl GrammarOrigin {
+    pub(crate) const fn from_derived(derived: bool) -> Self {
+        if derived {
+            Self::Projected
+        } else {
+            Self::Native
+        }
+    }
+
+    pub(crate) const fn is_projected(self) -> bool {
+        matches!(self, Self::Projected)
+    }
+}
+
 /// How recognized markup inside Markdown examples is handled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExamplePolicy {
@@ -871,6 +897,14 @@ const _: fn() = || {
 };
 
 impl CompiledGrammar {
+    /// Whether this grammar was compiled from a marker-suppression recipe.
+    ///
+    /// The recipe identity includes its unchanged parent source and policy.
+    #[must_use]
+    pub const fn is_derived(&self) -> bool {
+        self.origin.is_projected()
+    }
+
     pub(crate) const fn protocol_fences(&self) -> bool {
         matches!(self.examples, ExamplePolicy::ProtocolFences)
     }

@@ -31,6 +31,42 @@
   ],
   "stop": "stop",
   "input": "{\"name\": \"get_weather\", \"parameters\": {\"city\": \"Paris\", \"unit\": \"celsius\"}",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "calls",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 1,
+      "accepting_guesses": 1
+    },
+    "calls": [
+      {
+        "tool": "get_weather",
+        "arguments": {
+          "city": "Paris",
+          "unit": "celsius"
+        },
+        "candidate_dialects": [
+          "llama3-json-stripped.v1",
+          "llama3-json.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.markup.missing-closers-at-end"
+        ]
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.markup.missing-closers-at-end"
+    ]
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "calls",

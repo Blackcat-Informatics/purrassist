@@ -71,7 +71,8 @@ fn every_anchor_fixture_resolves() {
 
 /// Every anchor fixture of each of `dialects` is `Resolved`, top-level and
 /// per call, at `effort`: with that dialect alone, or with every built-in
-/// dialect allowed (the default request) when `all` is set.
+/// dialect allowed (the default request) when `all` is set. A marked Harmony
+/// projection anchor instead asserts its two explicit source interpretations.
 fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: bool) {
     for dialect in dialects {
         let dialect = dialect.clone();
@@ -115,6 +116,16 @@ fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: b
                 &ToolRecoveryRequest::new(effort),
                 dialects,
             );
+            if let Some(expectation) = string_member(&document, "expected_recovery") {
+                assert_eq!(expectation, "two-calls-or-trailing-extraction", "{file}");
+                assert_eq!(dialect, DialectId::HarmonyStripped, "{file}");
+                assert_eq!(
+                    path.file_name().and_then(std::ffi::OsStr::to_str),
+                    Some("multiple-calls.json")
+                );
+                assert_harmony_anchor_readings(&result, &markup, expected, effort, &file);
+                continue;
+            }
             assert_eq!(result.receipt.stopped, StopReason::Completed, "{file}");
             for evidence in &result.receipt.evidence {
                 let rule = purrassist_core::tool_call::rules::rule(&evidence.rule).expect("rule");
@@ -147,6 +158,150 @@ fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: b
             assert_eq!(result.receipt.stopped, StopReason::Completed, "{file}");
         }
     }
+}
+
+/// Erased message endings preserve both the two-call reading and the first
+/// call whose trailing text includes the second apparent invocation.
+fn assert_harmony_anchor_readings(
+    result: &AssistResult<ToolCalls>,
+    markup: &str,
+    expected: &[Node],
+    effort: Effort,
+    context: &str,
+) {
+    assert_eq!(markup.len(), 94, "{context}");
+    assert_eq!(result.receipt.sources.len(), 1, "{context}");
+    assert_eq!(
+        result.receipt.sources[0].bytes,
+        markup.as_bytes(),
+        "{context}"
+    );
+    assert_eq!(
+        result.receipt.source,
+        Digest::of(markup.as_bytes()),
+        "{context}"
+    );
+    assert_eq!(
+        result.receipt.sources[0].digest, result.receipt.source,
+        "{context}"
+    );
+    if effort == Effort::Exact {
+        assert_eq!(result.receipt.budget.candidates, 1, "{context}");
+        assert_eq!(
+            result.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::Candidates),
+            "{context}"
+        );
+        assert!(matches!(result.outcome, Outcome::Unresolved), "{context}");
+        return;
+    }
+    assert_eq!(effort, Effort::Standard, "{context}");
+    assert_eq!(result.receipt.stopped, StopReason::Completed, "{context}");
+    let Outcome::Ambiguous(readings) = &result.outcome else {
+        panic!("{context}: {:?}", result.outcome);
+    };
+    assert_eq!(readings.len(), 2, "{context}");
+    let complete = readings
+        .iter()
+        .find(|reading| reading.calls.len() == 2)
+        .unwrap_or_else(|| panic!("{context}: full two-call reading missing"));
+    assert_harmony_complete_reading(complete, expected, context);
+    let extracted = readings
+        .iter()
+        .find(|reading| reading.calls.len() == 1)
+        .unwrap_or_else(|| panic!("{context}: trailing-extraction reading missing"));
+    assert_harmony_trailing_extraction(
+        extracted,
+        &complete.calls[0],
+        markup,
+        result.receipt.source,
+        context,
+    );
+}
+
+fn assert_harmony_complete_reading(complete: &ToolCalls, expected: &[Node], context: &str) {
+    assert_eq!(expected.len(), 2, "{context}");
+    assert!(complete.rejected.is_empty(), "{context}");
+    assert!(complete.embedded.is_empty(), "{context}");
+    assert!(complete.content.is_empty(), "{context}");
+    assert!(complete.reasoning.is_empty(), "{context}");
+    assert_eq!(complete.finish, Finish::Calls, "{context}");
+    assert_eq!(complete.usable().len(), 2, "{context}");
+    for (index, (call, wanted)) in complete.calls.iter().zip(expected).enumerate() {
+        assert_eq!(call.index, index, "{context}");
+        assert_eq!(
+            call.tool.as_deref(),
+            string_member(wanted, "name").as_deref(),
+            "{context}"
+        );
+        assert_eq!(
+            call.arguments.to_json(),
+            wanted.get("arguments").expect("arguments").to_json(),
+            "{context}"
+        );
+        assert_eq!(call.dialect, DialectId::HarmonyStripped, "{context}");
+        assert_eq!(
+            call.candidate_dialects,
+            [DialectId::HarmonyStripped],
+            "{context}"
+        );
+        assert_eq!(call.source_id, None, "{context}");
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{context}");
+        assert!(call.repairs.evidence.is_empty(), "{context}");
+        assert!(call.repairs.losses.is_empty(), "{context}");
+        assert!(call.repairs.inferences.is_empty(), "{context}");
+    }
+    assert_eq!(complete.calls[0].span, 0..47, "{context}");
+    assert_eq!(complete.calls[1].span, 47..94, "{context}");
+    assert_eq!(complete.calls[0].arguments.span, Some(30..46), "{context}");
+    assert_eq!(complete.calls[1].arguments.span, Some(77..94), "{context}");
+}
+
+fn assert_harmony_trailing_extraction(
+    reading: &ToolCalls,
+    complete: &ToolCall,
+    markup: &str,
+    source: Digest,
+    context: &str,
+) {
+    assert_eq!(reading.calls.len(), 1, "{context}");
+    assert!(reading.rejected.is_empty(), "{context}");
+    assert!(reading.embedded.is_empty(), "{context}");
+    assert!(reading.content.is_empty(), "{context}");
+    assert!(reading.reasoning.is_empty(), "{context}");
+    assert_eq!(reading.finish, Finish::Unresolved, "{context}");
+    assert!(reading.usable().is_empty(), "{context}");
+    assert!(reading.usable_accepting_guesses().is_empty(), "{context}");
+    let call = &reading.calls[0];
+    assert_eq!(call.index, 0, "{context}");
+    assert_eq!(call.tool, complete.tool, "{context}");
+    assert_eq!(call.name, complete.name, "{context}");
+    assert_eq!(call.source_id, complete.source_id, "{context}");
+    assert_eq!(call.arguments, complete.arguments, "{context}");
+    assert_eq!(call.arguments.span, complete.arguments.span, "{context}");
+    assert_eq!(call.dialect, DialectId::HarmonyStripped, "{context}");
+    assert_eq!(
+        call.candidate_dialects,
+        [DialectId::HarmonyStripped],
+        "{context}"
+    );
+    assert_eq!(call.span, 0..94, "{context}");
+    assert_eq!(call.outcome, CallOutcome::BestGuess, "{context}");
+    assert_eq!(call.effects, Some(Effects::Mutating), "{context}");
+    assert_eq!(call.policy, Some(RepairPolicy::Structural), "{context}");
+    assert_eq!(call.repairs.evidence.len(), 1, "{context}");
+    assert_eq!(call.repairs.losses.len(), 1, "{context}");
+    assert!(call.repairs.inferences.is_empty(), "{context}");
+    let evidence = &call.repairs.evidence[0];
+    assert_eq!(evidence.rule, "tool_call.extract.prose", "{context}");
+    assert_eq!(evidence.destination, "/turn/0..94", "{context}");
+    let span = evidence.span.as_ref().expect("extraction source span");
+    assert_eq!(span.source, source, "{context}");
+    assert_eq!(span.bytes, 47..94, "{context}");
+    let loss = &call.repairs.losses[0];
+    assert_eq!(loss.kind, LossKind::Data, "{context}");
+    assert_eq!(loss.loss.evidence, *evidence, "{context}");
+    assert_eq!(loss.loss.original, markup[47..94], "{context}");
 }
 
 #[test]

@@ -78,7 +78,53 @@ fn set(dialects: &[DialectId]) -> DialectSet {
 fn recover_in(tools: &ToolSet, output: &[u8], dialect: &DialectId) -> ToolCalls {
     let dialects = set(core::slice::from_ref(dialect));
     let request = ToolRecoveryRequest::default();
-    value(tools.recover(output, &request, &dialects).outcome)
+    let result = tools.recover(output, &request, &dialects);
+    let outcome = result.outcome;
+    if dialect.grammar().is_derived()
+        && let Outcome::Ambiguous(readings) = outcome
+    {
+        // Marker removal keeps higher-cost lossy readings as Ambiguous too.
+        // Roundtrip uses the published least-cost invocation; every equally
+        // ranked reading must agree, including its repair ledger. Higher-cost
+        // alternatives stay in the production result and receipt.
+        assert_eq!(readings.len(), result.receipt.alternatives.len());
+        assert!(
+            result
+                .receipt
+                .alternatives
+                .windows(2)
+                .all(|pair| pair[0].cost <= pair[1].cost)
+        );
+        let minimum = result.receipt.alternatives[0].cost;
+        let first = readings.first().expect("nonempty ambiguity");
+        assert!(
+            readings
+                .iter()
+                .zip(&result.receipt.alternatives)
+                .take_while(|(_, receipt)| receipt.cost == minimum)
+                .all(|(reading, _)| {
+                    reading.calls.len() == first.calls.len()
+                        && reading.rejected.is_empty()
+                        && reading.calls.iter().zip(&first.calls).all(|(left, right)| {
+                            left.name == right.name
+                                && left.tool == right.tool
+                                && left.source_id == right.source_id
+                                && left.outcome == right.outcome
+                                && left.arguments.equivalent(&right.arguments)
+                                && left.repairs == right.repairs
+                        })
+                }),
+            "different equally ranked invocation readings: {readings:?}; costs: {:?}",
+            result
+                .receipt
+                .alternatives
+                .iter()
+                .map(|receipt| receipt.cost)
+                .collect::<Vec<_>>()
+        );
+        return readings.into_iter().next().expect("nonempty ambiguity");
+    }
+    value(outcome)
 }
 
 fn value(outcome: Outcome<ToolCalls>) -> ToolCalls {
@@ -163,12 +209,21 @@ fn every_pair_roundtrips() {
                 assert_same_calls(&first, &second, &context);
                 // Content between printed calls is only their separators.
                 for range in &second.content {
-                    assert_eq!(&printed.output[range.clone()], b"\n", "{context}");
+                    if target.grammar().is_derived() {
+                        assert!(
+                            printed.output[range.clone()]
+                                .iter()
+                                .all(u8::is_ascii_whitespace),
+                            "{context}"
+                        );
+                    } else {
+                        assert_eq!(&printed.output[range.clone()], b"\n", "{context}");
+                    }
                 }
                 // Ids survive where the target carries them. A Kimi-K2 id
                 // is composite: `functions.NAME:IDX`, IDX the call's
                 // position among the printed calls.
-                if target == DialectId::KimiK2 {
+                if matches!(target, DialectId::KimiK2 | DialectId::KimiK2Stripped) {
                     for (position, (before, after)) in
                         first.calls.iter().zip(&second.calls).enumerate()
                     {
@@ -442,6 +497,7 @@ fn declaration_reader(dialect: &DialectId) -> DialectSet {
     let source = dialect
         .source()
         .expect("built-in source")
+        .base_text()
         .replace("\ncall = ", "\nprinted-call = ")
         .replace("\nresult = ", "\nprinted-result = ")
         .replace("\ndeclaration = ", "\ncall = ")
@@ -624,7 +680,8 @@ fn tool_results_roundtrip() {
             // A Harmony tool message is addressed from the tool by name.
             let result = ToolResult {
                 id: Some("call_3"),
-                name: (dialect == DialectId::Harmony).then_some("read"),
+                name: matches!(dialect, DialectId::Harmony | DialectId::HarmonyStripped)
+                    .then_some("read"),
                 content,
             };
             let rendered = emit::render_tool_result(&dialect, &result).expect("rendered");
@@ -661,6 +718,7 @@ fn tool_results_roundtrip() {
                 dialect,
                 DialectId::OpenAiToolCalls
                     | DialectId::MistralV3
+                    | DialectId::MistralV3Stripped
                     | DialectId::AnthropicToolUse
                     | DialectId::BareJson
             ) {
@@ -673,12 +731,18 @@ fn tool_results_roundtrip() {
                 );
                 assert_eq!(found[0].id.as_ref().expect("id").value, "call_3");
                 assert_eq!(rendered.omitted, []);
-            } else if matches!(dialect, DialectId::MistralV11 | DialectId::KimiK2) {
+            } else if matches!(
+                dialect,
+                DialectId::MistralV11
+                    | DialectId::MistralV11Stripped
+                    | DialectId::KimiK2
+                    | DialectId::KimiK2Stripped
+            ) {
                 // Verbatim content, after the id of the call it answers.
                 assert_eq!(captured, content, "{context}");
                 assert_eq!(found[0].id.as_ref().expect("id").value, "call_3");
                 assert_eq!(rendered.omitted, []);
-            } else if dialect == DialectId::Harmony {
+            } else if matches!(dialect, DialectId::Harmony | DialectId::HarmonyStripped) {
                 // Verbatim content, from the tool it answers.
                 assert_eq!(captured, content, "{context}");
                 assert_eq!(found[0].name.as_ref().expect("name").value, "read");
@@ -1031,7 +1095,9 @@ fn emission_never_emits_unresolved_silently() {
     for dialect in DialectId::BUILT_IN {
         let printed = emit::emit(&tools, &calls, &dialect, &IdPolicy::Source).expect("emitted");
         check(&printed.calls, &printed.skipped, dialect.id());
-        if dialect.grammar().call_carries_ids() && dialect != DialectId::KimiK2 {
+        if dialect.grammar().call_carries_ids()
+            && !matches!(dialect, DialectId::KimiK2 | DialectId::KimiK2Stripped)
+        {
             // `call#0` is not an id the OpenAI or Mistral call-id class
             // accepts: those calls are skipped as unrepresentable, never
             // printed with another id.

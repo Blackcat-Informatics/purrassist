@@ -748,6 +748,22 @@ pub(crate) enum CodecState {
 }
 
 impl CodecState {
+    /// Real retained JSON evidence for a marker-suppressed call attempt.
+    pub(crate) const fn argument_anchor(&self) -> bool {
+        matches!(self, Self::Json(codec) if codec.argument_anchor())
+    }
+
+    /// Native-parser observation for a projected erased-entry commit only.
+    pub(crate) fn observe_native_anchor(
+        &mut self,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        match self {
+            Self::Json(codec) => codec.observe_native_anchor(governor),
+            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) | Self::Pythonic(_) => Ok(false),
+        }
+    }
+
     pub(crate) const fn kind(&self) -> CodecKind {
         match self {
             Self::Raw(_) => CodecKind::Raw,

@@ -67,7 +67,9 @@ use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
 use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason};
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason, format_output_governed,
+};
 use crate::digest::Digest;
 use crate::pattern::{DerivativeDfa, DfaState};
 use crate::search::Ledger;
@@ -79,6 +81,9 @@ use crate::tool_call::{
 use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Original name capture and optional beginning of its chained call.
+type CapturedName = (Range<usize>, Option<usize>);
 
 /// Set in a body configuration's matcher state once the body read on past
 /// a repaired delimiter (a closer variant or confusable spelling), beside
@@ -232,12 +237,14 @@ pub(crate) struct Thread {
     /// plus one, else zero. Its value is read, and its cost added, when the
     /// reading completes or begins another slot.
     pub(crate) pending: u32,
+    /// First native raw name/ID/parameter/argument OPEN position; MAX until seen.
+    pub(crate) header_end: usize,
 }
 
 impl ScratchCharge for Thread {
     const CHARGE: usize = {
-        assert!(core::mem::size_of::<Self>() <= 120);
-        120
+        assert!(core::mem::size_of::<Self>() <= 128);
+        128
     };
 }
 
@@ -311,6 +318,37 @@ pub(crate) enum HistKind {
 pub(crate) struct HistNode {
     pub(crate) prev: u32,
     pub(crate) kind: HistKind,
+    evidence: HistoryEvidence,
+}
+
+/// Facts on the immutable `prev` suffix above the nearest Root, Next or Link.
+/// A Link leaves its older ancestry unknown even after its `prev` is resolved.
+/// Pack follows only `prev`, exactly as the admission history walk does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HistoryEvidence(u8);
+
+impl HistoryEvidence {
+    const OPEN_NAME: u8 = 1;
+    const NAMED: u8 = 2;
+    const VALUE: u8 = 4;
+    const LINKED: u8 = 8;
+
+    const fn appended(self, kind: HistKind) -> Self {
+        match kind {
+            HistKind::Root | HistKind::Next(..) => Self(0),
+            HistKind::Link => Self(Self::LINKED),
+            HistKind::Open(CaptureKind::Name, _) => Self(self.0 | Self::OPEN_NAME),
+            HistKind::Close(CaptureKind::Name, _) if self.has(Self::OPEN_NAME) => {
+                Self(self.0 | Self::NAMED)
+            }
+            HistKind::Value(_) => Self(self.0 | Self::VALUE),
+            _ => self,
+        }
+    }
+
+    const fn has(self, flag: u8) -> bool {
+        self.0 & flag != 0
+    }
 }
 
 impl ScratchCharge for HistNode {
@@ -364,6 +402,7 @@ impl Arena {
         nodes.push(HistNode {
             prev: ROOT,
             kind: HistKind::Root,
+            evidence: HistoryEvidence(0),
         })?;
         Ok(Self {
             nodes,
@@ -380,7 +419,12 @@ impl Arena {
     }
 
     pub(crate) fn push(&mut self, prev: u32, kind: HistKind) -> Result<u32, StopReason> {
-        self.nodes.push(HistNode { prev, kind })?;
+        let evidence = self.nodes[prev as usize].evidence.appended(kind);
+        self.nodes.push(HistNode {
+            prev,
+            kind,
+            evidence,
+        })?;
         Ok(index_u32(self.nodes.len() - 1))
     }
 
@@ -473,6 +517,7 @@ impl Arena {
         self.nodes.push(HistNode {
             prev: ROOT,
             kind: HistKind::Root,
+            evidence: HistoryEvidence(0),
         })?;
         self.values.clear();
         self.edits.clear();
@@ -546,6 +591,8 @@ pub(crate) struct Out {
     pub(crate) failed: ScratchVec<Failure>,
     pub(crate) completed: ScratchVec<Thread>,
     pub(crate) opened: ScratchVec<(u64, usize)>,
+    headers: ScratchVec<(u64, usize)>,
+    native_frames: ScratchVec<(u64, usize)>,
 }
 
 impl Out {
@@ -555,6 +602,8 @@ impl Out {
             failed: ScratchVec::new(governor),
             completed: ScratchVec::new(governor),
             opened: ScratchVec::new(governor),
+            headers: ScratchVec::new(governor),
+            native_frames: ScratchVec::new(governor),
         }
     }
 
@@ -563,6 +612,8 @@ impl Out {
         self.failed.clear();
         self.completed.clear();
         self.opened.clear();
+        self.headers.clear();
+        self.native_frames.clear();
     }
 }
 
@@ -574,13 +625,13 @@ pub(crate) struct Step<'a, 's> {
     /// What the program reads (a call's verbatim argument body may hold
     /// closer text; see `Step::repaired_delimiter`).
     pub(crate) kind: ProductionKind,
-    pub(crate) dfas: &'a mut [DerivativeDfa<'s>],
+    pub(crate) dfas: &'a mut [Option<DerivativeDfa<'s>>],
     pub(crate) arena: &'a mut Arena,
     pub(crate) buffer: &'a [u8],
     pub(crate) base: usize,
     pub(crate) stall_cap: u32,
     pub(crate) visited: &'a mut Vec<u64>,
-    pub(crate) pending: &'a mut Vec<(u32, u32, u64)>,
+    pub(crate) pending: &'a mut Vec<(u32, u32, u64, usize)>,
     pub(crate) tools: Option<&'s ToolSet>,
     /// The latest start of any attempt that opened, in any table: a
     /// resynchronizing configuration gives up at another call's opener.
@@ -600,6 +651,24 @@ pub(crate) struct Step<'a, 's> {
 }
 
 impl<'s> Step<'_, 's> {
+    /// Initialize a class's original working automaton only when reached.
+    /// A failed admission leaves the slot empty and propagates unchanged.
+    fn class_dfa(
+        &mut self,
+        class: u32,
+        governor: &mut Governor,
+    ) -> Result<&mut DerivativeDfa<'s>, StopReason> {
+        let slot = &mut self.dfas[class as usize];
+        if slot.is_none() {
+            *slot = Some(
+                self.grammar.classes[class as usize]
+                    .automaton
+                    .dfa(governor)?,
+            );
+        }
+        Ok(slot.as_mut().expect("the class automaton was initialized"))
+    }
+
     pub(crate) const fn byte(&self, pos: usize) -> u8 {
         self.buffer[pos - self.base]
     }
@@ -711,7 +780,7 @@ impl<'s> Step<'_, 's> {
         let nodes = self.arena.nodes.as_slice();
         let mut node = thread.hist;
         for _ in 0..8 {
-            let HistNode { prev, kind } = nodes[node as usize];
+            let HistNode { prev, kind, .. } = nodes[node as usize];
             match kind {
                 HistKind::Open(_, at) | HistKind::Close(_, at) | HistKind::Next(at, _)
                     if at == thread.entry =>
@@ -1364,7 +1433,8 @@ impl<'s> Step<'_, 's> {
         self.step_literal(thread, lit, next, byte, stack, out, governor)
     }
 
-    /// One byte of a maximal class run.
+    /// One byte of a maximal class run, beside any compiler-proven projected
+    /// name boundary whose retained literal can begin at this byte.
     #[allow(clippy::too_many_arguments)]
     fn step_class(
         &mut self,
@@ -1380,9 +1450,25 @@ impl<'s> Step<'_, 's> {
             unreachable!("class configurations only")
         };
         let pos = thread.pos;
-        let dfa = &mut self.dfas[class as usize];
+        let literal_boundary = if self.program.name_follower_index.is_empty() {
+            false
+        } else {
+            governor.charge(Resource::Work, 1)?;
+            let row = self.program.name_follower_index[thread.pc as usize];
+            row != u32::MAX
+                && self.program.name_follower_bytes[row as usize + usize::from(byte >> 6)]
+                    & (1 << (byte & 63))
+                    != 0
+        };
+        let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;
         if !dfa.is_dead(stepped, governor)? {
+            if literal_boundary && thread.entry < pos && dfa.accepting(state, governor)? {
+                // A removed separator can join a name to a retained channel
+                // word. Keep the maximal class and the grammar's literal
+                // continuation; neither source reading is thrown away.
+                self.closure(thread, next, pos, stack, out, governor)?;
+            }
             thread.sub = Sub::Class(stepped);
             thread.pos = pos + 1;
             return self.queue(thread, stack);
@@ -1431,6 +1517,19 @@ impl<'s> Step<'_, 's> {
         let Sub::Body(raw, codec) = thread.sub else {
             unreachable!("body configurations only")
         };
+        if codec.is_some()
+            && thread.pos == thread.entry
+            && byte.is_ascii_whitespace()
+            && !self.weak_name_evidence(
+                thread.hist,
+                thread.start,
+                thread.entry,
+                Some(byte),
+                governor,
+            )?
+        {
+            return Ok(());
+        }
         let (state, mut past) = (raw & !(PAST_REPAIRED | TEXTED), raw & PAST_REPAIRED != 0);
         let mut texted = raw & TEXTED != 0;
         let pos = thread.pos;
@@ -1792,6 +1891,8 @@ impl<'s> Step<'_, 's> {
             governor,
         )? {
             Ok((top, cost)) => {
+                // This Link and every descendant retain unknown-ancestry
+                // evidence: no immutable suffix fact relies on its old prev.
                 self.arena.nodes.as_mut_slice()[deferred.node as usize].prev = top;
                 Reading::Read(cost)
             }
@@ -1827,6 +1928,21 @@ impl<'s> Step<'_, 's> {
             ),
             None => None,
         };
+        if self.program.argument_anchor
+            && let Some(slot) = codec
+        {
+            // This fallback owns a fresh codec: retain the native scanner's
+            // evidence before deciding whether its shortened body is a call.
+            if let Err(fault) = self.feed(slot, thread.entry..end, governor)? {
+                return Self::fail(out, thread, end, rejection(fault));
+            }
+            if !self.arena.codecs[slot as usize]
+                .as_ref()
+                .is_some_and(CodecState::argument_anchor)
+            {
+                return Self::fail(out, thread, end, Rejection::Malformed { at: end });
+            }
+        }
         let past = thread.beside();
         if past && self.opens_call(&thread, end, governor)? {
             return Ok(());
@@ -1937,6 +2053,15 @@ impl<'s> Step<'_, 's> {
             thread.past = true;
         }
         if let Some(slot) = codec {
+            // A weak derived frame cannot let EOF recovery invent its first
+            // object/stringified-object evidence. Exact codec behavior is unchanged.
+            if self.program.argument_anchor
+                && !self.arena.codecs[slot as usize]
+                    .as_ref()
+                    .is_some_and(CodecState::argument_anchor)
+            {
+                return Self::fail(out, thread, end, Rejection::Malformed { at: end });
+            }
             match self.finish_codec(slot, thread.hist, thread.entry..end, how, governor)? {
                 Ok((hist, cost)) => {
                     thread.hist = hist;
@@ -2019,15 +2144,36 @@ impl<'s> Step<'_, 's> {
         let Some(tools) = self.tools else {
             return Ok(markup);
         };
+        let Some((name, _)) = self.name_range(hist, governor)? else {
+            return Ok(markup);
+        };
+        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
+        let shape = core::str::from_utf8(self.bytes(name))
+            .ok()
+            .and_then(|name| tools.lookup_exact(name))
+            .map(CompiledTool::argument_shape);
+        Ok(CodecContext { shape, ..markup })
+    }
+
+    fn name_range(
+        &self,
+        hist: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<CapturedName>, StopReason> {
         let nodes = self.arena.nodes.as_slice();
         let (mut node, mut close, mut name) = (hist, None, None);
+        let mut segment = None;
         loop {
             governor.charge(Resource::Work, K_CODEC)?;
-            let HistNode { prev, kind } = nodes[node as usize];
+            let HistNode { prev, kind, .. } = nodes[node as usize];
             match kind {
                 // The name of the call this slot belongs to: no earlier
                 // than the call's own beginning.
-                HistKind::Root | HistKind::Next(..) => break,
+                HistKind::Root => break,
+                HistKind::Next(at, _) => {
+                    segment = Some(at);
+                    break;
+                }
                 HistKind::Close(CaptureKind::Name, at) => close = Some(at),
                 HistKind::Open(CaptureKind::Name, start) => {
                     if let Some(end) = close {
@@ -2038,15 +2184,205 @@ impl<'s> Step<'_, 's> {
             }
             node = prev;
         }
-        let Some(name) = name else {
-            return Ok(markup);
+        Ok(name.map(|name| (name, segment)))
+    }
+
+    /// Weak framing needs both a native name and native JSON evidence. In an
+    /// arguments-first envelope, the codec value precedes the completed name.
+    fn weak_call_evidence(
+        &mut self,
+        hist: u32,
+        active: Option<u32>,
+        observe_native: bool,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let evidence = self.arena.nodes[hist as usize].evidence;
+        let mut named = evidence.has(HistoryEvidence::NAMED);
+        let mut value = evidence.has(HistoryEvidence::VALUE);
+        let mut observed = false;
+        let mut closed_name = false;
+        let mut node = hist;
+        loop {
+            if named {
+                if value {
+                    return Ok(true);
+                }
+                if !observed {
+                    // Active codec evidence is mutable and never part of a
+                    // history fact. Nameless paths never inspect the codec.
+                    observed = true;
+                    let anchored = match active
+                        .and_then(|slot| self.arena.codecs[slot as usize].as_mut())
+                    {
+                        Some(codec) if observe_native => codec.observe_native_anchor(governor)?,
+                        Some(codec) => codec.argument_anchor(),
+                        None => false,
+                    };
+                    if anchored {
+                        return Ok(true);
+                    }
+                }
+            }
+            if !evidence.has(HistoryEvidence::LINKED) {
+                return Ok(false);
+            }
+            // A deferred Link may have changed since these immutable suffix
+            // facts were recorded. Read its current ancestry, following only
+            // prev (never a sibling Pack operand), as the original walk did.
+            governor.charge(Resource::Work, K_CODEC)?;
+            let HistNode { prev, kind, .. } = self.arena.nodes[node as usize];
+            match kind {
+                HistKind::Root | HistKind::Next(..) => return Ok(false),
+                HistKind::Close(CaptureKind::Name, _) => closed_name = true,
+                HistKind::Open(CaptureKind::Name, _) if closed_name => named = true,
+                HistKind::Value(_) => value = true,
+                _ => {}
+            }
+            node = prev;
+        }
+    }
+
+    /// A plain word separated from JSON by whitespace also describes prose.
+    /// Weak name-only presets require declared-name evidence in that case.
+    /// Dropped prose supplies no retained framing before the name.
+    /// Check at slot entry (and its first whitespace byte), never per body byte.
+    fn weak_name_evidence(
+        &self,
+        hist: u32,
+        start: usize,
+        through: usize,
+        first: Option<u8>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if !self.program.argument_anchor {
+            return Ok(true);
+        }
+        let Some(tools) = self.tools else {
+            return Ok(true);
         };
+        let Some((name, segment)) = self.name_range(hist, governor)? else {
+            return Ok(true);
+        };
+        let separated = if name.end < through {
+            self.bytes(name.end..name.end + 1)[0].is_ascii_whitespace()
+        } else {
+            first.is_some_and(|byte| byte.is_ascii_whitespace())
+        };
+        if !separated {
+            return Ok(true);
+        }
+        if self.retained_name_prefix(hist, segment.unwrap_or(start)..name.start, governor)? {
+            return Ok(true);
+        }
         governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
-        let shape = core::str::from_utf8(self.bytes(name))
-            .ok()
-            .and_then(|name| tools.lookup_exact(name))
-            .map(CompiledTool::argument_shape);
-        Ok(CodecContext { shape, ..markup })
+        let bytes = self.bytes(name);
+        if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
+            return Ok(true);
+        }
+        for &relation in &self.grammar.joint_captures {
+            let boundaries = super::partition::boundaries(self.grammar, relation, bytes, governor)?;
+            for tool in tools.tools() {
+                for candidate in
+                    core::iter::once(tool.name()).chain(tool.aliases().iter().map(String::as_str))
+                {
+                    governor.charge(
+                        Resource::Work,
+                        size(candidate.len().min(bytes.len())).saturating_add(65),
+                    )?;
+                    if bytes.starts_with(candidate.as_bytes())
+                        && boundaries.binary_search(&candidate.len()).is_ok()
+                    {
+                        // This is admission evidence only. Expansion still
+                        // retains every original source-valid partition.
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Written framing excludes source the same history reads as dropped text.
+    /// Extraction edits for Dropped captures are produced only at materialization,
+    /// so inspect both the native capture spans and already recorded edits.
+    fn retained_name_prefix(
+        &self,
+        hist: u32,
+        prefix: Range<usize>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, size(prefix.len()))?;
+        if !self
+            .bytes(prefix.clone())
+            .iter()
+            .any(|byte| !byte.is_ascii_whitespace())
+        {
+            return Ok(false);
+        }
+        let mut removed = ScratchVec::new(governor);
+        let (mut node, mut dropped_depth, mut dropped_end) = (hist, 0_usize, 0);
+        loop {
+            governor.charge(Resource::Work, K_CODEC)?;
+            let HistNode { prev, kind, .. } = self.arena.nodes[node as usize];
+            let span = match kind {
+                HistKind::Root | HistKind::Next(..) => break,
+                HistKind::Close(CaptureKind::Dropped, at) => {
+                    if dropped_depth == 0 {
+                        dropped_end = at;
+                    }
+                    dropped_depth += 1;
+                    None
+                }
+                HistKind::Open(CaptureKind::Dropped, at) if dropped_depth > 0 => {
+                    dropped_depth -= 1;
+                    (dropped_depth == 0).then_some((at, dropped_end))
+                }
+                HistKind::Edit(index) => {
+                    let edit = &self.arena.edits[index as usize];
+                    matches!(
+                        edit.operator,
+                        EditOperator::ExtractProse | EditOperator::ExtractFence
+                    )
+                    .then_some((edit.span.start, edit.span.end))
+                }
+                _ => None,
+            };
+            if let Some((start, end)) = span {
+                let clipped = (start.max(prefix.start), end.min(prefix.end));
+                if clipped.0 < clipped.1 {
+                    crate::contract::push_scratch(&mut removed, clipped, governor)?;
+                }
+            }
+            node = prev;
+        }
+        if removed.is_empty() {
+            return Ok(true);
+        }
+        governor.charge(
+            Resource::Work,
+            size(removed.len()).saturating_mul(size(removed.len())),
+        )?;
+        removed.as_mut_slice().sort_unstable();
+        let mut cursor = prefix.start;
+        for &(start, end) in &removed {
+            if cursor < start {
+                governor.charge(Resource::Work, size(start - cursor))?;
+                if self
+                    .bytes(cursor..start)
+                    .iter()
+                    .any(|byte| !byte.is_ascii_whitespace())
+                {
+                    return Ok(true);
+                }
+            }
+            cursor = cursor.max(end);
+        }
+        governor.charge(Resource::Work, size(prefix.end - cursor))?;
+        Ok(self
+            .bytes(cursor..prefix.end)
+            .iter()
+            .any(|byte| !byte.is_ascii_whitespace()))
     }
 
     fn protocol_spelling(&self, range: Range<usize>) -> bool {
@@ -2180,6 +2516,20 @@ impl<'s> Step<'_, 's> {
         if !thread.opened && !self.program.deferred() && self.program.openers.contains(&thread.pc) {
             thread.opened = true;
             out.opened.push((thread.attempt, at))?;
+            // This evidence is emitted only by the physically consumed native
+            // opener, before any call payload or grouped recovery exists.
+            if self.kind == ProductionKind::Call
+                && !self.program.origin.is_projected()
+                && thread.cost == 0
+                && thread.entry == thread.start
+                && matches!(self.program.insts[thread.pc as usize], Inst::Lit { lit, .. }
+                    if self.grammar.literals[lit as usize].bytes.as_slice() == b"[TOOL_CALLS]")
+            {
+                governor.charge(Resource::Work, size(at - thread.start))?;
+                if self.bytes(thread.start..at) == b"[TOOL_CALLS]" {
+                    out.native_frames.push((thread.attempt, at))?;
+                }
+            }
         }
         self.closure(thread, next, at, stack, out, governor)
     }
@@ -2194,12 +2544,8 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let words = self.program.insts.len().div_ceil(64);
-        self.visited.clear();
-        self.visited.resize(words, 0);
-        self.pending.clear();
-        self.pending.push((pc, thread.hist, thread.cost));
-        while let Some((pc, hist, cost)) = self.pending.pop() {
+        self.seed_closure(pc, thread);
+        while let Some((pc, hist, cost, mut header_end)) = self.pending.pop() {
             let (word, bit) = (pc as usize / 64, 1_u64 << (pc % 64));
             if self.visited[word] & bit != 0 {
                 continue;
@@ -2208,44 +2554,46 @@ impl<'s> Step<'_, 's> {
             governor.charge(Resource::Work, K_THREAD)?;
             let sub = match self.program.insts[pc as usize] {
                 Inst::Split(first, second) => {
-                    self.pending.push((second, hist, cost));
-                    self.pending.push((first, hist, cost));
+                    self.pending.push((second, hist, cost, header_end));
+                    self.pending.push((first, hist, cost, header_end));
                     continue;
                 }
                 Inst::Open { kind, next } => {
+                    if matches!(
+                        kind,
+                        CaptureKind::Name
+                            | CaptureKind::Id
+                            | CaptureKind::ParamName
+                            | CaptureKind::Arguments
+                    ) {
+                        // This is the native raw OPEN, before any codec parsing,
+                        // trimming, repair, string decoding or capture completion.
+                        header_end = header_end.min(at);
+                    }
                     let node = self.arena.push(hist, HistKind::Open(kind, at))?;
-                    self.pending.push((next, node, cost));
+                    self.pending.push((next, node, cost, header_end));
                     continue;
                 }
                 Inst::Close { kind, next } => {
                     let node = self.arena.push(hist, HistKind::Close(kind, at))?;
-                    self.pending.push((next, node, cost));
+                    self.pending.push((next, node, cost, header_end));
                     continue;
                 }
                 // The attempt opens when a configuration past the commit
                 // reaches the turn level (see `Engine::commit`).
                 Inst::Commit { next } => {
-                    self.pending.push((next, hist, cost));
+                    self.pending.push((next, hist, cost, header_end));
                     continue;
                 }
                 Inst::Next { next } => {
                     let node = self.arena.push(hist, HistKind::Next(at, cost))?;
-                    self.pending.push((next, node, cost));
+                    self.pending.push((next, node, cost, header_end));
                     continue;
                 }
                 Inst::Insert { lit, next } => {
-                    let edit = MarkupEdit {
-                        operator: EditOperator::MissingToken,
-                        span: at..at,
-                        original: Vec::new(),
-                        replacement: self.grammar.literals[lit as usize]
-                            .bytes
-                            .as_slice()
-                            .to_vec(),
-                    };
-                    let node = self.arena.edit(hist, edit, governor)?;
+                    let node = self.insert_token(hist, lit, at, governor)?;
                     let cost = cost.saturating_add(EditOperator::MissingToken.rule().cost);
-                    self.pending.push((next, node, cost));
+                    self.pending.push((next, node, cost, header_end));
                     continue;
                 }
                 // A deferred body's value is read when the completion is
@@ -2255,6 +2603,7 @@ impl<'s> Step<'_, 's> {
                     out.completed.push(Thread {
                         pc,
                         hist,
+                        header_end,
                         cost,
                         pos: at,
                         ..thread
@@ -2262,9 +2611,12 @@ impl<'s> Step<'_, 's> {
                     continue;
                 }
                 Inst::Lit { .. } => Sub::Lit(0),
-                Inst::Class { class, .. } => Sub::Class(self.dfas[class as usize].start()),
+                Inst::Class { class, .. } => Sub::Class(self.class_dfa(class, governor)?.start()),
                 Inst::Until { .. } => Sub::Body(super::automaton::ROOT, None),
                 Inst::Slot { codec, .. } => {
+                    if !self.weak_name_evidence(hist, thread.start, at, None, governor)? {
+                        continue;
+                    }
                     // A deferred body's value is read before the next one.
                     let Some(added) = self.settle_pending(thread.pending, governor)? else {
                         continue;
@@ -2278,6 +2630,7 @@ impl<'s> Step<'_, 's> {
                         entry: at,
                         pos: at,
                         hist,
+                        header_end,
                         cost: cost.saturating_add(added),
                         pending: 0,
                         ..thread
@@ -2292,12 +2645,43 @@ impl<'s> Step<'_, 's> {
                 entry: at,
                 pos: at,
                 hist,
+                header_end,
                 cost,
                 ..thread
             };
             self.queue(next, stack)?;
         }
         Ok(())
+    }
+
+    /// Start an input-free traversal with fresh visitation and pending state.
+    fn seed_closure(&mut self, pc: u32, thread: Thread) {
+        let words = self.program.insts.len().div_ceil(64);
+        self.visited.clear();
+        self.visited.resize(words, 0);
+        self.pending.clear();
+        self.pending
+            .push((pc, thread.hist, thread.cost, thread.header_end));
+    }
+
+    /// Record one omitted literal at its original input-free transition.
+    fn insert_token(
+        &mut self,
+        hist: u32,
+        lit: u32,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let edit = MarkupEdit {
+            operator: EditOperator::MissingToken,
+            span: at..at,
+            original: Vec::new(),
+            replacement: self.grammar.literals[lit as usize]
+                .bytes
+                .as_slice()
+                .to_vec(),
+        };
+        self.arena.edit(hist, edit, governor)
     }
 
     /// End-of-input transitions of a configuration at the end of input.
@@ -2331,7 +2715,7 @@ impl<'s> Step<'_, 's> {
                 Self::fail(out, thread, pos, Rejection::Unterminated)
             }
             (Inst::Class { class, next }, Sub::Class(state)) => {
-                let dfa = &mut self.dfas[class as usize];
+                let dfa = self.class_dfa(class, governor)?;
                 if thread.entry < pos && dfa.accepting(state, governor)? {
                     return self.closure(thread, next, pos, stack, out, governor);
                 }
@@ -2480,7 +2864,7 @@ impl<'s> Step<'_, 's> {
         while let Some((node, depth)) = stack.pop() {
             governor.charge(Resource::Work, K_CAPTURE)?;
             path.truncate(depth);
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[node as usize];
             match kind {
                 HistKind::Root => {
                     let forward: Vec<HistKind> = path.iter().rev().copied().collect();
@@ -2714,6 +3098,105 @@ impl<'s> Step<'_, 's> {
         }))
     }
 
+    /// Expand admitted source boundaries only after base histories were deduplicated.
+    /// The maximal whole-name reading remains; no missing ID boundary is chosen silently.
+    fn expand_joint(
+        &self,
+        readings: &mut Vec<RawCall>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if self.grammar.joint_captures.is_empty() {
+            return Ok(());
+        }
+        let count = readings.len();
+        for index in 0..count {
+            let call = &readings[index];
+            if call.kind != ProductionKind::Call || call.id.is_some() {
+                continue;
+            }
+            let Some(name) = &call.name else { continue };
+            let mut boundaries = ScratchVec::new(governor);
+            for &relation in &self.grammar.joint_captures {
+                let admitted = super::partition::boundaries(
+                    self.grammar,
+                    relation,
+                    name.value.as_bytes(),
+                    governor,
+                )?;
+                boundaries.extend(admitted.iter().copied())?;
+            }
+            governor.charge(
+                Resource::Work,
+                size(boundaries.len()).saturating_mul(size(boundaries.len())),
+            )?;
+            boundaries.as_mut_slice().sort_unstable();
+            let mut previous = None;
+            for &boundary in &boundaries {
+                if previous == Some(boundary) {
+                    continue;
+                }
+                previous = Some(boundary);
+                let call = &readings[index];
+                let name = call.name.as_ref().expect("joint source has a name");
+                if !name.value.is_char_boundary(boundary) {
+                    continue;
+                }
+                let at = name.span.start + boundary;
+                let operator = EditOperator::StrippedNameIdBoundary;
+                let bytes = call
+                    .arguments
+                    .estimated_bytes()
+                    .saturating_add(size(name.value.len()).saturating_mul(2))
+                    .saturating_add(size(call.captures.len() + 1).saturating_mul(96))
+                    .saturating_add(
+                        call.edits
+                            .iter()
+                            .map(MarkupEdit::estimated_bytes)
+                            .sum::<u64>(),
+                    )
+                    .saturating_add(size(call.edits.len() + 1).saturating_mul(192))
+                    .saturating_add(512);
+                governor.charge(Resource::Candidates, 1)?;
+                governor.charge(Resource::Work, bytes)?;
+                governor.charge(Resource::ScratchBytes, bytes)?;
+                let mut split = call.clone();
+                split.name = Some(Spanned {
+                    value: name.value[..boundary].to_owned(),
+                    span: name.span.start..at,
+                });
+                split.id = Some(Spanned {
+                    value: name.value[boundary..].to_owned(),
+                    span: at..name.span.end,
+                });
+                if let Some(capture) = split
+                    .captures
+                    .iter_mut()
+                    .find(|capture| capture.kind == CaptureKind::Name && capture.span == name.span)
+                {
+                    capture.span.end = at;
+                }
+                split.captures.push(CaptureSpan {
+                    kind: CaptureKind::Id,
+                    span: at..name.span.end,
+                });
+                split
+                    .captures
+                    .sort_by_key(|capture| (capture.span.start, capture.span.end));
+                let edit = MarkupEdit {
+                    operator,
+                    span: at..at,
+                    original: Vec::new(),
+                    replacement: Vec::new(),
+                };
+                let insertion = split.edits.partition_point(|edit| edit.span.start <= at);
+                split.edits.insert(insertion, edit);
+                split.cost = split.cost.saturating_add(operator.rule().cost);
+                readings.push(split);
+            }
+        }
+        Ok(())
+    }
+
     /// Materialize every reading of a completed (or cut-off) history.
     ///
     /// A history without `next` is one call. A history with `next` is one
@@ -2762,20 +3245,7 @@ impl<'s> Step<'_, 's> {
                 continue;
             };
             let group = &mut groups[index].1;
-            for (readings, part) in group.iter_mut().zip(calls) {
-                let (PartReadings::Call(readings), PartReadings::Call(mut call)) = (readings, part)
-                else {
-                    continue;
-                };
-                let call = call.remove(0);
-                if !readings.contains(&call) {
-                    // Every reading beyond the first competes.
-                    if !readings.is_empty() {
-                        governor.charge(Resource::Candidates, 1)?;
-                    }
-                    readings.push(call);
-                }
-            }
+            merge_part_readings(group, calls, governor)?;
         }
         // A segmentation that read no call is no reading of the attempt: it
         // is rejected whole, as one attempt.
@@ -2788,6 +3258,13 @@ impl<'s> Step<'_, 's> {
             return Ok(Err(
                 rejection.unwrap_or(Rejection::Malformed { at: shape.span.end })
             ));
+        }
+        for (_, parts) in &mut groups {
+            for part in parts {
+                if let PartReadings::Call(readings) = part {
+                    self.expand_joint(readings, governor)?;
+                }
+            }
         }
         let mut leads: Vec<Vec<MarkupEdit>> = Vec::with_capacity(groups.len());
         let mut segmentations: Vec<Parts> = groups
@@ -2830,6 +3307,28 @@ impl<'s> Step<'_, 's> {
         }
         Ok(Ok(segmentations))
     }
+}
+
+/// Combine histories with the same boundaries and rejected-part shape.
+fn merge_part_readings(
+    group: &mut [PartReadings],
+    calls: Vec<PartReadings>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    for (readings, part) in group.iter_mut().zip(calls) {
+        let (PartReadings::Call(readings), PartReadings::Call(mut call)) = (readings, part) else {
+            continue;
+        };
+        let call = call.remove(0);
+        if !readings.contains(&call) {
+            // Every reading beyond the first competes.
+            if !readings.is_empty() {
+                governor.charge(Resource::Candidates, 1)?;
+            }
+            readings.push(call);
+        }
+    }
+    Ok(())
 }
 
 /// When `parts` begins with rejected parts (the attempt's first call could
@@ -2878,6 +3377,84 @@ fn lead_split(parts: &mut Parts, lead: &[MarkupEdit]) {
 
 /// No chain: the parts closed so far are none.
 const NO_CHAIN: u32 = u32::MAX;
+
+/// The retained fence/type syntax makes the boundary's Markdown meaning
+/// independent of which neighboring call owns its uncaptured whitespace.
+fn canonical_deepseek_part(call: &CallSegment) -> bool {
+    if call.readings.len() != 1 || !call.derivations.is_empty() {
+        return false;
+    }
+    let reading = &call.readings[0];
+    reading.span == call.span
+        && reading.dialect == DialectId::DeepSeekV3Stripped
+        && reading.kind == ProductionKind::Call
+        && reading.closure == Closure::Closed
+        && reading.cost == 0
+        && reading.edits.is_empty()
+        && !reading.bare
+        && reading.name.is_some()
+        && reading.arguments.root.span.is_some()
+}
+
+/// Move a shared separator to the first retained byte, preserving all payload
+/// and capture anchors. This is the late layout preference, applied before
+/// equivalent turn paths would otherwise consume separate candidates.
+fn deepseek_layout_boundary(
+    left: &CallSegment,
+    right: &CallSegment,
+    source: &[u8],
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    let boundary = left.span.end - left.span.start;
+    let mut moved = 0;
+    for byte in &source[boundary..] {
+        governor.charge(Resource::Work, 1)?;
+        if !byte.is_ascii_whitespace() {
+            break;
+        }
+        moved += 1;
+    }
+    if moved == 0 {
+        return Ok(None);
+    }
+    governor.charge(Resource::Work, 11)?;
+    // The previous retained closing fence stays protected. The next retained
+    // type is not a Markdown marker, and its `bare` fact remains false. An
+    // inline closing run cannot begin at a call end already ending in ticks:
+    // adjacent ticks would be one run, so inline membership cannot change.
+    if boundary < 3
+        || &source[boundary - 3..boundary] != b"```"
+        || !source[boundary + moved..].starts_with(b"function")
+    {
+        return Ok(None);
+    }
+    let end = left.span.end + moved;
+    for call in [left, right] {
+        let reading = &call.readings[0];
+        governor.charge(
+            Resource::Work,
+            size(reading.captures.len()).saturating_add(4),
+        )?;
+        let touches = |span: &Range<usize>| {
+            span.start < end && span.end > left.span.end
+                || span.is_empty() && left.span.end <= span.start && span.start < end
+        };
+        if reading
+            .captures
+            .iter()
+            .any(|capture| touches(&capture.span))
+            || reading
+                .name
+                .as_ref()
+                .is_some_and(|name| touches(&name.span))
+            || reading.id.as_ref().is_some_and(|id| touches(&id.span))
+            || reading.arguments.root.span.as_ref().is_some_and(touches)
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(end))
+}
 
 /// Scratch bytes charged for each closed part's node and memo entry, on top
 /// of what reading the part charged.
@@ -3123,7 +3700,7 @@ impl Step<'_, '_> {
         while let Some((node, depth)) = stack.pop() {
             governor.charge(Resource::Work, K_CAPTURE)?;
             path.truncate(depth);
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[node as usize];
             let reached = match kind {
                 HistKind::Root => Some(None),
                 HistKind::Next(position, cost) => Some(Some((node, position, cost))),
@@ -3222,6 +3799,7 @@ impl Step<'_, '_> {
                 readings.push(call);
             }
         }
+        self.expand_joint(&mut readings, governor)?;
         let weight = self.undeclared(shape.kind, &readings);
         let span = readings[0].span.clone();
         let part = Part::Call(CallSegment {
@@ -3248,7 +3826,7 @@ impl Step<'_, '_> {
             if let Some(&known) = self.arena.memo.get(&at) {
                 break known;
             }
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[at as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[at as usize];
             let HistKind::Next(position, cost) = kind else {
                 unreachable!("a cut is a next node")
             };
@@ -3803,6 +4381,7 @@ pub(crate) fn merge_noting(
             let winner = &mut slice[write - 1];
             if winner.rank() == current.rank() {
                 winner.hist = arena.pack(winner.hist, current.hist)?;
+                winner.header_end = winner.header_end.min(current.header_end);
                 winner.stall = winner.stall.min(current.stall);
             }
             continue;
@@ -3878,6 +4457,17 @@ impl ScratchCharge for Attempt {
     };
 }
 
+/// Admission facts captured before the attempt can retire.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Opening {
+    /// Derived header boundary in original absolute source coordinates.
+    pub(crate) weak_header: Option<usize>,
+    /// End of a physically consumed canonical native Mistral V3 marker.
+    pub(crate) native_frame_end: Option<usize>,
+    /// The actual compiled program origin, independent of retained literals.
+    pub(crate) projected: bool,
+}
+
 /// A notification to the turn-level segmentation.
 #[derive(Clone, Debug)]
 pub(crate) enum Event {
@@ -3886,6 +4476,7 @@ pub(crate) enum Event {
         attempt: u64,
         start: usize,
         at: usize,
+        opening: Opening,
     },
     /// Attempt `attempt` matched `parts` (one call segment, or one per
     /// call of a production with `next`, each with its cost), ending at
@@ -4253,6 +4844,24 @@ enum HeldBody {
     Chain(Chained),
 }
 
+impl HeldBody {
+    /// The independently owned payload admission, excluding shared chains.
+    const fn owned_bytes(&self) -> u64 {
+        match self {
+            Self::Event(Event::Completed { charged, .. }, _) => *charged,
+            Self::Event(_, _) => 0,
+            Self::Chain(chained) => chained.last_bytes(),
+        }
+    }
+
+    /// Drop the payload before releasing its exact admission.
+    fn discard(self, governor: &mut Governor) -> Result<(), StopReason> {
+        let bytes = self.owned_bytes();
+        drop(self);
+        governor.release_scratch(bytes)
+    }
+}
+
 /// A completed configuration held while closer spellings of its grammar
 /// that follow it are absorbed into it as stray closers
 /// (`tool_call.markup.stray-closer`), so a repeated or stray closer after a
@@ -4320,7 +4929,7 @@ enum Verdict {
 struct GrammarRuntime<'s> {
     grammar: &'s CompiledGrammar,
     dialect: DialectId,
-    dfas: Vec<DerivativeDfa<'s>>,
+    dfas: Vec<Option<DerivativeDfa<'s>>>,
 }
 
 /// The segment-candidate layer over every table of a dialect set.
@@ -4338,7 +4947,7 @@ pub(crate) struct Engine<'s> {
     stack: ScratchVec<Thread>,
     out: Out,
     visited: Vec<u64>,
-    pending: Vec<(u32, u32, u64)>,
+    pending: Vec<(u32, u32, u64, usize)>,
     tools: Option<&'s ToolSet>,
     pub(crate) events: Vec<Event>,
     /// The latest start of any attempt that opened (see
@@ -4380,21 +4989,23 @@ const RELEASE_VECTOR_BYTES: u64 = 40;
 const DEFERRED_BYTES: u64 = 64;
 
 impl<'s> Engine<'s> {
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "Keep the recognizer's exclusive operation-governor boundary while class allocation is deferred to its first transition"
+    )]
     pub(crate) fn new(
         dialects: &'s [DialectId],
         tools: Option<&'s ToolSet>,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
+        governor.check()?;
         let mut grammars = Vec::with_capacity(dialects.len());
         let mut tables = Vec::with_capacity(dialects.len() * 2);
         let mut protocol_fences = false;
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
             protocol_fences |= grammar.protocol_fences();
-            let mut dfas = Vec::with_capacity(grammar.classes.len());
-            for class in &grammar.classes {
-                dfas.push(class.automaton.dfa(governor)?);
-            }
+            let dfas = (0..grammar.classes.len()).map(|_| None).collect();
             grammars.push(GrammarRuntime {
                 grammar,
                 dialect: dialect.clone(),
@@ -4467,11 +5078,12 @@ impl<'s> Engine<'s> {
     fn split(&mut self, table: usize) -> (Step<'_, 's>, &mut ScratchVec<Thread>, &mut Out) {
         let stall_cap = self.stall_cap(table);
         let runtime = &mut self.grammars[self.tables[table].grammar];
+        let table = &mut self.tables[table];
         (
             Step {
                 grammar: runtime.grammar,
-                program: self.tables[table].program,
-                kind: self.tables[table].kind,
+                program: table.program,
+                kind: table.kind,
                 dfas: &mut runtime.dfas,
                 arena: &mut self.arena,
                 buffer: self.buffer.as_slice(),
@@ -4483,7 +5095,7 @@ impl<'s> Engine<'s> {
                 newest_open: self.newest_open,
                 resynced: &mut self.resynced,
                 quoted_openers: &mut self.quoted_openers,
-                attempts: self.tables[table].attempts.as_slice(),
+                attempts: table.attempts.as_slice(),
             },
             &mut self.stack,
             &mut self.out,
@@ -4524,15 +5136,24 @@ impl<'s> Engine<'s> {
         let mut spawned = None;
         let line_blank = self.line_blank;
         let grammar = self.grammars[self.tables[table].grammar].grammar;
-        let opener_allowed = |pc: &u32| {
-            if !line_blank && program.line_start_openers.contains(pc) {
-                return false;
+        let opener_allowed = |pc: &u32, governor: &mut Governor| {
+            // Start a projected call at its first retained byte. An attempt
+            // on indentation could overlap the preceding call's trailing
+            // whitespace and absorb the later, non-overlapping attempt.
+            if program.line_start_openers.contains(pc)
+                && (!line_blank || (grammar.is_derived() && byte.is_ascii_whitespace()))
+            {
+                return Ok(false);
+            }
+            // Class-leading programs are admitted only by the derived compiler.
+            if matches!(program.insts[*pc as usize], Inst::Class { .. }) {
+                return program.class_starts_with(*pc, byte, governor);
             }
             let Inst::Lit { lit, .. } = program.insts[*pc as usize] else {
-                return false;
+                return Ok(false);
             };
             let repairs = &grammar.literal_tables[lit as usize];
-            grammar.literals[lit as usize].bytes.first() == Some(&byte)
+            Ok(grammar.literals[lit as usize].bytes.first() == Some(&byte)
                 || repairs
                     .variants
                     .trie
@@ -4544,9 +5165,17 @@ impl<'s> Engine<'s> {
                             .iter()
                             .flat_map(|table| table.trie.first_bytes()),
                     )
-                    .any(|first| first == byte)
+                    .any(|first| first == byte))
         };
-        if program.starts_with(byte) && program.openers.iter().any(opener_allowed) {
+        if program.starts_with(byte)
+            && program.openers.iter().try_fold(false, |found, pc| {
+                if found {
+                    Ok(true)
+                } else {
+                    opener_allowed(pc, governor)
+                }
+            })?
+        {
             let id = self.next_attempt;
             self.next_attempt += 1;
             self.tables[table].attempts.push(Attempt {
@@ -4574,6 +5203,7 @@ impl<'s> Engine<'s> {
                 reach: at,
                 past: false,
                 pending: 0,
+                header_end: usize::MAX,
             };
             if program.start_closure {
                 // Zero-width instructions with effects (an `insert`) lie
@@ -4581,7 +5211,7 @@ impl<'s> Engine<'s> {
                 spawned = Some(thread);
             } else {
                 for &pc in &program.openers {
-                    if opener_allowed(&pc) {
+                    if opener_allowed(&pc, governor)? {
                         self.tables[table].threads.push(Thread { pc, ..thread })?;
                     }
                 }
@@ -5027,14 +5657,48 @@ impl<'s> Engine<'s> {
         }
         for thread in threads {
             governor.charge(Resource::Work, K_THREAD)?;
+            // An opened attempt never emits another opening report. In
+            // particular, do not rescan a weak header's history on every
+            // subsequent argument byte once its evidence was admitted.
+            if (program.argument_anchor || !program.projected_entry_commit.is_empty())
+                && !self.tables[table]
+                    .attempts
+                    .as_slice()
+                    .iter()
+                    .any(|record| record.id == thread.attempt && !record.opened)
+            {
+                continue;
+            }
             let accepted = matches!(program.insts[thread.pc as usize], Inst::Accept);
-            if (accepted || program.commits(thread.pc))
+            let committed = if !program.argument_anchor && program.commits(thread.pc) {
+                true
+            } else if program.argument_anchor
+                || program
+                    .projected_entry_commit
+                    .get(thread.pc as usize)
+                    .copied()
+                    .unwrap_or(false)
+            {
+                let active = match thread.sub {
+                    Sub::Body(_, slot) => slot,
+                    _ => None,
+                };
+                let (mut step, _, _) = self.split(table);
+                step.weak_call_evidence(thread.hist, active, !program.argument_anchor, governor)?
+            } else {
+                program.commits(thread.pc)
+            };
+            if (committed || accepted && !program.argument_anchor)
                 && self.tables[table]
                     .attempts
                     .as_slice()
                     .iter()
                     .any(|record| record.id == thread.attempt && !record.opened)
             {
+                if program.origin.is_projected() {
+                    let boundary = thread.header_end.min(thread.pos);
+                    self.out.headers.push((thread.attempt, boundary))?;
+                }
                 self.out.opened.push((thread.attempt, thread.start + 1))?;
             }
         }
@@ -5049,6 +5713,9 @@ impl<'s> Engine<'s> {
         )?;
         let mut opened: Vec<(u64, usize)> = self.out.opened.as_slice().to_vec();
         opened.sort_unstable();
+        let projected = self.tables[table].program.origin.is_projected();
+        let native_mistral =
+            self.grammars[self.tables[table].grammar].dialect == DialectId::MistralV3;
         let mut latest = None;
         for (attempt, position) in opened {
             let attempts = self.tables[table].attempts.as_mut_slice();
@@ -5058,10 +5725,34 @@ impl<'s> Engine<'s> {
                 record.opened = true;
                 self.newest_open = self.newest_open.max(record.start);
                 latest = latest.max(Some(record.start));
+                governor.charge(Resource::Work, size(self.out.headers.len()))?;
+                let weak_header = self
+                    .out
+                    .headers
+                    .iter()
+                    .filter(|(owner, _)| *owner == attempt)
+                    .map(|(_, end)| *end)
+                    .min();
+                let native_frame_end = if native_mistral {
+                    governor.charge(Resource::Work, size(self.out.native_frames.len()))?;
+                    self.out
+                        .native_frames
+                        .iter()
+                        .filter(|(owner, _)| *owner == attempt)
+                        .map(|(_, end)| *end)
+                        .min()
+                } else {
+                    None
+                };
                 self.events.push(Event::Opened {
                     attempt,
                     start: record.start,
                     at: position,
+                    opening: Opening {
+                        weak_header,
+                        native_frame_end,
+                        projected,
+                    },
                 });
             }
         }
@@ -5218,7 +5909,7 @@ impl<'s> Engine<'s> {
             let mut node = failure.thread.hist;
             loop {
                 governor.charge(Resource::Work, 1)?;
-                let HistNode { prev, kind } = self.arena.nodes.as_slice()[node as usize];
+                let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[node as usize];
                 let boundary = match kind {
                     HistKind::Next(at, cost) => Some((at, prev, cost)),
                     // The attempt's first call: it began at the attempt's
@@ -5414,6 +6105,7 @@ impl<'s> Engine<'s> {
                 reach: until,
                 past: false,
                 pending: 0,
+                header_end: usize::MAX,
             })?;
         }
         Ok(())
@@ -5775,91 +6467,205 @@ impl<'s> Engine<'s> {
         attempt: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let mine = self.tables[table].held.take(attempt);
-        if mine.is_empty() {
+        let mut mine = self.tables[table].held.take(attempt).into_iter();
+        if mine.as_slice().is_empty() {
             return Ok(());
         }
-        let count = mine.len();
-        let _vectors = governor.lease_scratch(size(count).saturating_mul(RELEASE_VECTOR_BYTES))?;
-        // Latest end first: the completion that dominates the rest is almost
-        // always the one that read the most.
-        let mut order: Vec<usize> = (0..count).collect();
-        order.sort_by_key(|&index| Reverse((mine[index].at, mine[index].calls)));
-        governor.charge(
-            Resource::Work,
-            size(count).saturating_mul(size(usize::BITS as usize - count.leading_zeros() as usize)),
-        )?;
-        // The cost of the first calls of a completion, built when asked.
-        let mut tables: Vec<Option<Vec<u64>>> = vec![None; count];
+        let mut tables: Vec<Option<Vec<u64>>> = Vec::new();
         let mut table_bytes = 0_u64;
-        let mut keep = vec![true; count];
-        for (index, entry) in mine.iter().enumerate() {
-            for &other in &order {
-                if other == index {
-                    continue;
-                }
-                governor.charge(Resource::Work, 1)?;
-                let other_entry = &mine[other];
-                let later = other_entry.at > entry.at;
-                let more = other_entry.calls > entry.calls;
-                let dominated = if other_entry.dangling {
-                    // Cut off while writing a further call's arguments.
-                    later && more && other_entry.arguments
-                } else if entry.dangling {
-                    // A cut-off reading of no more calls than a completion
-                    // reads, or one whose last call never began its
-                    // arguments, or one that reaches no further.
-                    !entry.arguments
-                        || other_entry.at >= entry.at
-                        || (other_entry.calls >= entry.calls
+        let mut vectors = None;
+        let result = (|| {
+            let count = mine.len();
+            vectors =
+                Some(governor.lease_scratch(size(count).saturating_mul(RELEASE_VECTOR_BYTES))?);
+            // Latest end first: the completion that dominates the rest is almost
+            // always the one that read the most.
+            let mut order: Vec<usize> = (0..count).collect();
+            order.sort_by_key(|&index| {
+                Reverse((mine.as_slice()[index].at, mine.as_slice()[index].calls))
+            });
+            governor.charge(
+                Resource::Work,
+                size(count)
+                    .saturating_mul(size(usize::BITS as usize - count.leading_zeros() as usize)),
+            )?;
+            // The cost of the first calls of a completion, built when asked.
+            tables = vec![None; count];
+            let mut keep = vec![true; count];
+            for (index, entry) in mine.as_slice().iter().enumerate() {
+                for &other in &order {
+                    if other == index {
+                        continue;
+                    }
+                    governor.charge(Resource::Work, 1)?;
+                    let other_entry = &mine.as_slice()[other];
+                    let later = other_entry.at > entry.at;
+                    let more = other_entry.calls > entry.calls;
+                    let dominated = if other_entry.dangling {
+                        // Cut off while writing a further call's arguments.
+                        later && more && other_entry.arguments
+                    } else if entry.dangling {
+                        // A cut-off reading of no more calls than a completion
+                        // reads, or one whose last call never began its
+                        // arguments, or one that reaches no further.
+                        !entry.arguments
+                            || other_entry.at >= entry.at
+                            || (other_entry.calls >= entry.calls
+                                && self.prefix(
+                                    other_entry,
+                                    &mut tables[other],
+                                    &mut table_bytes,
+                                    entry.calls,
+                                    governor,
+                                )? <= entry.total)
+                    } else {
+                        // The same calls read no worse, and further ones.
+                        later
+                            && more
                             && self.prefix(
                                 other_entry,
                                 &mut tables[other],
                                 &mut table_bytes,
                                 entry.calls,
                                 governor,
-                            )? <= entry.total)
-                } else {
-                    // The same calls read no worse, and further ones.
-                    later
-                        && more
-                        && self.prefix(
-                            other_entry,
-                            &mut tables[other],
-                            &mut table_bytes,
-                            entry.calls,
-                            governor,
-                        )? <= entry.total
-                };
-                if dominated {
-                    keep[index] = false;
-                    break;
+                            )? <= entry.total
+                    };
+                    if dominated {
+                        keep[index] = false;
+                        break;
+                    }
                 }
+            }
+            drop(core::mem::take(&mut tables));
+            governor.release_scratch(core::mem::take(&mut table_bytes))?;
+            for keep in keep {
+                let entry = mine.next().expect("one decision per held completion");
+                if keep {
+                    self.release_body(table, entry.body, governor)?;
+                } else {
+                    entry.body.discard(governor)?;
+                }
+            }
+            Ok(())
+        })();
+        // A refusal abandons every remaining owner, including prefix tables.
+        // Preserve that refusal even if a cleanup reports an imbalance.
+        drop(tables);
+        let prefix_cleanup = governor.release_scratch(table_bytes);
+        let mut bytes = 0_u64;
+        for entry in mine {
+            bytes = bytes.saturating_add(entry.body.owned_bytes());
+            drop(entry);
+        }
+        let held_cleanup = governor.release_scratch(bytes);
+        drop(vectors);
+        result.and(prefix_cleanup).and(held_cleanup)
+    }
+
+    /// Transfer one owned held payload to the outgoing events, or drop its
+    /// physical buffers before releasing their admissions on refusal.
+    fn release_body(
+        &mut self,
+        table: usize,
+        body: HeldBody,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        match body {
+            HeldBody::Event(mut event, costs) => {
+                if let Event::Completed { parts, .. } = &mut event
+                    && let Err(reason) = self.normalize_deepseek_layout(table, parts, governor)
+                {
+                    let _ = HeldBody::Event(event, costs).discard(governor);
+                    return Err(reason);
+                }
+                self.events.push(event);
+            }
+            HeldBody::Chain(chained) => {
+                let materialized = self.arena.parts(&chained, governor);
+                let (mut parts, charged) = match materialized {
+                    Ok(materialized) => materialized,
+                    Err(reason) => {
+                        let _ = HeldBody::Chain(chained).discard(governor);
+                        return Err(reason);
+                    }
+                };
+                if let Err(reason) = self.normalize_deepseek_layout(table, &mut parts, governor) {
+                    drop(parts);
+                    let _ = governor.release_scratch(charged);
+                    let _ = HeldBody::Chain(chained).discard(governor);
+                    return Err(reason);
+                }
+                let event = Event::Completed {
+                    table: chained.table,
+                    attempt: chained.attempt,
+                    at: chained.at,
+                    parts,
+                    charged,
+                };
+                if let Err(reason) = HeldBody::Chain(chained).discard(governor) {
+                    drop(event);
+                    let _ = governor.release_scratch(charged);
+                    return Err(reason);
+                }
+                self.events.push(event);
             }
         }
-        governor.release_scratch(table_bytes)?;
-        for (entry, keep) in mine.into_iter().zip(keep) {
-            if !keep {
-                if let HeldBody::Chain(chained) = &entry.body {
-                    governor.release_scratch(chained.last_bytes())?;
-                }
+        Ok(())
+    }
+
+    /// Canonicalize only owned outgoing copies, before turn-path candidate
+    /// admission. Shared histories and cached chain parts remain immutable.
+    fn normalize_deepseek_layout(
+        &self,
+        table: usize,
+        parts: &mut [(Part, u64)],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if self.tables[table].kind != ProductionKind::Call
+            || self.grammars[self.tables[table].grammar].dialect != DialectId::DeepSeekV3Stripped
+        {
+            return Ok(());
+        }
+        for index in 1..parts.len() {
+            governor.charge(Resource::Work, 1)?;
+            let (before, after) = parts.split_at_mut(index);
+            let (Part::Call(left), left_cost) = &mut before[index - 1] else {
+                continue;
+            };
+            let (Part::Call(right), right_cost) = &mut after[0] else {
+                continue;
+            };
+            if *left_cost != 0
+                || *right_cost != 0
+                || !canonical_deepseek_part(left)
+                || !canonical_deepseek_part(right)
+                || left.span.end != right.span.start
+            {
                 continue;
             }
-            match entry.body {
-                HeldBody::Event(event, _) => self.events.push(event),
-                HeldBody::Chain(chained) => {
-                    let (parts, charged) = self.arena.parts(&chained, governor)?;
-                    // The shared last part's charge is the copy's now.
-                    governor.release_scratch(chained.last_bytes())?;
-                    self.events.push(Event::Completed {
-                        table: chained.table,
-                        attempt: chained.attempt,
-                        at: chained.at,
-                        parts,
-                        charged,
-                    });
-                }
-            }
+            let source = left
+                .span
+                .start
+                .checked_sub(self.base)
+                .zip(right.span.end.checked_sub(self.base))
+                .and_then(|(start, end)| self.buffer.as_slice().get(start..end));
+            let Some(source) = source else {
+                return Err(StopReason::InvalidInput(format_output_governed(
+                    format_args!(
+                        "completed DeepSeek source range {}..{} is outside the retained input window",
+                        left.span.start, right.span.end
+                    ),
+                    governor,
+                )?));
+            };
+            let Some(boundary) = deepseek_layout_boundary(left, right, source, governor)? else {
+                continue;
+            };
+            governor.charge(Resource::Work, 4)?;
+            left.span.end = boundary;
+            left.readings[0].span.end = boundary;
+            right.span.start = boundary;
+            right.readings[0].span.start = boundary;
         }
         Ok(())
     }
@@ -6280,7 +7086,7 @@ impl<'s> Engine<'s> {
         let mut changed = false;
         while let Some(at) = pending.pop() {
             governor.charge(Resource::Work, K_THREAD)?;
-            let HistNode { prev, kind } = self.arena.nodes.as_slice()[at as usize];
+            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[at as usize];
             match kind {
                 HistKind::Edit(index) => {
                     let edit = &mut self.arena.edits[index as usize];
@@ -6313,7 +7119,7 @@ impl<'s> Engine<'s> {
         let mut pending = vec![hist];
         while let Some(at) = pending.pop() {
             governor.charge(Resource::Work, K_THREAD)?;
-            let HistNode { prev, kind } = nodes[at as usize];
+            let HistNode { prev, kind, .. } = nodes[at as usize];
             match kind {
                 HistKind::Edit(index) => match self.arena.edits[index as usize].operator {
                     EditOperator::MissingWrapperClose => {}
@@ -6354,7 +7160,7 @@ impl<'s> Engine<'s> {
         let start = trail.thread.pos;
         let original = self.buffer.as_slice()[start - self.base..stop - self.base].to_vec();
         governor.charge(Resource::Work, size(original.len()))?;
-        let HistNode { prev, kind } = self.arena.nodes.as_slice()[trail.thread.hist as usize];
+        let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[trail.thread.hist as usize];
         let inserted = match kind {
             HistKind::Edit(index) => {
                 let edit = &self.arena.edits[index as usize];
@@ -7067,6 +7873,7 @@ mod tests {
                 reach: 0,
                 past: false,
                 pending: 0,
+                header_end: usize::MAX,
             },
             at: entry,
             reason: Rejection::Malformed { at: entry },

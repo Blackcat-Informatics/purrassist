@@ -70,6 +70,47 @@
   ],
   "stop": "stop",
   "input": "{\"name\": \"define_type\", \"arguments\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"integer\"}}}}",
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "calls",
+    "openai_finish_reason": "tool_calls",
+    "verdict": "run",
+    "usable_calls": {
+      "strict": 1,
+      "accepting_guesses": 1
+    },
+    "calls": [
+      {
+        "tool": "define_type",
+        "arguments": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer"
+            }
+          }
+        },
+        "candidate_dialects": [
+          "bare-json.v1",
+          "hermes-stripped.v1",
+          "llama3-json-stripped.v1"
+        ],
+        "outcome": "resolved",
+        "rules": [
+          "tool_call.parameter.pass-through"
+        ]
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "tool_call.parameter.pass-through"
+    ]
+  },
   "outcome": "resolved",
   "stopped": "completed",
   "finish": "calls",

@@ -130,3 +130,7 @@ harness = false
 [[example]]
 name = "canonical_print"
 path = "examples/canonical_print.rs"
+
+[[example]]
+name = "grammar-bounds"
+path = "examples/grammar_bounds.rs"

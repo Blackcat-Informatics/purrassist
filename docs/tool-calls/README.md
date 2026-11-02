@@ -11,7 +11,7 @@ call. The operation is `tool_call.recover.v1`, implemented in
 `recover_tool_calls` MCP tool, and the `purrassist recover-tool-calls` CLI
 command.
 
-Fifteen dialects are built in:
+Twenty-three dialects are built in:
 
 | Dialect | Shape | Reference |
 | --- | --- | --- |
@@ -30,15 +30,37 @@ Fifteen dialects are built in:
 | `mistral-v11.v1` | `[TOOL_CALLS]NAME[CALL_ID]ID[ARGS]{...}` (`[CALL_ID]` optional), repeated per call | [dialect](dialects/mistral-v11.v1.md) |
 | `pythonic.v1` | `[NAME(keyword=VALUE), ...]` at line start or after an explicit marker | [dialect](dialects/pythonic.v1.md) |
 | `bare-json.v1` | an unwrapped `{"name": NAME, "arguments": {...}}` object: the whole turn, in prose, in a code fence, or an array element; never a declaration-shaped object | [dialect](dialects/bare-json.v1.md) |
+| `deepseek-v3-stripped.v1` | Function name with a fenced JSON argument block | [dialect](dialects/deepseek-v3-stripped.v1.md) |
+| `deepseek-v3.1-stripped.v1` | Name followed by JSON arguments | [dialect](dialects/deepseek-v3.1-stripped.v1.md) |
+| `harmony-stripped.v1` | Recipient and ordinary header text followed by arguments | [dialect](dialects/harmony-stripped.v1.md) |
+| `hermes-stripped.v1` | JSON name/arguments object | [dialect](dialects/hermes-stripped.v1.md) |
+| `kimi-k2-stripped.v1` | `functions.NAME:IDX` followed by JSON arguments | [dialect](dialects/kimi-k2-stripped.v1.md) |
+| `llama3-json-stripped.v1` | JSON name/parameters object | [dialect](dialects/llama3-json-stripped.v1.md) |
+| `mistral-v11-stripped.v1` | Name, optional adjacent ID, and JSON arguments | [dialect](dialects/mistral-v11-stripped.v1.md) |
+| `mistral-v3-stripped.v1` | JSON array of name/arguments call objects | [dialect](dialects/mistral-v3-stripped.v1.md) |
 
 Callers add their own dialects with the grammar DSL
 ([GRAMMAR.md](GRAMMAR.md)). Tool definitions and their typed arguments can be
 derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
 `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
 `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
-[README](../../crates/derive/README.md)). Still tracked: the
-`*-stripped` variants (#18), streaming recognition (#16), and provider
-streaming events (#17).
+[README](../../crates/derive/README.md)). Streaming recognition (#16) and
+provider streaming events (#17) remain tracked.
+
+## Marker-suppressed variants
+
+Eight built-in recipes derive call framing from the original grammar through
+one positioned syntax-tree transform. They inherit result, declaration and
+reasoning conventions. The per-dialect references distinguish verified special-token
+skipping from explicit protocol-marker suppression; a name ending in `-stripped`
+does not claim that every tokenizer marks those bytes as special tokens.
+
+
+
+Exact and derived readings can share an invocation. Exact framing has
+representative priority at equal cost; distinct names, IDs, arguments and
+segmentations remain alternatives. A suppressed separator that joins a name and
+ID retains every valid partition rather than inventing one identity.
 
 ## Design
 
@@ -344,10 +366,10 @@ finish.
 
 Call markup that no dialect of the allow-list reads is never silent
 content. A linear detector (`detect_unparsed`) scans the turn's content for
-the distinctive openers and shapes of the families no built-in dialect
-parses yet (the stripped renderings `kimi-k2-stripped.v1`, `harmony-stripped.v1`,
-`deepseek-v3-stripped.v1` and `name-arguments-stripped.v1`), and for the built-in dialects the
-allow-list leaves out. Each hit is a `RejectedCall` with
+the distinctive openers and shapes of built-in families the allow-list leaves
+out, including marker-suppressed variants. The shared
+`name-arguments-stripped.v1` detector family covers the separately registered
+DeepSeek V3.1 and Mistral v11 recipes. Each hit is a `RejectedCall` with
 `Rejection::UnsupportedDialect { family }` (its `dialect` is the family's
 built-in dialect, or `None`; it has no `candidate_dialects`), recorded as
 `tool_call.markup.unparsed-dialect` evidence; its bytes stay content, and

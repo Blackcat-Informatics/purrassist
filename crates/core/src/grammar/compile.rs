@@ -23,12 +23,13 @@ use super::cost::K_COMPILE;
 use super::syntax::{Document, PExpr, Statement};
 use super::{
     CallEnd, CaptureKind, ClassId, ClassTerminal, CloserClass, CloserId, CompiledGrammar,
-    DelimiterSet, DelimiterSetId, ExamplePolicy, Expr, ExprChild, ExprItems, GrammarError, Literal,
-    LiteralId, Production, ProductionId, index_u32,
+    DelimiterSet, DelimiterSetId, ExamplePolicy, Expr, ExprChild, ExprItems, GrammarError,
+    GrammarOrigin, Literal, LiteralId, Production, ProductionId, index_u32,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, format_scratch_governed,
+    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, format_output_governed,
+    format_scratch_governed,
 };
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
@@ -79,6 +80,21 @@ pub(crate) struct ProtocolFence {
     pub(crate) body: Option<u32>,
 }
 
+/// Native first-step survival for one projected class opener, not a proof
+/// that every retained byte has an accepting continuation.
+#[derive(Debug, PartialEq, Eq)]
+struct ClassOpener {
+    pc: u32,
+    first: [u64; 4],
+}
+
+impl ScratchCharge for ClassOpener {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 40);
+        40
+    };
+}
+
 /// The recognizer program of one production.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program {
@@ -87,9 +103,23 @@ pub(crate) struct Program {
     pub(crate) start: u32,
     /// The literal instructions reachable from the start without input.
     pub(crate) openers: ScratchVec<u32>,
+    /// First-step masks prepared through the original class automata.
+    class_openers: ScratchVec<ClassOpener>,
     /// Initial opener PCs admitted only at a blank line prefix.
     pub(crate) line_start_openers: ScratchVec<u32>,
     pub(crate) protocol: Option<ProtocolFence>,
+    pub(crate) argument_anchor: bool,
+    /// Locations beyond an original commit when an entry marker vanished.
+    /// Retained evidence may establish those commits, never a sibling's
+    /// pre-commit location. Surviving native commits remain authoritative.
+    pub(crate) projected_entry_commit: ScratchVec<bool>,
+    /// Per-PC offsets into `name_follower_bytes`, or `u32::MAX` for no row.
+    /// Empty when no projected name class has a retained literal follower.
+    pub(crate) name_follower_index: ScratchVec<u32>,
+    /// Four-word first-byte masks of retained literals after projected name
+    /// classes. The original class reading remains beside these continuations.
+    pub(crate) name_follower_bytes: ScratchVec<u64>,
+    pub(crate) origin: GrammarOrigin,
     /// Bytes that can begin an opener (any spelling), as a 256-bit set.
     pub(crate) first: [u64; 4],
     /// The configuration bound (see `CompiledGrammar::configuration_bound`).
@@ -133,11 +163,32 @@ const _: () = assert!(
 );
 
 impl Program {
+    /// A missing descriptor is a compiler invariant failure, never a non-match.
+    pub(crate) fn class_starts_with(
+        &self,
+        pc: u32,
+        byte: u8,
+        governor: &mut Governor,
+    ) -> Result<bool, crate::contract::StopReason> {
+        governor.charge(Resource::Work, size(self.class_openers.len()))?;
+        let Some(opener) = self.class_openers.iter().find(|opener| opener.pc == pc) else {
+            return Err(crate::contract::StopReason::InvalidInput(
+                format_output_governed(
+                    format_args!(
+                        "compiled class opener at program location {pc} has no first-step dispatch mask"
+                    ),
+                    governor,
+                )?,
+            ));
+        };
+        Ok(opener.first[usize::from(byte >> 6)] & (1 << (byte & 63)) != 0)
+    }
+
     /// Whether the program's attempts open at a `commit` rather than at
     /// their opener literal.
     #[inline]
     pub(crate) const fn deferred(&self) -> bool {
-        !self.committed.is_empty()
+        self.origin.is_projected() || self.argument_anchor || !self.committed.is_empty()
     }
 
     /// Whether a configuration at `pc` belongs to a committed attempt.
@@ -1454,6 +1505,103 @@ fn split_keys(
     Ok((keys, per_program))
 }
 
+struct ProjectedControls {
+    entry_commit: ScratchVec<bool>,
+    name_follower_index: ScratchVec<u32>,
+    name_follower_bytes: ScratchVec<u64>,
+}
+
+fn projected_controls(
+    insts: &mut ScratchVec<Inst>,
+    start: u32,
+    derived: bool,
+    literals: &[Literal],
+    governor: &mut Governor,
+) -> Result<ProjectedControls, GrammarError> {
+    let mut controls = ProjectedControls {
+        entry_commit: ScratchVec::new(governor),
+        name_follower_index: ScratchVec::new(governor),
+        name_follower_bytes: ScratchVec::new(governor),
+    };
+    if !derived {
+        return Ok(controls);
+    }
+    // An erased entry marker cannot commit before retained input. Remember
+    // that admission may instead be established by native name/JSON evidence.
+    let mut seen = flags(insts.len(), governor)?;
+    let mut pending = ScratchVec::new(governor);
+    pending.push(start)?;
+    while let Some(pc) = pending.pop() {
+        governor.charge(Resource::Work, 1)?;
+        if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
+            continue;
+        }
+        match insts[pc as usize] {
+            Inst::Commit { next } => {
+                if controls.entry_commit.is_empty() {
+                    // Capture the original graph before replacing any entry
+                    // commit. A sibling cannot inherit admission before its
+                    // own commit merely because another branch lost a marker.
+                    controls.entry_commit = committed(insts, start, governor)?;
+                }
+                insts.as_mut_slice()[pc as usize] = Inst::Split(next, next);
+                pending.push(next)?;
+            }
+            Inst::Split(..)
+            | Inst::Open { .. }
+            | Inst::Close { .. }
+            | Inst::Next { .. }
+            | Inst::Insert { .. } => {
+                pending.extend(successors(&insts[pc as usize]))?;
+            }
+            _ => {}
+        }
+    }
+    for (pc, inst) in insts.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        let Inst::Class { next, .. } = *inst else {
+            continue;
+        };
+        if !matches!(
+            insts[next as usize],
+            Inst::Close {
+                kind: CaptureKind::Name,
+                ..
+            }
+        ) {
+            continue;
+        }
+        for &follower in &epsilon_closure(insts, next, governor)? {
+            governor.charge(Resource::Work, 1)?;
+            if let Inst::Lit { lit, .. } = insts[follower as usize] {
+                let Some(&byte) = literals[lit as usize].bytes.first() else {
+                    continue;
+                };
+                if controls.name_follower_index.is_empty() {
+                    work_for(insts.len(), 1, 1, governor)?;
+                    controls
+                        .name_follower_index
+                        .extend(core::iter::repeat_n(u32::MAX, insts.len()))?;
+                }
+                let row = &mut controls.name_follower_index.as_mut_slice()[pc];
+                if *row == u32::MAX {
+                    let offset = u32::try_from(controls.name_follower_bytes.len())
+                        .ok()
+                        .filter(|offset| offset.checked_add(3).is_some())
+                        .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+                    governor.charge(Resource::Work, 4)?;
+                    controls.name_follower_bytes.extend([0; 4])?;
+                    *row = offset;
+                }
+                governor.charge(Resource::Work, 1)?;
+                controls.name_follower_bytes.as_mut_slice()
+                    [*row as usize + usize::from(byte >> 6)] |= 1 << (byte & 63);
+            }
+        }
+    }
+    Ok(controls)
+}
+
 fn compile_program(
     productions: &[Production],
     closer_literals: &[u32],
@@ -1480,10 +1628,24 @@ fn compile_program(
         };
         *lit = copy;
     }
+    let controls =
+        projected_controls(&mut insts, start, tables.derived, tables.literals, governor)?;
     let openers = epsilon_closure(&insts, start, governor)?;
+    let mut class_openers = ScratchVec::new(governor);
     let mut first = [0_u64; 4];
     for &pc in &openers {
         governor.charge(Resource::Work, 1)?;
+        if tables.derived
+            && let Inst::Class { class, .. } = insts[pc as usize]
+        {
+            let mask = class_first_bytes(&tables.classes[class as usize], governor)?;
+            governor.charge(Resource::Work, 4)?;
+            for (word, additional) in first.iter_mut().zip(mask) {
+                *word |= additional;
+            }
+            class_openers.push(ClassOpener { pc, first: mask })?;
+            continue;
+        }
         let Inst::Lit { lit, .. } = insts[pc as usize] else {
             return Err(GrammarError::InvalidOpener {
                 offset,
@@ -1508,7 +1670,9 @@ fn compile_program(
     let committed = committed(&insts, start, governor)?;
     work_for(insts.len(), 1, 1, governor)?;
     let grouped = insts.iter().any(|inst| matches!(inst, Inst::Next { .. }));
-    let start_closure = start_closure(&insts, start, governor)?;
+    // A class opener needs its native DFA start state, installed by closure.
+    // Direct literal dispatch initializes Sub::Lit and cannot start a class.
+    let start_closure = tables.derived || start_closure(&insts, start, governor)?;
     let call_closers = call_closer_lits(&insts, grouped, governor)?;
     let call_openers = call_opener_lits(&insts, governor)?;
     let insert_alternatives = insert_alternatives(&insts, governor)?;
@@ -1517,8 +1681,14 @@ fn compile_program(
         insts,
         start,
         openers,
+        class_openers,
         line_start_openers: ScratchVec::new(governor),
         protocol: None,
+        argument_anchor: tables.argument_anchor,
+        projected_entry_commit: controls.entry_commit,
+        name_follower_index: controls.name_follower_index,
+        name_follower_bytes: controls.name_follower_bytes,
+        origin: GrammarOrigin::from_derived(tables.derived),
         first,
         bound,
         committed,
@@ -1528,6 +1698,26 @@ fn compile_program(
         call_openers,
         insert_alternatives,
     })
+}
+
+/// Enumerate the existing first-step predicate in one temporary native session.
+/// Its caches only memoize pure transitions and viability; every byte starts
+/// from the unchanged initial state, including incomplete UTF-8 lead prefixes.
+fn class_first_bytes(
+    class: &ClassTerminal,
+    governor: &mut Governor,
+) -> Result<[u64; 4], GrammarError> {
+    let mut dfa = class.automaton.dfa(governor)?;
+    let start = dfa.start();
+    let mut first = [0_u64; 4];
+    for byte in 0..=u8::MAX {
+        governor.charge(Resource::Work, 1)?;
+        let stepped = dfa.step(start, byte, governor)?;
+        if !dfa.is_dead(stepped, governor)? {
+            first[usize::from(byte >> 6)] |= 1 << (byte & 63);
+        }
+    }
+    Ok(first)
 }
 
 fn program_bound(
@@ -1609,21 +1799,95 @@ impl LiteralTables {
 
 struct Tables<'a> {
     literals: &'a [Literal],
+    classes: &'a [ClassTerminal],
     repairs: &'a [LiteralTables],
     stray_nodes: u64,
+    derived: bool,
+    argument_anchor: bool,
 }
 
 /// What the `call` and `result` programs are compiled from, over literal
 /// tables that a `json-envelope` grammar rebuilds once.
 struct Programs<'p> {
     productions: &'p [Production],
+    classes: &'p [ClassTerminal],
     closer_ids: &'p [u32],
     offsets: &'p [usize],
     stray_nodes: u64,
     roots: [ProductionId; 2],
+    argument_anchor: bool,
+    derived: bool,
 }
 
+/// Frame configuration shared by the call and result compilation passes.
+type Framing<'f> = (
+    bool,
+    ExamplePolicy,
+    &'f [(ScratchVec<u8>, usize)],
+    &'f [DelimiterSet],
+);
+
 impl Programs<'_> {
+    /// Compile literal spellings, then configure the declared opener and fence framing.
+    fn compile_framed(
+        &self,
+        literals: &mut ScratchVec<Literal>,
+        literal_tables: &mut ScratchVec<LiteralTables>,
+        closers: &[CloserClass],
+        confusables: &[(Bytes, Bytes)],
+        framing: Framing<'_>,
+        governor: &mut Governor,
+    ) -> Result<[Program; 2], GrammarError> {
+        let (json_envelope, examples, line_start, delimiters) = framing;
+        let mut programs = self.compile(literals, literal_tables, &[], governor)?;
+        if json_envelope {
+            // Key uses of a literal also used otherwise point at its key copy.
+            let renames;
+            (*literal_tables, renames) =
+                json_tables(&programs, literals, closers, confusables, governor)?;
+            programs = self.compile(literals, literal_tables, &renames, governor)?;
+        }
+        line_start_openers(&mut programs[0], line_start, literals, governor)?;
+        if examples == ExamplePolicy::ProtocolFences {
+            protocol_fences(
+                &mut programs,
+                literals,
+                closers,
+                literal_tables,
+                delimiters,
+                governor,
+            )?;
+        }
+        Ok(programs)
+    }
+
+    /// Retained joint captures use the existing native space layout.
+    fn joint_layouts(
+        &self,
+        program: &Program,
+        classes: &[ClassTerminal],
+        layouts: &mut ScratchVec<Option<Bytes>>,
+        governor: &mut Governor,
+    ) -> Result<ScratchVec<super::partition::JointCapture>, GrammarError> {
+        let joint_captures = if self.derived {
+            super::partition::relations(program, governor)?
+        } else {
+            ScratchVec::new(governor)
+        };
+        if !joint_captures.is_empty() {
+            for (index, production) in self.productions.iter().enumerate() {
+                governor.charge(Resource::Work, 1)?;
+                if layouts[index].is_none()
+                    && let Expr::Class(class) = production.expr
+                    && classes[class.index()].accepts(b" ", governor)?
+                {
+                    layouts.as_mut_slice()[index] = Some(owned_bytes(b" ", governor)?);
+                }
+            }
+        }
+        Ok(joint_captures)
+    }
+
     fn compile(
         &self,
         literals: &[Literal],
@@ -1631,12 +1895,15 @@ impl Programs<'_> {
         renames: &[ScratchVec<(u32, u32)>],
         governor: &mut Governor,
     ) -> Result<[Program; 2], GrammarError> {
-        let tables = Tables {
-            literals,
-            repairs,
-            stray_nodes: self.stray_nodes,
-        };
         let mut program = |index: usize| {
+            let tables = Tables {
+                literals,
+                classes: self.classes,
+                repairs,
+                stray_nodes: self.stray_nodes,
+                derived: index == 0 && self.derived,
+                argument_anchor: index == 0 && self.argument_anchor,
+            };
             let root = self.roots[index];
             compile_program(
                 self.productions,
@@ -2093,6 +2360,13 @@ fn line_start_openers(
     literals: &[Literal],
     governor: &mut Governor,
 ) -> Result<(), GrammarError> {
+    if program.origin.is_projected() {
+        governor.charge(Resource::Work, size(program.openers.len()))?;
+        let openers = core::mem::replace(&mut program.openers, ScratchVec::new(governor));
+        program.line_start_openers.extend(openers.iter().copied())?;
+        program.openers = openers;
+        return Ok(());
+    }
     for (opener, offset) in declarations {
         let before = program.line_start_openers.len();
         if !program.start_closure {
@@ -2124,6 +2398,31 @@ pub(crate) fn compile(
     digest: Digest,
     governor: &mut Governor,
 ) -> Result<CompiledGrammar, GrammarError> {
+    compile_policy(document, digest, false, false, governor)
+}
+
+pub(super) fn compile_derived(
+    document: Document,
+    digest: Digest,
+    anchor: super::CallAnchor,
+    governor: &mut Governor,
+) -> Result<CompiledGrammar, GrammarError> {
+    compile_policy(
+        document,
+        digest,
+        true,
+        anchor == super::CallAnchor::LineStartArguments,
+        governor,
+    )
+}
+
+fn compile_policy(
+    document: Document,
+    digest: Digest,
+    derived: bool,
+    argument_anchor: bool,
+    governor: &mut Governor,
+) -> Result<CompiledGrammar, GrammarError> {
     let mut builder = Builder::new(governor);
     let Declared {
         reasoning,
@@ -2138,7 +2437,7 @@ pub(crate) fn compile(
         json_envelope,
     } = declare(&mut builder, document.statements.as_slice())?;
     let productions = resolve_productions(&mut builder, bodies)?;
-    let (layouts, [call, result, declaration]) =
+    let (mut layouts, [call, result, declaration]) =
         checked_entry_points(&mut builder, &productions, &declared_layouts)?;
     let Builder {
         governor,
@@ -2161,33 +2460,22 @@ pub(crate) fn compile(
     let delimiters = delimiter_sets(sets, &confusables, governor)?;
     let source = Programs {
         productions: &productions,
+        classes: &classes,
         closer_ids: &closer_ids,
         offsets: &production_offsets,
         stray_nodes: stray.bytes(governor)?,
         roots: [call, result],
+        argument_anchor,
+        derived,
     };
-    let mut programs = source.compile(&literals, &literal_tables, &[], governor)?;
-    if json_envelope {
-        // The JSON spellings need to know which literals are member keys,
-        // which the compiled programs tell; the programs are then compiled
-        // again over the extended tables, key uses of a literal also used
-        // otherwise pointing at its key copy.
-        let renames;
-        (literal_tables, renames) =
-            json_tables(&programs, &mut literals, &closers, &confusables, governor)?;
-        programs = source.compile(&literals, &literal_tables, &renames, governor)?;
-    }
-    line_start_openers(&mut programs[0], &line_start, &literals, governor)?;
-    if examples == ExamplePolicy::ProtocolFences {
-        protocol_fences(
-            &mut programs,
-            &literals,
-            &closers,
-            &literal_tables,
-            &delimiters,
-            governor,
-        )?;
-    }
+    let programs = source.compile_framed(
+        &mut literals,
+        &mut literal_tables,
+        &closers,
+        &confusables,
+        (json_envelope, examples, &line_start, &delimiters),
+        governor,
+    )?;
     let longest = longest_literal(
         &literals,
         &literal_tables,
@@ -2196,6 +2484,7 @@ pub(crate) fn compile(
         &reasoning,
         governor,
     )?;
+    let joint_captures = source.joint_layouts(&programs[0], &classes, &mut layouts, governor)?;
     let call_ends = call_ends(&programs[0], &literals, &literal_tables, governor)?;
     let call_literals = call_literals(&programs[0], &literals, &literal_tables, governor)?;
     // An optional-id grammar reads model-added ids absent from its markup.
@@ -2205,6 +2494,8 @@ pub(crate) fn compile(
     Ok(CompiledGrammar {
         id: document.id.into_string(),
         digest,
+        origin: GrammarOrigin::from_derived(derived),
+        joint_captures,
         literals,
         literal_tables,
         closers,
@@ -2952,8 +3243,11 @@ result = "<r>"; declaration = "<d>";"#;
             Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
         let tables = Tables {
             literals: &grammar.literals,
+            classes: &grammar.classes,
             repairs: &grammar.literal_tables,
             stray_nodes: 0,
+            derived: false,
+            argument_anchor: false,
         };
         let prepare = |g: &mut Governor| -> Result<Program, GrammarError> {
             let program =

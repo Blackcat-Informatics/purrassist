@@ -4017,7 +4017,10 @@ fn anthropic_tool_use() {
     let (_, result) = golden("llama3_id_first_parameters");
     let call = the_call(&result);
     assert_eq!(call.outcome, CallOutcome::Resolved);
-    assert_eq!(call.candidate_dialects, [DialectId::Llama3Json]);
+    assert_eq!(
+        call.candidate_dialects,
+        [DialectId::Llama3JsonStripped, DialectId::Llama3Json]
+    );
     assert_eq!(call.source_id.as_deref(), Some("toolu_01"));
     let (_, result) = golden("llama3_leading_id_member");
     assert_eq!(the_call(&result).source_id.as_deref(), Some("call_7"));

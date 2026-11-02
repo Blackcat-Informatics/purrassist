@@ -75,18 +75,19 @@ use super::context::{ContextTracker, RECORD_BYTES};
 use super::dialect::{DialectId, DialectSet};
 use super::ir::{
     ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
-    RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment,
+    RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment, Spanned,
 };
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, ScratchVec,
-    SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchMap,
+    ScratchMeter, ScratchVec, SourceSpan, StopReason,
 };
 use crate::digest::{Digest, DigestBuilder};
+use crate::grammar::CaptureKind;
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
-use crate::grammar::engine::{Engine, Event, Part, Salvaged};
+use crate::grammar::engine::{Engine, Event, Opening, Part, Salvaged};
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
@@ -192,9 +193,9 @@ struct Think {
     /// `0` for a block the turn starts in (no opener).
     text_start: usize,
     pair: Option<u32>,
-    /// The opener start and promoted base, once the block was closed at its
-    /// first opener.
-    promoted: Option<(usize, Base)>,
+    /// The first promotion's origin, boundary and base. A native opener
+    /// nested in that weak header can retain its own reasoning boundary.
+    promoted: Option<Promotion>,
     embedded: Vec<u32>,
 }
 
@@ -207,8 +208,115 @@ struct Base {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Interp {
     Top(Base),
+    NativePromoted(Base),
+    WeakPromoted(u64, Base),
     Embedded(usize),
 }
+
+impl ScratchCharge for Interp {
+    const CHARGE: usize = 32;
+}
+
+/// One owner-specific source of a pre-header interpretation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeaderOrigin {
+    owner: u64,
+    prefix: usize,
+    interp: Interp,
+}
+
+impl ScratchCharge for HeaderOrigin {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 64);
+        64
+    };
+}
+
+impl Interp {
+    const fn base(self) -> Option<Base> {
+        match self {
+            Self::Top(base) | Self::NativePromoted(base) | Self::WeakPromoted(_, base) => {
+                Some(base)
+            }
+            Self::Embedded(_) => None,
+        }
+    }
+
+    /// Preserve a top interpretation's promotion origin when extending content.
+    fn rebase(self, base: Base) -> Self {
+        match self {
+            Self::Top(_) => Self::Top(base),
+            Self::NativePromoted(_) => Self::NativePromoted(base),
+            Self::WeakPromoted(owner, _) => Self::WeakPromoted(owner, base),
+            Self::Embedded(_) => unreachable!("embedded interpretations have no top base"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Promotion {
+    Native(usize, Base),
+    Weak(u64, usize, Base),
+}
+
+impl Promotion {
+    const fn start(self) -> usize {
+        match self {
+            Self::Native(start, _) | Self::Weak(_, start, _) => start,
+        }
+    }
+
+    const fn base(self) -> Base {
+        match self {
+            Self::Native(_, base) | Self::Weak(_, _, base) => base,
+        }
+    }
+
+    const fn interpretation(self) -> Interp {
+        match self {
+            Self::Native(_, base) => Interp::NativePromoted(base),
+            Self::Weak(owner, _, base) => Interp::WeakPromoted(owner, base),
+        }
+    }
+}
+
+/// A same-start cache keeps the origin of the interpretation it reuses.
+#[derive(Clone, Copy, Debug)]
+enum LastKill {
+    Top(usize, Base),
+    NativePromoted(usize, Base),
+    WeakPromoted(usize, u64, Base),
+}
+
+impl LastKill {
+    fn new(start: usize, top: Interp) -> Self {
+        match top {
+            Interp::Top(base) => Self::Top(start, base),
+            Interp::NativePromoted(base) => Self::NativePromoted(start, base),
+            Interp::WeakPromoted(owner, base) => Self::WeakPromoted(start, owner, base),
+            Interp::Embedded(_) => unreachable!("embedded interpretations cannot end content"),
+        }
+    }
+
+    const fn at(self, start: usize) -> Option<Interp> {
+        let (at, top) = match self {
+            Self::Top(at, base) => (at, Interp::Top(base)),
+            Self::NativePromoted(at, base) => (at, Interp::NativePromoted(base)),
+            Self::WeakPromoted(at, owner, base) => (at, Interp::WeakPromoted(owner, base)),
+        };
+        if at == start { Some(top) } else { None }
+    }
+}
+
+// Owner identity adds one inline word to each promotion/same-start cache.
+// Interpretation buffers own their actual portable 32-byte element charge;
+// Header-origin capacity slots retain their separate 64-byte admission.
+const _: () = {
+    assert!(core::mem::size_of::<Think>() <= 104);
+    assert!(core::mem::size_of::<Option<Promotion>>() <= 40);
+    assert!(core::mem::size_of::<Option<LastKill>>() <= 40);
+    assert!(core::mem::size_of::<Interp>() <= Interp::CHARGE);
+};
 
 /// The scratch held by queued reports ([`QUEUED_REPORT`] each), released
 /// as they are processed; what is still held when the recognizer is dropped
@@ -228,7 +336,7 @@ impl Drop for Queued {
 // The portable per-report charge never undercounts a report's own size.
 const _: () = assert!(core::mem::size_of::<Pending>() as u64 <= QUEUED_REPORT);
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum Pending {
     Engine(Event),
     Marker {
@@ -245,6 +353,26 @@ impl Pending {
             Self::Engine(event) => event.at(),
             Self::Marker { end, .. } => *end,
         }
+    }
+
+    /// Drop unprocessed owned payloads before refunding their admissions.
+    fn discard_all(
+        entries: impl Iterator<Item = Self>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut bytes = 0_u64;
+        for entry in entries {
+            bytes = bytes.saturating_add(match &entry {
+                Self::Engine(Event::Completed { charged, .. }) => *charged,
+                Self::Engine(Event::Ended {
+                    salvage: Some(salvage),
+                    ..
+                }) => salvage.charged,
+                _ => 0,
+            });
+            drop(entry);
+        }
+        governor.release_scratch(bytes)
     }
 
     /// Order within one offset: openers before revivals.
@@ -281,9 +409,15 @@ struct Turn {
     think: Option<Think>,
     /// Each attempt with an interpretation, until its end is reported:
     /// where it began, and its interpretations.
-    interps: BTreeMap<u64, (usize, Vec<Interp>)>,
-    /// The base of the last opener start that ended a content run.
-    last_kill: Option<(usize, Base)>,
+    interps: BTreeMap<u64, (usize, ScratchVec<Interp>)>,
+    /// Absolute raw OPEN barriers for interpreted derived headers only.
+    weak_headers: BTreeMap<u64, usize>,
+    /// Earliest physically consumed native Mistral frame within each weak header.
+    /// The weak attempt remains alive; every completion supplies its own proof.
+    native_frames: ScratchMap<u64, (usize, usize)>,
+    /// The last opener start and its source interpretation, including any
+    /// reasoning-promotion origin, when it ended a content run.
+    last_kill: Option<LastKill>,
     /// Every stored reasoning segment: its end and store index, by its
     /// block's start. A call an attempt began inside the block may complete
     /// after the segment is stored (an attempt holding several calls ends
@@ -442,42 +576,11 @@ impl Turn {
             if segment.span.end > end {
                 continue;
             }
-            let Some(mut segment) = cut_at_marker(segment, marker) else {
+            let Some(segment) = cut_at_marker(segment, marker) else {
                 continue;
             };
-            for reading in &mut segment.readings {
-                reading.edits.push(MarkupEdit {
-                    operator: EditOperator::ReasoningEmbeddedCall,
-                    span: segment.span.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                });
-            }
-            embedded.push(segment);
+            insert_embedded(&mut embedded, segment, governor)?;
         }
-        // A call another embedded call contains (the bare function element
-        // inside a wrapped Qwen3-Coder XML call, say) is part of that call,
-        // as it would be outside reasoning.
-        governor.charge(
-            Resource::Work,
-            size(embedded.len()).saturating_mul(size(embedded.len())),
-        )?;
-        let spans: Vec<Range<usize>> = embedded
-            .iter()
-            .map(|segment| segment.span.clone())
-            .collect();
-        embedded.retain(|segment| {
-            !spans.iter().any(|outer| {
-                *outer != segment.span
-                    && outer.start <= segment.span.start
-                    && segment.span.end <= outer.end
-            })
-        });
-        // One call per span, in span order: two attempts that read the same
-        // call (a call of an attempt reading several, and the attempt its
-        // own opener began) offer it once, the first one completed.
-        embedded.sort_by_key(|segment| (segment.span.start, segment.span.end));
-        embedded.dedup_by(|later, first| later.span == first.span);
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
@@ -525,40 +628,11 @@ impl Turn {
             let Some(call) = cut_at_marker(&whole, marker) else {
                 continue;
             };
-            let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
-                continue;
-            };
-            governor.charge(Resource::Work, size(reasoning.embedded.len()))?;
-            // A call another embedded call contains is part of that call,
-            // and a call already offered (another attempt read it) is not
-            // offered again.
-            if reasoning
-                .embedded
-                .iter()
-                .any(|outer| outer.span.start <= call.span.start && call.span.end <= outer.span.end)
-            {
-                continue;
-            }
             let before = segment_bytes(&self.store[index as usize]);
             let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
                 continue;
             };
-            reasoning.embedded.retain(|inner| {
-                !(call.span.start <= inner.span.start && inner.span.end <= call.span.end)
-            });
-            let mut segment = call.clone();
-            for reading in &mut segment.readings {
-                reading.edits.push(MarkupEdit {
-                    operator: EditOperator::ReasoningEmbeddedCall,
-                    span: segment.span.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                });
-            }
-            let at = reasoning.embedded.partition_point(|other| {
-                (other.span.start, other.span.end) < (segment.span.start, segment.span.end)
-            });
-            reasoning.embedded.insert(at, segment);
+            insert_embedded(&mut reasoning.embedded, call, governor)?;
             let after = segment_bytes(&self.store[index as usize]);
             governor.charge(Resource::ScratchBytes, after.saturating_sub(before))?;
         }
@@ -566,14 +640,430 @@ impl Turn {
     }
 }
 
-/// `segment` cut at a reasoning block's closing marker at `marker`
-/// (`tool_call.reasoning.marker-cut`): unchanged when it ends before the
-/// marker (or no marker closed the block), `None` when it begins inside it.
-/// A cut reading keeps what it read before the marker: a name, id or
-/// capture reaching into the marker is dropped, and arguments read from the
-/// marker's bytes are not arguments (the reading's arguments are then
-/// unresolved at the marker), so a call whose arguments came from the
-/// marker is never usable.
+/// Pairwise selection after source framing, before geometric containment.
+enum EmbeddedRelation {
+    Geometry,
+    Both,
+    Left,
+    Right,
+}
+
+/// Plan every removal before changing the list: a refusal or an enclosing
+/// candidate must not leave a partially normalized reasoning block.
+fn insert_embedded(
+    embedded: &mut Vec<CallSegment>,
+    mut incoming: CallSegment,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let mut remove = ScratchVec::new(governor);
+    for (index, existing) in embedded.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        match embedded_relation(existing, &incoming, governor)? {
+            EmbeddedRelation::Left => return Ok(()),
+            EmbeddedRelation::Right => remove.push(index)?,
+            EmbeddedRelation::Both => {}
+            EmbeddedRelation::Geometry => {
+                if existing.span.start <= incoming.span.start
+                    && incoming.span.end <= existing.span.end
+                {
+                    return Ok(());
+                }
+                if incoming.span.start <= existing.span.start
+                    && existing.span.end <= incoming.span.end
+                {
+                    remove.push(index)?;
+                }
+            }
+        }
+    }
+    for reading in &mut incoming.readings {
+        reading.edits.push(MarkupEdit {
+            operator: EditOperator::ReasoningEmbeddedCall,
+            span: incoming.span.clone(),
+            original: Vec::new(),
+            replacement: Vec::new(),
+        });
+    }
+    // Retention, ordered search and insertion relocation each visit or move
+    // at most the original length; admit the complete mutation before it starts.
+    governor.charge(
+        Resource::Work,
+        size(embedded.len()).saturating_mul(3).saturating_add(1),
+    )?;
+    let mut index = 0;
+    let mut removals = remove.as_slice().iter().peekable();
+    embedded.retain(|_| {
+        let keep = removals.peek().copied().copied() != Some(index);
+        if !keep {
+            let _ = removals.next();
+        }
+        index += 1;
+        keep
+    });
+    let at = embedded.partition_point(|other| {
+        (other.span.start, other.span.end) < (incoming.span.start, incoming.span.end)
+    });
+    embedded.insert(at, incoming);
+    Ok(())
+}
+
+fn embedded_relation(
+    left: &CallSegment,
+    right: &CallSegment,
+    governor: &mut Governor,
+) -> Result<EmbeddedRelation, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.readings.len()).saturating_add(size(right.readings.len())),
+    )?;
+    let native = |segment: &CallSegment| {
+        !segment.readings.is_empty()
+            && segment.readings.iter().all(|reading| {
+                matches!(
+                    reading.dialect,
+                    DialectId::BareJson | DialectId::AnthropicToolUse
+                ) && reading.span == segment.span
+            })
+    };
+    let shadow = |segment: &CallSegment| {
+        !segment.readings.is_empty()
+            && segment.readings.iter().all(|reading| {
+                reading.dialect == DialectId::HermesStripped && reading.span == segment.span
+            })
+    };
+    let (native, shadow, preference) = if native(left) && shadow(right) {
+        (left, right, EmbeddedRelation::Left)
+    } else if native(right) && shadow(left) {
+        (right, left, EmbeddedRelation::Right)
+    } else {
+        return Ok(EmbeddedRelation::Geometry);
+    };
+    // A native object inside the arguments of a genuinely enclosing call is
+    // data. Protect alternatives only after proving the same lexical envelope.
+    for reading in &shadow.readings {
+        if !same_embedded_envelope(reading, &native.span, governor)? {
+            return Ok(EmbeddedRelation::Geometry);
+        }
+    }
+    let ([exact], [derived]) = (native.readings.as_slice(), shadow.readings.as_slice()) else {
+        return Ok(EmbeddedRelation::Both);
+    };
+    if same_embedded_invocation(exact, derived, governor)? {
+        Ok(preference)
+    } else {
+        Ok(EmbeddedRelation::Both)
+    }
+}
+
+/// Exterior extraction must describe the same dropped source on both sides
+/// of its ledger; no retained capture may be trimmed from the native frame.
+fn same_embedded_envelope(
+    shadow: &RawCall,
+    frame: &Range<usize>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if shadow.span.start > frame.start
+        || shadow.span.end < frame.end
+        || retained_context(shadow, governor)? != *frame
+    {
+        return Ok(false);
+    }
+    let exterior = |span: &Range<usize>| {
+        shadow.span.start <= span.start
+            && span.end <= shadow.span.end
+            && (span.end <= frame.start || frame.end <= span.start)
+    };
+    for capture in &shadow.captures {
+        governor.charge(Resource::Work, 1)?;
+        if capture.kind == CaptureKind::Dropped {
+            if !exterior(&capture.span) {
+                return Ok(false);
+            }
+            governor.charge(Resource::Work, size(shadow.edits.len()))?;
+            if !shadow.edits.iter().any(|edit| {
+                matches!(
+                    edit.operator,
+                    EditOperator::ExtractProse | EditOperator::ExtractFence
+                ) && edit.span == capture.span
+            }) {
+                return Ok(false);
+            }
+        } else if capture.span.start < frame.start || capture.span.end > frame.end {
+            return Ok(false);
+        }
+    }
+    for edit in &shadow.edits {
+        governor.charge(Resource::Work, 1)?;
+        if matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        ) {
+            governor.charge(Resource::Work, size(shadow.captures.len()))?;
+            if !exterior(&edit.span)
+                || !edit.replacement.is_empty()
+                || edit.span.len() != edit.original.len()
+                || !shadow.captures.iter().any(|capture| {
+                    capture.kind == CaptureKind::Dropped && capture.span == edit.span
+                })
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn embedded_annotation(edit: &MarkupEdit, span: &Range<usize>) -> bool {
+    edit.operator == EditOperator::ReasoningEmbeddedCall
+        && edit.span == *span
+        && edit.original.is_empty()
+        && edit.replacement.is_empty()
+}
+
+fn same_embedded_invocation(
+    exact: &RawCall,
+    shadow: &RawCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, size(exact.edits.len()))?;
+    if exact.cost != 0
+        || !exact.bare
+        || exact.name.is_none()
+        || exact.closure != Closure::Closed
+        || shadow.closure != Closure::Closed
+        || exact
+            .edits
+            .iter()
+            .any(|edit| !embedded_annotation(edit, &exact.span))
+        || exact.kind != ProductionKind::Call
+        || exact.kind != shadow.kind
+        || exact.order != shadow.order
+        || !same_embedded_binding(exact.name.as_ref(), shadow.name.as_ref(), governor)?
+        || !same_embedded_binding(exact.id.as_ref(), shadow.id.as_ref(), governor)?
+    {
+        return Ok(false);
+    }
+    let native_grammar = exact.dialect.grammar();
+    let projected_grammar = shadow.dialect.grammar();
+    if (exact.id.is_none()
+        && native_grammar.call_carries_ids() != projected_grammar.call_carries_ids())
+        || native_grammar.examples_content() != projected_grammar.examples_content()
+        || native_grammar.protocol_fences() != projected_grammar.protocol_fences()
+    {
+        return Ok(false);
+    }
+    // Projected JSON applies declaration-shaped counter-evidence as BareJson
+    // does. Anthropic does not, so conservatively retain that alternative.
+    if exact.dialect == DialectId::AnthropicToolUse {
+        let root = &exact.arguments.root;
+        if let crate::json::Value::Object(members) = &root.value {
+            for member in members {
+                governor.charge(
+                    Resource::Work,
+                    size(member.key.len()).saturating_add(1).saturating_mul(2),
+                )?;
+            }
+            governor.charge(Resource::Work, 16)?;
+            if matches!(root.get("type").map(|node| &node.value), Some(crate::json::Value::String(kind)) if kind == "object")
+                && matches!(
+                    root.get("properties").map(|node| &node.value),
+                    Some(crate::json::Value::Object(_))
+                )
+            {
+                return Ok(false);
+            }
+        }
+    }
+    governor.charge(
+        Resource::Work,
+        size(exact.captures.len()).saturating_add(size(shadow.captures.len())),
+    )?;
+    if !exact.captures.iter().eq(shadow
+        .captures
+        .iter()
+        .filter(|capture| capture.kind != CaptureKind::Dropped))
+        || !same_embedded_arguments(&exact.arguments, &shadow.arguments, governor)?
+    {
+        return Ok(false);
+    }
+    let mut cost = 0_u64;
+    for edit in &shadow.edits {
+        governor.charge(Resource::Work, edit.estimated_bytes())?;
+        if embedded_annotation(edit, &shadow.span) {
+            continue;
+        }
+        if !matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        ) {
+            // Only the declared Anthropic input-header alias is source-proven.
+            if exact.dialect != DialectId::AnthropicToolUse
+                || edit.operator != EditOperator::TerminalConfusable
+                || edit.original != b"\"input\""
+                || edit.replacement != b"\"arguments\""
+                || edit.span.len() != edit.original.len()
+                || edit.span.start < exact.span.start
+                || edit.span.end > exact.span.end
+            {
+                return Ok(false);
+            }
+            governor.charge(Resource::Work, size(shadow.captures.len()))?;
+            if shadow.captures.iter().any(|capture| {
+                capture.kind != CaptureKind::Dropped
+                    && capture.span.start < edit.span.end
+                    && edit.span.start < capture.span.end
+            }) {
+                return Ok(false);
+            }
+        }
+        cost = cost.saturating_add(edit.rule().cost);
+    }
+    Ok(cost == shadow.cost)
+}
+
+pub(super) fn same_source_text(
+    left: &str,
+    right: &str,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.len())
+            .saturating_add(size(right.len()))
+            .saturating_add(1),
+    )?;
+    Ok(left == right)
+}
+
+fn same_embedded_binding(
+    left: Option<&Spanned<String>>,
+    right: Option<&Spanned<String>>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    match (left, right) {
+        (None, None) => Ok(true),
+        (Some(left), Some(right)) => {
+            Ok(left.span == right.span && same_source_text(&left.value, &right.value, governor)?)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn same_embedded_arguments(
+    left: &ArgTree,
+    right: &ArgTree,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if !left.unresolved.is_empty()
+        || !right.unresolved.is_empty()
+        || !left.collected.is_empty()
+        || !right.collected.is_empty()
+        || left.arguments_were_stringified != right.arguments_were_stringified
+        || left.leaves.len() != right.leaves.len()
+    {
+        return Ok(false);
+    }
+    match (&left.tool, &right.tool) {
+        (None, None) => {}
+        (Some(left), Some(right)) if same_source_text(left, right, governor)? => {}
+        _ => return Ok(false),
+    }
+    for (left, right) in left.leaves.iter().zip(&right.leaves) {
+        governor.charge(Resource::Work, 1)?;
+        if left.raw != right.raw
+            || left.origin != right.origin
+            || !same_source_text(&left.pointer, &right.pointer, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    same_source_tree(&left.root, &right.root, governor)
+}
+
+struct SourceNode<'a> {
+    left: &'a crate::json::Node,
+    right: &'a crate::json::Node,
+    depth: u64,
+}
+
+impl ScratchCharge for SourceNode<'_> {
+    const CHARGE: usize = 24;
+}
+const _: () = assert!(core::mem::size_of::<SourceNode<'_>>() <= SourceNode::CHARGE);
+
+/// Source identity is stricter than semantic JSON equality: preserve every
+/// occurrence, source range and exact number spelling without numeric work.
+pub(super) fn same_source_tree(
+    left: &crate::json::Node,
+    right: &crate::json::Node,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    use crate::json::Value;
+    let mut stack = ScratchVec::new(governor);
+    stack.push(SourceNode {
+        left,
+        right,
+        depth: 0,
+    })?;
+    while let Some(SourceNode { left, right, depth }) = stack.pop() {
+        governor.charge(Resource::Work, 1)?;
+        governor.charge(Resource::Depth, depth)?;
+        if left.span != right.span {
+            return Ok(false);
+        }
+        match (&left.value, &right.value) {
+            (Value::Null, Value::Null) => {}
+            (Value::Bool(a), Value::Bool(b)) if a == b => {}
+            (Value::String(a), Value::String(b)) => {
+                if !same_source_text(a, b, governor)? {
+                    return Ok(false);
+                }
+            }
+            (Value::Number(a), Value::Number(b)) => {
+                if !same_source_text(a.as_str(), b.as_str(), governor)? {
+                    return Ok(false);
+                }
+            }
+            (Value::Array(a), Value::Array(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (left, right) in a.iter().zip(b).rev() {
+                    governor.charge(Resource::Work, 1)?;
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    stack.push(SourceNode {
+                        left,
+                        right,
+                        depth: depth.saturating_add(1),
+                    })?;
+                }
+            }
+            (Value::Object(a), Value::Object(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (left, right) in a.iter().zip(b).rev() {
+                    governor.charge(Resource::Work, 1)?;
+                    if left.key_span != right.key_span
+                        || !same_source_text(&left.key, &right.key, governor)?
+                    {
+                        return Ok(false);
+                    }
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    stack.push(SourceNode {
+                        left: &left.value,
+                        right: &right.value,
+                        depth: depth.saturating_add(1),
+                    })?;
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    governor.check()?;
+    Ok(true)
+}
+
 /// The turn-level segment of one part of a completed attempt of `dialect`.
 fn part_segment(kind: ProductionKind, dialect: &DialectId, part: Part) -> Segment {
     match part {
@@ -601,6 +1091,14 @@ struct Ended {
     outread: bool,
 }
 
+/// `segment` cut at a reasoning block's closing marker at `marker`
+/// (`tool_call.reasoning.marker-cut`): unchanged when it ends before the
+/// marker (or no marker closed the block), `None` when it begins inside it.
+/// A cut reading keeps what it read before the marker: a name, id or
+/// capture reaching into the marker is dropped, and arguments read from the
+/// marker's bytes are not arguments (the reading's arguments are then
+/// unresolved at the marker), so a call whose arguments came from the
+/// marker is never usable.
 fn cut_at_marker(segment: &CallSegment, marker: Option<usize>) -> Option<CallSegment> {
     let Some(marker) = marker.filter(|marker| segment.span.end > *marker) else {
         return Some(segment.clone());
@@ -1050,6 +1548,8 @@ impl<'s> Recognizer<'s> {
                 embedded: Vec::new(),
             }),
             interps: BTreeMap::new(),
+            weak_headers: BTreeMap::new(),
+            native_frames: ScratchMap::new(governor),
             last_kill: None,
             blocks: BTreeMap::new(),
             blocked: Vec::new(),
@@ -1191,14 +1691,13 @@ impl<'s> Recognizer<'s> {
     /// Process every pending report at an offset up to `limit`, releasing
     /// each one's queue charge.
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
+        let mut ready = Vec::new();
         // Stable order: offset, then phase, then arrival.
         while let Some(entry) = self.pending.first_entry() {
             if entry.key().0 > limit {
                 break;
             }
-            let pending = entry.remove();
-            ready.push((ready.len(), pending.at(), pending));
+            ready.push(entry.remove());
         }
         if ready.is_empty() {
             return Ok(());
@@ -1206,19 +1705,17 @@ impl<'s> Recognizer<'s> {
         let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
         governor.release_scratch(released)?;
         self.queued.bytes -= released;
-        let mut start = 0;
-        while start < ready.len() {
-            let at = ready[start].1;
-            let end = ready[start..]
-                .iter()
-                .position(|(_, other, _)| *other != at)
-                .map_or(ready.len(), |offset| start + offset);
-            let group: Vec<Pending> = ready[start..end]
-                .iter()
-                .map(|(_, _, pending)| pending.clone())
-                .collect();
-            self.position(at, group, governor)?;
-            start = end;
+        let mut ready = ready.into_iter().peekable();
+        while let Some(pending) = ready.next() {
+            let at = pending.at();
+            let mut group = vec![pending];
+            while ready.peek().is_some_and(|pending| pending.at() == at) {
+                group.push(ready.next().expect("peeked report"));
+            }
+            if let Err(reason) = self.position(at, group, governor) {
+                let _ = Pending::discard_all(ready, governor);
+                return Err(reason);
+            }
         }
         Ok(())
     }
@@ -1232,85 +1729,107 @@ impl<'s> Recognizer<'s> {
         group: Vec<Pending>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
-        let mut frame = Frame {
-            top: self.turn.top,
-            kill: false,
-            candidates: Vec::new(),
-            think: None,
-            closed: false,
-        };
-        for pending in group {
-            match pending {
-                Pending::Engine(Event::Opened { attempt, start, .. }) => {
-                    self.opened(&mut frame, attempt, start, governor)?;
-                }
-                Pending::Marker {
-                    start,
-                    end,
-                    pair,
-                    open: true,
-                } => self.think_opened(&mut frame, start, end, pair, governor)?,
-                Pending::Engine(Event::Completed {
+        let mut group = group.into_iter();
+        let result = (|| {
+            governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
+            let mut frame = Frame {
+                top: self.turn.top,
+                kill: false,
+                candidates: Vec::new(),
+                think: None,
+                closed: false,
+            };
+            for pending in group.by_ref() {
+                self.report(&mut frame, at, pending, governor)?;
+            }
+            if frame.kill {
+                self.turn.top = None;
+            }
+            if frame.closed {
+                self.turn.think = None;
+            }
+            if let Some(think) = frame.think
+                && self
+                    .turn
+                    .think
+                    .as_ref()
+                    .is_none_or(|existing| think.cost < existing.cost)
+            {
+                self.turn.think = Some(think);
+            }
+            self.turn.revive(frame.candidates, at, governor)
+        })();
+        let cleanup = Pending::discard_all(group, governor);
+        result.and(cleanup)
+    }
+
+    /// Consume one report, moving each owned payload to its handler.
+    fn report(
+        &mut self,
+        frame: &mut Frame,
+        at: usize,
+        pending: Pending,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        match pending {
+            Pending::Engine(Event::Opened {
+                attempt,
+                start,
+                opening,
+                ..
+            }) => {
+                self.opened(frame, attempt, start..at, opening, governor)?;
+            }
+            Pending::Marker {
+                start,
+                end,
+                pair,
+                open: true,
+            } => self.think_opened(frame, start, end, pair, governor)?,
+            Pending::Engine(Event::Completed {
+                table,
+                attempt,
+                parts,
+                charged,
+                ..
+            }) => {
+                let kind = self.engine.kind(table);
+                let dialect = self.engine.dialect(table).clone();
+                let parts = parts
+                    .into_iter()
+                    .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
+                    .collect();
+                self.completed(frame, attempt, parts, charged, governor)?;
+            }
+            Pending::Engine(Event::Ended {
+                table,
+                attempt,
+                start,
+                completed,
+                reason,
+                salvage,
+                outread,
+                ..
+            }) => {
+                let ended = Ended {
                     table,
                     attempt,
-                    parts,
-                    charged,
-                    ..
-                }) => {
-                    let kind = self.engine.kind(table);
-                    let dialect = self.engine.dialect(table).clone();
-                    let parts = parts
-                        .into_iter()
-                        .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
-                        .collect();
-                    self.completed(&mut frame, attempt, parts, charged, governor)?;
-                }
-                Pending::Engine(Event::Ended {
-                    table,
-                    attempt,
                     start,
+                    at,
                     completed,
                     reason,
-                    salvage,
                     outread,
-                    ..
-                }) => {
-                    let ended = Ended {
-                        table,
-                        attempt,
-                        start,
-                        at,
-                        completed,
-                        reason,
-                        outread,
-                    };
-                    self.ended(&mut frame, ended, salvage, governor)?;
-                }
-                Pending::Marker {
-                    start,
-                    pair,
-                    open: false,
-                    ..
-                } => self.think_closed(&mut frame, at, start, pair, governor)?,
+                };
+                self.ended(frame, ended, salvage, governor)?;
             }
+            Pending::Marker {
+                start,
+                pair,
+                open: false,
+                ..
+            } => self.think_closed(frame, at, start, pair, governor)?,
         }
-        if frame.kill {
-            self.turn.top = None;
-        }
-        if frame.closed {
-            self.turn.think = None;
-        }
-        if let Some(think) = frame.think
-            && self
-                .turn
-                .think
-                .as_ref()
-                .is_none_or(|existing| think.cost < existing.cost)
-        {
-            self.turn.think = Some(think);
-        }
-        self.turn.revive(frame.candidates, at, governor)
+        Ok(())
     }
 
     /// An attempt's opener completed: give it a base on every state that
@@ -1319,35 +1838,60 @@ impl<'s> Recognizer<'s> {
         &mut self,
         frame: &mut Frame,
         attempt: u64,
-        start: usize,
+        prefix: Range<usize>,
+        opening: Opening,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let mut interps = Vec::new();
-        match (frame.top, self.turn.last_kill) {
+        let start = prefix.start;
+        let weak_header = opening.weak_header;
+        let mut interps = ScratchVec::new(governor);
+        let last = self
+            .turn
+            .last_kill
+            .and_then(|last| last.at(start))
+            .filter(|top| opening.projected || !matches!(top, Interp::WeakPromoted(..)));
+        match (frame.top, last) {
             (Some(top), last) if top.boundary <= start => {
-                let base = match last {
-                    Some((kill_start, base)) if kill_start == start => base,
-                    _ => {
-                        let base = Base {
-                            cost: top.cost,
-                            hist: self.turn.close(top, start, governor)?,
-                        };
-                        self.turn.last_kill = Some((start, base));
-                        base
-                    }
+                let inherited = if let Some(inherited) = last {
+                    inherited
+                } else {
+                    let base = Base {
+                        cost: top.cost,
+                        hist: self.turn.close(top, start, governor)?,
+                    };
+                    let inherited = Interp::Top(base);
+                    self.turn.last_kill = Some(LastKill::new(start, inherited));
+                    inherited
                 };
-                interps.push(Interp::Top(base));
+                crate::contract::push_scratch(&mut interps, inherited, governor)?;
                 frame.kill = true;
             }
-            (_, Some((kill_start, base))) if kill_start == start => interps.push(Interp::Top(base)),
+            (_, Some(inherited)) => {
+                crate::contract::push_scratch(&mut interps, inherited, governor)?;
+            }
             _ => {}
         }
+        let replace_weak = if interps.is_empty()
+            && weak_header.is_none()
+            && !self.has_exact_outer(start, governor)?
+        {
+            self.inherit_header(frame, start, opening.projected, &mut interps, governor)?
+        } else {
+            None
+        };
         if let Some(think) = self.turn.think.clone()
             && think.start <= start
         {
-            interps.push(Interp::Embedded(think.start));
-            if let Some(base) = self.promote(&think, start, governor)? {
-                interps.push(Interp::Top(base));
+            crate::contract::push_scratch(&mut interps, Interp::Embedded(think.start), governor)?;
+            if let Some(promoted) = self.promote(
+                &think,
+                attempt,
+                start,
+                opening.projected,
+                replace_weak,
+                governor,
+            )? {
+                crate::contract::push_scratch(&mut interps, promoted, governor)?;
             }
         }
         if interps.is_empty() {
@@ -1357,21 +1901,298 @@ impl<'s> Recognizer<'s> {
             // reading it.
             self.engine.abandon(attempt, governor)?;
         } else {
+            if weak_header.is_none() && prefix.len() > 1 {
+                self.suppress_weak_prefix(start, opening.native_frame_end, governor)?;
+            }
+            if let Some(barrier) = weak_header {
+                governor.charge(Resource::ScratchBytes, 64)?;
+                self.turn.weak_headers.insert(attempt, barrier);
+            }
             self.turn.interps.insert(attempt, (start, interps));
         }
         Ok(())
     }
 
-    /// The base of a call that closes the unclosed reasoning block `think`
-    /// at its first opener (`start`), by the guess-flagged rule.
+    /// Inherit pre-header origins without reclassifying a weak reasoning
+    /// promotion as ordinary content on a nested native path.
+    fn inherit_header(
+        &mut self,
+        frame: &mut Frame,
+        start: usize,
+        projected: bool,
+        interps: &mut ScratchVec<Interp>,
+        governor: &mut Governor,
+    ) -> Result<Option<u64>, StopReason> {
+        let weak_promotion = self
+            .turn
+            .think
+            .as_ref()
+            .and_then(|think| match think.promoted {
+                Some(Promotion::Weak(owner, start, base)) => Some((owner, start, base)),
+                _ => None,
+            });
+        let mut replace_weak = None;
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        let mut origins = ScratchVec::new(governor);
+        for (&owner, &barrier) in &self.turn.weak_headers {
+            let Some((prefix, inherited)) = self.turn.interps.get(&owner) else {
+                continue;
+            };
+            if *prefix < start && start < barrier {
+                for &interp in inherited {
+                    governor.charge(Resource::Work, 1)?;
+                    let origin = HeaderOrigin {
+                        owner,
+                        prefix: *prefix,
+                        interp,
+                    };
+                    governor.charge(Resource::Work, size(origins.len()))?;
+                    if !origins.contains(&origin) {
+                        crate::contract::push_scratch(&mut origins, origin, governor)?;
+                    }
+                }
+            }
+        }
+        for HeaderOrigin {
+            owner,
+            prefix,
+            interp,
+        } in origins.iter().copied()
+        {
+            match interp {
+                Interp::WeakPromoted(origin, base) if !projected => {
+                    // A sibling profile's later barrier cannot authorize replacing
+                    // the first weak promotion, even when its prefix/base agree.
+                    if owner == origin && weak_promotion == Some((owner, prefix, base)) {
+                        replace_weak = Some(owner);
+                    }
+                }
+                top @ (Interp::Top(base)
+                | Interp::NativePromoted(base)
+                | Interp::WeakPromoted(_, base)) => {
+                    let hist = self.turn.close(
+                        Top {
+                            cost: base.cost,
+                            hist: base.hist,
+                            boundary: prefix,
+                        },
+                        start,
+                        governor,
+                    )?;
+                    let base = Base {
+                        cost: base.cost,
+                        hist,
+                    };
+                    let inherited = top.rebase(base);
+                    governor.charge(Resource::Work, size(interps.len()))?;
+                    if !interps.contains(&inherited) {
+                        crate::contract::push_scratch(interps, inherited, governor)?;
+                    }
+                    self.turn.last_kill = Some(LastKill::new(start, inherited));
+                    frame.kill = true;
+                }
+                Interp::Embedded(block) => {
+                    governor.charge(Resource::Work, size(interps.len()))?;
+                    if !interps.contains(&Interp::Embedded(block)) {
+                        crate::contract::push_scratch(interps, Interp::Embedded(block), governor)?;
+                    }
+                }
+            }
+        }
+        Ok(replace_weak)
+    }
+
+    /// A written native opener owns its prefix. A projected preamble at
+    /// that same prefix must not turn the framing into lossy prose and
+    /// revive a path that omits earlier calls from the native group.
+    /// Interior native frames are remembered for per-completion proof only.
+    fn suppress_weak_prefix(
+        &mut self,
+        start: usize,
+        native_frame_end: Option<usize>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        let mut suppressed = ScratchVec::new(governor);
+        for &owner in self.turn.weak_headers.keys() {
+            if self
+                .turn
+                .interps
+                .get(&owner)
+                .is_some_and(|(prefix, _)| *prefix == start)
+            {
+                suppressed.push(owner)?;
+            }
+        }
+        for &owner in &suppressed {
+            self.forget_native_frame(owner, governor)?;
+            self.turn.weak_headers.remove(&owner);
+            self.turn.interps.remove(&owner);
+            self.engine.abandon(owner, governor)?;
+        }
+        self.remember_native_frame(start, native_frame_end, governor)
+    }
+
+    /// Remember source framing without stopping any weak configuration.
+    fn remember_native_frame(
+        &mut self,
+        start: usize,
+        end: Option<usize>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Some(end) = end else { return Ok(()) };
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        for (&owner, &barrier) in &self.turn.weak_headers {
+            let Some((prefix, _)) = self.turn.interps.get(&owner) else {
+                continue;
+            };
+            if *prefix < start && start < barrier {
+                governor.charge(
+                    Resource::Work,
+                    size(self.turn.native_frames.len())
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                )?;
+                if self
+                    .turn
+                    .native_frames
+                    .get(&owner)
+                    .is_none_or(|&(prior, _)| start < prior)
+                {
+                    self.turn.native_frames.insert(owner, (start, end))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The frame survives native completion and ends with its weak owner.
+    fn forget_native_frame(
+        &mut self,
+        owner: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.turn.native_frames.len()).saturating_mul(2),
+        )?;
+        self.turn.native_frames.remove(&owner);
+        Ok(())
+    }
+
+    /// Each materialized reading must discard the full native marker in its
+    /// leading prose capture, before every name, ID and argument capture.
+    fn discards_native_frame(
+        &self,
+        attempt: u64,
+        parts: &[(Segment, u64)],
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if self.turn.native_frames.is_empty() {
+            return Ok(false);
+        }
+        governor.charge(Resource::Work, size(self.turn.native_frames.len()))?;
+        let Some(&(start, end)) = self.turn.native_frames.get(&attempt) else {
+            return Ok(false);
+        };
+        let Some((prefix, _)) = self.turn.interps.get(&attempt) else {
+            return Ok(false);
+        };
+        let [(Segment::Call(call), _)] = parts else {
+            return Ok(false);
+        };
+        if call.span.start != *prefix || call.readings.is_empty() || !call.derivations.is_empty() {
+            return Ok(false);
+        }
+        for reading in &call.readings {
+            governor.charge(Resource::Work, 1)?;
+            if reading.dialect != DialectId::HermesStripped
+                || reading.kind != ProductionKind::Call
+                || reading.span != call.span
+            {
+                return Ok(false);
+            }
+            governor.charge(
+                Resource::Work,
+                size(reading.captures.len())
+                    .saturating_mul(2)
+                    .saturating_add(size(reading.edits.len())),
+            )?;
+            let (mut name, mut arguments, mut first) = (false, false, usize::MAX);
+            for capture in &reading.captures {
+                if matches!(
+                    capture.kind,
+                    CaptureKind::Name | CaptureKind::Id | CaptureKind::Arguments
+                ) {
+                    if capture.span.start < end {
+                        return Ok(false);
+                    }
+                    first = first.min(capture.span.start);
+                    name |= capture.kind == CaptureKind::Name;
+                    arguments |= capture.kind == CaptureKind::Arguments;
+                }
+            }
+            let Some(dropped) = reading.captures.iter().find(|capture| {
+                capture.kind == CaptureKind::Dropped
+                    && capture.span.start == *prefix
+                    && capture.span.start <= start
+                    && end <= capture.span.end
+                    && capture.span.end <= first
+            }) else {
+                return Ok(false);
+            };
+            if !name
+                || !arguments
+                || !reading.edits.iter().any(|edit| {
+                    edit.operator == EditOperator::ExtractProse
+                        && edit.span == dropped.span
+                        && edit.replacement.is_empty()
+                        && edit.original.len() == dropped.span.len()
+                })
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Weak framing cannot reopen the committed span of a native attempt.
+    fn has_exact_outer(&self, start: usize, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, size(self.turn.interps.len()))?;
+        Ok(self.turn.interps.iter().any(|(owner, (prefix, _))| {
+            *prefix < start && !self.turn.weak_headers.contains_key(owner)
+        }))
+    }
+
+    /// Promote the first opener within one origin. A native opener inside
+    /// the cached weak promotion's own header may retain its source boundary.
+    /// Existing weak interpretations keep their original bases and provenance.
     fn promote(
         &mut self,
         think: &Think,
+        owner: u64,
         start: usize,
+        projected: bool,
+        replace_weak: Option<u64>,
         governor: &mut Governor,
-    ) -> Result<Option<Base>, StopReason> {
-        if let Some((promoted_start, base)) = think.promoted {
-            return Ok((promoted_start == start).then_some(base));
+    ) -> Result<Option<Interp>, StopReason> {
+        if let Some(cached) = think.promoted {
+            if cached.start() == start {
+                let promotion = if projected {
+                    cached
+                } else {
+                    Promotion::Native(start, cached.base())
+                };
+                if let Some(think) = self.turn.think.as_mut() {
+                    think.promoted = Some(promotion);
+                }
+                return Ok(Some(promotion.interpretation()));
+            }
+            if projected
+                || !matches!(cached, Promotion::Weak(origin, _, _) if replace_weak == Some(origin))
+            {
+                return Ok(None);
+            }
         }
         // A call opener inside the block's own opening marker leaves no
         // text to close: the block does not close there.
@@ -1404,10 +2225,15 @@ impl<'s> Recognizer<'s> {
             .turn
             .append(prior, segment, REASONING_UNCLOSED, start, governor)?;
         let base = Base { cost, hist };
+        let promotion = if projected {
+            Promotion::Weak(owner, start, base)
+        } else {
+            Promotion::Native(start, base)
+        };
         if let Some(think) = self.turn.think.as_mut() {
-            think.promoted = Some((start, base));
+            think.promoted = Some(promotion);
         }
-        Ok(Some(base))
+        Ok(Some(promotion.interpretation()))
     }
 
     /// A reasoning opener completed at `start`.
@@ -1439,6 +2265,22 @@ impl<'s> Recognizer<'s> {
         Ok(())
     }
 
+    /// A fallible owned copy of the attempt's live interpretations.
+    fn copy_interps(
+        &self,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<Option<ScratchVec<Interp>>, StopReason> {
+        let Some((_, live)) = self.turn.interps.get(&attempt) else {
+            return Ok(None);
+        };
+        governor.charge(Resource::Work, size(live.len()))?;
+        let mut copied = ScratchVec::new(governor);
+        copied.reserve(live.len())?;
+        copied.extend(live.iter().copied())?;
+        Ok(Some(copied))
+    }
+
     /// The segments of `attempt` ended: one call (or result), or each
     /// call of an attempt whose production separates calls with `next`,
     /// in order, each with its cost.
@@ -1450,12 +2292,26 @@ impl<'s> Recognizer<'s> {
         charged: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some((_, interps)) = self.turn.interps.get(&attempt).cloned() else {
-            // An attempt with no interpretation (it began inside another
-            // attempt's committed span): its parts are dropped unread.
-            drop(parts);
-            return governor.release_scratch(charged);
+        let interps = match self.copy_interps(attempt, governor) {
+            Ok(Some(interps)) => interps,
+            Ok(None) => {
+                drop(parts);
+                return governor.release_scratch(charged);
+            }
+            Err(reason) => {
+                drop(parts);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
         };
+        match self.discards_native_frame(attempt, &parts, governor) {
+            Ok(false) => {}
+            disposition => {
+                drop(parts);
+                let cleanup = governor.release_scratch(charged);
+                return disposition.and(cleanup);
+            }
+        }
         // An opening reasoning marker a call read over as markup, not as
         // the data of a string value, cuts it (see `marker_cut`).
         let cut = self.marker_cut(&parts, governor)?;
@@ -1476,9 +2332,11 @@ impl<'s> Recognizer<'s> {
             let end = segment.span().end;
             stored.push((self.turn.store(segment, governor)?, cost, end));
         }
-        for interp in interps {
+        for &interp in &interps {
             match interp {
-                Interp::Top(base) => {
+                Interp::Top(base)
+                | Interp::NativePromoted(base)
+                | Interp::WeakPromoted(_, base) => {
                     let mut chain = base;
                     let (kept, open) = match (cut, cut_part) {
                         (Some((part, marker, pair)), Some(trimmed)) => {
@@ -1541,6 +2399,13 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if let Err(reason) = self.forget_native_frame(ended.attempt, governor) {
+            let charged = salvage.as_ref().map_or(0, |salvage| salvage.charged);
+            drop(salvage);
+            let _ = governor.release_scratch(charged);
+            return Err(reason);
+        }
+        self.turn.weak_headers.remove(&ended.attempt);
         let removed = self.turn.interps.remove(&ended.attempt);
         // An opening reasoning marker the attempt read over cuts it: the
         // marker's bytes belong to the block, which opens where the
@@ -1622,8 +2487,8 @@ impl<'s> Recognizer<'s> {
         if outread {
             return Ok(());
         }
-        for interp in interps {
-            if let Interp::Top(base) = interp {
+        for &interp in &interps {
+            if let Some(base) = interp.base() {
                 frame
                     .candidates
                     .push(self.turn.append(base, index, REJECT, ended.at, governor)?);
@@ -1743,7 +2608,7 @@ impl<'s> Recognizer<'s> {
         };
         let index = self.turn.store(segment, governor)?;
         for &interp in interps {
-            if let Interp::Top(base) = interp {
+            if let Some(base) = interp.base() {
                 let (cost, mut hist) = self.turn.append(base, index, REJECT, end, governor)?;
                 if end < marker {
                     hist = self
@@ -1874,7 +2739,9 @@ impl<'s> Recognizer<'s> {
             }
             for interp in interps {
                 match *interp {
-                    Interp::Top(base) => {
+                    Interp::Top(base)
+                    | Interp::NativePromoted(base)
+                    | Interp::WeakPromoted(_, base) => {
                         let mut chain = base;
                         for &(index, cost, end) in &stored {
                             let (cost, hist) =
@@ -2350,32 +3217,38 @@ impl Builder<'_> {
             reasoning.embedded = embedded;
             return Ok(());
         }
-        let span = segment.span();
-        if !self
-            .context
-            .strict_example(&span, fenced, inline, governor)?
-        {
-            return Ok(());
-        }
         match segment {
             Segment::Call(call) | Segment::Result(call) => {
                 let mut index = 0;
-                call.readings.retain(|reading| {
-                    let keep = !reading.dialect.grammar().examples_content();
-                    if !keep && index < call.derivations.len() {
-                        call.derivations.remove(index);
-                    }
-                    if keep {
+                while index < call.readings.len() {
+                    let reading = &call.readings[index];
+                    let suppress = if reading.dialect.grammar().examples_content() {
+                        let span = retained_context(reading, governor)?;
+                        self.context
+                            .strict_example(&span, fenced, inline, governor)?
+                    } else {
+                        false
+                    };
+                    if suppress {
+                        call.readings.remove(index);
+                        if index < call.derivations.len() {
+                            call.derivations.remove(index);
+                        }
+                    } else {
                         index += 1;
                     }
-                    keep
-                });
+                }
                 if call.readings.is_empty() {
-                    *segment = Segment::Content(span);
+                    *segment = Segment::Content(call.span.clone());
                 }
             }
-            Segment::Rejected { dialect, .. } if dialect.grammar().examples_content() => {
-                *segment = Segment::Content(span);
+            Segment::Rejected { dialect, span, .. }
+                if dialect.grammar().examples_content()
+                    && self
+                        .context
+                        .strict_example(span, fenced, inline, governor)? =>
+            {
+                *segment = Segment::Content(span.clone());
             }
             Segment::Content(_) | Segment::Reasoning(_) | Segment::Rejected { .. } => {}
         }
@@ -2401,7 +3274,9 @@ impl Builder<'_> {
         let mut excluded = Vec::new();
         for (index, segment) in reading.iter().enumerate() {
             match segment {
-                Segment::Call(call) | Segment::Result(call) => excluded.push(call.span.clone()),
+                Segment::Call(call) | Segment::Result(call) => {
+                    excluded.push(retained_context(&call.readings[0], governor)?);
+                }
                 // A rejected attempt's bytes are call markup, not prose: a
                 // fence inside it opens no fenced block. With the whole
                 // output, its markup extends as recovery reads it.
@@ -2453,15 +3328,15 @@ impl Builder<'_> {
             }
         }
         let excluded = merged;
-        let mut calls: Vec<&mut CallSegment> = Vec::new();
+        let mut calls: Vec<&mut RawCall> = Vec::new();
         for piece in pieces.iter_mut() {
             match piece {
-                Piece::Segment(Segment::Call(call)) => calls.push(call),
+                Piece::Segment(Segment::Call(call)) => calls.extend(&mut call.readings),
                 Piece::Choice(choice) => {
                     for reading in &mut choice.readings {
                         for segment in reading {
                             if let Segment::Call(call) = segment {
-                                calls.push(call);
+                                calls.extend(&mut call.readings);
                             }
                         }
                     }
@@ -2469,7 +3344,10 @@ impl Builder<'_> {
                 Piece::Segment(_) => {}
             }
         }
-        let spans: Vec<Range<usize>> = calls.iter().map(|call| call.span.clone()).collect();
+        let mut spans = Vec::with_capacity(calls.len());
+        for call in &calls {
+            spans.push(retained_context(call, governor)?);
+        }
         let contexts = self
             .context
             .examples(&spans, &excluded, self.len, governor)?;
@@ -2477,21 +3355,7 @@ impl Builder<'_> {
             let Some(region) = context else {
                 continue;
             };
-            for reading in &mut call.readings {
-                let edit = MarkupEdit {
-                    operator: EditOperator::ContextFencedExample,
-                    span: region.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                };
-                governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
-                let at = reading
-                    .edits
-                    .iter()
-                    .position(|other| other.span.start > region.start)
-                    .unwrap_or(reading.edits.len());
-                reading.edits.insert(at, edit);
-            }
+            mark_example(call, region, governor)?;
         }
         Ok(())
     }
@@ -2725,10 +3589,15 @@ fn example_call(
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     governor.charge(Resource::Work, size(call.readings.len()))?;
-    governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
-    spans.push(call.span.clone());
     let mut own_fence = false;
+    let mut previous = None;
     for reading in &call.readings {
+        let span = retained_context(reading, governor)?;
+        if previous.as_ref() != Some(&span) {
+            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+            spans.push(span.clone());
+            previous = Some(span);
+        }
         let grammar = reading.dialect.grammar();
         *applicable |= grammar.examples_content();
         own_fence |= grammar.protocol_fences();
@@ -2736,6 +3605,79 @@ fn example_call(
     if own_fence {
         protocol.push(call.span.start)?;
     }
+    Ok(())
+}
+
+/// Only exterior extraction can move a context boundary. An enclosing native
+/// protocol still protects every interior byte, including dropped fence text.
+/// Source spans provide identical geometry with or without the whole input.
+fn retained_context(
+    reading: &RawCall,
+    governor: &mut Governor,
+) -> Result<Range<usize>, StopReason> {
+    let mut span = reading.span.clone();
+    for edit in &reading.edits {
+        governor.charge(Resource::Work, 1)?;
+        if edit.span.start == span.start
+            && edit.span.end <= span.end
+            && context_extraction(reading, edit, governor)?
+        {
+            span.start = edit.span.end;
+        }
+    }
+    for edit in reading.edits.iter().rev() {
+        governor.charge(Resource::Work, 1)?;
+        if edit.span.end == span.end
+            && edit.span.start >= span.start
+            && context_extraction(reading, edit, governor)?
+        {
+            span.end = edit.span.start;
+        }
+    }
+    Ok(span)
+}
+
+/// Retained capture bytes cannot be removed from Markdown protection.
+fn context_extraction(
+    reading: &RawCall,
+    edit: &MarkupEdit,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if edit.span.is_empty()
+        || !matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        )
+    {
+        return Ok(false);
+    }
+    governor.charge(Resource::Work, size(reading.captures.len()))?;
+    Ok(!reading.captures.iter().any(|capture| {
+        capture.kind != crate::grammar::CaptureKind::Dropped
+            && capture.span.start < edit.span.end
+            && edit.span.start < capture.span.end
+    }))
+}
+
+/// Insert the same source-ordered contextual guess into one raw reading.
+fn mark_example(
+    call: &mut RawCall,
+    region: Range<usize>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let edit = MarkupEdit {
+        operator: EditOperator::ContextFencedExample,
+        span: region.clone(),
+        original: Vec::new(),
+        replacement: Vec::new(),
+    };
+    governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+    let at = call
+        .edits
+        .iter()
+        .position(|other| other.span.start > region.start)
+        .unwrap_or(call.edits.len());
+    call.edits.insert(at, edit);
     Ok(())
 }
 
@@ -2766,6 +3708,13 @@ pub(super) fn escaped(bytes: &[u8]) -> String {
 /// parameter element, or a call cut at a reasoning marker.
 fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> String {
     match edit.operator {
+        EditOperator::JsonBody => {
+            "read a whole JSON object in the function body as the arguments".into()
+        }
+        EditOperator::StrippedNameIdBoundary => format!(
+            "partitioned the retained joint name and ID at byte {} after the selected profile suppressed their separator; every admitted boundary remains a competing guess",
+            edit.span.start
+        ),
         EditOperator::ExtractProse => {
             format!("dropped prose `{original}` inside the call's markup")
         }
@@ -2863,9 +3812,6 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::NestedParameter => format!(
             "read nested parameter elements after `{original}` as the members of an object parameter, or of one object item of an array parameter"
         ),
-        EditOperator::JsonBody => {
-            "read a whole JSON object in the function body as the arguments".into()
-        }
         EditOperator::ArrayItem => {
             format!(
                 "read array parameter value `{original}` as one item of the array (an object item when written as nested parameter elements)"
@@ -2880,7 +3826,9 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::StringifiedArguments => {
             format!("decoded stringified arguments `{original}` as JSON `{replacement}`")
         }
-        EditOperator::ExtractProse
+        EditOperator::JsonBody
+        | EditOperator::StrippedNameIdBoundary
+        | EditOperator::ExtractProse
         | EditOperator::ExtractFence
         | EditOperator::GroupSplit
         | EditOperator::CloserMisspelled

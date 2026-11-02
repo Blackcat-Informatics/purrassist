@@ -239,7 +239,7 @@ struct DialectCase {
 }
 
 /// One case per entry of `DialectId::BUILT_IN` (checked by the test below).
-const DIALECT_CASES: [DialectCase; 15] = [
+const DIALECT_CASES: [DialectCase; 23] = [
     DialectCase {
         dialect: DialectId::AnthropicToolUse,
         anchor: "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Write the file, then read the notes.\",\"signature\":\"EqQB\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"write_file\",\"input\":{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}},{\"type\":\"tool_use\",\"id\":\"toolu_02\",\"name\":\"read_file\",\"input\":{\"path\": \"notes.txt\", \"limit\": 10}}]}",
@@ -255,6 +255,24 @@ const DIALECT_CASES: [DialectCase; 15] = [
         repair: "Reading it now: {\"name\": \"read_file\", \"arguments\": {path: \"src/lib.rs\", \"limit\": 40,}} and {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"Oslo\\\", \\\"unit\\\": \\\"celsius\\\"}\"}.",
         repair_status: "resolved",
         repair_digest: "sha256:745bc8ca233511f808b04b6f3259b5ff7cd98083f4558207e4ea3328988961a3",
+    },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::DeepSeekV3Stripped,
+        anchor: "functionread_file\n```json\n{\"path\":\"notes.txt\",\"limit\":10}\n```",
+        anchor_digest: "sha256:7496415f061da56d20b7ac49f85b9beca4c2fe76d45a5cc827efadc926df1d13",
+        repair: "functionread_file\n```json\n{\"path\":\"notes.txt\",\"limit\":10,}\n```",
+        repair_status: "resolved",
+        repair_digest: "sha256:2ba45c2582025d34932800577a92c0451d7ccc4dc9664e12ffd1430b5c90b647",
+    },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::DeepSeekV31Stripped,
+        anchor: "read_file{\"path\":\"notes.txt\",\"limit\":10}",
+        anchor_digest: "sha256:e48c7b2c699075fd276c886285530f7a917c42f0df4a65fc7dfe6b316a7386af",
+        repair: "read_file{\"path\":\"notes.txt\",\"limit\":10,}",
+        repair_status: "resolved",
+        repair_digest: "sha256:65891ff57daa8041357d4183df30cd5dcf36e32a88b534ee5d957b295918298f",
     },
     DialectCase {
         dialect: DialectId::DeepSeekV31,
@@ -288,6 +306,15 @@ const DIALECT_CASES: [DialectCase; 15] = [
         repair_status: "resolved",
         repair_digest: "sha256:555ced96d3b3a9bd81c40409387a3b634c0251c674dc50a689b1150ec8abd766",
     },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::HarmonyStripped,
+        anchor: "commentary to=functions.read_file json{\"path\":\"notes.txt\",\"limit\":10}",
+        anchor_digest: "sha256:ff75218ad9e442ff7e8dde8dbf4eade06699003e6d67a244aee5d8387534b04f",
+        repair: "commentary to=functions.read_file json{\"path\":\"notes.txt\",\"limit\":10,}",
+        repair_status: "resolved",
+        repair_digest: "sha256:9068e10cc446ae96ccf97b936bc759398392b8beb040fac0ed41d06a82254b1a",
+    },
     DialectCase {
         dialect: DialectId::Harmony,
         anchor: "<|channel|>analysis<|message|>Write the file, then read the notes.<|end|><|start|>assistant<|channel|>commentary to=functions.write_file <|constrain|>json<|message|>{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}<|call|><|start|>assistant to=functions.read_file<|channel|>commentary <|constrain|>json<|message|>{\"path\": \"notes.txt\", \"limit\": 10}<|call|>",
@@ -295,6 +322,15 @@ const DIALECT_CASES: [DialectCase; 15] = [
         repair: "<|channel>commentary to=read_file <|constrain|>json<|message|>{\"path\": \"src/lib.rs\", \"limit\": 40}<|end|><|start|>assistant<|channel|>commentary to=functions.get_weather<|message|>{\"city\": \"Oslo\", \"unit\": \"celsius\"}",
         repair_status: "resolved",
         repair_digest: "sha256:8802c2e4b438099b46c86a661fd8c81c19c294f5b8b32a5559942892cdeb2c9e",
+    },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::HermesStripped,
+        anchor: "{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\",\"limit\":10}}",
+        anchor_digest: "sha256:f646c17c222877a2f21b40f347a8c13b6af1e3c792e545a152ab25ae864d6121",
+        repair: "{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\",\"limit\":10,}}",
+        repair_status: "resolved",
+        repair_digest: "sha256:7a4f92e9c884b9f88f5f226eacef8ee664933a9b13597aa4ccf0563d92b0010e",
     },
     DialectCase {
         dialect: DialectId::Hermes,
@@ -304,6 +340,15 @@ const DIALECT_CASES: [DialectCase; 15] = [
         repair_status: "best_guess",
         repair_digest: "sha256:81c28b0d74c3bcec95b1bf93265af004a5cc5d06b73784badf28689b815f03fb",
     },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::KimiK2Stripped,
+        anchor: "functions.read_file:0{\"path\":\"notes.txt\",\"limit\":10}",
+        anchor_digest: "sha256:933890f15087f837c41f3602f3a1c4c108d6e141f6b783d4b9785537b2797344",
+        repair: "functions.read_file:0{\"path\":\"notes.txt\",\"limit\":10,}",
+        repair_status: "resolved",
+        repair_digest: "sha256:933890f15087f837c41f3602f3a1c4c108d6e141f6b783d4b9785537b2797344",
+    },
     DialectCase {
         dialect: DialectId::KimiK2,
         anchor: "<think>Write the file, then read the notes.</think><|tool_calls_section_begin|><|tool_call_begin|>functions.write_file:0<|tool_call_argument_begin|>{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}<|tool_call_end|><|tool_call_begin|>functions.read_file:1<|tool_call_argument_begin|>{\"path\": \"notes.txt\", \"limit\": 10}<|tool_call_end|><|tool_calls_section_end|><|im_end|>",
@@ -311,6 +356,15 @@ const DIALECT_CASES: [DialectCase; 15] = [
         repair: "<|tool_call_section_begin|><|tool_call_begin|>functions.read_file<|tool_call_argument_begin|>{\"path\": \"src/lib.rs\", \"limit\": 40}<|tool_call_begin|>get_weather:1<|tool_call_argument_begin|>{\"city\": \"Oslo\", \"unit\": \"celsius\"}<|tool_call_end|>",
         repair_status: "resolved",
         repair_digest: "sha256:04504fd0b57bbc6dbc9e51cbd14cf88e301917da9b694474c160bdba032e29d0",
+    },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::Llama3JsonStripped,
+        anchor: "{\"name\":\"read_file\",\"parameters\":{\"path\":\"notes.txt\",\"limit\":10}}",
+        anchor_digest: "sha256:36f10b8b98e084008f251eefea489218cd181159b94c899b75424efee2128c51",
+        repair: "{\"name\":\"read_file\",\"parameters\":{\"path\":\"notes.txt\",\"limit\":10,}}",
+        repair_status: "resolved",
+        repair_digest: "sha256:41134fd9e9a2505ccb8726c342c3160b4ae67430f9fb9a4cab05266e3df4de41",
     },
     DialectCase {
         dialect: DialectId::Llama3Json,
@@ -320,6 +374,15 @@ const DIALECT_CASES: [DialectCase; 15] = [
         repair_status: "resolved",
         repair_digest: "sha256:cf64b7392f46122a2ad98a32099dff59275c4aea1410b023f9446709a0729b6b",
     },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::MistralV11Stripped,
+        anchor: "read_file a1B2c3D4e {\"path\":\"notes.txt\",\"limit\":10}",
+        anchor_digest: "sha256:59113bf6c69a4acbb6668027fd494b1c36bb1044e76cfe4b0b55a6e15bfecdc2",
+        repair: "read_file a1B2c3D4e {\"path\":\"notes.txt\",\"limit\":10,}",
+        repair_status: "resolved",
+        repair_digest: "sha256:59113bf6c69a4acbb6668027fd494b1c36bb1044e76cfe4b0b55a6e15bfecdc2",
+    },
     DialectCase {
         dialect: DialectId::MistralV11,
         anchor: "[THINK]Write the file, then read the notes.[/THINK][TOOL_CALLS]write_file[CALL_ID]a1B2c3D4e[ARGS]{\"path\": \"src/main.rs\", \"content\": \"fn main() {\\n    println!(\\\"hi\\\");\\n\\n\\tlet  x = 1;  \\n}\\n\", \"mode\": \"create\", \"ratio\": 2.50, \"count\": 1e3, \"tags\": [], \"options\": {\"backup\": false, \"retries\": 0, \"owner\": {\"name\": \"ops\", \"uid\": -7}}}[TOOL_CALLS]read_file[CALL_ID]f5G6h7J8k[ARGS]{\"path\": \"notes.txt\", \"limit\": 10}</s>",
@@ -327,6 +390,15 @@ const DIALECT_CASES: [DialectCase; 15] = [
         repair: "[TOOL_CALLS] read_file\n{\"path\": \"src/lib.rs\", \"limit\": 40}\nget_weather[ARGS]{\"city\": \"Oslo\", \"unit\": \"celsius\"",
         repair_status: "resolved",
         repair_digest: "sha256:840d2aad58e7db4390971f66d054fddde97c4f1451e065e69ec8beb25f413b26",
+    },
+    // Canonical marker-suppressed call and a trailing-comma JSON repair.
+    DialectCase {
+        dialect: DialectId::MistralV3Stripped,
+        anchor: "[{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\",\"limit\":10},\"id\":\"a1B2c3D4e\"}]",
+        anchor_digest: "sha256:59113bf6c69a4acbb6668027fd494b1c36bb1044e76cfe4b0b55a6e15bfecdc2",
+        repair: "[{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\",\"limit\":10,},\"id\":\"a1B2c3D4e\"}]",
+        repair_status: "resolved",
+        repair_digest: "sha256:59113bf6c69a4acbb6668027fd494b1c36bb1044e76cfe4b0b55a6e15bfecdc2",
     },
     DialectCase {
         dialect: DialectId::MistralV3,
