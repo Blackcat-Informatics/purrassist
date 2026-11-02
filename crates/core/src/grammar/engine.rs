@@ -80,7 +80,7 @@ use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One positive codec-context query over a Link-free immutable history prefix.
+/// One positive codec-context query over a stable name-capture projection.
 /// A later history can reuse its oldest complete name at this exact ancestor.
 #[derive(Debug)]
 struct NameContextMemo {
@@ -1812,6 +1812,10 @@ impl<'s> Step<'_, 's> {
             governor,
         )? {
             Ok((top, cost)) => {
+                // Both closer_note and codec_value append only Edit, Value
+                // and prev-following Pack nodes rooted at the former prev.
+                // No name capture or Root/Next boundary changes, so cached
+                // context-name queries remain valid across this Link update.
                 self.arena.nodes.as_mut_slice()[deferred.node as usize].prev = top;
                 Reading::Read(cost)
             }
@@ -2051,7 +2055,7 @@ impl<'s> Step<'_, 's> {
         Ok(CodecContext { shape, ..markup })
     }
 
-    /// Only a positive query whose entire prefix is immutable can be reused.
+    /// A positive query's name projection survives value-only Link updates.
     /// A newer complete name cannot supersede the oldest one at its ancestor.
     fn context_name_range(
         &mut self,
@@ -2060,8 +2064,8 @@ impl<'s> Step<'_, 's> {
     ) -> Result<Option<Range<usize>>, StopReason> {
         governor.charge(Resource::Work, 1)?;
         let cached = self.arena.name_context.as_slice().first();
-        let (name, immutable) = self.find_context_name(hist, cached, governor)?;
-        if immutable && let Some(name) = &name {
+        let name = self.find_context_name(hist, cached, governor)?;
+        if let Some(name) = &name {
             governor.charge(Resource::Work, 1)?;
             let memo = NameContextMemo {
                 hist,
@@ -2077,22 +2081,21 @@ impl<'s> Step<'_, 's> {
     }
 
     /// Preserve the original oldest-name walk along `prev`, including Pack.
-    /// A mutable Link disables reuse below it and makes this query uncacheable.
+    /// Link resolution inserts no name capture or call boundary on that path.
     fn find_context_name(
         &self,
         hist: u32,
         cached: Option<&NameContextMemo>,
         governor: &mut Governor,
-    ) -> Result<(Option<Range<usize>>, bool), StopReason> {
+    ) -> Result<Option<Range<usize>>, StopReason> {
         let nodes = self.arena.nodes.as_slice();
         let (mut node, mut close, mut name) = (hist, None, None);
-        let mut immutable = true;
         loop {
             governor.charge(Resource::Work, K_CODEC)?;
-            if immutable && let Some(cached) = cached {
+            if let Some(cached) = cached {
                 governor.charge(Resource::Work, 1)?;
                 if node == cached.hist {
-                    return Ok((Some(cached.name.clone()), true));
+                    return Ok(Some(cached.name.clone()));
                 }
             }
             let HistNode { prev, kind } = nodes[node as usize];
@@ -2106,12 +2109,11 @@ impl<'s> Step<'_, 's> {
                         name = Some(start..end);
                     }
                 }
-                HistKind::Link => immutable = false,
                 _ => {}
             }
             node = prev;
         }
-        Ok((name, immutable))
+        Ok(name)
     }
 
     fn protocol_spelling(&self, range: Range<usize>) -> bool {

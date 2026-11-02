@@ -914,10 +914,13 @@ capture can continue.
 
 Codec context keeps one positive oldest-name query in the shared history
 arena's fallible scratch vector. A later context query can stop at that exact
-immutable ancestor instead of rescanning earlier parameter history. Every
-visited node and memo comparison admits Work; only positive Link-free queries
-are retained. A mutable Link disables reuse below it and prevents caching the
-query. Pack follows only its `prev` path, as in the original context walk.
+ancestor instead of rescanning earlier parameter history. Every visited node
+and memo comparison admits Work; only positive queries are retained. Deferred
+Link resolution inserts value, edit and packed-value nodes rooted at the same
+former predecessor. It changes neither the name-capture sequence nor the
+Root/Next boundary, so name-query reuse remains valid across that update.
+Pack follows only its `prev` path, as in the original context walk. This is a
+name-query invariant, not a claim that the complete history is immutable.
 Root and Next still bound the current call. Arena reset clears the memo before
 history IDs are reused; its retained capacity releases with the arena. Tool
 lookup and codec markup remain specific to the current caller and grammar.
