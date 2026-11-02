@@ -1094,6 +1094,17 @@ serialized diagnostic text are parsed to reconstruct edits. Revisions created
 by semantic search still need structured transformation records at their
 production sites; this native route does not fabricate their missing payloads.
 
+Revision rule lookup uses a static ordinal index sorted at compile time from
+the operator registry. Equal identifiers keep their original registry order,
+so the first matching operator remains the same. An explicit lower-bound loop
+halves its exclusive search interval on every comparison. Each string comparison
+admits the queried identifier's byte length plus one Work before it runs,
+including the final equality check when an indexed entry exists. A lookup uses
+at most the registry count's bit width plus one comparisons: at most seven
+for the current 47 operators. This index adds no heap storage and preserves
+evidence and event order; these source bounds do not establish where the
+restarted DeepSeek workload exhausts or whether it fits its Work budget.
+
 Packed ambiguity and grouped attempts can hold this conservative frontier even
 when later recovery would fold their meanings together. Proving the longest
 semantic stable prefix, ambiguous EOF event intersection, exact held/candidate

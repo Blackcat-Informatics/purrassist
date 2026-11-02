@@ -22,7 +22,7 @@ use crate::contract::{
     StopReason, invalid_input, push_scratch, reserve_failure, saturating_size as size,
 };
 use crate::grammar::CaptureKind;
-use crate::grammar::edit::{EditOperator, MarkupEdit, OPERATORS};
+use crate::grammar::edit::{EditOperator, MarkupEdit, OPERATOR_COUNT, OPERATOR_TABLE, OPERATORS};
 use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
 use core::ops::Range;
@@ -31,6 +31,63 @@ use core::ops::Range;
 /// Four native slots also admit the collector insertion per event.
 const EVENT_BYTES: u64 = 512;
 const _: () = assert!(4 * core::mem::size_of::<StreamEvent>() as u64 <= EVENT_BYTES);
+
+/// Lexical byte ordering for the compile-time operator index.
+const fn operator_id_precedes(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let mut at = 0;
+    while at < left.len() && at < right.len() {
+        if left[at] != right[at] {
+            return left[at] < right[at];
+        }
+        at += 1;
+    }
+    left.len() < right.len()
+}
+
+/// Stable ordinal ordering preserves the registry's first match for equal ids.
+/// The index derives from the registry without duplicating its identifiers.
+static OPERATOR_ID_ORDER: [usize; OPERATOR_COUNT] = {
+    let mut order = [0; OPERATOR_COUNT];
+    let mut next = 0;
+    while next < OPERATOR_COUNT {
+        let mut at = next;
+        while at > 0
+            && operator_id_precedes(OPERATOR_TABLE[next].id, OPERATOR_TABLE[order[at - 1]].id)
+        {
+            order[at] = order[at - 1];
+            at -= 1;
+        }
+        order[at] = next;
+        next += 1;
+    }
+    order
+};
+
+/// Admit each comparison before finding the first equal registry identifier.
+fn revision_operator(
+    id: &str,
+    governor: &mut Governor,
+) -> Result<Option<EditOperator>, StopReason> {
+    let comparison = size(id.len()).saturating_add(1);
+    let (mut low, mut high) = (0, OPERATOR_ID_ORDER.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        governor.charge(Resource::Work, comparison)?;
+        if OPERATORS[OPERATOR_ID_ORDER[middle]].id < id {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    let Some(&ordinal) = OPERATOR_ID_ORDER.get(low) else {
+        return Ok(None);
+    };
+    governor.charge(Resource::Work, comparison)?;
+    let operator = &OPERATORS[ordinal];
+    Ok((operator.id == id).then_some(operator.operator))
+}
 
 /// An owned notification whose source interpretation is already stable.
 ///
@@ -930,14 +987,7 @@ impl EventCursor {
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
         for evidence in &call.repairs.evidence {
-            governor.charge(
-                Resource::Work,
-                size(OPERATORS.len()).saturating_mul(size(evidence.rule.len()).saturating_add(1)),
-            )?;
-            let Some(operator) = OPERATORS
-                .iter()
-                .find(|operator| operator.id == evidence.rule)
-            else {
+            let Some(operator) = revision_operator(&evidence.rule, governor)? else {
                 continue;
             };
             let Some(span) = &evidence.span else {
@@ -946,7 +996,7 @@ impl EventCursor {
             let key = (
                 call.span.start,
                 call.span.end,
-                operator.operator,
+                operator,
                 span.bytes.start,
                 span.bytes.end,
             );
