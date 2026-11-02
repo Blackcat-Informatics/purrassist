@@ -315,6 +315,8 @@ const SOURCE_LEVELS: usize = usize::BITS.div_ceil(6) as usize;
 /// Portable admission for planning, validation, minimum descent and application.
 /// Eight record operations per level plus sixteen fixed operations cover the
 /// maximum eleven levels of a 64-bit source domain, including the root read.
+/// Fixed operations include count-page inspection and prepared-page handoff;
+/// initializing directory entries and page slots is admitted as growth below.
 /// Keep this admission identical on 32-bit targets with fewer stored levels.
 const SOURCE_UPDATE_WORK: u64 = 8 * 11 + 16;
 
@@ -327,13 +329,40 @@ struct SourceUpdate {
     active: usize,
     floor: Option<usize>,
     words: SourceWords,
+    page: Option<ScratchVec<usize>>,
+}
+
+impl SourceUpdate {
+    /// Consume the prepared owner only after queue admission has succeeded.
+    fn apply(self, sources: &mut PendingSources) {
+        let Self {
+            source,
+            count,
+            active,
+            floor,
+            words,
+            page,
+        } = self;
+        if let Some(page) = page {
+            sources.counts.as_mut_slice()[source / 64] = page;
+        }
+        sources.counts.as_mut_slice()[source / 64].as_mut_slice()[source % 64] = count;
+        for (level, changed) in sources.occupancy.iter_mut().zip(words) {
+            if let Some((index, word)) = changed {
+                level.as_mut_slice()[index] = word;
+            }
+        }
+        sources.active = active;
+        sources.floor = floor;
+    }
 }
 
 /// Exact pending-source multiplicities and their minimum in a lazy source
 /// universe. Every level exists from the first origin; growth only appends
 /// zeros, so an existing low path already reaches the fixed singleton root.
 struct PendingSources {
-    counts: ScratchVec<usize>,
+    /// Empty inner owners are absent pages; allocated pages have 64 counts.
+    counts: ScratchVec<ScratchVec<usize>>,
     occupancy: [ScratchVec<u64>; SOURCE_LEVELS],
     active: usize,
     floor: Option<usize>,
@@ -376,9 +405,8 @@ impl PendingSources {
     }
 
     fn grow(&mut self, source: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        let needed = source
-            .checked_add(1)
-            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        // Division first permits the inclusive EOF coordinate usize::MAX.
+        let needed = source / 64 + 1;
         Self::reserve_slots(&mut self.counts, needed, governor)?;
         let mut lengths = [0; SOURCE_LEVELS];
         let mut coordinate = source;
@@ -388,10 +416,11 @@ impl PendingSources {
             *length = coordinate + 1;
             Self::reserve_slots(level, *length, governor)?;
         }
-        // Every reservation succeeded before any length or occupancy changes.
-        // The following zero appends fit their already admitted capacities.
-        let missing = needed.saturating_sub(self.counts.len());
-        self.counts.extend(core::iter::repeat_n(0, missing))?;
+        // Every reservation succeeded before directory/occupancy lengths grow.
+        // Appending empty owners and zero words fits admitted capacities.
+        for _ in self.counts.len()..needed {
+            self.counts.push(ScratchVec::new(governor))?;
+        }
         for (level, length) in self.occupancy.iter_mut().zip(lengths) {
             let missing = length.saturating_sub(level.len());
             level.extend(core::iter::repeat_n(0, missing))?;
@@ -410,15 +439,25 @@ impl PendingSources {
             return Err(invalid_input("pending source root and minimum disagree"));
         }
         if let Some(floor) = self.floor
-            && self
-                .counts
-                .as_slice()
-                .get(floor)
-                .is_none_or(|count| *count == 0)
+            && self.count_at(floor)? == 0
         {
             return Err(invalid_input("pending source minimum has no live count"));
         }
         Ok(())
+    }
+
+    fn count_at(&self, source: usize) -> Result<usize, StopReason> {
+        let page = self
+            .counts
+            .as_slice()
+            .get(source / 64)
+            .ok_or_else(|| invalid_input("live pending source has no count page"))?;
+        if page.len() != 64 {
+            return Err(invalid_input(
+                "live pending source count page is not complete",
+            ));
+        }
+        Ok(page[source % 64])
     }
 
     fn changed_words(&self, source: usize, adding: bool) -> Result<SourceWords, StopReason> {
@@ -479,9 +518,7 @@ impl PendingSources {
         let count = if coordinate == update.source {
             update.count
         } else {
-            *self.counts.as_slice().get(coordinate).ok_or_else(|| {
-                invalid_input("pending source minimum points outside the source index")
-            })?
+            self.count_at(coordinate)?
         };
         if count == 0 {
             return Err(invalid_input(
@@ -503,7 +540,24 @@ impl PendingSources {
         }
         self.grow(source, governor)?;
         self.validate()?;
-        let old = self.counts[source];
+        let stored = &self.counts[source / 64];
+        let (old, page) = if stored.is_empty() {
+            let word = self.occupancy[0]
+                .as_slice()
+                .get(source / 64)
+                .ok_or_else(|| invalid_input("pending source page has no occupancy word"))?;
+            if *word != 0 {
+                return Err(invalid_input(
+                    "absent pending source page has live occupancy",
+                ));
+            }
+            let mut page = ScratchVec::new(governor);
+            Self::reserve_slots(&mut page, 64, governor)?;
+            page.extend(core::iter::repeat_n(0, 64))?;
+            (0, Some(page))
+        } else {
+            (self.count_at(source)?, None)
+        };
         let count = old
             .checked_add(1)
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
@@ -523,6 +577,7 @@ impl PendingSources {
             active,
             floor: Some(self.floor.map_or(source, |known| known.min(source))),
             words,
+            page,
         })
     }
 
@@ -545,10 +600,8 @@ impl PendingSources {
         governor.charge(Resource::Work, SOURCE_UPDATE_WORK)?;
         self.validate()?;
         let count = self
-            .counts
-            .as_slice()
-            .get(source)
-            .and_then(|count| count.checked_sub(1))
+            .count_at(source)?
+            .checked_sub(1)
             .ok_or_else(|| invalid_input("queued source origin has no live count"))?;
         if self.floor.is_none_or(|floor| floor > source) {
             return Err(invalid_input(
@@ -571,23 +624,12 @@ impl PendingSources {
             active,
             floor: self.floor,
             words,
+            page: None,
         };
         if count == 0 && self.floor == Some(source) {
             update.floor = self.minimum_after(&update)?;
         }
         Ok(update)
-    }
-
-    /// The prepare phase already admitted every write and validated its index.
-    fn apply(&mut self, update: SourceUpdate) {
-        self.counts.as_mut_slice()[update.source] = update.count;
-        for (level, changed) in self.occupancy.iter_mut().zip(update.words) {
-            if let Some((index, word)) = changed {
-                level.as_mut_slice()[index] = word;
-            }
-        }
-        self.active = update.active;
-        self.floor = update.floor;
     }
 }
 
@@ -1774,7 +1816,7 @@ impl<'s> Recognizer<'s> {
             .checked_add(1)
             .ok_or_else(|| governor.stop_resource(Resource::Work))?;
         governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
-        self.pending_sources.apply(update);
+        update.apply(&mut self.pending_sources);
         self.queued.bytes += QUEUED_REPORT;
         self.arrivals = arrival;
         self.pending
@@ -1809,7 +1851,7 @@ impl<'s> Recognizer<'s> {
                 .pending
                 .pop_first()
                 .expect("pending minimum was just read");
-            self.pending_sources.apply(update);
+            update.apply(&mut self.pending_sources);
             ready.push((ready.len(), pending.at(), pending));
         }
         if ready.is_empty() {

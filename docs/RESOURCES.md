@@ -973,29 +973,41 @@ intersection visits those links rather than enumerating or replaying histories.
 The portable history-node reservation is 48 bytes. Traversals admit work before
 each visited step, and scanning live owners admits work for their records.
 Pending reports keep their dispatch order separately from a counted source
-index. Lazy source-offset counts and hierarchical occupancy bitsets retain the
+index. Paged source-offset counts and hierarchical occupancy bitsets retain the
 exact minimum, including a later-ending report whose source begins earlier.
 Each occupancy level marks nonempty words of the level below it; all levels
 exist from the first origin through one fixed root word. Updates and minimum
 descent visit at most eleven levels on 64-bit targets, or six on 32-bit targets,
 without assuming source origins arrive or leave in order. Every prepared update
 admits 104 Work on either target for bounded planning, validation and writes,
-including the root read. Growth separately admits newly zeroed slots and live
-slots potentially relocated by a capacity increase. All capacities are reserved
-before zero initialization; live counts, occupancy and the cached minimum change
-only after the complete update and queue admission succeed. Removal is planned
-before a report leaves the dispatch queue, with no fallible charge between that
-removal and applying the source update. Invalid source offsets, count overflow
+including the root read and page bookkeeping. Growth separately admits newly
+initialized directory entries, count slots and bitmap words, and live slots
+potentially relocated by a capacity increase. Directory and bitmap capacities
+are reserved before their lengths grow. Each touched page reserves exactly 64
+native-width counts, while an empty inner owner represents an unallocated page.
+A prepared update owns a newly initialized page until queue admission succeeds;
+refusal drops that page without installing it. Live counts, occupancy and the
+cached minimum change only after the complete update and queue admission
+succeed. Removal is planned before a report leaves the dispatch queue, with no
+fallible charge between that removal and applying the source update. Invalid
+source offsets, count overflow
 and inconsistent occupancy paths fail explicitly.
 
 The index grows only to the largest queued origin, which must not exceed the
-fed byte count, including an empty completion's EOF offset. Scratch vectors own
-and charge their actual reserved capacity until the recognizer drops; the old
-256-byte reservation per distinct origin is removed. With geometric growth,
-the counts and occupancy buffers reserve at most 16.254 bytes per indexed source
-position plus fixed level overhead. This is a source-derived storage and update
-bound, not measured evidence that a workload fits its Work or scratch budget.
-Frontier updates read the cached exact minimum without scanning the pending
+fed byte count, including an empty completion's EOF offset. Dividing the source
+coordinate into a page and slot avoids an overflowing `source + 1` at the native
+offset limit. Scratch vectors own and charge their reserved capacity until the
+recognizer drops; the old 256-byte reservation per distinct origin is removed.
+The directory stores 40-byte inner owners with geometric growth, while page
+capacity stays at 64 counts. Together with the occupancy buffers this reserves
+less than 9.504 bytes per indexed source position plus rounding and fixed level
+overhead. A late origin after a large source gap needs the directory and its own
+page, without allocating count pages for the gap. Hermes JSON strings followed
+by `}` can queue such a late origin: their closing quote and brace also match an
+Anthropic reasoning closer, which is queued before ownership interpretation.
+These source-derived storage and update bounds do not establish whether a
+workload fits its Work or scratch budget. Frontier updates read the cached exact
+minimum without scanning the pending
 queue.
 
 A successful native projection retains an exact memo of its engine and
