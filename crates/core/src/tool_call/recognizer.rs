@@ -80,8 +80,8 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, ScratchVec,
-    SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchMeter,
+    ScratchVec, SourceSpan, StopReason, invalid_input,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
@@ -183,8 +183,6 @@ struct TurnNode {
 
 const TURN_NODE_BYTES: u64 = 48;
 const _: () = assert!(core::mem::size_of::<TurnNode>() as u64 <= TURN_NODE_BYTES);
-/// One source-origin count plus its share of ordered-map node storage.
-const PENDING_ORIGIN_BYTES: u64 = 256;
 
 /// A conservative native continuation boundary, not a resolved stream event.
 /// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
@@ -309,6 +307,287 @@ impl Pending {
             Self::Engine(Event::Ended { .. }) => 3,
             Self::Marker { open: false, .. } => 4,
         }
+    }
+}
+
+/// Six source-coordinate bits per occupancy level, covering the native domain.
+const SOURCE_LEVELS: usize = usize::BITS.div_ceil(6) as usize;
+/// Portable admission for planning, validation, minimum descent and application.
+/// Eight record operations per level plus sixteen fixed operations cover the
+/// maximum eleven levels of a 64-bit source domain, including the root read.
+/// Keep this admission identical on 32-bit targets with fewer stored levels.
+const SOURCE_UPDATE_WORK: u64 = 8 * 11 + 16;
+
+type SourceWords = [Option<(usize, u64)>; SOURCE_LEVELS];
+
+/// An admitted update, fully planned before the dispatch queue changes.
+struct SourceUpdate {
+    source: usize,
+    count: usize,
+    active: usize,
+    floor: Option<usize>,
+    words: SourceWords,
+}
+
+/// Exact pending-source multiplicities and their minimum in a lazy source
+/// universe. Every level exists from the first origin; growth only appends
+/// zeros, so an existing low path already reaches the fixed singleton root.
+struct PendingSources {
+    counts: ScratchVec<usize>,
+    occupancy: [ScratchVec<u64>; SOURCE_LEVELS],
+    active: usize,
+    floor: Option<usize>,
+}
+
+impl PendingSources {
+    fn new(governor: &Governor) -> Self {
+        Self {
+            counts: ScratchVec::new(governor),
+            occupancy: core::array::from_fn(|_| ScratchVec::new(governor)),
+            active: 0,
+            floor: None,
+        }
+    }
+
+    const fn floor(&self) -> Option<usize> {
+        self.floor
+    }
+
+    /// Admit initialization and possible relocation independently of updates.
+    fn reserve_slots<T: ScratchCharge>(
+        values: &mut ScratchVec<T>,
+        needed: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if needed <= values.len() {
+            return Ok(());
+        }
+        let missing = needed - values.len();
+        let relocated = if needed > values.capacity() {
+            values.len()
+        } else {
+            0
+        };
+        governor.charge(
+            Resource::Work,
+            size(missing).saturating_add(size(relocated)),
+        )?;
+        values.reserve(missing)
+    }
+
+    fn grow(&mut self, source: usize, governor: &mut Governor) -> Result<(), StopReason> {
+        let needed = source
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        Self::reserve_slots(&mut self.counts, needed, governor)?;
+        let mut lengths = [0; SOURCE_LEVELS];
+        let mut coordinate = source;
+        for (level, length) in self.occupancy.iter_mut().zip(&mut lengths) {
+            coordinate /= 64;
+            // Division happens first, so this addition cannot overflow.
+            *length = coordinate + 1;
+            Self::reserve_slots(level, *length, governor)?;
+        }
+        // Every reservation succeeded before any length or occupancy changes.
+        // The following zero appends fit their already admitted capacities.
+        let missing = needed.saturating_sub(self.counts.len());
+        self.counts.extend(core::iter::repeat_n(0, missing))?;
+        for (level, length) in self.occupancy.iter_mut().zip(lengths) {
+            let missing = length.saturating_sub(level.len());
+            level.extend(core::iter::repeat_n(0, missing))?;
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), StopReason> {
+        let root = &self.occupancy[SOURCE_LEVELS - 1];
+        let word = match root.as_slice() {
+            [] if self.active == 0 => 0,
+            [word] => *word,
+            _ => return Err(invalid_input("pending source root is not a singleton")),
+        };
+        if (self.active == 0) != (word == 0) || (self.active == 0) != self.floor.is_none() {
+            return Err(invalid_input("pending source root and minimum disagree"));
+        }
+        if let Some(floor) = self.floor
+            && self
+                .counts
+                .as_slice()
+                .get(floor)
+                .is_none_or(|count| *count == 0)
+        {
+            return Err(invalid_input("pending source minimum has no live count"));
+        }
+        Ok(())
+    }
+
+    fn changed_words(&self, source: usize, adding: bool) -> Result<SourceWords, StopReason> {
+        let mut words = [None; SOURCE_LEVELS];
+        let mut coordinate = source;
+        for (level, changed) in self.occupancy.iter().zip(&mut words) {
+            let index = coordinate / 64;
+            let mask = 1_u64 << (coordinate % 64);
+            let old = *level
+                .as_slice()
+                .get(index)
+                .ok_or_else(|| invalid_input("pending source occupancy word is missing"))?;
+            if (old & mask != 0) == adding {
+                return Err(invalid_input(
+                    "pending source occupancy transition is inconsistent",
+                ));
+            }
+            let new = if adding { old | mask } else { old & !mask };
+            *changed = Some((index, new));
+            if (adding && old != 0) || (!adding && new != 0) {
+                break;
+            }
+            coordinate = index;
+        }
+        Ok(words)
+    }
+
+    fn minimum_after(&self, update: &SourceUpdate) -> Result<Option<usize>, StopReason> {
+        let mut coordinate = 0_usize;
+        for level in (0..SOURCE_LEVELS).rev() {
+            let stored = self.occupancy[level]
+                .as_slice()
+                .get(coordinate)
+                .ok_or_else(|| invalid_input("pending source minimum path is missing"))?;
+            let word = match update.words[level] {
+                Some((index, word)) if index == coordinate => word,
+                _ => *stored,
+            };
+            if level == SOURCE_LEVELS - 1 && update.active == 0 {
+                return if word == 0 {
+                    Ok(None)
+                } else {
+                    Err(invalid_input(
+                        "empty pending source index has a nonempty root",
+                    ))
+                };
+            }
+            if word == 0 {
+                return Err(invalid_input(
+                    "nonempty pending source path has an empty word",
+                ));
+            }
+            coordinate = coordinate
+                .checked_mul(64)
+                .and_then(|base| base.checked_add(word.trailing_zeros() as usize))
+                .ok_or_else(|| invalid_input("pending source minimum exceeds the offset domain"))?;
+        }
+        let count = if coordinate == update.source {
+            update.count
+        } else {
+            *self.counts.as_slice().get(coordinate).ok_or_else(|| {
+                invalid_input("pending source minimum points outside the source index")
+            })?
+        };
+        if count == 0 {
+            return Err(invalid_input(
+                "pending source minimum points to an empty count",
+            ));
+        }
+        Ok(Some(coordinate))
+    }
+
+    fn prepare_add(
+        &mut self,
+        source: usize,
+        fed: usize,
+        governor: &mut Governor,
+    ) -> Result<SourceUpdate, StopReason> {
+        governor.charge(Resource::Work, SOURCE_UPDATE_WORK)?;
+        if source > fed {
+            return Err(invalid_input("queued source origin exceeds admitted input"));
+        }
+        self.grow(source, governor)?;
+        self.validate()?;
+        let old = self.counts[source];
+        let count = old
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let active = self
+            .active
+            .checked_add(usize::from(old == 0))
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let words = if old == 0 {
+            self.changed_words(source, true)?
+        } else {
+            self.check_occupied(source)?;
+            [None; SOURCE_LEVELS]
+        };
+        Ok(SourceUpdate {
+            source,
+            count,
+            active,
+            floor: Some(self.floor.map_or(source, |known| known.min(source))),
+            words,
+        })
+    }
+
+    fn check_occupied(&self, source: usize) -> Result<(), StopReason> {
+        let word = self.occupancy[0]
+            .as_slice()
+            .get(source / 64)
+            .ok_or_else(|| invalid_input("live pending source has no occupancy word"))?;
+        if word & (1_u64 << (source % 64)) == 0 {
+            return Err(invalid_input("live pending source has no occupancy bit"));
+        }
+        Ok(())
+    }
+
+    fn prepare_remove(
+        &self,
+        source: usize,
+        governor: &mut Governor,
+    ) -> Result<SourceUpdate, StopReason> {
+        governor.charge(Resource::Work, SOURCE_UPDATE_WORK)?;
+        self.validate()?;
+        let count = self
+            .counts
+            .as_slice()
+            .get(source)
+            .and_then(|count| count.checked_sub(1))
+            .ok_or_else(|| invalid_input("queued source origin has no live count"))?;
+        if self.floor.is_none_or(|floor| floor > source) {
+            return Err(invalid_input(
+                "queued source origin precedes the cached minimum",
+            ));
+        }
+        let active = self
+            .active
+            .checked_sub(usize::from(count == 0))
+            .ok_or_else(|| invalid_input("pending source origin count underflows"))?;
+        let words = if count == 0 {
+            self.changed_words(source, false)?
+        } else {
+            self.check_occupied(source)?;
+            [None; SOURCE_LEVELS]
+        };
+        let mut update = SourceUpdate {
+            source,
+            count,
+            active,
+            floor: self.floor,
+            words,
+        };
+        if count == 0 && self.floor == Some(source) {
+            update.floor = self.minimum_after(&update)?;
+        }
+        Ok(update)
+    }
+
+    /// The prepare phase already admitted every write and validated its index.
+    fn apply(&mut self, update: SourceUpdate) {
+        self.counts.as_mut_slice()[update.source] = update.count;
+        for (level, changed) in self.occupancy.iter_mut().zip(update.words) {
+            if let Some((index, word)) = changed {
+                level.as_mut_slice()[index] = word;
+            }
+        }
+        self.active = update.active;
+        self.floor = update.floor;
     }
 }
 
@@ -1105,8 +1384,7 @@ pub struct Recognizer<'s> {
     pending: BTreeMap<(usize, u8, u64), Pending>,
     /// Report offsets and source origins have different orders. Keep their
     /// counted source index and cached minimum separate from dispatch order.
-    pending_sources: BTreeMap<usize, usize>,
-    pending_source_floor: Option<usize>,
+    pending_sources: PendingSources,
     arrivals: u64,
     queued: Queued,
     turn: Turn,
@@ -1237,8 +1515,7 @@ impl<'s> Recognizer<'s> {
             digest: DigestBuilder::new(),
             marker: 0,
             pending: BTreeMap::new(),
-            pending_sources: BTreeMap::new(),
-            pending_source_floor: None,
+            pending_sources: PendingSources::new(governor),
             arrivals: 0,
             queued: Queued {
                 meter: governor.scratch_meter(),
@@ -1362,7 +1639,7 @@ impl<'s> Recognizer<'s> {
     /// A packed disagreement is not resolved here.
     fn update_frontier(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         let engine_floor = self.engine.continuation_floor(governor)?;
-        let report_floor = self.pending_source_floor;
+        let report_floor = self.pending_sources.floor();
         let lexical = self.engine.fed().saturating_sub(self.set.lookbehind);
         governor.charge(Resource::Work, 1)?;
         if let Some(memo) = self.frontier_memo
@@ -1488,65 +1765,20 @@ impl<'s> Recognizer<'s> {
     /// whose inserted wrapper closer is still being decided, and a queue too
     /// long for the budget is `BudgetExceeded(ScratchBytes)`.
     fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
-        self.admit_source_index(governor)?;
         let source = pending.source_start();
-        let previous = self.pending_sources.get(&source).copied();
-        let count = previous
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let update = self
+            .pending_sources
+            .prepare_add(source, self.engine.fed(), governor)?;
         let arrival = self
             .arrivals
             .checked_add(1)
             .ok_or_else(|| governor.stop_resource(Resource::Work))?;
-        let admitted = QUEUED_REPORT
-            + if previous.is_none() {
-                PENDING_ORIGIN_BYTES
-            } else {
-                0
-            };
-        governor.charge(Resource::ScratchBytes, admitted)?;
-        self.queued.bytes += admitted;
-        self.pending_sources.insert(source, count);
-        self.pending_source_floor = Some(
-            self.pending_source_floor
-                .map_or(source, |known| known.min(source)),
-        );
+        governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
+        self.pending_sources.apply(update);
+        self.queued.bytes += QUEUED_REPORT;
         self.arrivals = arrival;
         self.pending
             .insert((pending.at(), pending.phase(), self.arrivals), pending);
-        Ok(())
-    }
-
-    /// Admit logarithmic native-map lookup/update work, including a possible
-    /// minimum refresh. A node search compares at most 11 keys per level;
-    /// binary height bounds conservatively cover the native B-tree's height.
-    fn admit_source_index(&self, governor: &mut Governor) -> Result<(), StopReason> {
-        let levels = self.pending_sources.len().bit_width() + 1;
-        governor.charge(Resource::Work, u64::from(levels).saturating_mul(33))
-    }
-
-    /// Remove an origin after its index work was admitted, before dispatch.
-    fn unqueue_source(&mut self, source: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        let count = self.pending_sources.get(&source).copied().ok_or_else(|| {
-            StopReason::InvalidInput("queued report has no source-origin count".into())
-        })?;
-        let remaining = count
-            .checked_sub(1)
-            .ok_or_else(|| StopReason::InvalidInput("queued source-origin count is zero".into()))?;
-        if remaining == 0 {
-            self.pending_sources.remove(&source);
-            if self.pending_source_floor == Some(source) {
-                self.pending_source_floor = self
-                    .pending_sources
-                    .first_key_value()
-                    .map(|(&first, _)| first);
-            }
-            governor.release_scratch(PENDING_ORIGIN_BYTES)?;
-            self.queued.bytes -= PENDING_ORIGIN_BYTES;
-        } else {
-            self.pending_sources.insert(source, remaining);
-        }
         Ok(())
     }
 
@@ -1564,18 +1796,20 @@ impl<'s> Recognizer<'s> {
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
         let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
         // Stable order: offset, then phase, then arrival.
-        while let Some((&key, _)) = self.pending.first_key_value() {
+        while let Some((&key, pending)) = self.pending.first_key_value() {
             if key.0 > limit {
                 break;
             }
             // Admit before removing either index entry, so work refusal
             // leaves both orders and their ownership intact.
-            self.admit_source_index(governor)?;
+            let update = self
+                .pending_sources
+                .prepare_remove(pending.source_start(), governor)?;
             let (_, pending) = self
                 .pending
                 .pop_first()
                 .expect("pending minimum was just read");
-            self.unqueue_source(pending.source_start(), governor)?;
+            self.pending_sources.apply(update);
             ready.push((ready.len(), pending.at(), pending));
         }
         if ready.is_empty() {

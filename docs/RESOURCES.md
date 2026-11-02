@@ -972,13 +972,31 @@ their unambiguous structural prefix with one skip link per node; prefix
 intersection visits those links rather than enumerating or replaying histories.
 The portable history-node reservation is 48 bytes. Traversals admit work before
 each visited step, and scanning live owners admits work for their records.
-Pending reports keep their dispatch order separately from a counted ordered
-source-origin index. The cached source minimum covers every pending report,
-including a later-ending report whose source begins earlier. Each distinct
-origin admits 256 bytes for its count and ordered-node storage, released when
-its final report leaves the queue. Index updates admit lookup and update work
-before mutation; frontier updates read the cached minimum without scanning the
-pending queue.
+Pending reports keep their dispatch order separately from a counted source
+index. Lazy source-offset counts and hierarchical occupancy bitsets retain the
+exact minimum, including a later-ending report whose source begins earlier.
+Each occupancy level marks nonempty words of the level below it; all levels
+exist from the first origin through one fixed root word. Updates and minimum
+descent visit at most eleven levels on 64-bit targets, or six on 32-bit targets,
+without assuming source origins arrive or leave in order. Every prepared update
+admits 104 Work on either target for bounded planning, validation and writes,
+including the root read. Growth separately admits newly zeroed slots and live
+slots potentially relocated by a capacity increase. All capacities are reserved
+before zero initialization; live counts, occupancy and the cached minimum change
+only after the complete update and queue admission succeed. Removal is planned
+before a report leaves the dispatch queue, with no fallible charge between that
+removal and applying the source update. Invalid source offsets, count overflow
+and inconsistent occupancy paths fail explicitly.
+
+The index grows only to the largest queued origin, which must not exceed the
+fed byte count, including an empty completion's EOF offset. Scratch vectors own
+and charge their actual reserved capacity until the recognizer drops; the old
+256-byte reservation per distinct origin is removed. With geometric growth,
+the counts and occupancy buffers reserve at most 16.254 bytes per indexed source
+position plus fixed level overhead. This is a source-derived storage and update
+bound, not measured evidence that a workload fits its Work or scratch budget.
+Frontier updates read the cached exact minimum without scanning the pending
+queue.
 
 A successful native projection retains an exact memo of its engine and
 pending-source floors, final ownership barrier and effective cutoff. Every byte
