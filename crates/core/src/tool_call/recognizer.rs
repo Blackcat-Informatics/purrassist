@@ -1984,7 +1984,7 @@ impl<'s> Recognizer<'s> {
                     .into_iter()
                     .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
                     .collect();
-                self.completed(frame, attempt, parts, envelopes, charged, governor)?;
+                self.completed(frame, attempt, parts, &envelopes, charged, governor)?;
             }
             Pending::Engine(Event::Ended {
                 table,
@@ -2475,7 +2475,7 @@ impl<'s> Recognizer<'s> {
         frame: &mut Frame,
         attempt: u64,
         parts: Vec<(Segment, u64)>,
-        envelopes: ScratchVec<PartEnvelope>,
+        envelopes: &[PartEnvelope],
         charged: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
@@ -2519,7 +2519,7 @@ impl<'s> Recognizer<'s> {
             let end = segment.span().end;
             stored.push((
                 self.turn
-                    .store_certified(segment, index, &envelopes, governor)?,
+                    .store_certified(segment, index, envelopes, governor)?,
                 cost,
                 end,
             ));

@@ -83,6 +83,7 @@ use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod envelope;
+mod insertion;
 pub(crate) use envelope::{CompletedParts, PartEnvelope, SourceEnvelope, retained_context};
 
 /// Original name capture and optional beginning of its chained call.
@@ -6947,7 +6948,7 @@ impl<'s> Engine<'s> {
             let mut verdict = Verdict::Held;
             if trail.scan.is_none() && self.step_trail(table, &mut trail, until, end, governor)? {
                 verdict = Verdict::Report;
-                if self.ended_by_insertion(trail.thread.hist, governor)? {
+                if self.ended_by_insertion(&trail.thread, governor)? {
                     trail.scan = Some(Scan { text: None });
                     trail.at = trail.thread.pos;
                 }
@@ -7245,55 +7246,26 @@ impl<'s> Engine<'s> {
         thread: &mut Thread,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let mut pending = vec![thread.hist];
-        let mut changed = false;
-        while let Some(at) = pending.pop() {
-            governor.charge(Resource::Work, K_THREAD)?;
-            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[at as usize];
-            match kind {
-                HistKind::Edit(index) => {
-                    let edit = &mut self.arena.edits[index as usize];
-                    match edit.operator {
-                        EditOperator::MissingWrapperClose => {
-                            edit.operator = EditOperator::MissingWrapperCloseBeforeText;
-                            changed = true;
-                        }
-                        EditOperator::DeleteStrayCloser => pending.push(prev),
-                        _ => {}
-                    }
-                }
-                HistKind::Pack(other) => pending.extend([prev, other]),
-                _ => {}
-            }
-        }
-        if changed {
-            thread.cost = thread
-                .cost
-                .saturating_sub(EditOperator::MissingWrapperClose.rule().cost)
-                .saturating_add(EditOperator::MissingWrapperCloseBeforeText.rule().cost);
-        }
+        let tail = insertion::ending(&self.arena, thread.hist, thread.pos, governor)?.ok_or_else(
+            || crate::contract::invalid_input("wrapper guess lost its insertion tail"),
+        )?;
+        let hist = tail.guess(&mut self.arena, governor)?;
+        thread.hist = hist;
+        thread.cost = thread
+            .cost
+            .saturating_sub(EditOperator::MissingWrapperClose.rule().cost)
+            .saturating_add(EditOperator::MissingWrapperCloseBeforeText.rule().cost);
         Ok(())
     }
 
     /// Whether every history packed in `hist` ends with an inserted wrapper
     /// closer, possibly followed by absorbed stray closers.
-    fn ended_by_insertion(&self, hist: u32, governor: &mut Governor) -> Result<bool, StopReason> {
-        let nodes = self.arena.nodes.as_slice();
-        let mut pending = vec![hist];
-        while let Some(at) = pending.pop() {
-            governor.charge(Resource::Work, K_THREAD)?;
-            let HistNode { prev, kind, .. } = nodes[at as usize];
-            match kind {
-                HistKind::Edit(index) => match self.arena.edits[index as usize].operator {
-                    EditOperator::MissingWrapperClose => {}
-                    EditOperator::DeleteStrayCloser => pending.push(prev),
-                    _ => return Ok(false),
-                },
-                HistKind::Pack(other) => pending.extend([prev, other]),
-                _ => return Ok(false),
-            }
-        }
-        Ok(true)
+    fn ended_by_insertion(
+        &self,
+        thread: &Thread,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        Ok(insertion::ending(&self.arena, thread.hist, thread.pos, governor)?.is_some())
     }
 
     /// Drop a held completion [`Self::scan_trail`] rejected: the attempt
@@ -7323,16 +7295,10 @@ impl<'s> Engine<'s> {
         let start = trail.thread.pos;
         let original = self.buffer.as_slice()[start - self.base..stop - self.base].to_vec();
         governor.charge(Resource::Work, size(original.len()))?;
-        let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[trail.thread.hist as usize];
-        let inserted = match kind {
-            HistKind::Edit(index) => {
-                let edit = &self.arena.edits[index as usize];
-                (edit.operator == EditOperator::MissingWrapperClose
-                    && edit.span.start == start
-                    && original.trim_ascii_start() == edit.replacement.as_slice())
-                .then_some(prev)
-            }
-            _ => None,
+        let inserted = match insertion::absorbing(&self.arena, trail.thread.hist, start, governor)?
+        {
+            Some(tail) => tail.absorb(&mut self.arena, start, stop, &original, governor)?,
+            None => None,
         };
         if let Some(prev) = inserted {
             // The call's final closer was inserted where whitespace stood,
@@ -7544,6 +7510,59 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    /// Keep the source certificate's owner separate from the materialized
+    /// payload admission, releasing that payload exactly once on refusal.
+    fn certify_completion(
+        &self,
+        parts: Parts,
+        charged: u64,
+        governor: &mut Governor,
+    ) -> Result<CompletedParts, StopReason> {
+        match envelope::certify(&parts, self.base, self.buffer.as_slice(), governor) {
+            Ok(envelopes) => Ok(CompletedParts { parts, envelopes }),
+            Err(reason) => {
+                drop(parts);
+                let _ = governor.release_scratch(charged);
+                Err(reason)
+            }
+        }
+    }
+
+    /// Move a completed payload into the same held or outgoing owner as
+    /// before certification; no admission or source edit happens here.
+    fn emit_completed(
+        &mut self,
+        table: usize,
+        event: Event,
+        attempt: u64,
+        dangling: bool,
+        grouped: bool,
+    ) {
+        if grouped {
+            let (costs, arguments) = match &event {
+                Event::Completed { parts, .. } => (
+                    parts.parts.iter().map(|(_, cost)| *cost).collect(),
+                    parts
+                        .parts
+                        .last()
+                        .is_some_and(|(part, _)| began_arguments(part)),
+                ),
+                _ => (Vec::new(), false),
+            };
+            self.tables[table].held.push(Held {
+                attempt,
+                at: event.at(),
+                calls: costs.len(),
+                total: costs.iter().sum(),
+                dangling,
+                arguments,
+                body: HeldBody::Event(event, costs),
+            });
+        } else {
+            self.events.push(event);
+        }
+    }
+
     fn report(
         &mut self,
         table: usize,
@@ -7618,49 +7637,15 @@ impl<'s> Engine<'s> {
                 let charged = if segmentations.len() == 1 { charged } else { 0 };
                 for parts in segmentations {
                     governor.charge(Resource::Work, super::cost::K_EVENT)?;
-                    let envelopes = match envelope::certify(
-                        &parts,
-                        self.base,
-                        self.buffer.as_slice(),
-                        governor,
-                    ) {
-                        Ok(envelopes) => envelopes,
-                        Err(reason) => {
-                            drop(parts);
-                            let _ = governor.release_scratch(charged);
-                            return Err(reason);
-                        }
-                    };
+                    let parts = self.certify_completion(parts, charged, governor)?;
                     let event = Event::Completed {
                         table: index_u32(table),
                         attempt: thread.attempt,
                         at: thread.pos,
-                        parts: CompletedParts { parts, envelopes },
+                        parts,
                         charged,
                     };
-                    if grouped {
-                        let (costs, arguments) = match &event {
-                            Event::Completed { parts, .. } => (
-                                parts.parts.iter().map(|(_, cost)| *cost).collect(),
-                                parts
-                                    .parts
-                                    .last()
-                                    .is_some_and(|(part, _)| began_arguments(part)),
-                            ),
-                            _ => (Vec::new(), false),
-                        };
-                        self.tables[table].held.push(Held {
-                            attempt: thread.attempt,
-                            at: event.at(),
-                            calls: costs.len(),
-                            total: costs.iter().sum(),
-                            dangling,
-                            arguments,
-                            body: HeldBody::Event(event, costs),
-                        });
-                    } else {
-                        self.events.push(event);
-                    }
+                    self.emit_completed(table, event, thread.attempt, dangling, grouped);
                 }
             }
             Err(reason) => {

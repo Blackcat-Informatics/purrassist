@@ -3053,6 +3053,25 @@ fn trailing_text_inside_wrapper_rejected() {
 
 const BEFORE_TEXT: &str = "tool_call.markup.missing-wrapper-close.before-text";
 
+/// The shipped projection inserts array brackets around an unbracketed call
+/// object, including when its final brace needs recovery.
+fn mistral_inserted_bracket_tail(input: &str, policy: RepairPolicy) -> AssistResult<ToolCalls> {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("f")
+            .effects(Effects::ReadOnly)
+            .policy(policy)
+            .param("a", Param::string())],
+        Budget::default(),
+    )
+    .expect("wrapper-tail tool");
+    let dialects = DialectSet::new(
+        [DialectId::MistralV3Stripped],
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("shipped Mistral projection");
+    tools.recover(input.as_bytes(), &ToolRecoveryRequest::default(), &dialects)
+}
+
 #[test]
 fn missing_wrapper_close_then_prose_tolerant() {
     let (_, result) = golden("missing_wrapper_close_then_prose_tolerant");
@@ -3065,6 +3084,28 @@ fn missing_wrapper_close_then_prose_tolerant() {
     let calls = reading(&result);
     assert_eq!(calls.usable().len(), 0);
     assert_eq!(calls.usable_accepting_guesses().len(), 1);
+
+    let input = r#"{"name":"f","arguments":{"a":"x"} tail"#;
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Tolerant);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{result:?}");
+    let call = &calls.calls[0];
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    let rules = rules_of(call);
+    assert_eq!(rules.iter().filter(|&&rule| rule == BEFORE_TEXT).count(), 1);
+    assert_eq!(
+        rules
+            .iter()
+            .filter(|&&rule| rule == "tool_call.markup.missing-token")
+            .count(),
+        2,
+        "both explicit bracket insertions survive the wrapper relabel"
+    );
+    assert!(!rules.contains(&"tool_call.markup.missing-wrapper-close"));
+    assert_eq!(
+        (calls.usable().len(), calls.usable_accepting_guesses().len()),
+        (0, 1)
+    );
 }
 
 #[test]
@@ -3087,6 +3128,24 @@ fn missing_wrapper_close_then_prose_structural() {
         (0, 0)
     );
     assert_eq!(calls.finish, Finish::Unresolved);
+
+    let input = r#"{"name":"f","arguments":{"a":"x"} tail"#;
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Structural);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{result:?}");
+    assert_eq!(
+        calls.calls[0].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::RuleNotAdmitted {
+                rule: BEFORE_TEXT.into(),
+                policy: RepairPolicy::Structural,
+            },
+        }
+    );
+    assert_eq!(
+        (calls.usable().len(), calls.usable_accepting_guesses().len()),
+        (0, 0)
+    );
 }
 
 #[test]
@@ -3104,6 +3163,56 @@ fn missing_wrapper_close_then_prose_then_call() {
     let first = &reading(&result).calls[0];
     assert_eq!(first.outcome, CallOutcome::Resolved);
     assert!(rules_of(first).contains(&"tool_call.markup.missing-wrapper-close"));
+
+    let input =
+        "{\"name\":\"f\",\"arguments\":{\"a\":\"x\"}\n{\"name\":\"f\",\"arguments\":{\"a\":\"y\"}}";
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Tolerant);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 2, "{result:?}");
+    assert!(
+        calls
+            .calls
+            .iter()
+            .all(|call| call.outcome == CallOutcome::Resolved)
+    );
+    assert!(rules_of(&calls.calls[0]).contains(&"tool_call.markup.missing-wrapper-close"));
+    assert!(
+        calls
+            .calls
+            .iter()
+            .all(|call| !rules_of(call).contains(&BEFORE_TEXT))
+    );
+
+    // A consumed authentic closer leaves the virtual array bracket after
+    // its complete source span, including intervening layout whitespace.
+    let input = "{\"name\":\"f\",\"arguments\":{\"a\":\"x\"} \t\r\n}";
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Tolerant);
+    assert_eq!(result.receipt.sources[0].bytes.as_slice(), input.as_bytes());
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{result:?}");
+    let call = &calls.calls[0];
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.span, 0..input.len());
+    assert_eq!(call.arguments.to_json(), r#"{"a":"x"}"#);
+    let rules = rules_of(call);
+    assert!(!rules.contains(&"tool_call.markup.missing-wrapper-close"));
+    assert!(!rules.contains(&BEFORE_TEXT));
+    assert!(!rules.contains(&"tool_call.markup.stray-closer"));
+    let brackets: Vec<_> = call
+        .repairs
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.rule == "tool_call.markup.missing-token")
+        .collect();
+    assert_eq!(brackets.len(), 2);
+    let closing = brackets
+        .iter()
+        .find(|evidence| evidence.explanation == "read the omitted token `]` as inserted here")
+        .expect("virtual closing array bracket");
+    assert_eq!(
+        closing.span.as_ref().expect("source position").bytes,
+        input.len()..input.len()
+    );
 }
 
 /// Llama 3 JSON: the object's final brace is its closer, so a missing one
@@ -4306,6 +4415,22 @@ fn bare_json_calls() {
         // Every byte is content.
         let covered: usize = calls.content.iter().map(ExactSizeIterator::len).sum();
         assert_eq!(covered, golden.input.len(), "{name}");
+        if name == "bare_json_extra_member_is_content" {
+            // A projected prefix must not hide the object's authentic final
+            // brace behind inserted array markup and become usable.
+            let default = golden.run_default().expect("default allow-list run");
+            let readings = match &default.outcome {
+                Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+                Outcome::Ambiguous(readings) => readings.iter().collect(),
+                Outcome::Unresolved => panic!("default wrapper-tail recovery refused: {default:?}"),
+            };
+            for calls in readings {
+                assert_eq!(
+                    (calls.usable().len(), calls.usable_accepting_guesses().len()),
+                    (0, 0)
+                );
+            }
+        }
     }
     // After <|python_tag|> the object is a call whatever its arguments.
     let (_, result) = golden("llama3_python_tag_declaration_shaped_call");

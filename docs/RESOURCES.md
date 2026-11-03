@@ -1057,7 +1057,7 @@ every value below to equal the code's.
 | `JSON_REPAIR` | 1 | One non-guessed JSON recovery edit in a value |
 | `JSON_GUESS` | 4 | One guessed JSON recovery edit in a value |
 | `STRAY_CLOSER_GAP` | 32 | Longest whitespace run before an absorbed stray closer |
-| `QUEUED_REPORT` | 96 | `ScratchBytes` per queued recognizer report |
+| `QUEUED_REPORT` | 128 | `ScratchBytes` per queued recognizer report |
 | `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
 | `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
 | `UNDECLARED_NAME` | 4 | Selection weight of a call whose name denotes no declared tool |
