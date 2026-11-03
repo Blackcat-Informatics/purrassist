@@ -3312,7 +3312,9 @@ fn projected_layout_dominates(
 ) -> Result<bool, StopReason> {
     governor.charge(
         Resource::Work,
-        size(left.len()).saturating_add(size(right.len())),
+        size(left.len())
+            .saturating_add(size(right.len()))
+            .saturating_mul(2),
     )?;
     if left.iter().chain(right).any(|segment| {
         !matches!(
@@ -3322,13 +3324,38 @@ fn projected_layout_dominates(
     }) {
         return Ok(false);
     }
+    // Equal or earlier frames cannot dominate, regardless of their captured
+    // values. Decide this before traversing arguments and provenance; a busy
+    // turn otherwise repeats that full comparison for every unchanged call.
+    let mut left_frames = left.iter().filter_map(resolved_json_call);
+    let mut right_frames = right.iter().filter_map(resolved_json_call);
+    loop {
+        governor.charge(Resource::Work, 1)?;
+        let (a, b) = match (left_frames.next(), right_frames.next()) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Ok(false),
+        };
+        match a
+            .span
+            .end
+            .cmp(&b.span.end)
+            .then(b.span.start.cmp(&a.span.start))
+        {
+            core::cmp::Ordering::Greater => break,
+            core::cmp::Ordering::Less => return Ok(false),
+            core::cmp::Ordering::Equal => {}
+        }
+    }
+    governor.charge(
+        Resource::Work,
+        size(left.len()).saturating_add(size(right.len())),
+    )?;
     let mut left = left.iter().filter_map(resolved_json_call);
     let mut right = right.iter().filter_map(resolved_json_call);
-    let mut order = core::cmp::Ordering::Equal;
     loop {
         governor.charge(Resource::Work, 1)?;
         let (a, b) = match (left.next(), right.next()) {
-            (None, None) => return Ok(order.is_gt()),
+            (None, None) => return Ok(true),
             (Some(a), Some(b)) => (a, b),
             _ => return Ok(false),
         };
@@ -3349,9 +3376,6 @@ fn projected_layout_dominates(
         if !same_layout_call(a, b, governor)? {
             return Ok(false);
         }
-        order = order
-            .then(a.span.end.cmp(&b.span.end))
-            .then(b.span.start.cmp(&a.span.start));
     }
 }
 
