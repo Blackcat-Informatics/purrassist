@@ -3091,14 +3091,24 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     let tools = compile([ToolDefinition::new("f")
         .effects(Effects::ReadOnly)
         .param("a", Param::string())]);
-    let call = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>";
+    // The blocker declares no reasoning: its wrapper-tail scan must not
+    // hand off at the first <think>. Hermes supplies those marker reports
+    // through the combined dialect set without opening another call.
+    let blocker = custom(
+        r#"grammar "held-reports.v1";
+        closer end = "</held>";
+        call = "<held>" name:/[a-z]+/ arguments:slot(json, "\x00") end;
+        result = "<r>" content:until("</r>") "</r>";
+        declaration = "<d>";"#,
+    );
+    let call = r#"<held>f{"a":"x"}"#;
     let thoughts = "<think>t</think>".repeat(BLOCKS);
     // The wrapper closer never comes: every reasoning marker after the
     // call waits for the end of output.
     let held = format!("{call}\nDone.{thoughts}");
     // The same turn with its closer: markers are processed as they come.
-    let closed = format!("{call}\n</tool_call>\nDone.{thoughts}");
-    let dialects = set(&[DialectId::Qwen3CoderXml]);
+    let closed = format!("{call}</held>\nDone.{thoughts}");
+    let dialects = set(&[blocker, DialectId::Hermes]);
     let recognize = |output: &str, chunk: usize, scratch: u64| {
         let mut governor = Governor::new(Budget {
             scratch_bytes: scratch,
