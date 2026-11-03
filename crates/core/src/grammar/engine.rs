@@ -5389,7 +5389,7 @@ impl<'s> Engine<'s> {
             return Ok(());
         }
         // The existing idle return stays ahead of cache work. Immutable
-        // dispatch also excludes result, grouped and non-anchored tables.
+        // dispatch excludes result, non-anchored and unproved grouped tables.
         let class_candidate = class_run::eligible(&self.tables[table]);
         if class_candidate && self.reuse_class_run(table, byte, at, governor)? {
             return Ok(());

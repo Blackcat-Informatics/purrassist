@@ -34,6 +34,9 @@ use crate::contract::{
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
 
+mod initial_classes;
+use initial_classes::InitialClasses;
+
 /// One instruction of a compiled production program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inst {
@@ -139,6 +142,8 @@ pub(crate) struct Program {
     /// completion of the same attempt reads further at no more cost is
     /// dropped (the attempt reads every call it can).
     pub(crate) grouped: bool,
+    /// Initial Class locations unreachable after any `next`; empty otherwise.
+    pub(crate) initial_classes: InitialClasses,
     /// For a grouped program, the literal instructions after which one call
     /// ends (the production completes or the next call begins, without
     /// input): where an attempt that could not read a call resynchronizes
@@ -1682,6 +1687,12 @@ fn compile_program(
     let committed = committed(&insts, start, governor)?;
     work_for(insts.len(), 1, 1, governor)?;
     let grouped = insts.iter().any(|inst| matches!(inst, Inst::Next { .. }));
+    let initial_classes = InitialClasses::compile(
+        &insts,
+        start,
+        tables.derived && tables.argument_anchor && grouped,
+        governor,
+    )?;
     // A class opener needs its native DFA start state, installed by closure.
     // Direct literal dispatch initializes Sub::Lit and cannot start a class.
     let start_closure = tables.derived || start_closure(&insts, start, governor)?;
@@ -1706,6 +1717,7 @@ fn compile_program(
         committed,
         start_closure,
         grouped,
+        initial_classes,
         call_closers,
         call_openers,
         insert_alternatives,
@@ -3260,7 +3272,7 @@ mod admission_tests {
     #[test]
     fn program_refusals_release_partial_control_tables_and_completed_retained_buffers() {
         let source = r#"grammar "program";
-call = "<c>" commit ("a" | "b") ("x" next "y")? insert("</c>") "</c>";
+call = "<c>" commit ("a" | "b") /[a-z]+/ ("x" next "y")? insert("</c>") "</c>";
 result = "<r>"; declaration = "<d>";"#;
         let grammar =
             Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
@@ -3269,8 +3281,8 @@ result = "<r>"; declaration = "<d>";"#;
             classes: &grammar.classes,
             repairs: &grammar.literal_tables,
             stray_nodes: 0,
-            derived: false,
-            argument_anchor: false,
+            derived: true,
+            argument_anchor: true,
         };
         let prepare = |g: &mut Governor| -> Result<Program, GrammarError> {
             let program =

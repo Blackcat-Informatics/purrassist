@@ -193,8 +193,7 @@ impl PathProof {
             let same = other
                 .rows
                 .binary_search_by_key(&row.segment, |row| row.segment)
-                .ok()
-                .is_some_and(|index| other.rows[index].certificate == row.certificate);
+                .is_ok_and(|index| other.rows[index].certificate == row.certificate);
             if same {
                 self.rows.as_mut_slice()[write] = row;
                 write += 1;
@@ -386,7 +385,7 @@ impl BuildProofs {
             governor.charge(Resource::Work, 1)?;
             match (proof, source) {
                 (PieceProof::Shared(path), Piece::Segment(segment)) => {
-                    result.append(piece, None, path, core::slice::from_ref(segment), governor)?
+                    result.append(piece, None, path, core::slice::from_ref(segment), governor)?;
                 }
                 (PieceProof::Choice(paths), Piece::Choice(choice))
                     if paths.len() == choice.readings.len() =>

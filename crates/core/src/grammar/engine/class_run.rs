@@ -38,7 +38,9 @@ pub(super) fn slots(
 /// Immutable dispatch excludes tables that cannot own this kind of proof.
 #[must_use]
 pub(super) fn eligible(table: &Table<'_>) -> bool {
-    table.program.argument_anchor && !table.program.grouped && table.kind == ProductionKind::Call
+    table.program.argument_anchor
+        && (!table.program.grouped || !table.program.initial_classes.is_empty())
+        && table.kind == ProductionKind::Call
 }
 
 /// Separate fields let opener admission retain its borrowed grammar metadata.
@@ -164,6 +166,12 @@ impl Engine<'_> {
                 .is_none_or(|length| length < 32)
         {
             return Ok(());
+        }
+        if current.program.grouped {
+            governor.charge(Resource::Work, 1)?;
+            if !current.program.initial_classes.contains(first.pc) {
+                return Ok(());
+            }
         }
         if !self.repeated_class_byte(byte, next_at, governor)? {
             return Ok(());
@@ -325,6 +333,12 @@ impl Engine<'_> {
             else {
                 return Ok(false);
             };
+            if current.program.grouped {
+                governor.charge(Resource::Work, 1)?;
+                if !current.program.initial_classes.contains(thread.pc) {
+                    return Ok(false);
+                }
+            }
             if thread.attempt != owner_id
                 || thread.start != owner_start
                 || thread.opened

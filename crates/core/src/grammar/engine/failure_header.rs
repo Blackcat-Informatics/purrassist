@@ -123,7 +123,7 @@ impl Prefix {
                     CaptureKind::Name if self.name.is_none() => self.first = self.first.min(at),
                     CaptureKind::Id if self.id.is_none() => self.first = self.first.min(at),
                     CaptureKind::Arguments if self.name.is_some() => {
-                        self.first = self.first.min(at)
+                        self.first = self.first.min(at);
                     }
                     _ => return None,
                 }
@@ -288,11 +288,11 @@ impl Engine<'_> {
                 continue;
             }
             let next = self.certify_failure(table, failure, end, governor)?;
-            if !seen {
+            if seen {
+                header = intersect(header, next, governor)?;
+            } else {
                 header = next;
                 seen = true;
-            } else {
-                header = intersect(header, next, governor)?;
             }
         }
         selected.header = header;

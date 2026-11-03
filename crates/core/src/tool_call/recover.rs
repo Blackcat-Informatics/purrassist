@@ -4460,7 +4460,7 @@ impl Recovery<'_> {
                     self.output,
                     following,
                     !matches!(self.request.tool_choice, ToolChoice::ForcedStrict(_)),
-                    FailureChoice::new(failure_proofs, index, &choice.span, governor)?,
+                    &FailureChoice::new(failure_proofs, index, &choice.span, governor)?,
                     governor,
                 )?);
             }
@@ -5832,7 +5832,7 @@ fn fold_options<'t>(
     output: &[u8],
     following: Option<&ResolvedCall>,
     prefer_native_json: bool,
-    failures: FailureChoice<'_>,
+    failures: &FailureChoice<'_>,
     governor: &mut Governor,
 ) -> Result<Vec<Fold<'t>>, StopReason> {
     // Each group: its member indices, in option order.
@@ -5853,7 +5853,7 @@ fn fold_options<'t>(
     }
     let mut folds = Vec::with_capacity(groups.len());
     for members in &groups {
-        let kept = equivalent_representative(options, members, output, &failures, governor)?;
+        let kept = equivalent_representative(options, members, output, failures, governor)?;
         let mut fold = Fold::new(&options[kept], governor)?;
         for &member in members.iter().filter(|&&member| member != kept) {
             fold.absorb(&options[member], governor)?;

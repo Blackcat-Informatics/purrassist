@@ -221,11 +221,34 @@ repeat the same ASCII byte. Recent source is inspected backwards and stops at
 the first difference. A retired older suffix declines this optional proof; an
 inconsistent current input position, window or byte is an explicit engine error.
 
+A grouped projected program additionally proves that every reused Class PC is
+reachable from the start before any `next`, and unreachable after every `next`.
+Two complete control-flow walks prepare this mask: the first stops at `next`,
+and the second starts at all `next` targets and follows all continuations. Each
+PC is enqueued once per walk. Initial invocation references emit separate PCs
+from repeated invocation references; shared suffixes reachable after `next`
+remain excluded. An empty or nameless earlier invocation cannot bypass this
+restriction by crossing `next` without committing.
+
+Every Program retains a portable 64-byte mask descriptor admission, including
+empty, native and result programs. This covers the boolean-vector handle and
+its RAII lease, with a compile-time layout bound. Reserved boolean slots admit
+one byte each separately. The second flag vector, traversal stack and their
+aggregate lease admit a temporary 96-byte descriptor bound; their reserved
+elements admit storage separately. Descriptor initialization, flag preparation,
+seed scans, queue insertions, visited PCs, successor inspections and filtering
+admit Work before processing. JSON-key recompilation rebuilds the proof after
+the final instruction rewrites. Replaced programs, compilation refusal and
+grammar drop release these owners; sharing the compiled grammar copies no mask.
+Program equality compares mask facts independently of its accounting lease.
+
 All table certificate slots, including empty and spare slots, retain a portable
 32-byte admission until engine drop. Initialization, admission guards, owner-queue
 scans, complete state comparisons, invalidation, and slot writes admit Work before
 processing. Cache work follows the existing idle return and is limited to resident
-call tables with an immutable argument anchor and no grouping. An occupancy count
+call tables with an immutable argument anchor, either ungrouped or carrying a
+nonempty initial-Class proof. Grouped admission checks the first PC after the
+length guard and checks every PC during the full thread proof. An occupancy count
 skips slot probes and reset sweeps when every certificate is empty. Reuse compares
 the exact byte and absolute input position, then admits both thread-position stores
 and the retained cursor update before advancing any thread. The proved zero stall
@@ -255,9 +278,12 @@ each of the one to eight actual source-byte probes. Only a complete repeat
 qualifier reaches the 24 pristine-owner checks, two per global queue entry,
 40 per thread inspected and two for a successful slot/count write. A complete
 admission over T threads and Q queued entries costs `45 + 40 * T + 2 * Q`.
+Grouped admission adds one early mask lookup and one per inspected thread, for
+`46 + 41 * T + 2 * Q` on a complete successful proof; hits retain the same fee.
 After the length guard, alternating bytes stop after two source probes and
 paired-byte churn after two or three; their admission fees are 13 or 14 Work
-units before any residual empty-slot probes. Runs of exactly eight copies can
+units before any residual empty-slot probes, plus the grouped early lookup.
+Runs of exactly eight copies can
 still pay one complete admission without a hit, followed by a five-unit key miss
 when the byte changes. A repeat ending before eight copies cannot reach the
 expensive proof, but still pays the short-circuit qualifier's actual probes.
@@ -266,6 +292,12 @@ owns a proof. Nonempty bulk invalidation costs one per table slot plus one count
 write; empty occupancy performs no sweep. Initialization still admits every slot.
 Short or changing runs, refused admissions and unrelated live proofs can add
 Work without a later hit; these fees are part of any future workload comparison.
+The grouped extension predicts a benefit for long initial name/type runs but has
+not established measured savings or resource acceptance. Dense Qwen calls with
+one payload byte never reach the 32-byte guard: their newly eligible grouped
+tables can pay the six-Work ASCII and first-thread/length probe without a hit,
+plus any occupancy probes. Dense resource qualification remains independently
+required; this extension does not resolve that separate failure.
 
 ### Failed native frame certificates
 

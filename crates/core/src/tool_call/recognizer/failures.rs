@@ -125,8 +125,11 @@ impl Builder<'_> {
             } else {
                 PathProof::new(governor)
             };
-            let (segments, path) =
-                self.normalize_example_reading(reading, path, fenced, inline, governor)?;
+            let normalized =
+                self.normalize_example_reading(reading, &path, fenced, inline, governor);
+            // Preserve the consumed owner's old return/refusal drop boundary.
+            drop(path);
+            let (segments, path) = normalized?;
             let mut duplicate = None;
             for (index, previous) in readings.iter().enumerate() {
                 if same_example_reading(&segments, previous, governor)? {
@@ -158,7 +161,7 @@ impl Builder<'_> {
     fn normalize_example_reading(
         &self,
         reading: Vec<Segment>,
-        path: PathProof,
+        path: &PathProof,
         fenced: &[Range<usize>],
         inline: &[Range<usize>],
         governor: &mut Governor,

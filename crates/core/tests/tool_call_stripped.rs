@@ -4,8 +4,8 @@
 use purrassist_core::grammar::edit::EditOperator;
 use purrassist_core::grammar::{CaptureKind, GrammarRecipe};
 use purrassist_core::tool_call::{
-    DialectId, DialectSet, GenerationStop, MarkupFamily, ReasoningPolicy, RecognizedTurn,
-    Recognizer, ToolCalls, ToolRecoveryRequest, ToolSet,
+    DialectId, DialectSet, Effects, GenerationStop, MarkupFamily, Param, ReasoningPolicy,
+    RecognizedTurn, Recognizer, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
 };
 use purrassist_core::{Budget, Governor, Outcome};
 
@@ -19,11 +19,13 @@ fn set(dialects: impl IntoIterator<Item = DialectId>) -> DialectSet {
     DialectSet::new(dialects, &mut Governor::new(Budget::default())).expect("dialects")
 }
 fn recognize(input: &str, dialect: DialectId) -> (RecognizedTurn, u64) {
+    recognize_with_tools(input, dialect, &tools())
+}
+fn recognize_with_tools(input: &str, dialect: DialectId, tools: &ToolSet) -> (RecognizedTurn, u64) {
     let set = set([dialect]);
-    let tools = tools();
     let mut governor = Governor::new(Budget::default());
     let mut recognizer =
-        Recognizer::with_tools(&set, &tools, ReasoningPolicy::default(), &mut governor)
+        Recognizer::with_tools(&set, tools, ReasoningPolicy::default(), &mut governor)
             .expect("recognizer");
     recognizer
         .push(input.as_bytes(), &mut governor)
@@ -84,16 +86,25 @@ fn stripped_variants_parse() {
         assert_eq!(calls.calls[0].tool.as_deref(), Some("f"));
         assert_eq!(calls.calls[0].dialect, dialect);
     }
+    assert_long_initial_names_retain_calls();
 }
 
 fn assert_chunk_parity(input: &str, dialect: DialectId, splits: &[usize]) {
-    let (whole, _) = recognize(input, dialect.clone());
+    assert_chunk_parity_with_tools(input, dialect, splits, &tools());
+}
+
+fn assert_chunk_parity_with_tools(
+    input: &str,
+    dialect: DialectId,
+    splits: &[usize],
+    tools: &ToolSet,
+) -> RecognizedTurn {
+    let (whole, work) = recognize_with_tools(input, dialect.clone(), tools);
     let set = set([dialect]);
-    let tools = tools();
     for &split in splits {
         let mut governor = Governor::new(Budget::default());
         let mut recognizer =
-            Recognizer::with_tools(&set, &tools, ReasoningPolicy::default(), &mut governor)
+            Recognizer::with_tools(&set, tools, ReasoningPolicy::default(), &mut governor)
                 .expect("recognizer");
         for chunk in [&input.as_bytes()[..split], &input.as_bytes()[split..]] {
             recognizer.push(chunk, &mut governor).expect("chunk");
@@ -102,6 +113,63 @@ fn assert_chunk_parity(input: &str, dialect: DialectId, splits: &[usize]) {
             .finish(GenerationStop::Stop, &mut governor)
             .expect("finish");
         assert_eq!(turn, whole, "split at {split}: {input:?}");
+        assert_eq!(governor.usage().work, work, "split at {split}: work");
+    }
+    whole
+}
+
+/// Long initial names retain their source and admit only native JSON evidence.
+fn assert_long_initial_names_retain_calls() {
+    let name = "a".repeat(64);
+    let tools = ToolSet::compile(
+        [ToolDefinition::new(&name)
+            .effects(Effects::ReadOnly)
+            .param("text", Param::string().required())],
+        Budget::default(),
+    )
+    .expect("long name tool");
+    let arguments = r#"{"text":"retained"}"#;
+    for (dialect, input) in [
+        (
+            DialectId::DeepSeekV3Stripped,
+            format!("{name}\n```json\n{arguments}\n```"),
+        ),
+        (DialectId::DeepSeekV31Stripped, format!("{name}{arguments}")),
+        (DialectId::KimiK2Stripped, format!("{name}{arguments}")),
+        (DialectId::MistralV11Stripped, format!("{name}{arguments}")),
+    ] {
+        let result = tools.recover(
+            input.as_bytes(),
+            &ToolRecoveryRequest::default(),
+            &set([dialect.clone()]),
+        );
+        assert_eq!(result.receipt.sources[0].bytes, input.as_bytes());
+        let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+            panic!("{}: {:?}", dialect.id(), result.outcome)
+        };
+        assert_eq!(calls.calls.len(), 1, "{}", dialect.id());
+        assert_eq!(calls.calls[0].tool.as_deref(), Some(name.as_str()));
+        assert_eq!(
+            calls.calls[0]
+                .arguments
+                .get("text")
+                .and_then(purrassist_core::json::Node::as_str),
+            Some("retained")
+        );
+        let turn = assert_chunk_parity_with_tools(&input, dialect, &[32, 64, input.len()], &tools);
+        assert!(
+            turn.calls()
+                .iter()
+                .flat_map(|call| &call.readings)
+                .any(|reading| {
+                    reading.name.as_ref().is_some_and(|captured| {
+                        captured.value == name && &input[captured.span.clone()] == name
+                    }) && reading.captures.iter().any(|capture| {
+                        capture.kind == CaptureKind::Arguments
+                            && &input[capture.span.clone()] == arguments
+                    })
+                })
+        );
     }
 }
 
@@ -171,6 +239,7 @@ fn weak_names_without_retained_json_evidence_stay_content() {
     let long_name = "f".repeat(64);
     let unicode_boundary = format!("{long_name}é");
     for dialect in [
+        DialectId::DeepSeekV3Stripped,
         DialectId::DeepSeekV31Stripped,
         DialectId::KimiK2Stripped,
         DialectId::MistralV11Stripped,

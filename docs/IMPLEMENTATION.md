@@ -2,6 +2,15 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Grouped argument-anchored projections can reuse a settled Class run only at
+compiler-proved initial-call PCs that are unreachable after every `next`.
+All existing pristine-owner, side-work, history, native-DFA, name-follower,
+UTF-8, source-position and lifecycle checks remain required. Governed mask and
+temporary descriptors release with their owners across recompilation and
+refusal. Named long-source and compiler-refusal coverage is extended; execution
+and resource acceptance remain pending normal verification. Dense Qwen calls
+do not meet the run-length guard and can pay additional probes without a hit.
+
 Failed native Mistral framing and its Hermes marker-projected shadow now carry
 private selected-failure header certificates through source retirement, stored
 segments, Builder normalization and resolution. Exact source capture geometry and
