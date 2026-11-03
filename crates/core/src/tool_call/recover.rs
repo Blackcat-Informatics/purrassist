@@ -3331,9 +3331,8 @@ fn projected_layout_dominates(
     let mut right_frames = right.iter().filter_map(resolved_json_call);
     loop {
         governor.charge(Resource::Work, 1)?;
-        let (a, b) = match (left_frames.next(), right_frames.next()) {
-            (Some(a), Some(b)) => (a, b),
-            _ => return Ok(false),
+        let (Some(a), Some(b)) = (left_frames.next(), right_frames.next()) else {
+            return Ok(false);
         };
         match a
             .span
