@@ -23,9 +23,10 @@
 //! default allow-list (every built-in dialect): no Llama 3 JSON attempt
 //! commits, so there is no call and no rejected attempt.
 use core::ops::Range;
+use purrassist_core::grammar::Grammar;
 use purrassist_core::tool_call::{
-    CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, Param, Rejection,
-    RepairPolicy, StreamEvent, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, Param, ReasoningPolicy,
+    Rejection, RepairPolicy, StreamEvent, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
     UnresolvedReason,
 };
 use purrassist_core::{AssistResult, Budget, Governor, Outcome};
@@ -206,16 +207,16 @@ fn trailing_text_inside_wrapper() {
 
 /// Compare complete results and source-ordered content events at every split.
 /// A repaired frame waits for final normalization; a closed native frame can
-/// publish its trailing content as the fixed settlement cutoff advances.
+/// publish its whole trailing content after its reports have settled.
 fn stream_content(
     tools: &ToolSet,
     dialects: &DialectSet,
     input: &str,
+    request: &ToolRecoveryRequest,
     tail: usize,
     live: bool,
 ) -> AssistResult<ToolCalls> {
-    let request = ToolRecoveryRequest::default();
-    let batch = tools.recover(input.as_bytes(), &request, dialects);
+    let batch = tools.recover(input.as_bytes(), request, dialects);
     for split in 0..=input.len() {
         let mut stream = tools.stream_with_dialects(request.clone(), dialects);
         let mut events = Vec::new();
@@ -231,7 +232,7 @@ fn stream_content(
         if live {
             assert_eq!(
                 live_end,
-                Some(input.len() - dialects.lookbehind()),
+                Some(input.len()),
                 "closed frame withheld its settled content at split {split}"
             );
         } else {
@@ -268,7 +269,8 @@ fn stray_closers_after_ambiguous_body_tail() {
             &mut Governor::new(Budget::default()),
         )
         .expect("dialect set");
-        let result = stream_content(&tools, &dialects, input, tail, false);
+        let request = ToolRecoveryRequest::default();
+        let result = stream_content(&tools, &dialects, input, &request, tail, false);
         let calls = match &result.outcome {
             Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
             other => panic!("{effects:?}: expected one reading, got {other:?}"),
@@ -280,7 +282,114 @@ fn stray_closers_after_ambiguous_body_tail() {
         // The short native-frame control extends only beyond the actual
         // compiled settlement bound, so live tail publication is required.
         let closed = format!("{CALL} tail{}", " ".repeat(dialects.lookbehind() + 1));
-        stream_content(&tools, &dialects, &closed, CALL.len(), true);
+        stream_content(&tools, &dialects, &closed, &request, CALL.len(), true);
+    }
+    let tools = tools(Effects::ReadOnly);
+    lexical_content_frontier(&tools);
+    uncommitted_candidate_frontier(&tools);
+}
+
+/// Plain content depends on live opener/marker prefixes and UTF-8 carry,
+/// independently of an unrelated long closer's repair settlement window.
+fn lexical_content_frontier(tools: &ToolSet) {
+    let closer = "Z".repeat(256);
+    let grammar = format!(
+        r#"grammar "lexical-frontier.v1";
+        reasoning "<think>" "</think>";
+        closer end = "{closer}";
+        ident = /[A-Za-z_][A-Za-z0-9_]*/;
+        call = "<c>" name:ident ":" arguments:slot(json, "\x00") end;
+        result = "<r>" content:until("</r>") "</r>";
+        declaration = "<d>";"#
+    );
+    let dialect = DialectId::custom(
+        Grammar::compile_governed(&grammar, &mut Governor::new(Budget::default()))
+            .expect("lexical grammar"),
+    );
+    let dialects =
+        DialectSet::new([dialect], &mut Governor::new(Budget::default())).expect("dialects");
+    let input = "plain <thiX <cX 😺";
+    assert!(dialects.lookbehind() > input.len());
+    for reasoning in [
+        ReasoningPolicy::Separate { starts_open: false },
+        ReasoningPolicy::AsContent,
+    ] {
+        let request = ToolRecoveryRequest::default().reasoning(reasoning);
+        let batch = stream_content(tools, &dialects, input, &request, 0, true);
+        let mut stream = tools.stream_with_dialects(request, &dialects);
+        let mut events = Vec::new();
+        let (mut previous, mut content) = (0, Vec::new());
+        let marker_end = if reasoning == ReasoningPolicy::AsContent {
+            10
+        } else {
+            6
+        };
+        for (end, published) in [
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (5, 5),
+            (6, 6),
+            (10, marker_end),
+            (11, 11),
+            (12, 12),
+            (14, 12),
+            (15, 15),
+            (16, 16),
+            (17, 16),
+            (18, 16),
+            (19, 16),
+            (20, 20),
+        ] {
+            stream.feed(&input.as_bytes()[previous..end], &mut events);
+            previous = end;
+            for event in events.drain(..) {
+                let StreamEvent::ContentDelta { span, raw } = event else {
+                    panic!("plain prefix produced a non-content event");
+                };
+                assert_eq!(span, content.len()..content.len() + raw.len());
+                content.extend(raw);
+            }
+            assert_eq!(
+                content,
+                input.as_bytes()[..published],
+                "prefix ending at {end}"
+            );
+        }
+        assert_eq!(stream.finish(GenerationStop::Stop), batch);
+    }
+}
+
+/// Completed initial delimiters own uncommitted argument bytes even when
+/// their discriminating key or closing literal has not arrived.
+fn uncommitted_candidate_frontier(tools: &ToolSet) {
+    for dialect in [DialectId::BareJson, DialectId::Pythonic] {
+        let dialects = DialectSet::new([dialect.clone()], &mut Governor::new(Budget::default()))
+            .expect("candidate dialect");
+        let body = "x".repeat(dialects.lookbehind() + 16);
+        let input = if dialect == DialectId::BareJson {
+            format!(r#"{{"arguments":{{"a":"{body}"}},"na"#)
+        } else {
+            format!("[f(a='{body}")
+        };
+        let request = ToolRecoveryRequest::default();
+        let batch = tools.recover(input.as_bytes(), &request, &dialects);
+        for split in 0..=input.len() {
+            let mut stream = tools.stream_with_dialects(request.clone(), &dialects);
+            let mut events = Vec::new();
+            stream.feed(&input.as_bytes()[..split], &mut events);
+            stream.feed(&input.as_bytes()[split..], &mut events);
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, StreamEvent::ContentDelta { .. }))
+            );
+            assert_eq!(
+                stream.finish_with_events(GenerationStop::Stop, &mut events),
+                batch
+            );
+        }
     }
 }
 

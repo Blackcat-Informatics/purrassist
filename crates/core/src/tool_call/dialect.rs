@@ -15,7 +15,8 @@
 //! changes a recognition result.
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Budget, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
+    Budget, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
+    invalid_input,
 };
 use crate::digest::Digest;
 use crate::grammar::automaton::Matcher;
@@ -444,8 +445,31 @@ pub struct DialectSet {
     /// `explicit` (see [`CompiledGrammar::reasoning_explicit`](crate::grammar::CompiledGrammar::reasoning_explicit)).
     pub(crate) explicit: ScratchVec<bool>,
     pub(crate) marker_matcher: Option<Matcher>,
+    marker_prefixes: Option<MarkerPrefixes>,
     pub(crate) lookbehind: usize,
     configuration_bound: u64,
+}
+
+/// Retained marker-only table and its added allow-list metadata.
+#[derive(Debug)]
+struct MarkerPrefixes {
+    values: ScratchVec<u32>,
+    _metadata: ScratchLease,
+}
+
+const MARKER_PREFIX_BYTES: u64 = 64;
+const _: () = assert!(core::mem::size_of::<Option<MarkerPrefixes>>() as u64 <= MARKER_PREFIX_BYTES);
+
+impl MarkerPrefixes {
+    fn new(matcher: &Matcher, governor: &mut Governor) -> Result<Self, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let metadata = governor.lease_scratch(MARKER_PREFIX_BYTES)?;
+        let values = matcher.continuation_depths(governor)?;
+        Ok(Self {
+            values,
+            _metadata: metadata,
+        })
+    }
 }
 
 impl DialectSet {
@@ -514,6 +538,10 @@ impl DialectSet {
             }
             Some(Matcher::build(&literals, governor)?)
         };
+        let marker_prefixes = marker_matcher
+            .as_ref()
+            .map(|matcher| MarkerPrefixes::new(matcher, governor))
+            .transpose()?;
         let (lookbehind, configuration_bound) = set_bounds(&collected, &markers, governor)?;
         governor.check()?;
         Ok(Self {
@@ -521,9 +549,25 @@ impl DialectSet {
             markers,
             explicit,
             marker_matcher,
+            marker_prefixes,
             lookbehind,
             configuration_bound,
         })
+    }
+
+    /// Current suffix that can still grow into a longer marker spelling.
+    /// Complete leaf matches are protected by queued reports, not this table.
+    pub(crate) fn marker_prefix_len(
+        &self,
+        state: u32,
+        governor: &mut Governor,
+    ) -> Result<usize, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        self.marker_prefixes
+            .as_ref()
+            .and_then(|prefixes| prefixes.values.get(state as usize))
+            .map(|&depth| depth as usize)
+            .ok_or_else(|| invalid_input("reasoning marker has no viable-prefix state"))
     }
 
     /// The allow-list of every built-in dialect ([`DialectId::BUILT_IN`]).

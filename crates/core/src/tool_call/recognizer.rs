@@ -1730,19 +1730,33 @@ impl<'s> Recognizer<'s> {
     /// result only while its owner floors, turn state and effective cutoff agree.
     /// A packed disagreement is not resolved here.
     fn update_frontier(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        // Restore a previous memo only after every fallible floor lookup has
+        // succeeded; refusal must never leave an older projection reusable.
+        let previous = self.frontier_memo.take();
         let engine_floor = self.engine.continuation_floor(governor)?;
         let report_floor = self.pending_sources.floor();
-        let lexical = self.engine.fed().saturating_sub(self.set.lookbehind);
         governor.charge(Resource::Work, 1)?;
-        if let Some(memo) = self.frontier_memo
+        let held = if matches!(self.policy, ReasoningPolicy::Separate { .. })
+            && self.set.marker_matcher.is_some()
+        {
+            self.set.marker_prefix_len(self.marker, governor)?
+        } else {
+            0
+        };
+        let lexical = self
+            .engine
+            .fed()
+            .checked_sub(held)
+            .ok_or_else(|| invalid_input("reasoning marker prefix exceeds consumed source"))?;
+        governor.charge(Resource::Work, 1)?;
+        if let Some(memo) = previous
             && memo.engine_floor == engine_floor
             && memo.report_floor == report_floor
             && memo.limit == memo.barrier.map_or(lexical, |floor| lexical.min(floor))
         {
+            self.frontier_memo = Some(memo);
             return Ok(());
         }
-        // A failed refresh must not leave an older projection marked reusable.
-        self.frontier_memo = None;
         let mut barrier = engine_floor.into_iter().chain(report_floor).min();
         let mut common = None;
         if let Some(top) = self.turn.top {

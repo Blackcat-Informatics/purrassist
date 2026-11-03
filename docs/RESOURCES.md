@@ -970,6 +970,29 @@ content state, every active attempt's turn interpretations, open reasoning and
 promoted bases, and pending and engine ownership barriers. Turn histories cache
 their unambiguous structural prefix with one skip link per node; prefix
 intersection visits those links rather than enumerating or replaying histories.
+Plain-content publication uses current ownership rather than subtracting the
+repair lookbehind window. Native attempts already own partial call/result
+openers from their first admitted byte. Separate reasoning uses a marker-only
+proper-continuation table: for each finalized dense matcher state, take the
+maximum successor depth minus one, saturating at zero. This preserves a suffix
+that can grow into a longer marker, excluding a completed leaf with no viable
+continuation. The original matcher depth and delimiter behavior remain unchanged.
+Completed markers queue their reports before projection; those reports retain
+their own source floors. Repair settlement still uses the original lookbehind
+and held-floor rules, and source publication still caps incomplete UTF-8 scalars.
+
+The marker table is prepared once per dialect set, using four admitted Work
+units per visited dense transition and insertion/relocation admission for each
+stored depth. Its fallible `u32` buffer charges four bytes per reserved entry;
+a retained 64-byte metadata reservation covers the added optional table owner.
+Sets without reasoning markers allocate no continuation table. Each byte admits
+one lexical-planning Work unit and one memo-key lookup Work unit, plus one
+table lookup Work unit when reasoning markers are enabled. As-content
+reasoning uses the current input offset directly. A memo
+is restored only after all fallible floor lookups succeed and its effective
+cutoff agrees. This advances plain live content without claiming public D7
+metrics, full live semantic-prefix equivalence, cloning or decoding queries.
+
 The portable history-node reservation is 48 bytes. Traversals admit work before
 each visited step, and scanning live owners admits work for their records.
 Pending reports keep their dispatch order separately from a counted source

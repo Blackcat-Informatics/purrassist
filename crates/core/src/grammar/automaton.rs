@@ -19,7 +19,9 @@
 #![allow(clippy::redundant_pub_crate)]
 use super::cost::K_COMPILE;
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchVec, StopReason, invalid_input, push_scratch,
+};
 
 /// Byte-identical node id of a trie or matcher root.
 pub(crate) const ROOT: u32 = 0;
@@ -145,8 +147,9 @@ impl Trie {
 /// After each byte, [`Matcher::found`] reports the longest literal that
 /// ends at that byte (so the earliest-ending occurrence wins, and among
 /// literals ending together the one starting first), and
-/// [`Matcher::depth`] the length of the longest suffix that is still a
-/// proper prefix of some literal: the bytes a caller must hold back.
+/// [`Matcher::depth`] the length of the longest suffix represented by a trie
+/// prefix, including completed leaves. Marker holdback uses the separately
+/// prepared proper-continuation depths from [`Matcher::continuation_depths`].
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Matcher {
     delta: ScratchVec<u32>,
@@ -168,6 +171,45 @@ const _: () = assert!(
 const _: () = assert!(core::mem::size_of::<Matcher>() <= Matcher::CHARGE);
 
 impl Matcher {
+    /// Build proper continuation depths only for a caller needing lexical
+    /// holdback. Ordinary delimiter matchers retain no additional table.
+    pub(crate) fn continuation_depths(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<ScratchVec<u32>, StopReason> {
+        let cells = self
+            .depth
+            .len()
+            .checked_mul(256)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        if self.delta.len() != cells {
+            return Err(invalid_input(
+                "matcher continuation table has inconsistent dimensions",
+            ));
+        }
+        // Each finalized transition needs one target lookup, depth lookup,
+        // subtraction and maximum update. Insertions admit their own work.
+        let work = size(cells)
+            .checked_mul(4)
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        governor.charge(Resource::Work, work)?;
+        let mut values = ScratchVec::new(governor);
+        values.reserve(self.depth.len())?;
+        for row in self.delta.chunks_exact(256) {
+            let mut viable = 0;
+            for &next in row {
+                let depth = self
+                    .depth
+                    .get(next as usize)
+                    .ok_or_else(|| invalid_input("matcher continuation target is out of range"))?;
+                viable = viable.max(depth.saturating_sub(1));
+            }
+            push_scratch(&mut values, viable, governor)?;
+        }
+        governor.check()?;
+        Ok(values)
+    }
+
     /// Build the matcher; `literals` must be non-empty byte strings.
     pub(crate) fn build<B: AsRef<[u8]>>(
         literals: &[B],

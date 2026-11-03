@@ -840,7 +840,7 @@ impl EventCursor {
                 }
             }
         }
-        self.revisions(index, origins, publication, governor, sink)?;
+        Self::revisions(index, origins, publication, governor, sink)?;
         if publication.complete(call, origins, governor)? {
             StreamEvent::completed(index, &call.outcome, governor)?.publish(sink)?;
             if matches!(call.outcome, CallOutcome::Resolved | CallOutcome::BestGuess) {
@@ -851,7 +851,6 @@ impl EventCursor {
     }
 
     fn revisions(
-        &self,
         index: usize,
         origins: &Origins,
         publication: &FinalPublication<'_>,
