@@ -94,7 +94,7 @@ fn certify(
         return Ok(None);
     }
     let mut pending = ScratchVec::new(governor);
-    let mut nodes = ScratchMap::new(governor);
+    let mut nodes = ScratchMap::<u32, Boundary>::new(governor);
     push_scratch(
         &mut pending,
         (

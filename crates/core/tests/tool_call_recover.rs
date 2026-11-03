@@ -126,7 +126,11 @@ fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: b
                 assert_harmony_anchor_readings(&result, &markup, expected, effort, &file);
                 continue;
             }
-            assert_eq!(result.receipt.stopped, StopReason::Completed, "{file}");
+            assert_eq!(
+                result.receipt.stopped,
+                StopReason::Completed,
+                "{file}: {result:#?}"
+            );
             for evidence in &result.receipt.evidence {
                 let rule = purrassist_core::tool_call::rules::rule(&evidence.rule).expect("rule");
                 assert!(
@@ -2978,7 +2982,12 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     let ample = Effort::Standard.budget().scratch_bytes;
     let (held_turn, held_usage) = recognize(&held, held.len(), ample);
     let (closed_turn, closed_usage) = recognize(&closed, closed.len(), ample);
-    assert!(held_turn.is_ok() && closed_turn.is_ok());
+    assert!(
+        held_turn.is_ok() && closed_turn.is_ok(),
+        "held stop {:?}, usage {held_usage:?}; closed stop {:?}, usage {closed_usage:?}",
+        held_turn.as_ref().err(),
+        closed_turn.as_ref().err()
+    );
     // Two markers per block were queued at once.
     let queue = 2 * BLOCKS as u64 * cost::QUEUED_REPORT;
     assert!(
