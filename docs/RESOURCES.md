@@ -220,6 +220,14 @@ Rejected-part costs, undeclared-name weights and split-cost transfers retain
 their existing rules. This source change is formatted and source-inspected;
 compilation, corpus behavior and runtime admission remain unverified.
 
+Runtime settlement reuses its first merge and commit scan when no intervening
+configuration removal, repair or resynchronization can change their evidence,
+and no stalled failure needs examination. Every attempted repair invalidates
+that reuse, including one that only resolves a shared deferred-history link.
+Stalled repairs retain their existing merge path and invalidate commit reuse
+when attempted. Remaining completion, refusal and retirement processing stays
+on its existing path. Runtime savings and cost-budget acceptance are unverified.
+
 ## Schema bundle identity construction
 
 `Schema::compile_governed` and `with_resources_governed` stream their complete

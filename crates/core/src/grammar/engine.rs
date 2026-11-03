@@ -5371,7 +5371,9 @@ impl<'s> Engine<'s> {
         )?;
         let opened = self.open(table, governor)?;
         let keep = self.last_written(table, opened, governor)?;
+        let merged_len = live.len();
         Self::stop_past(&mut live, opened, &keep, governor)?;
+        let mut dirty = live.len() != merged_len;
         // Repairs for attempts left with nothing.
         let _records = governor.lease_scratch(
             size(self.tables[table].attempts.len())
@@ -5423,6 +5425,9 @@ impl<'s> Engine<'s> {
             self.note_failure(table, record.id, &failures, eof.is_none());
             self.note_boundary(table, record.id, &failures, governor)?;
             let until = if eof.is_some() { at } else { at + 1 };
+            // Even a repair with no surviving state can resolve a shared
+            // deferred-history link and change commit evidence.
+            dirty = true;
             for state in self.repair(table, record, &failures, until, eof, governor)? {
                 match state.status {
                     Status::Live => live.push(state.thread)?,
@@ -5437,11 +5442,15 @@ impl<'s> Engine<'s> {
             }
         }
         self.hold_failures(table, &failed, &live, governor)?;
-        self.merge_settled(table, at, eof, &mut live, &mut completed, governor)?;
+        // Without intervening changes or stalled repairs, the first merge
+        // and commit already settled these exact configurations.
+        if dirty || !self.tables[table].stalled.is_empty() {
+            dirty |= self.merge_settled(table, at, eof, &mut live, &mut completed, governor)?;
+        }
         self.unstick(table, &live, governor)?;
         // A repair may carry an attempt past its commit, and a completion
         // always commits its attempt.
-        if self.tables[table].program.deferred() {
+        if dirty && self.tables[table].program.deferred() {
             self.commit(
                 table,
                 live.as_slice().iter().chain(completed.as_slice()),
@@ -5459,6 +5468,7 @@ impl<'s> Engine<'s> {
 
     /// Merge `live`, then repair the stalled failures its merge shows are
     /// final (see [`Self::repair_stalled`]), merging again if any were.
+    /// Returns whether a stalled repair may have changed commit evidence.
     fn merge_settled(
         &mut self,
         table: usize,
@@ -5467,7 +5477,7 @@ impl<'s> Engine<'s> {
         live: &mut ScratchVec<Thread>,
         completed: &mut ScratchVec<Thread>,
         governor: &mut Governor,
-    ) -> Result<(), StopReason> {
+    ) -> Result<bool, StopReason> {
         // The attempts whose body reads on past closers, noted in the merge.
         let mut reading: Vec<u64> = Vec::new();
         merge_noting(live, &mut self.arena, governor, |thread| {
@@ -5475,10 +5485,11 @@ impl<'s> Engine<'s> {
                 reading.push(thread.attempt);
             }
         })?;
-        if self.repair_stalled(table, at, eof, &reading, live, completed, governor)? {
+        let repaired = self.repair_stalled(table, at, eof, &reading, live, completed, governor)?;
+        if repaired {
             merge(live, &mut self.arena, governor)?;
         }
-        Ok(())
+        Ok(repaired)
     }
 
     /// Move the failures of readings beside another of a verbatim value
