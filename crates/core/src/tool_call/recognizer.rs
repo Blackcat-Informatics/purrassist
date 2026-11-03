@@ -1000,11 +1000,15 @@ pub(super) fn same_source_tree(
 ) -> Result<bool, StopReason> {
     use crate::json::Value;
     let mut stack = ScratchVec::new(governor);
-    stack.push(SourceNode {
-        left,
-        right,
-        depth: 0,
-    })?;
+    crate::contract::push_scratch(
+        &mut stack,
+        SourceNode {
+            left,
+            right,
+            depth: 0,
+        },
+        governor,
+    )?;
     while let Some(SourceNode { left, right, depth }) = stack.pop() {
         governor.charge(Resource::Work, 1)?;
         governor.charge(Resource::Depth, depth)?;
@@ -1031,11 +1035,15 @@ pub(super) fn same_source_tree(
                 for (left, right) in a.iter().zip(b).rev() {
                     governor.charge(Resource::Work, 1)?;
                     governor.charge(Resource::Depth, depth.saturating_add(1))?;
-                    stack.push(SourceNode {
-                        left,
-                        right,
-                        depth: depth.saturating_add(1),
-                    })?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        SourceNode {
+                            left,
+                            right,
+                            depth: depth.saturating_add(1),
+                        },
+                        governor,
+                    )?;
                 }
             }
             (Value::Object(a), Value::Object(b)) => {
@@ -1050,11 +1058,15 @@ pub(super) fn same_source_tree(
                         return Ok(false);
                     }
                     governor.charge(Resource::Depth, depth.saturating_add(1))?;
-                    stack.push(SourceNode {
-                        left: &left.value,
-                        right: &right.value,
-                        depth: depth.saturating_add(1),
-                    })?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        SourceNode {
+                            left: &left.value,
+                            right: &right.value,
+                            depth: depth.saturating_add(1),
+                        },
+                        governor,
+                    )?;
                 }
             }
             _ => return Ok(false),
