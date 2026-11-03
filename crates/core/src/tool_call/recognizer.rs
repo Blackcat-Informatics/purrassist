@@ -322,6 +322,9 @@ const SOURCE_LEVELS: usize = 11;
 /// initializing directory entries and page slots is admitted as growth below.
 /// Keep both this admission and the stored hierarchy identical on every target.
 const SOURCE_UPDATE_WORK: u64 = 8 * 11 + 16;
+/// Root/count/leaf validation, multiplicity arithmetic and one count write.
+/// A nonzero-to-nonzero change never constructs or traverses hierarchy updates.
+const SOURCE_COUNT_WORK: u64 = 24;
 
 type SourceWords = [Option<(usize, u64)>; SOURCE_LEVELS];
 
@@ -329,6 +332,11 @@ type SourceWords = [Option<(usize, u64)>; SOURCE_LEVELS];
 struct SourceUpdate {
     source: usize,
     count: usize,
+    occupancy: Option<SourceOccupancy>,
+}
+
+/// Only zero/nonzero transitions change occupancy, active origins or minimum.
+struct SourceOccupancy {
     active: usize,
     floor: Option<usize>,
     words: SourceWords,
@@ -341,22 +349,29 @@ impl SourceUpdate {
         let Self {
             source,
             count,
+            occupancy,
+        } = self;
+        if let Some(SourceOccupancy {
             active,
             floor,
             words,
             page,
-        } = self;
-        if let Some(page) = page {
-            sources.counts.as_mut_slice()[source / 64] = page;
-        }
-        sources.counts.as_mut_slice()[source / 64].as_mut_slice()[source % 64] = count;
-        for (level, changed) in sources.occupancy.iter_mut().zip(words) {
-            if let Some((index, word)) = changed {
-                level.as_mut_slice()[index] = word;
+        }) = occupancy
+        {
+            if let Some(page) = page {
+                sources.counts.as_mut_slice()[source / 64] = page;
             }
+            sources.counts.as_mut_slice()[source / 64].as_mut_slice()[source % 64] = count;
+            for (level, changed) in sources.occupancy.iter_mut().zip(words) {
+                if let Some((index, word)) = changed {
+                    level.as_mut_slice()[index] = word;
+                }
+            }
+            sources.active = active;
+            sources.floor = floor;
+        } else {
+            sources.counts.as_mut_slice()[source / 64].as_mut_slice()[source % 64] = count;
         }
-        sources.active = active;
-        sources.floor = floor;
     }
 }
 
@@ -410,6 +425,12 @@ impl PendingSources {
     fn grow(&mut self, source: usize, governor: &mut Governor) -> Result<(), StopReason> {
         // Division first permits the inclusive EOF coordinate usize::MAX.
         let needed = source / 64 + 1;
+        // A successful directory extension reserves and initializes every
+        // hierarchy level before returning. Failed reservations change no
+        // lengths, so covered coordinates need no further traversal.
+        if needed <= self.counts.len() {
+            return Ok(());
+        }
         Self::reserve_slots(&mut self.counts, needed, governor)?;
         let mut lengths = [0; SOURCE_LEVELS];
         let mut coordinate = source;
@@ -488,7 +509,12 @@ impl PendingSources {
         Ok(words)
     }
 
-    fn minimum_after(&self, update: &SourceUpdate) -> Result<Option<usize>, StopReason> {
+    fn minimum_after(
+        &self,
+        source: usize,
+        count: usize,
+        update: &SourceOccupancy,
+    ) -> Result<Option<usize>, StopReason> {
         let mut coordinate = 0_usize;
         for level in (0..SOURCE_LEVELS).rev() {
             let stored = self.occupancy[level]
@@ -518,8 +544,8 @@ impl PendingSources {
                 .and_then(|base| base.checked_add(word.trailing_zeros() as usize))
                 .ok_or_else(|| invalid_input("pending source minimum exceeds the offset domain"))?;
         }
-        let count = if coordinate == update.source {
-            update.count
+        let count = if coordinate == source {
+            count
         } else {
             self.count_at(coordinate)?
         };
@@ -537,14 +563,35 @@ impl PendingSources {
         fed: usize,
         governor: &mut Governor,
     ) -> Result<SourceUpdate, StopReason> {
-        governor.charge(Resource::Work, SOURCE_UPDATE_WORK)?;
+        governor.charge(Resource::Work, SOURCE_COUNT_WORK)?;
         if source > fed {
             return Err(invalid_input("queued source origin exceeds admitted input"));
         }
-        self.grow(source, governor)?;
         self.validate()?;
+        let old = match self.counts.as_slice().get(source / 64) {
+            Some(page) if !page.is_empty() => self.count_at(source)?,
+            _ => 0,
+        };
+        let count = old
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        if old != 0 {
+            self.check_occupied(source)?;
+            if self.floor.is_none_or(|floor| floor > source) {
+                return Err(invalid_input(
+                    "queued source origin precedes the cached minimum",
+                ));
+            }
+            return Ok(SourceUpdate {
+                source,
+                count,
+                occupancy: None,
+            });
+        }
+        governor.charge(Resource::Work, SOURCE_UPDATE_WORK - SOURCE_COUNT_WORK)?;
+        self.grow(source, governor)?;
         let stored = &self.counts[source / 64];
-        let (old, page) = if stored.is_empty() {
+        let page = if stored.is_empty() {
             let word = self.occupancy[0]
                 .as_slice()
                 .get(source / 64)
@@ -557,30 +604,24 @@ impl PendingSources {
             let mut page = ScratchVec::new(governor);
             Self::reserve_slots(&mut page, 64, governor)?;
             page.extend(core::iter::repeat_n(0, 64))?;
-            (0, Some(page))
+            Some(page)
         } else {
-            (self.count_at(source)?, None)
+            None
         };
-        let count = old
-            .checked_add(1)
-            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let active = self
             .active
-            .checked_add(usize::from(old == 0))
+            .checked_add(1)
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
-        let words = if old == 0 {
-            self.changed_words(source, true)?
-        } else {
-            self.check_occupied(source)?;
-            [None; SOURCE_LEVELS]
-        };
+        let words = self.changed_words(source, true)?;
         Ok(SourceUpdate {
             source,
             count,
-            active,
-            floor: Some(self.floor.map_or(source, |known| known.min(source))),
-            words,
-            page,
+            occupancy: Some(SourceOccupancy {
+                active,
+                floor: Some(self.floor.map_or(source, |known| known.min(source))),
+                words,
+                page,
+            }),
         })
     }
 
@@ -600,7 +641,7 @@ impl PendingSources {
         source: usize,
         governor: &mut Governor,
     ) -> Result<SourceUpdate, StopReason> {
-        governor.charge(Resource::Work, SOURCE_UPDATE_WORK)?;
+        governor.charge(Resource::Work, SOURCE_COUNT_WORK)?;
         self.validate()?;
         let count = self
             .count_at(source)?
@@ -611,28 +652,34 @@ impl PendingSources {
                 "queued source origin precedes the cached minimum",
             ));
         }
+        if count != 0 {
+            self.check_occupied(source)?;
+            return Ok(SourceUpdate {
+                source,
+                count,
+                occupancy: None,
+            });
+        }
+        governor.charge(Resource::Work, SOURCE_UPDATE_WORK - SOURCE_COUNT_WORK)?;
         let active = self
             .active
-            .checked_sub(usize::from(count == 0))
+            .checked_sub(1)
             .ok_or_else(|| invalid_input("pending source origin count underflows"))?;
-        let words = if count == 0 {
-            self.changed_words(source, false)?
-        } else {
-            self.check_occupied(source)?;
-            [None; SOURCE_LEVELS]
-        };
-        let mut update = SourceUpdate {
-            source,
-            count,
+        let words = self.changed_words(source, false)?;
+        let mut occupancy = SourceOccupancy {
             active,
             floor: self.floor,
             words,
             page: None,
         };
-        if count == 0 && self.floor == Some(source) {
-            update.floor = self.minimum_after(&update)?;
+        if self.floor == Some(source) {
+            occupancy.floor = self.minimum_after(source, count, &occupancy)?;
         }
-        Ok(update)
+        Ok(SourceUpdate {
+            source,
+            count,
+            occupancy: Some(occupancy),
+        })
     }
 }
 

@@ -980,10 +980,15 @@ exist from the first origin through one fixed root word. Updates and minimum
 descent visit at most eleven levels on every target, without assuming source
 origins arrive or leave in order. This portable 64-bit source universe retains
 the native offset's addressability limit; its additional singleton roots on
-32-bit targets preserve identical actual storage and initialization. Every
-prepared update admits 104 Work on either target for bounded planning,
-validation and writes, including the root read and page bookkeeping. Growth
-separately admits newly
+32-bit targets preserve identical actual storage and initialization. A change
+between zero and nonzero multiplicity admits 104 Work on either target for
+bounded planning, validation and writes, including the root read and page
+bookkeeping. When the count stays nonzero, the prepared update carries only
+the source and new count, and its application writes only that count. It admits
+24 Work for the retained root, count-page, leaf-bit and minimum checks,
+arithmetic and count write; no hierarchy-update array is constructed or visited.
+Covered source coordinates also skip directory and hierarchy growth traversal.
+Growth separately admits newly
 initialized directory entries, count slots and bitmap words, and live slots
 potentially relocated by a capacity increase. Directory and bitmap capacities
 are reserved before their lengths grow. Each touched page reserves exactly 64
@@ -995,6 +1000,8 @@ succeed. Removal is planned before a report leaves the dispatch queue, with no
 fallible charge between that removal and applying the source update. Invalid
 source offsets, count overflow
 and inconsistent occupancy paths fail explicitly.
+The multiplicity-only change is source-reviewed; its current runtime budget and
+receipt behavior remain pending automatic CI.
 
 The index grows only to the largest queued origin, which must not exceed the
 fed byte count, including an empty completion's EOF offset. Dividing the source
