@@ -408,8 +408,8 @@ fn exhaustion_is_explicit_every_resource() {
 
 fn assert_source_retention_limits(tools: &ToolSet, output: &[u8], built_in: &DialectSet) {
     let defaults = Budget::default();
-    // Retention runs first: an input over the byte limit is identified by
-    // digest but not retained.
+    // Incremental admission retains the complete supplied digest but never
+    // publishes an admitted prefix after source admission refuses a byte.
     let result = tools.recover(
         output,
         &ToolRecoveryRequest::default().budget(Budget {
@@ -418,23 +418,28 @@ fn assert_source_retention_limits(tools: &ToolSet, output: &[u8], built_in: &Dia
         }),
         built_in,
     );
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    assert_eq!(
+        result.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::InputBytes)
+    );
+    assert_eq!(result.receipt.source, Digest::of(output));
     assert_eq!(result.receipt.sources.len(), 0);
-    // A budget that only retention fits is reported as the search's
-    // exhaustion, with the source retained.
-    let retained = output.len() as u64 + 1;
+    // Capture growth and interpretation share the byte fold's Work budget.
+    // This allowance refuses intake before the complete source is admitted.
+    let work = output.len() as u64 + 1;
     let result = tools.recover(
         output,
-        &ToolRecoveryRequest::default().budget(Budget {
-            work: retained,
-            ..defaults
-        }),
+        &ToolRecoveryRequest::default().budget(Budget { work, ..defaults }),
         built_in,
     );
     assert_eq!(
         result.receipt.stopped,
         StopReason::BudgetExceeded(Resource::Work)
     );
-    assert_eq!(result.receipt.sources[0].bytes, output);
+    assert_eq!(result.outcome, Outcome::Unresolved);
+    assert_eq!(result.receipt.source, Digest::of(output));
+    assert_eq!(result.receipt.sources.len(), 0);
 }
 
 /// G16 (security review A6 and P1, historical-fit risk 5): the `Depth`
@@ -526,7 +531,10 @@ fn nested_item_depth_is_a_stack_guard() {
         if fits > 0 {
             let result = tools.recover(turn(fits).as_bytes(), &request, built_in);
             let Outcome::Resolved(calls) = &result.outcome else {
-                panic!("depth {d}: {fits} nested items: {:#?}", result.outcome);
+                panic!(
+                    "depth {d}: {fits} nested items: {:?}, stopped {:?}, usage {:?}",
+                    result.outcome, result.receipt.stopped, result.receipt.usage
+                );
             };
             assert_eq!(
                 calls.calls[0].arguments.to_json(),
@@ -1758,6 +1766,11 @@ fn effects_override_per_tool() {
         matches!(&result.receipt.stopped, StopReason::InvalidInput(detail) if detail.contains("`read`"))
     );
     assert_eq!(result.receipt.sources.len(), 1);
+    assert_eq!(result.receipt.source, Digest::of(output.as_bytes()));
+    assert_eq!(
+        result.receipt.sources[0].bytes.as_slice(),
+        output.as_bytes()
+    );
 }
 
 #[test]
@@ -3105,7 +3118,12 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     let ample = Effort::Standard.budget().scratch_bytes;
     let (held_turn, held_usage) = recognize(&held, held.len(), ample);
     let (closed_turn, closed_usage) = recognize(&closed, closed.len(), ample);
-    assert!(held_turn.is_ok() && closed_turn.is_ok());
+    assert!(
+        held_turn.is_ok() && closed_turn.is_ok(),
+        "held stop {:?}, usage {held_usage:?}; closed stop {:?}, usage {closed_usage:?}",
+        held_turn.as_ref().err(),
+        closed_turn.as_ref().err()
+    );
     // Two markers per block were queued at once.
     let queue = 2 * BLOCKS as u64 * cost::QUEUED_REPORT;
     assert!(
