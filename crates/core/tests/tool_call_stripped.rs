@@ -163,7 +163,7 @@ fn assert_long_initial_names_retain_calls() {
                 .flat_map(|call| &call.readings)
                 .any(|reading| {
                     reading.name.as_ref().is_some_and(|captured| {
-                        captured.value == name && &input[captured.span.clone()] == name
+                        captured.value == name && input[captured.span.clone()] == name
                     }) && reading.captures.iter().any(|capture| {
                         capture.kind == CaptureKind::Arguments
                             && &input[capture.span.clone()] == arguments
