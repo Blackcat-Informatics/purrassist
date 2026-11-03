@@ -995,53 +995,61 @@ semantic-prefix equivalence, cloning or decoding queries.
 
 The portable history-node reservation is 112 bytes. Traversals admit work before
 each visited step, and scanning live owners admits work for their records.
-Pending reports keep their dispatch order separately from a counted source
-index. Paged source-offset counts and hierarchical occupancy bitsets retain the
-exact minimum, including a later-ending report whose source begins earlier.
-Each occupancy level marks nonempty words of the level below it; all levels
-exist from the first origin through one fixed root word. Updates and minimum
-descent visit at most eleven levels on every target, without assuming source
-origins arrive or leave in order. This portable 64-bit source universe retains
-the native offset's addressability limit; its additional singleton roots on
-32-bit targets preserve identical actual storage and initialization. A change
-between zero and nonzero multiplicity admits 104 Work on either target for
-bounded planning, validation and writes, including the root read and page
-bookkeeping. When the count stays nonzero, the prepared update carries only
-the source and new count, and its application writes only that count. It admits
-24 Work for the retained root, count-page, leaf-bit and minimum checks,
-arithmetic and count write; no hierarchy-update array is constructed or visited.
-Covered source coordinates also skip directory and hierarchy growth traversal.
-Growth separately admits newly
-initialized directory entries, count slots and bitmap words, and live slots
-potentially relocated by a capacity increase. Directory and bitmap capacities
-are reserved before their lengths grow. Each touched page reserves exactly 64
-native-width counts, while an empty inner owner represents an unallocated page.
-A prepared update owns a newly initialized page until queue admission succeeds;
-refusal drops that page without installing it. Live counts, occupancy and the
-cached minimum change only after the complete update and queue admission
-succeed. Removal is planned before a report leaves the dispatch queue, with no
-fallible charge between that removal and applying the source update. Invalid
-source offsets, count overflow
-and inconsistent occupancy paths fail explicitly.
-The multiplicity-only change is source-reviewed; its current runtime budget and
-receipt behavior remain pending automatic CI.
+Pending reports keep their dispatch order separately from one typed counted
+source index. Each source row stores report and candidate multiplicities;
+candidates are a checked subset of reports. Each occupancy row stores two
+`u64` lanes with the same subset invariant. Counts and bitmap rows each reserve
+16 portable bytes. A touched count page contains exactly 64 paired rows; empty
+40-byte inner owners represent absent pages. Both exact minima and active-origin
+counts are cached independently, while page addressing, root validation and the
+source-coordinate bitmap path are shared. A candidate report with a different
+source origin is an explicit invariant failure.
 
-The index grows only to the largest queued origin, which must not exceed the
-fed byte count, including an empty completion's EOF offset. Dividing the source
-coordinate into a page and slot avoids an overflowing `source + 1` at the native
-offset limit. Scratch vectors own and charge their reserved capacity until the
-recognizer drops; the old 256-byte reservation per distinct origin is removed.
-The directory stores 40-byte inner owners with geometric growth, while page
-capacity stays at 64 counts. Together with the occupancy buffers this reserves
-less than 9.504 bytes per indexed source position plus rounding and fixed level
-overhead. A late origin after a large source gap needs the directory and its own
-page, without allocating count pages for the gap. Hermes JSON strings followed
-by `}` can queue such a late origin: their closing quote and brace also match an
-Anthropic reasoning closer, which is queued before ownership interpretation.
-These source-derived storage and update bounds do not establish whether a
-workload fits its Work or scratch budget. Frontier updates read the cached exact
-minimum without scanning the pending
-queue.
+The index has eleven portable occupancy owners and a source-derived logical
+height: `max(1, ceil(bit_width(u64(source)) / 6))` for an admitted source, with zero
+height before the first update. The height is a high-water mark and never shrinks.
+Only active levels are traversed. Each paired path row advances only lanes still
+propagating a zero/nonzero change and stops when neither lane propagates.
+Multiplicity-only changes construct no bitmap-path array and perform no bitmap
+update traversal; the fixed leaf membership check remains. Compact prepared deltas retain the source, polarity and each lane's
+changed-prefix length; apply recomputes that already checked path rather than
+initializing maximum-height row carriers.
+
+Height growth separately promotes the old root through child zero in each newly
+exposed ancestor. Promotions and the new source path can touch different words
+of the same level. Preparation overlays those promotions while validating the
+source path; apply publishes promotions before its path deltas. Removing a cached
+minimum descends only affected nonempty lanes. Descent shares paired reads while
+lane coordinates agree, then reads each distinct coordinate; an empty lane checks
+its zero root without descending. Every final minimum must have a live count.
+Root, source-bound, page, subset, occupancy and arithmetic failures remain explicit.
+Dividing source coordinates before adding one preserves inclusive EOF offsets at
+the native addressability limit.
+
+The shared update admits 20 fixed record operations covering source addressing
+and height, root/active/minimum agreement, the old count page/pair, checked paired
+arithmetic, leaf membership, active/floor planning, compact carrier handoff and
+page/count/cache application. Cached-minimum count validation separately admits
+two Work per distinct additional source lookup. Each visited changed path row
+admits five Work for planning and eventual application, including both coordinate
+computations and the paired write. Each actual promoted row admits three Work.
+Minimum replacement admits three Work per distinct paired row lookup/overlay,
+one per scanned lane with checked coordinate advance, and two per distinct final
+count lookup. Growth separately admits two level visits, initialized directory,
+count and bitmap slots, and live slots potentially relocated by capacity growth.
+These charges describe actual retained computation; no fixed maximum-height fee
+or separate candidate-index update remains.
+
+All backing reservations and initialization, new page ownership, promotions,
+path-prefix deltas and replacement minima are prepared before dispatch mutation.
+Failed preparation can retain enlarged zero backing but changes no logical
+height, live count, bit, active count or minimum. A prepared page remains private
+until queue admission succeeds. Apply has no fallible admission and publishes
+both lanes together. Scratch owners retain their capacity until recognizer drop.
+The existing held-marker production case crosses source pages and active heights;
+a focused typed-minimum case additionally covers mixed routing/candidate reports
+at one origin and queue-admission refusal before page handoff. Source review and
+runtime qualification of this combined-index unit remain pending.
 
 The engine caches its exact minimum live source origin. A lookup admits one
 work unit; a miss scans every attempt and deferred report under its original
@@ -1154,9 +1162,8 @@ Native thread phases merge only across equal-ranked configurations; current
 winning configurations determine ownership independently of historical opening.
 Cached engine minima invalidate when threads or retained payload owners change;
 unchanged candidate bodies do not trigger full configuration scans per byte.
-Pending candidate reports have their own counted source index, with the same
-fallible storage and admission as the report index above. Both indices currently
-admit updates separately; this adds real runtime cost.
+Pending candidate reports use the candidate lane of the shared typed source
+index above; report and candidate origins share addressing and path admission.
 
 Settled calls and rejections append their exact source spans to an ordered merged
 coverage list. Reasoning appends its sorted embedded semantic spans. Each retained

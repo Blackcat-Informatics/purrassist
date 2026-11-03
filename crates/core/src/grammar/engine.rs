@@ -69,6 +69,7 @@ use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchLease, ScratchMeter, ScratchVec, StopReason,
+    invalid_input,
 };
 use crate::digest::Digest;
 use crate::pattern::{DerivativeDfa, DfaState};
