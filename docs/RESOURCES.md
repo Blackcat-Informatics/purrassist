@@ -1085,10 +1085,34 @@ rejection, reasoning block, suppressible frame or frame needing repairs; content
 after that owner still waits for final normalization. These owners can extend
 rejected markup, remove closers after reasoning or add previously unpublished
 content. Unsupported-markup reports preserve content bytes. No source is replayed.
-At EOF, one completed whole-message reading flushes its remaining content through
-the same cursor, followed by remaining reasoning ranges. Both batch discard and
-streaming sinks run this producer. This does not complete the longest semantic
-prefix, lexical holdback or candidate-byte contracts.
+At EOF, completed unique and ambiguous outcomes borrow their existing resident
+readings. A single final producer merges content, reasoning, calls and rejected
+attempts in source order. Unique outcomes use that same path without alternative
+comparison. Both batch discard and streaming sinks run the producer. This does
+not complete the longest semantic prefix, lexical holdback or candidate-byte
+contracts.
+
+For whole-message ambiguity, a fallible scratch cursor per alternative retains
+four native indices and one borrowed reading reference, with a portable 40-byte
+reservation. A complete prefix-planning pass precedes new EOF publication.
+Every source-family lookup and checked cursor advance admits bounded work;
+string, ledger, diagnostic and provenance comparisons admit their actual visited
+payloads. Call agreement includes identity, every outcome and repair field,
+alternatives and distinguishing provenance. Governed JSON source comparison
+preserves member order, duplicate occurrences, all source spans and exact number
+spellings; it never substitutes mathematical numeric equality. Its explicit
+24-byte comparison-stack records retain fallible ownership and check depth.
+
+Planning continues through overlapping owners before publication: an equal
+rejected wrapper cannot hide an earlier disagreement in a call inside it.
+Content and reasoning ranges are clipped to the common cutoff, normalized
+outside a valid UTF-8 scalar by the same boundary helper used during live intake.
+Calls and rejected attempts publish only when their complete source spans fit
+before the cutoff. Later common suffixes stay withheld. A differing complete
+call currently stops the plan at its start; maximal agreement inside that call
+still needs native capture and edit facts correlated with each final reading.
+No synthetic result, cloned alternative or source replay supplies this prefix.
+Refusal preserves the ordinary explicit failure and source-retention contract.
 
 A native event cursor follows the structurally shared history exactly once.
 Its direct fixed-key lookup admits one work unit. A successful traversal is
@@ -1114,7 +1138,7 @@ claim about settled parameter values or permission to execute.
 Before resolution consumes the finished native turn, the cursor records
 governed argument-capture offsets and authentic grammar-edit payloads. A charged sort and binary lookup allow EOF
 events to use captures whose native alternatives agree, without replaying the
-input or decoding arguments again. The completed unique reading fills missing
+input or decoding arguments again. The completed common prefix fills missing
 call starts, canonical names and raw arguments. EOF names may follow a guessed
 final identity; the final outcome and receipt retain that uncertainty.
 
@@ -1157,7 +1181,7 @@ restarted DeepSeek workload exhausts or whether it fits its Work budget.
 
 Packed ambiguity and grouped attempts can hold this conservative frontier even
 when later recovery would fold their meanings together. Proving the longest
-semantic stable prefix, ambiguous EOF event intersection, exact held/candidate
+semantic stable prefix, maximal intra-call EOF agreement, exact held/candidate
 byte accounting, semantic-search revision events,
 decoding queries, governed cloning and CLI/MCP progress remain
 unfinished under #16.

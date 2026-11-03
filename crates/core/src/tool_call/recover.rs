@@ -3377,47 +3377,12 @@ impl<'s> RecoveryIntake<'s> {
     /// when the encoding cursor has no pending bytes. Inspect only the scalar
     /// crossing this cutoff; invalid sequences retain their original boundary.
     fn source_boundary(&self, end: usize, governor: &mut Governor) -> Result<usize, StopReason> {
-        // A constant bound covers the cutoff lookup, at most three backward
-        // byte probes, leading-byte classification and validation of four bytes.
-        governor.charge(Resource::Work, 12)?;
         let source = self
             .capture
             .as_ref()
             .map(|capture| capture.bytes.as_slice())
             .ok_or_else(|| invalid_input("content frontier has no admitted source"))?;
-        if end > source.len() {
-            return Err(invalid_input("content frontier exceeds admitted source"));
-        }
-        if end == 0 || source.get(end).is_none_or(|byte| byte & 0xc0 != 0x80) {
-            return Ok(end);
-        }
-        let mut start = end;
-        for _ in 0..3 {
-            start -= 1;
-            let first = source[start];
-            if first & 0xc0 != 0x80 {
-                let width = match first {
-                    0xc2..=0xdf => 2,
-                    0xe0..=0xef => 3,
-                    0xf0..=0xf4 => 4,
-                    _ => return Ok(end),
-                };
-                let Some(scalar) = source.get(start..start.saturating_add(width)) else {
-                    return Ok(end);
-                };
-                return Ok(
-                    if start.saturating_add(width) > end && core::str::from_utf8(scalar).is_ok() {
-                        start
-                    } else {
-                        end
-                    },
-                );
-            }
-            if start == 0 {
-                break;
-            }
-        }
-        Ok(end)
+        super::stream_finish::source_boundary(source, end, governor)
     }
 
     fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
@@ -3532,15 +3497,20 @@ impl<'s> RecoveryIntake<'s> {
     ) -> AssistResult<ToolCalls> {
         self.receipt.source = core::mem::take(&mut self.digest).finish();
         let completed = self.complete(request, governor).and_then(|done| {
-            if let Outcome::Resolved(calls) | Outcome::BestGuess(calls) = &done.outcome {
-                let source = self
-                    .capture
-                    .as_ref()
-                    .expect("completed recovery owns admitted source")
-                    .bytes
-                    .as_slice();
-                self.events.finish(calls, source, governor, sink)?;
-            }
+            let readings = match &done.outcome {
+                Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
+                    core::slice::from_ref(calls)
+                }
+                Outcome::Ambiguous(readings) => readings.as_slice(),
+                Outcome::Unresolved => return Ok(done),
+            };
+            let source = self
+                .capture
+                .as_ref()
+                .expect("completed recovery owns admitted source")
+                .bytes
+                .as_slice();
+            self.events.finish(readings, source, governor, sink)?;
             Ok(done)
         });
         let outcome = match completed {

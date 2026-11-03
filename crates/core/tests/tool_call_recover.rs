@@ -13,7 +13,7 @@ use purrassist_core::tool_call::emit;
 use purrassist_core::tool_call::{
     AmbiguityPolicy, CallOutcome, DialectId, DialectSet, Effects, Finish, FromNode, FromNodeError,
     GenerationStop, IdGenerator, IdPolicy, Param, PolicySelection, ReasoningPolicy, Rejection,
-    RepairPolicy, StrictForced, ToolCall, ToolCalls, ToolChoice, ToolDefinition,
+    RepairPolicy, StreamEvent, StrictForced, ToolCall, ToolCalls, ToolChoice, ToolDefinition,
     ToolRecoveryRequest, ToolSet, UnresolvedReason, turn_id_prefix,
 };
 use purrassist_core::wire::WireValue;
@@ -588,6 +588,98 @@ fn custom(text: &str) -> DialectId {
     )
 }
 
+/// EOF releases the shared interpretation prefix, never later equal content
+/// beyond a different call. Every split retains the whole batch result/usage.
+fn stream_ambiguous_prefix(
+    tools: &ToolSet,
+    dialects: &DialectSet,
+    input: &[u8],
+    expected_content: &[u8],
+    shared_calls: usize,
+    batch: &AssistResult<ToolCalls>,
+) {
+    let Outcome::Ambiguous(readings) = &batch.outcome else {
+        panic!("expected whole-message ambiguity: {:?}", batch.outcome);
+    };
+    for split in 0..=input.len() {
+        let mut stream = tools.stream_with_dialects(ToolRecoveryRequest::default(), dialects);
+        let mut events = Vec::new();
+        stream.feed(&input[..split], &mut events);
+        stream.feed(&input[split..], &mut events);
+        let result = stream.finish_with_events(GenerationStop::Stop, &mut events);
+        assert_eq!(&result, batch, "whole result/usage at split {split}");
+        let mut content = Vec::new();
+        let mut previous = 0;
+        let mut completed = 0;
+        for event in events {
+            match event {
+                StreamEvent::ContentDelta { span, raw } => {
+                    assert!(span.start >= previous && span.start < span.end);
+                    assert_eq!(raw.as_slice(), &input[span.clone()]);
+                    for reading in readings {
+                        assert!(
+                            reading.content.iter().any(|range| {
+                                range.start <= span.start && span.end <= range.end
+                            })
+                        );
+                    }
+                    previous = span.end;
+                    content.extend(raw);
+                }
+                StreamEvent::CallStarted { index, .. }
+                | StreamEvent::CallName { index, .. }
+                | StreamEvent::ArgumentDelta { index, .. }
+                | StreamEvent::Revision { index, .. }
+                | StreamEvent::ParameterComplete { index, .. } => {
+                    assert!(
+                        index < shared_calls,
+                        "event passed the first different call"
+                    );
+                }
+                StreamEvent::CallComplete { index, outcome } => {
+                    assert_eq!(index, completed);
+                    assert!(index < shared_calls);
+                    for reading in readings {
+                        assert_eq!(outcome, reading.calls[index].outcome);
+                    }
+                    completed += 1;
+                }
+                StreamEvent::ReasoningDelta { .. } | StreamEvent::CallRejected { .. } => {
+                    panic!("no reasoning or rejection belongs to the shared prefix");
+                }
+            }
+        }
+        assert_eq!(content, expected_content, "common prefix at split {split}");
+        assert_eq!(
+            completed, shared_calls,
+            "common completion at split {split}"
+        );
+    }
+}
+
+fn ambiguous_eof_common_facts(
+    tools: &ToolSet,
+    both: &DialectSet,
+    output: &[u8],
+    report: &AssistResult<ToolCalls>,
+) {
+    stream_ambiguous_prefix(tools, both, output, b"say ", 0, report);
+    // One genuine native call precedes the unchanged custom-grammar ambiguity.
+    let prefix = hermes("f", "{}");
+    let shared = format!("{prefix} {}", core::str::from_utf8(output).unwrap());
+    let extended = DialectSet::new(
+        both.dialects().iter().cloned().chain([DialectId::Hermes]),
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("extended dialect set");
+    let batch = tools.recover(
+        shared.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &extended,
+    );
+    stream_ambiguous_prefix(tools, &extended, shared.as_bytes(), b" say ", 1, &batch);
+}
+
 #[test]
 fn strict_ambiguity_rejects() {
     // Per-call ambiguity: a repeated parameter has a first and a last reading.
@@ -652,6 +744,7 @@ fn strict_ambiguity_rejects() {
     };
     assert_eq!(values.len(), 2);
     assert_eq!(report.receipt.alternatives.len(), 2);
+    ambiguous_eof_common_facts(&tools, &both, output, &report);
     let dialects: Vec<&str> = values
         .iter()
         .map(|value| value.calls[0].dialect.name())

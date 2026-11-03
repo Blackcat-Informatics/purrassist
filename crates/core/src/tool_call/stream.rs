@@ -5,13 +5,15 @@
 //!
 //! Live events follow the history shared by native continuations. Calls subject
 //! to later prose normalization hold numeric call indexing. Finalization flushes
-//! remaining source facts from a unique completed reading, without replaying
-//! input. Completion events retain final certainty and typed values, while
-//! native revisions retain their actual operator payloads. Longest semantic
-//! prefix equivalence, ambiguous EOF intersection, semantic-search revisions,
-//! decoding queries and stream cloning are not implemented yet.
+//! source facts from the common interpretation prefix of completed readings,
+//! without replaying input. Completion events retain final certainty and typed
+//! values, while native revisions retain their actual operator payloads.
+//! Maximal agreement inside a differing call, full live semantic-prefix
+//! equivalence, semantic-search revisions, decoding queries and stream cloning
+//! are not implemented yet.
 
 use super::recover::RecoveryIntake;
+use super::stream_finish::{FinalCursor, FinalItem, common_prefix};
 use super::{
     ArgLeaf, CallOutcome, CallSegment, Closure, DialectId, DialectSet, GenerationStop, Piece,
     RecognizedTurn, Recognizer, Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest,
@@ -98,7 +100,7 @@ fn revision_operator(
 pub enum StreamEvent {
     /// Newly settled content bytes, including runs after closed native frames
     /// whose earlier history has no unresolved normalization owner. Other
-    /// content waits for a unique final reading. Notifications do not overlap.
+    /// content waits for agreement in final readings. Notifications do not overlap.
     ContentDelta {
         /// The exact range in the original output.
         span: Range<usize>,
@@ -1016,68 +1018,97 @@ impl EventCursor {
         push_scratch(&mut self.edits, fact, governor)
     }
 
-    /// Flush only facts from a complete, unique whole-message reading. This is
-    /// EOF completion of the live producer, not another recovery operation.
+    /// Flush the source-ordered interpretation prefix shared by final readings.
+    /// Planning visits overlapping owners before any EOF event is published.
     pub(super) fn finish(
         &mut self,
-        calls: &ToolCalls,
+        readings: &[ToolCalls],
         source: &[u8],
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
-        for range in &calls.content {
-            governor.charge(Resource::Work, 1)?;
-            self.content(range, source, governor, sink)?;
-        }
-        for block in &calls.reasoning_blocks {
-            governor.charge(Resource::Work, 1)?;
-            let start = block.text.start.max(self.reasoning_end);
-            if start < block.text.end {
-                StreamEvent::reasoning(start..block.text.end, source, governor)?.publish(sink)?;
+        let limit = common_prefix(readings, source.len(), governor)?;
+        let limit = super::stream_finish::source_boundary(source, limit, governor)?;
+        let first = readings
+            .first()
+            .ok_or_else(|| invalid_input("completed recovery has no final reading"))?;
+        let mut cursor = FinalCursor::new(first);
+        while let Some(item) = cursor.next(governor)? {
+            let span = item.span();
+            if span.start > span.end || span.end > source.len() {
+                return Err(invalid_input("final event owner exceeds admitted source"));
             }
-        }
-        for (index, call) in calls.calls.iter().enumerate() {
-            governor.charge(Resource::Work, 1)?;
-            let live = self.calls.as_slice().get(index);
-            if let Some(live) = live {
-                if live.start != call.span.start || live.end != call.span.end {
-                    return Err(invalid_input(
-                        "final call differs from published native call",
-                    ));
+            if span.start >= limit {
+                break;
+            }
+            match item {
+                FinalItem::Content(range) => {
+                    self.content(&(range.start..range.end.min(limit)), source, governor, sink)?;
                 }
-            } else {
-                StreamEvent::started(
-                    index,
-                    call.span.start,
-                    call.candidate_dialects.iter().cloned(),
-                    governor,
-                )?
-                .publish(sink)?;
+                FinalItem::Reasoning(block) => {
+                    let start = block.text.start.max(self.reasoning_end);
+                    let end = block.text.end.min(limit);
+                    if start < end {
+                        StreamEvent::reasoning(start..end, source, governor)?.publish(sink)?;
+                        self.reasoning_end = end;
+                    }
+                }
+                FinalItem::Call(call) if call.span.end <= limit => {
+                    self.finish_call(call, source, governor, sink)?;
+                }
+                FinalItem::Rejected(rejected) if rejected.span.end <= limit => {
+                    StreamEvent::rejected(rejected.span.clone(), rejected.reason, governor)?
+                        .publish(sink)?;
+                }
+                FinalItem::Call(_) | FinalItem::Rejected(_) => {}
             }
-            if live.is_none_or(|live| !live.named)
-                && let Some(tool) = &call.tool
-            {
-                StreamEvent::name(index, tool, governor)?.publish(sink)?;
-            }
-            if live.is_none_or(|live| !live.arguments)
-                && let Some(span) = self.final_arguments(&call.span, governor)?
-            {
-                StreamEvent::argument(index, span, source, governor)?.publish(sink)?;
-            }
-            self.revisions(index, call, governor, sink)?;
-            StreamEvent::completed(index, &call.outcome, governor)?.publish(sink)?;
-            // All typed parameter events follow completion, including mutating
-            // calls. Ambiguous/unresolved values are not presented as settled.
-            if matches!(call.outcome, CallOutcome::Resolved | CallOutcome::BestGuess) {
-                parameters(index, &call.arguments, governor, sink)?;
-            }
-        }
-        for rejected in &calls.rejected {
-            governor.charge(Resource::Work, 1)?;
-            StreamEvent::rejected(rejected.span.clone(), rejected.reason, governor)?
-                .publish(sink)?;
         }
         governor.check()
+    }
+
+    fn finish_call(
+        &self,
+        call: &ToolCall,
+        source: &[u8],
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> Result<(), StopReason> {
+        let index = call.index;
+        governor.charge(Resource::Work, 1)?;
+        let live = self.calls.as_slice().get(index);
+        if let Some(live) = live {
+            if live.start != call.span.start || live.end != call.span.end {
+                return Err(invalid_input(
+                    "final call differs from published native call",
+                ));
+            }
+        } else {
+            StreamEvent::started(
+                index,
+                call.span.start,
+                call.candidate_dialects.iter().cloned(),
+                governor,
+            )?
+            .publish(sink)?;
+        }
+        if live.is_none_or(|live| !live.named)
+            && let Some(tool) = &call.tool
+        {
+            StreamEvent::name(index, tool, governor)?.publish(sink)?;
+        }
+        if live.is_none_or(|live| !live.arguments)
+            && let Some(span) = self.final_arguments(&call.span, governor)?
+        {
+            StreamEvent::argument(index, span, source, governor)?.publish(sink)?;
+        }
+        self.revisions(index, call, governor, sink)?;
+        StreamEvent::completed(index, &call.outcome, governor)?.publish(sink)?;
+        // All typed parameter events follow completion, including mutating
+        // calls. Ambiguous/unresolved values are not presented as settled.
+        if matches!(call.outcome, CallOutcome::Resolved | CallOutcome::BestGuess) {
+            parameters(index, &call.arguments, governor, sink)?;
+        }
+        Ok(())
     }
 
     fn revisions(
@@ -1262,9 +1293,9 @@ fn unique_name<'t>(
 /// publication. Exhaustion and cancellation are reported by the final receipt;
 /// bytes supplied after refusal still contribute to its complete source digest.
 ///
-/// See [`StreamEvent`] for source facts and EOF completion events. Semantic
-/// search revisions and events common to ambiguous final readings remain
-/// unfinished.
+/// See [`StreamEvent`] for source facts and EOF completion events. Final
+/// readings publish only their common interpretation prefix; maximal agreement
+/// inside a differing call and semantic-search revisions remain unfinished.
 ///
 /// ```
 /// use purrassist_core::{Budget, tool_call::{GenerationStop, ToolSet, ToolRecoveryRequest}};

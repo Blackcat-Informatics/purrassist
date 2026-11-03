@@ -66,6 +66,7 @@ pub mod rules;
 mod scope;
 mod shape;
 mod stream;
+mod stream_finish;
 mod toolset;
 
 pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
