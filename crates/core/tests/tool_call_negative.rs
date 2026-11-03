@@ -206,8 +206,8 @@ fn trailing_text_inside_wrapper() {
 }
 
 /// Compare complete results and source-ordered content events at every split.
-/// A repaired frame waits for final normalization; a closed native frame can
-/// publish its whole trailing content after its reports have settled.
+/// Competing argument readings withhold later content through EOF; a closed
+/// native frame publishes its whole tail after its reports have settled.
 fn stream_content(
     tools: &ToolSet,
     dialects: &DialectSet,
@@ -240,6 +240,14 @@ fn stream_content(
         }
         let result = stream.finish_with_events(GenerationStop::Stop, &mut events);
         assert_eq!(result, batch, "whole result differs at split {split}");
+        if !live {
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, StreamEvent::CallComplete { .. })),
+                "competing argument readings completed at split {split}"
+            );
+        }
         let mut next = tail;
         for event in events {
             if let StreamEvent::ContentDelta { span, raw } = event {
@@ -249,14 +257,18 @@ fn stream_content(
                 next = span.end;
             }
         }
-        assert_eq!(next, input.len(), "content coverage at split {split}");
+        assert_eq!(
+            next,
+            if live { input.len() } else { tail },
+            "content coverage at split {split}"
+        );
     }
     batch
 }
 
 /// Repeated closers after an ambiguous body tail remain markup; only the
-/// prose after them stays content. Streaming preserves both the repaired
-/// frame's deferred tail and a closed native frame's live content.
+/// prose after them stays batch content. Streaming withholds it after competing
+/// argument readings and publishes a closed native frame's settled tail.
 #[test]
 fn stray_closers_after_ambiguous_body_tail() {
     let input = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>\n</tool_call> tail";
