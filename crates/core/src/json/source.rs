@@ -2,12 +2,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Governed source identity for ordered JSON trees with exact lexical numbers.
+// `unreachable_pub` rejects `pub` helpers reexported only within the crate,
+// while `redundant_pub_crate` rejects `pub(crate)` inside this private module
+// (https://github.com/rust-lang/rust-clippy/issues/6188). Retain the compiler's
+// crate-only visibility contract, as in `grammar::engine`.
+#![allow(clippy::redundant_pub_crate)]
+
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason, push_scratch};
 
 /// Compare exact spellings after admitting both byte lengths; resource refusal
 /// propagates without allocating or publishing a partial comparison.
-pub fn same_source_text(
+pub(crate) fn same_source_text(
     left: &str,
     right: &str,
     governor: &mut Governor,
@@ -34,7 +40,7 @@ const _: () = assert!(core::mem::size_of::<SourceNode<'_>>() <= SourceNode::CHAR
 
 /// Source identity is stricter than semantic JSON equality: preserve every
 /// occurrence, source range and exact number spelling without numeric work.
-pub fn same_source_tree(
+pub(crate) fn same_source_tree(
     left: &crate::json::Node,
     right: &crate::json::Node,
     governor: &mut Governor,
