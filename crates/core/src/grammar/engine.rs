@@ -67,7 +67,9 @@ use super::repair::{RepairContext, RepairState, Status};
 use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
 use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
-use crate::contract::{Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason};
+use crate::contract::{
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchMeter, ScratchVec, StopReason,
+};
 use crate::digest::Digest;
 use crate::pattern::{DerivativeDfa, DfaState};
 use crate::search::Ledger;
@@ -221,6 +223,8 @@ pub(crate) struct Thread {
     pub(crate) cost: u64,
     pub(crate) hist: u32,
     pub(crate) opened: bool,
+    /// Metric hypotheses: finite opener prefix (1), candidate (2), or both.
+    pub(crate) ownership: u8,
     pub(crate) stall: u32,
     pub(crate) reach: usize,
     /// Whether the configuration descends from a body that read on past a
@@ -647,6 +651,12 @@ impl<'s> Step<'_, 's> {
 
     /// Queue `thread`, which has moved to `thread.pos`.
     fn queue(&self, mut thread: Thread, stack: &mut ScratchVec<Thread>) -> Result<(), StopReason> {
+        if !matches!(
+            thread.sub,
+            Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
+        ) {
+            thread.ownership = 2;
+        }
         if thread.pos > thread.reach {
             thread.reach = thread.pos;
             thread.stall = 0;
@@ -661,12 +671,26 @@ impl<'s> Step<'_, 's> {
 
     fn step(
         &mut self,
-        thread: Thread,
+        mut thread: Thread,
         byte: u8,
         stack: &mut ScratchVec<Thread>,
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if thread.ownership & 1 != 0 {
+            governor.charge(
+                Resource::Work,
+                size(self.program.openers.len()).saturating_add(1),
+            )?;
+            if !self.program.openers.contains(&thread.pc)
+                || !matches!(
+                    thread.sub,
+                    Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
+                )
+            {
+                thread.ownership = 2;
+            }
+        }
         if self.writes_inserted(&thread, byte) {
             // The token this reading inserted is written right here: the
             // reading that reads it as written is the reading.
@@ -2163,6 +2187,7 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        thread.ownership = 2;
         if let Inst::Lit { lit, .. } = self.program.insts[thread.pc as usize]
             && self
                 .program
@@ -2253,6 +2278,7 @@ impl<'s> Step<'_, 's> {
                 // reject never reads it.
                 Inst::Accept => {
                     out.completed.push(Thread {
+                        ownership: 2,
                         pc,
                         hist,
                         cost,
@@ -2273,6 +2299,7 @@ impl<'s> Step<'_, 's> {
                         .arena
                         .begin_codec(codec.begin(at, governor)?, governor)?;
                     let next = Thread {
+                        ownership: 2,
                         pc,
                         sub: Sub::Body(super::automaton::ROOT, Some(slot)),
                         entry: at,
@@ -2286,7 +2313,21 @@ impl<'s> Step<'_, 's> {
                     continue;
                 }
             };
+            let ownership = if thread.ownership & 1 != 0 {
+                governor.charge(
+                    Resource::Work,
+                    size(self.program.openers.len()).saturating_add(1),
+                )?;
+                if self.program.openers.contains(&pc) {
+                    thread.ownership
+                } else {
+                    2
+                }
+            } else {
+                2
+            };
             let next = Thread {
+                ownership,
                 pc,
                 sub,
                 entry: at,
@@ -3793,6 +3834,8 @@ pub(crate) fn merge_noting(
         (first.key(), first.rank(), first.hist) != (second.key(), second.rank(), second.hist) || {
             first.stall = 0;
             second.stall = 0;
+            first.ownership = 0;
+            second.ownership = 0;
             first == second
         }
     }));
@@ -3804,6 +3847,7 @@ pub(crate) fn merge_noting(
             if winner.rank() == current.rank() {
                 winner.hist = arena.pack(winner.hist, current.hist)?;
                 winner.stall = winner.stall.min(current.stall);
+                winner.ownership |= current.ownership;
             }
             continue;
         }
@@ -3955,6 +3999,25 @@ impl ScratchCharge for Boundary {
 }
 
 impl Event {
+    /// Routing-only reports do not retain candidate bytes by themselves.
+    pub(crate) fn candidate_start(&self) -> Option<usize> {
+        match self {
+            Self::Opened { .. } => None,
+            Self::Completed { parts, .. } => parts.first().map(|(part, _)| match part {
+                Part::Call(call) => call.span.start,
+                Part::Rejected { span, .. } => span.start,
+            }),
+            Self::Ended {
+                start,
+                completed: false,
+                outread,
+                salvage,
+                ..
+            } if !outread || salvage.is_some() => Some(*start),
+            Self::Ended { .. } => None,
+        }
+    }
+
     pub(crate) const fn at(&self) -> usize {
         match self {
             Self::Opened { at, .. } | Self::Completed { at, .. } | Self::Ended { at, .. } => *at,
@@ -3962,7 +4025,21 @@ impl Event {
     }
 }
 
+type OwnershipFloors = (Option<usize>, Option<usize>);
+const _: () = assert!(core::mem::size_of::<OwnershipFloors>() <= 32);
+const _: () = assert!(core::mem::size_of::<(Option<OwnershipFloors>, ScratchLease)>() <= 64);
+
+fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
+    if thread.ownership & 1 != 0 {
+        floors.0 = Some(floors.0.map_or(thread.start, |old| old.min(thread.start)));
+    }
+    if thread.ownership & 2 != 0 {
+        floors.1 = Some(floors.1.map_or(thread.start, |old| old.min(thread.start)));
+    }
+}
+
 struct Table<'s> {
+    thread_ownership: OwnershipFloors,
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
@@ -4364,6 +4441,8 @@ pub(crate) struct Engine<'s> {
     /// Cached minimum of immutable attempt and deferred-report origins. Every
     /// insertion or removal invalidates it before changing those collections.
     continuation_floor: ContinuationFloor,
+    ownership: Option<OwnershipFloors>,
+    _ownership_metadata: ScratchLease,
     /// The openers where an attempt read a whole call, while a held report
     /// or a live attempt at them remains (see [`Self::defer`]).
     whole: Vec<usize>,
@@ -4390,6 +4469,55 @@ const RELEASE_VECTOR_BYTES: u64 = 40;
 const DEFERRED_BYTES: u64 = 64;
 
 impl<'s> Engine<'s> {
+    /// Current retained configurations and payloads, independently of opened metadata.
+    pub(crate) fn ownership_floors(
+        &mut self,
+        governor: &mut Governor,
+    ) -> Result<(Option<usize>, Option<usize>), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if let Some(owned) = self.ownership {
+            return Ok(owned);
+        }
+        let (mut lexical, mut candidate) = (None, None);
+        let include = |floor: &mut Option<usize>, start| {
+            *floor = Some(floor.map_or(start, |old| old.min(start)));
+        };
+        for table in &self.tables {
+            governor.charge(Resource::Work, 1)?;
+            if let Some(start) = table.thread_ownership.0 {
+                include(&mut lexical, start);
+            }
+            if let Some(start) = table.thread_ownership.1 {
+                include(&mut candidate, start);
+            }
+            for trail in &table.trails {
+                governor.charge(Resource::Work, 1)?;
+                include(&mut candidate, trail.thread.start);
+            }
+            for thread in &table.past {
+                governor.charge(Resource::Work, 1)?;
+                include(&mut candidate, thread.start);
+            }
+            for &attempt in table.held.by_attempt.keys() {
+                governor.charge(Resource::Work, size(table.attempts.len()).saturating_add(1))?;
+                let record = table
+                    .attempts
+                    .iter()
+                    .find(|row| row.id == attempt)
+                    .ok_or_else(|| invalid_input("held candidate has no native attempt"))?;
+                include(&mut candidate, record.start);
+            }
+        }
+        for (_, event) in &self.deferred {
+            governor.charge(Resource::Work, 1)?;
+            if let Some(start) = event.candidate_start() {
+                include(&mut candidate, start);
+            }
+        }
+        self.ownership = Some((lexical, candidate));
+        Ok((lexical, candidate))
+    }
+
     pub(crate) fn new(
         dialects: &'s [DialectId],
         tools: Option<&'s ToolSet>,
@@ -4415,6 +4543,7 @@ impl<'s> Engine<'s> {
                 .zip(&grammar.programs)
             {
                 tables.push(Table {
+                    thread_ownership: (None, None),
                     grammar: index,
                     kind,
                     program,
@@ -4430,6 +4559,11 @@ impl<'s> Engine<'s> {
                 });
             }
         }
+        let ownership_bytes = size(tables.len())
+            .checked_mul(32)
+            .and_then(|bytes| bytes.checked_add(64))
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
         Ok(Self {
             tables,
             grammars,
@@ -4450,6 +4584,8 @@ impl<'s> Engine<'s> {
             spawned: Vec::new(),
             deferred: Vec::new(),
             continuation_floor: ContinuationFloor::Invalid,
+            ownership: None,
+            _ownership_metadata: ownership_metadata,
             whole: Vec::new(),
             tools,
             events: Vec::new(),
@@ -4588,6 +4724,7 @@ impl<'s> Engine<'s> {
             let id = self.next_attempt;
             self.next_attempt += 1;
             self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
             self.tables[table].attempts.push(Attempt {
                 id,
                 start: at,
@@ -4609,6 +4746,7 @@ impl<'s> Engine<'s> {
                 cost: 0,
                 hist: ROOT,
                 opened: false,
+                ownership: 1,
                 stall: 0,
                 reach: at,
                 past: false,
@@ -4762,6 +4900,17 @@ impl<'s> Engine<'s> {
             let opened = self.open(table, governor)?;
             let keep = self.last_written(table, opened, governor)?;
             Self::stop_past(&mut live, opened, &keep, governor)?;
+            if opened.is_some() {
+                let mut owned = (None, None);
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                for thread in &live {
+                    note_ownership(&mut owned, thread);
+                }
+                if self.tables[table].thread_ownership != owned {
+                    self.ownership = None;
+                }
+                self.tables[table].thread_ownership = owned;
+            }
         }
         self.complete(table, &mut completed, eof, governor)?;
         self.retire(table, &live, at, eof, governor)?;
@@ -4782,13 +4931,24 @@ impl<'s> Engine<'s> {
     ) -> Result<(), StopReason> {
         // The attempts whose body reads on past closers, noted in the merge.
         let mut reading: Vec<u64> = Vec::new();
+        let mut owned = (None, None);
+        governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
         merge_noting(live, &mut self.arena, governor, |thread| {
+            note_ownership(&mut owned, thread);
             if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
                 reading.push(thread.attempt);
             }
         })?;
         if self.repair_stalled(table, at, eof, &reading, live, completed, governor)? {
-            merge(live, &mut self.arena, governor)?;
+            owned = (None, None);
+            governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+            merge_noting(live, &mut self.arena, governor, |thread| {
+                note_ownership(&mut owned, thread)
+            })?;
+        }
+        if self.tables[table].thread_ownership != owned {
+            self.ownership = None;
+            self.tables[table].thread_ownership = owned;
         }
         Ok(())
     }
@@ -5449,6 +5609,7 @@ impl<'s> Engine<'s> {
                 cost,
                 hist,
                 opened: true,
+                ownership: 2,
                 stall: 0,
                 reach: until,
                 past: false,
@@ -5696,6 +5857,7 @@ impl<'s> Engine<'s> {
                 self.take_boundary(table, record.id);
             }
             self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
@@ -5743,6 +5905,7 @@ impl<'s> Engine<'s> {
         if reads_on {
             governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
             self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
             self.deferred.push((record.start, ended));
         } else {
             // Another attempt at the opener may have read a whole call and
@@ -5784,6 +5947,7 @@ impl<'s> Engine<'s> {
                 continue;
             }
             self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
             let (_, mut ended) = self.deferred.remove(index);
             if let Event::Ended { outread, .. } = &mut ended {
                 *outread = self.whole.contains(&start);
@@ -5818,6 +5982,9 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mine = self.tables[table].held.take(attempt);
+        if !mine.is_empty() {
+            self.ownership = None;
+        }
         if mine.is_empty() {
             return Ok(());
         }
@@ -5991,6 +6158,7 @@ impl<'s> Engine<'s> {
                 {
                     record.closed = Some(group.pos);
                 }
+                self.ownership = None;
                 self.tables[table].trails.push(Trail {
                     thread: group,
                     node: ROOT,
@@ -6037,11 +6205,13 @@ impl<'s> Engine<'s> {
                 Verdict::Report => {}
                 Verdict::Guess => self.guess_insertion(&mut trail.thread, governor)?,
                 Verdict::Reject => {
+                    self.ownership = None;
                     self.tables[table].trails.remove(index);
                     self.drop_completion(table, &trail);
                     continue;
                 }
             }
+            self.ownership = None;
             self.tables[table].trails.remove(index);
             self.emit(table, trail.thread, false, governor)?;
         }
@@ -6451,6 +6621,7 @@ impl<'s> Engine<'s> {
                 Resource::ScratchBytes,
                 size(<Thread as ScratchCharge>::CHARGE),
             )?;
+            self.ownership = None;
             self.tables[table].past.push(thread);
             return Ok(());
         }
@@ -6480,6 +6651,7 @@ impl<'s> Engine<'s> {
         {
             return Ok(());
         }
+        self.ownership = None;
         let (mine, rest): (Vec<Thread>, Vec<Thread>) =
             core::mem::take(&mut self.tables[table].past)
                 .into_iter()
@@ -6605,6 +6777,7 @@ impl<'s> Engine<'s> {
         governor.charge(Resource::Work, super::cost::K_EVENT)?;
         let calls = self.arena.depth_of(&chained) + 1;
         let total = self.arena.total(&chained);
+        self.ownership = None;
         self.tables[table].held.push(Held {
             attempt: thread.attempt,
             at: thread.pos,
@@ -6706,6 +6879,7 @@ impl<'s> Engine<'s> {
                             ),
                             _ => (Vec::new(), false),
                         };
+                        self.ownership = None;
                         self.tables[table].held.push(Held {
                             attempt: thread.attempt,
                             at: event.at(),
@@ -6818,8 +6992,14 @@ impl<'s> Engine<'s> {
         start: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        self.ownership = None;
         for table in &mut self.tables {
             Self::stop_past(&mut table.threads, Some(start), &[], governor)?;
+            table.thread_ownership = (None, None);
+            governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+            for thread in &table.threads {
+                note_ownership(&mut table.thread_ownership, thread);
+            }
         }
         Ok(())
     }
@@ -6849,12 +7029,18 @@ impl<'s> Engine<'s> {
             }
         }
         self.continuation_floor = ContinuationFloor::Invalid;
+        self.ownership = None;
         for table in &mut self.tables {
             governor.charge(
                 Resource::Work,
                 size(table.threads.len() + table.attempts.len() + table.trails.len()),
             )?;
             keep(&mut table.threads, |thread| thread.attempt != attempt);
+            table.thread_ownership = (None, None);
+            governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+            for thread in &table.threads {
+                note_ownership(&mut table.thread_ownership, thread);
+            }
             keep(&mut table.attempts, |record| record.id != attempt);
             governor.charge(
                 Resource::Work,
@@ -6922,7 +7108,9 @@ impl<'s> Engine<'s> {
                 self.settle(table, end, Some(generation), governor)?;
             }
             self.tables[table].threads.clear();
+            self.tables[table].thread_ownership = (None, None);
             self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
             self.tables[table].attempts.clear();
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();
@@ -7107,6 +7295,7 @@ mod tests {
                 cost: 0,
                 hist: 0,
                 opened: false,
+                ownership: 1,
                 stall: 0,
                 reach: 0,
                 past: false,

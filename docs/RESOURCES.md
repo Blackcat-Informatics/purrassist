@@ -990,10 +990,10 @@ one lexical-planning Work unit and one memo-key lookup Work unit, plus one
 table lookup Work unit when reasoning markers are enabled. As-content
 reasoning uses the current input offset directly. A memo
 is restored only after all fallible floor lookups succeed and its effective
-cutoff agrees. This advances plain live content without claiming public D7
-metrics, full live semantic-prefix equivalence, cloning or decoding queries.
+cutoff agrees. This advances plain live content without claiming full live
+semantic-prefix equivalence, cloning or decoding queries.
 
-The portable history-node reservation is 48 bytes. Traversals admit work before
+The portable history-node reservation is 112 bytes. Traversals admit work before
 each visited step, and scanning live owners admits work for their records.
 Pending reports keep their dispatch order separately from a counted source
 index. Paged source-offset counts and hierarchical occupancy bitsets retain the
@@ -1120,9 +1120,70 @@ readings. Ambiguity rejection retains those actual values privately for shared
 source events; exact-effort, resource and other refusal paths retain their barriers.
 A single final producer merges content, reasoning, calls and rejected attempts
 in source order, including local semantic competitors within one turn reading.
-Both batch discard and streaming sinks run the producer. This does
-not complete the longest semantic prefix, lexical holdback or candidate-byte
-contracts.
+Both batch discard and streaming sinks run the producer. The longest live
+semantic-prefix contract remains incomplete. Lexical holdback and candidate-byte
+ownership use the separate cached counters described below.
+
+
+`ToolCallStream::held_bytes()` counts source bytes retained only by viable finite
+lexical prefixes or UTF-8 publication boundaries. `candidate_bytes()` counts the
+unique source coverage of actual live candidates, unpublished typed turn payloads,
+settled semantic frames awaiting final resolution and content actually suppressed
+by final normalization. Receipt source bytes, historical opener reports and routing
+metadata alone contribute neither count. Top-level result frames become content;
+reasoning publication retires its text owner while retaining actual embedded
+semantic spans. Open reasoning, including `starts_open`, and late discriminators
+can grow candidate ownership without a constant bound.
+
+`hold_back_bound()` is compiled from the request's native finite opener spellings,
+including configured variant, confusable and JSON spellings, and from reasoning
+markers when reasoning is separate. Its bound is `max(3, P_normal,
+P_continuation + 3)`, where each `P` is the maximum proper viable prefix length and
+continuation spellings start with a UTF-8 continuation byte. Incomplete UTF-8 carry
+is included, overlapping lexical coverage is counted once, and valid scalar
+backoff is included for arbitrary custom byte spellings. Ordinary UTF-8 spellings
+reduce the bound to `max(3, P_normal)`. Unrepresented repair modes become candidate
+owners; they do not extend the finite lexical bound. A bound remains available
+when stream preparation refuses.
+
+A byte's complete report fold and settled cursor traversal precede ownership
+refresh. The cursor checkpoint is a native history-node identity, so same-end
+unvisited payloads remain owned. Typed payload minima and jump links skip already
+visited ancestry. Packed histories preserve the earliest actual uncertain payload.
+Native thread phases merge only across equal-ranked configurations; current
+winning configurations determine ownership independently of historical opening.
+Cached engine minima invalidate when threads or retained payload owners change;
+unchanged candidate bodies do not trigger full configuration scans per byte.
+Pending candidate reports have their own counted source index, with the same
+fallible storage and admission as the report index above. Both indices currently
+admit updates separately; this adds real runtime cost.
+
+Settled calls and rejections append their exact source spans to an ordered merged
+coverage list. Reasoning appends its sorted embedded semantic spans. Each retained
+interval reserves 24 portable bytes and stores cumulative union coverage; two
+cached prefix queries use admitted binary search on misses. For interpreted length
+`n`, candidate suffix start `c` and normalized lexical/encoding boundary `u`, let
+`F(x)` be finite interval coverage before `x`. Candidate coverage is
+`F(c) + n - c`; held coverage is zero when `u >= c`, otherwise
+`c - u - (F(c) - F(u))`. Scalar backoff applies only to `u`, computed from
+the native candidate, lexical and encoding floors. Candidate start `c` and actual
+suppressed content retain their original source boundaries. Source bounds, interval order, ancestry, coverage and arithmetic
+invariants fail explicitly. Finite records remain until EOF consumption or
+abandonment.
+
+Added retained metadata reserves 64 bytes per dialect set, 64 bytes per intake,
+128 bytes per event cursor, 576 bytes per recognizer and 32 bytes per engine table
+plus 64 bytes per engine. Layout assertions cover these portable reservations.
+Counter and bound reads allocate nothing, admit no work and do not poll the
+governor or cancellation token. A shared token requests cancellation; counts
+continue to describe resident owners until the next mutable operation, including
+an empty feed, observes it. Explicit cancellation and interpretation refusal drop
+recognizer, encoding and interval owners together, clear both counts and preserve
+the first resource refusal. Source capture and digest retain their existing
+contract. Batch and stream share the same per-byte accounting path. Added
+behavioral cases cover ownership handoffs, scalar and byte-marker boundaries,
+chunk parity and disposal; compilation and runtime qualification of this unit
+remain pending.
 
 For whole-message ambiguity, a fallible scratch cursor per alternative retains
 four native indices and borrowed value/origin references, with a portable 48-byte

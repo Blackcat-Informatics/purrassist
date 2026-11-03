@@ -277,6 +277,7 @@ impl<'a, 's> RepairState<'a, 's> {
         let mut seeds = ScratchVec::new(governor);
         seeds.push(Thread {
             hist,
+            ownership: 2,
             pos: at + 1,
             entry: at + 1,
             ..self.thread
@@ -360,6 +361,7 @@ impl<'a, 's> RepairState<'a, 's> {
         context.step.closure(
             Thread {
                 hist,
+                ownership: 2,
                 ..self.thread
             },
             next,

@@ -23,13 +23,16 @@
 //! default allow-list (every built-in dialect): no Llama 3 JSON attempt
 //! commits, so there is no call and no rejected attempt.
 use core::ops::Range;
+use purrassist_core::digest::Digest;
 use purrassist_core::grammar::Grammar;
 use purrassist_core::tool_call::{
     CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, Param, ReasoningPolicy,
-    Rejection, RepairPolicy, StreamEvent, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
-    UnresolvedReason,
+    Rejection, RepairPolicy, StreamEvent, ToolCalls, ToolChoice, ToolDefinition,
+    ToolRecoveryRequest, ToolSet, UnresolvedReason,
 };
-use purrassist_core::{AssistResult, Budget, Governor, Outcome};
+use purrassist_core::{
+    AssistResult, Budget, CancellationToken, Governor, Outcome, Resource, StopReason,
+};
 
 /// A call to `f` with one parameter `a` = `x`, in canonical layout.
 const CALL: &str =
@@ -222,6 +225,14 @@ fn stream_content(
         let mut events = Vec::new();
         stream.feed(&input.as_bytes()[..split], &mut events);
         stream.feed(&input.as_bytes()[split..], &mut events);
+        assert!(stream.held_bytes() <= stream.hold_back_bound());
+        if live {
+            assert_eq!(
+                stream.candidate_bytes(),
+                tail,
+                "finite frame coverage at split {split}"
+            );
+        }
         let live_end = events
             .iter()
             .filter_map(|event| match event {
@@ -314,6 +325,7 @@ fn stray_closers_after_ambiguous_body_tail() {
     let tools = tools(Effects::ReadOnly);
     lexical_content_frontier(&tools);
     uncommitted_candidate_frontier(&tools);
+    stream_holdback_ownership(&tools);
 }
 
 /// Plain content depends on live opener/marker prefixes and UTF-8 carry,
@@ -384,6 +396,9 @@ fn lexical_content_frontier(tools: &ToolSet) {
                 input.as_bytes()[..published],
                 "prefix ending at {end}"
             );
+            assert_eq!(stream.candidate_bytes(), 0);
+            assert_eq!(stream.held_bytes(), end - published);
+            assert!(stream.held_bytes() <= stream.hold_back_bound());
         }
         assert_eq!(stream.finish(GenerationStop::Stop), batch);
     }
@@ -408,6 +423,12 @@ fn uncommitted_candidate_frontier(tools: &ToolSet) {
             let mut events = Vec::new();
             stream.feed(&input.as_bytes()[..split], &mut events);
             stream.feed(&input.as_bytes()[split..], &mut events);
+            assert_eq!(
+                stream.candidate_bytes(),
+                input.len(),
+                "late {dialect:?} discriminator at split {split}"
+            );
+            assert_eq!(stream.held_bytes(), 0);
             assert!(
                 !events
                     .iter()
@@ -419,6 +440,221 @@ fn uncommitted_candidate_frontier(tools: &ToolSet) {
             );
         }
     }
+}
+
+/// D7 ownership follows actual prefixes, semantic frames and mutable stop observation.
+fn ownership_dialects(name: &str, extra: &str, call: &str) -> DialectSet {
+    let text = format!(r#"grammar "{name}"; {extra} {call} result = "R"; declaration = "D";"#);
+    let dialect = DialectId::custom(
+        Grammar::compile_governed(&text, &mut Governor::new(Budget::default()))
+            .expect("ownership grammar"),
+    );
+    DialectSet::new([dialect], &mut Governor::new(Budget::default())).expect("ownership dialects")
+}
+
+fn stream_holdback_ownership(tools: &ToolSet) {
+    stream_encoding_ownership(tools);
+    stream_marker_ownership(tools);
+    stream_candidate_handoffs(tools);
+    stream_owner_disposal(tools);
+}
+
+fn stream_encoding_ownership(tools: &ToolSet) {
+    let ascii = ownership_dialects("ownership-ascii.v1", "", r#"call = "C";"#);
+    let request = ToolRecoveryRequest::default();
+    let scalar = "😺".as_bytes();
+    let batch = tools.recover(scalar, &request, &ascii);
+    for split in 0..=scalar.len() {
+        let mut stream = tools.stream_with_dialects(request.clone(), &ascii);
+        assert_eq!(stream.hold_back_bound(), 3);
+        let _ = stream.feed_collect(&scalar[..split]);
+        assert_eq!(
+            stream.held_bytes(),
+            if split == scalar.len() { 0 } else { split }
+        );
+        assert_eq!(stream.candidate_bytes(), 0);
+        // Queries and empty feeds must not change result or whole usage.
+        let _ = (
+            stream.held_bytes(),
+            stream.candidate_bytes(),
+            stream.hold_back_bound(),
+        );
+        let _ = stream.feed_collect(&[]);
+        let _ = stream.feed_collect(&scalar[split..]);
+        assert_eq!(stream.held_bytes(), 0);
+        assert_eq!(stream.finish(GenerationStop::Stop), batch);
+    }
+    let invalid = [0xf0, 0x9f, b'x'];
+    let mut stream = tools.stream_with_dialects(request.clone(), &ascii);
+    let _ = stream.feed_collect(&invalid[..2]);
+    assert_eq!(stream.held_bytes(), 2);
+    let _ = stream.feed_collect(&invalid[2..]);
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
+    assert_eq!(
+        stream.finish(GenerationStop::Stop),
+        tools.recover(&invalid, &request, &ascii)
+    );
+}
+
+fn stream_marker_ownership(tools: &ToolSet) {
+    let request = ToolRecoveryRequest::default();
+    let scalar = "😺".as_bytes();
+    let unicode = ownership_dialects(
+        "ownership-unicode.v1",
+        r#"reasoning "😺Z" "!";"#,
+        r#"call = "C";"#,
+    );
+    let mut stream = tools.stream_with_dialects(request.clone(), &unicode);
+    assert_eq!(stream.hold_back_bound(), 4);
+    let _ = stream.feed_collect(&scalar[..3]);
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (3, 0));
+    let _ = stream.feed_collect(&scalar[3..]);
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (4, 0));
+    let _ = stream.feed_collect(b"?");
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
+
+    let bytes = ownership_dialects(
+        "ownership-byte-marker.v1",
+        r#"reasoning "\x80ABCDEFZ" "!";"#,
+        r#"call = "<c>";"#,
+    );
+    let input = "😀ABCDEF?".as_bytes();
+    let batch = tools.recover(input, &request, &bytes);
+    for split in 0..=input.len() {
+        let mut stream = tools.stream_with_dialects(request.clone(), &bytes);
+        assert_eq!(stream.hold_back_bound(), 10);
+        let _ = stream.feed_collect(&input[..split]);
+        assert!(stream.held_bytes() <= 10);
+        if split == input.len() - 1 {
+            assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (10, 0));
+        }
+        let _ = stream.feed_collect(&input[split..]);
+        assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
+        assert_eq!(stream.finish(GenerationStop::Stop), batch);
+    }
+}
+
+fn stream_candidate_handoffs(tools: &ToolSet) {
+    let request = ToolRecoveryRequest::default();
+    let phases = ownership_dialects(
+        "ownership-phase-loss.v1",
+        "",
+        r#"x = /X/; call = ("<a>" name:x | "<a>LONG") commit;"#,
+    );
+    let mut stream = tools.stream_with_dialects(request.clone(), &phases);
+    let _ = stream.feed_collect(b"<a>");
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 3));
+    let _ = stream.feed_collect(b"L");
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (4, 0));
+    let _ = stream.feed_collect(b"ONG");
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 7));
+    assert_eq!(
+        stream.finish(GenerationStop::Stop),
+        tools.recover(b"<a>LONG", &request, &phases)
+    );
+
+    let reasoning = ownership_dialects(
+        "ownership-reasoning.v1",
+        r#"reasoning "<t>" "</t>";"#,
+        r#"call = "C";"#,
+    );
+    for starts_open in [false, true] {
+        let request = request
+            .clone()
+            .reasoning(ReasoningPolicy::Separate { starts_open });
+        let thought = format!(
+            "{}{}",
+            if starts_open { "" } else { "<t>" },
+            "thought ".repeat(32)
+        );
+        let suffix = format!("</t>{}", " ".repeat(reasoning.lookbehind() + 1));
+        let input = format!("{thought}{suffix}");
+        let mut stream = tools.stream_with_dialects(request.clone(), &reasoning);
+        let _ = stream.feed_collect(thought.as_bytes());
+        assert_eq!(
+            (stream.held_bytes(), stream.candidate_bytes()),
+            (0, thought.len())
+        );
+        let events = stream.feed_collect(suffix.as_bytes());
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::ReasoningDelta { .. }))
+        );
+        assert_eq!(
+            (stream.held_bytes(), stream.candidate_bytes()),
+            (0, suffix.len() - 4)
+        );
+        assert_eq!(
+            stream.finish(GenerationStop::Stop),
+            tools.recover(input.as_bytes(), &request, &reasoning)
+        );
+    }
+}
+
+fn stream_owner_disposal(tools: &ToolSet) {
+    let request = ToolRecoveryRequest::default();
+    let ascii = ownership_dialects("ownership-ascii.v1", "", r#"call = "C";"#);
+    let scalar = "😺".as_bytes();
+    let token = CancellationToken::new();
+    let governor = Governor::with_cancellation(Budget::default(), token.clone());
+    let mut stream = tools.stream_with_dialects_governed(request.clone(), &ascii, governor);
+    let _ = stream.feed_collect(&scalar[..3]);
+    token.cancel();
+    assert_eq!(
+        stream.held_bytes(),
+        3,
+        "request alone has not disposed owners"
+    );
+    let _ = stream.feed_collect(&[]);
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
+    let cancelled = stream.finish(GenerationStop::Stop);
+    assert_eq!(cancelled.receipt.stopped, StopReason::Cancelled);
+    assert_eq!(cancelled.receipt.sources[0].bytes, scalar[..3]);
+
+    let mut stream = tools.stream_with_dialects(
+        request.clone().budget(Budget {
+            input_bytes: 1,
+            ..Budget::default()
+        }),
+        &ascii,
+    );
+    let _ = stream.feed_collect(&scalar[..3]);
+    stream.cancel();
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
+    let refused = stream.finish(GenerationStop::Stop);
+    assert_eq!(
+        refused.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::InputBytes)
+    );
+    assert_eq!(refused.receipt.source, Digest::of(&scalar[..3]));
+    assert!(refused.receipt.sources.is_empty());
+
+    let mut stream = tools.stream_with_dialects(
+        request.clone().budget(Budget {
+            scratch_bytes: 0,
+            ..Budget::default()
+        }),
+        &ascii,
+    );
+    assert_eq!(stream.hold_back_bound(), 3);
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
+    let _ = stream.feed_collect(b"source");
+    assert_eq!(
+        stream.finish(GenerationStop::Stop).receipt.source,
+        Digest::of(b"source")
+    );
+
+    let invalid_request = request.tool_choice(ToolChoice::Forced("absent".into()));
+    let mut stream = tools.stream_with_dialects(invalid_request.clone(), &ascii);
+    let _ = stream.feed_collect(b"source");
+    assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
+    let invalid = stream.finish(GenerationStop::Stop);
+    assert!(matches!(
+        invalid.receipt.stopped,
+        StopReason::InvalidInput(_)
+    ));
+    assert_eq!(invalid.receipt.sources[0].bytes, b"source");
 }
 
 #[test]

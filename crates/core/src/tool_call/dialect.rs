@@ -448,6 +448,74 @@ pub struct DialectSet {
     marker_prefixes: Option<MarkerPrefixes>,
     pub(crate) lookbehind: usize,
     configuration_bound: u64,
+    hold_back: HoldBackBounds,
+}
+
+#[derive(Debug)]
+struct HoldBackBounds {
+    native: usize,
+    separate: usize,
+    _metadata: ScratchLease,
+}
+const _: () = assert!(core::mem::size_of::<HoldBackBounds>() <= 64);
+
+fn include_prefix(
+    bound: &mut usize,
+    bytes: &[u8],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let prefix = bytes.len().saturating_sub(1);
+    let extra = usize::from(bytes.first().is_some_and(|b| b & 0xc0 == 0x80)) * 3;
+    let normalized = prefix
+        .checked_add(extra)
+        .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+    *bound = (*bound).max(normalized);
+    Ok(())
+}
+
+impl HoldBackBounds {
+    fn build(
+        dialects: &[DialectId],
+        markers: &[MarkerPair],
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(64)?;
+        let mut native = 3;
+        for dialect in dialects {
+            governor.charge(Resource::Work, 1)?;
+            let grammar = dialect.grammar();
+            for program in &grammar.programs {
+                governor.charge(Resource::Work, 1)?;
+                for &pc in &program.openers {
+                    governor.charge(Resource::Work, 1)?;
+                    let crate::grammar::Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+                        return Err(invalid_input("lexical opener has no finite literal"));
+                    };
+                    include_prefix(&mut native, &grammar.literals[lit as usize].bytes, governor)?;
+                    let table = &grammar.literal_tables[lit as usize];
+                    for spellings in [&table.variants, &table.confusables]
+                        .into_iter()
+                        .chain(table.json.iter())
+                    {
+                        for bytes in &spellings.list {
+                            include_prefix(&mut native, bytes, governor)?;
+                        }
+                    }
+                }
+            }
+        }
+        let mut separate = native;
+        for (open, close) in markers {
+            include_prefix(&mut separate, open, governor)?;
+            include_prefix(&mut separate, close, governor)?;
+        }
+        Ok(Self {
+            native,
+            separate,
+            _metadata: metadata,
+        })
+    }
 }
 
 /// Retained marker-only table and its added allow-list metadata.
@@ -473,6 +541,14 @@ impl MarkerPrefixes {
 }
 
 impl DialectSet {
+    pub(crate) const fn hold_back_bound(&self, separate: bool) -> usize {
+        if separate {
+            self.hold_back.separate
+        } else {
+            self.hold_back.native
+        }
+    }
+
     /// Compile an allow-list: order it canonically, check it, and build the
     /// combined reasoning-marker matcher (the union of the dialects'
     /// declared reasoning markers).
@@ -543,6 +619,7 @@ impl DialectSet {
             .map(|matcher| MarkerPrefixes::new(matcher, governor))
             .transpose()?;
         let (lookbehind, configuration_bound) = set_bounds(&collected, &markers, governor)?;
+        let hold_back = HoldBackBounds::build(&collected, &markers, governor)?;
         governor.check()?;
         Ok(Self {
             dialects: collected,
@@ -552,6 +629,7 @@ impl DialectSet {
             marker_prefixes,
             lookbehind,
             configuration_bound,
+            hold_back,
         })
     }
 

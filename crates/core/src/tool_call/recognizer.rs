@@ -80,8 +80,8 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchMeter,
-    ScratchVec, SourceSpan, StopReason, invalid_input,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchLease,
+    ScratchMeter, ScratchVec, SourceSpan, StopReason, invalid_input,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
@@ -179,10 +179,18 @@ struct TurnNode {
     /// Depth and skip ancestor in the unambiguous-prefix tree.
     depth: u32,
     jump: u32,
+    payload: Option<usize>,
+    jump_payload: Option<usize>,
+    packed: Option<usize>,
+    tail_payload: Option<usize>,
 }
 
-const TURN_NODE_BYTES: u64 = 48;
+const TURN_NODE_BYTES: u64 = 112;
 const _: () = assert!(core::mem::size_of::<TurnNode>() as u64 <= TURN_NODE_BYTES);
+
+fn source_min(left: Option<usize>, right: Option<usize>) -> Option<usize> {
+    left.into_iter().chain(right).min()
+}
 
 /// A conservative native continuation boundary, not a resolved stream event.
 /// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
@@ -279,6 +287,12 @@ enum Pending {
 }
 
 impl Pending {
+    fn candidate_start(&self) -> Option<usize> {
+        match self {
+            Self::Engine(event) => event.candidate_start(),
+            Self::Marker { start, .. } => Some(*start),
+        }
+    }
     const fn at(&self) -> usize {
         match self {
             Self::Engine(event) => event.at(),
@@ -385,6 +399,9 @@ struct PendingSources {
     active: usize,
     floor: Option<usize>,
 }
+const _: () = assert!(
+    core::mem::size_of::<(PendingSources, Option<(u32, Option<usize>)>, ScratchLease)>() <= 576
+);
 
 impl PendingSources {
     fn new(governor: &Governor) -> Self {
@@ -725,6 +742,36 @@ struct Turn {
 }
 
 impl Turn {
+    /// Typed payloads after a successfully traversed native source checkpoint.
+    fn payload_floor(
+        &self,
+        hist: u32,
+        visited: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<usize>, StopReason> {
+        let root = self.nodes[hist as usize];
+        let mut floor = source_min(root.packed, root.tail_payload);
+        let mut node = root.plain;
+        let depth = self.nodes[visited as usize].depth;
+        while self.nodes[node as usize].depth > depth {
+            governor.charge(Resource::Work, 1)?;
+            let current = self.nodes[node as usize];
+            if current.jump != node && self.nodes[current.jump as usize].depth >= depth {
+                floor = source_min(floor, current.jump_payload);
+                node = current.jump;
+            } else {
+                floor = source_min(floor, current.payload);
+                node = current.prev;
+            }
+        }
+        if node != visited {
+            return Err(invalid_input(
+                "ownership history does not descend from its visited checkpoint",
+            ));
+        }
+        Ok(floor)
+    }
+
     fn push(
         &mut self,
         prev: u32,
@@ -753,6 +800,44 @@ impl Turn {
         } else {
             (parent.plain, 0, 0)
         };
+        governor.charge(Resource::Work, 4)?;
+        let payload = match kind {
+            TurnKind::Stored(stored, _) => match &self.store[stored as usize] {
+                Segment::Content(_) => None,
+                other => Some(other.span().start),
+            },
+            _ => None,
+        };
+        let (packed, tail_payload) = if let TurnKind::Pack(other) = kind {
+            let cutoff = plain;
+            (
+                source_min(
+                    self.payload_floor(prev, cutoff, governor)?,
+                    self.payload_floor(other, cutoff, governor)?,
+                ),
+                None,
+            )
+        } else {
+            (
+                parent.packed,
+                if parent.plain != prev {
+                    source_min(parent.tail_payload, payload)
+                } else {
+                    None
+                },
+            )
+        };
+        let jump_payload = if plain == index && jump != prev {
+            source_min(
+                payload,
+                source_min(
+                    parent.jump_payload,
+                    self.nodes[parent.jump as usize].jump_payload,
+                ),
+            )
+        } else {
+            payload
+        };
         governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
         self.nodes.push(TurnNode {
             prev,
@@ -761,6 +846,10 @@ impl Turn {
             plain,
             depth,
             jump,
+            payload,
+            jump_payload,
+            packed,
+            tail_payload,
         });
         Ok(index)
     }
@@ -1477,6 +1566,9 @@ pub struct Recognizer<'s> {
     /// Report offsets and source origins have different orders. Keep their
     /// counted source index and cached minimum separate from dispatch order.
     pending_sources: PendingSources,
+    pending_candidates: PendingSources,
+    ownership_memo: Option<(u32, Option<usize>)>,
+    _ownership_metadata: ScratchLease,
     arrivals: u64,
     queued: Queued,
     turn: Turn,
@@ -1566,6 +1658,7 @@ impl<'s> Recognizer<'s> {
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         let engine = Engine::new(&set.dialects, tools, governor)?;
+        let ownership_metadata = governor.lease_scratch(576)?;
         let context = ContextTracker::new(engine.protocol_fences());
         let starts_open = matches!(policy, ReasoningPolicy::Separate { starts_open: true });
         let root = TurnNode {
@@ -1575,6 +1668,10 @@ impl<'s> Recognizer<'s> {
             plain: 0,
             depth: 0,
             jump: 0,
+            payload: None,
+            jump_payload: None,
+            packed: None,
+            tail_payload: None,
         };
         governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
         let turn = Turn {
@@ -1608,6 +1705,9 @@ impl<'s> Recognizer<'s> {
             marker: 0,
             pending: BTreeMap::new(),
             pending_sources: PendingSources::new(governor),
+            pending_candidates: PendingSources::new(governor),
+            ownership_memo: None,
+            _ownership_metadata: ownership_metadata,
             arrivals: 0,
             queued: Queued {
                 meter: governor.scratch_meter(),
@@ -1643,6 +1743,68 @@ impl<'s> Recognizer<'s> {
 
     pub(super) const fn continuation_frontier(&self) -> ContinuationFrontier {
         self.frontier
+    }
+
+    /// Project actual retained ownership after the byte's complete report fold.
+    pub(super) fn ownership_floors(
+        &mut self,
+        visited: u32,
+        governor: &mut Governor,
+    ) -> Result<(Option<usize>, Option<usize>), StopReason> {
+        let (mut lexical, mut candidate) = self.engine.ownership_floors(governor)?;
+        if matches!(self.policy, ReasoningPolicy::Separate { .. })
+            && self.set.marker_matcher.is_some()
+        {
+            let held = self.set.marker_prefix_len(self.marker, governor)?;
+            if held != 0 {
+                let start = self
+                    .fed()
+                    .checked_sub(held)
+                    .ok_or_else(|| invalid_input("marker ownership exceeds consumed source"))?;
+                lexical = source_min(lexical, Some(start));
+            }
+        }
+        candidate = source_min(candidate, self.pending_candidates.floor());
+        let turn_floor = if let Some((_, floor)) =
+            self.ownership_memo.filter(|(known, _)| *known == visited)
+        {
+            floor
+        } else {
+            let mut floor = None;
+            if let Some(top) = self.turn.top {
+                floor = source_min(floor, self.turn.payload_floor(top.hist, visited, governor)?);
+            }
+            if let Some(think) = &self.turn.think {
+                floor = source_min(floor, Some(think.start));
+                floor = source_min(
+                    floor,
+                    self.turn.payload_floor(think.hist, visited, governor)?,
+                );
+                if let Some((_, base)) = think.promoted {
+                    floor = source_min(
+                        floor,
+                        self.turn.payload_floor(base.hist, visited, governor)?,
+                    );
+                }
+            }
+            for (_, interps) in self.turn.interps.values() {
+                governor.charge(Resource::Work, 1)?;
+                for interp in interps {
+                    governor.charge(Resource::Work, 1)?;
+                    if let Interp::Top(base) = interp {
+                        floor = source_min(
+                            floor,
+                            self.turn.payload_floor(base.hist, visited, governor)?,
+                        );
+                    }
+                    // Embedded routing keeps its real active reasoning payload
+                    // in the histories above; historical block entries are not owners.
+                }
+            }
+            self.ownership_memo = Some((visited, floor));
+            floor
+        };
+        Ok((lexical, source_min(candidate, turn_floor)))
     }
 
     /// Immutable ancestry identity of the current structurally settled prefix.
@@ -1876,12 +2038,22 @@ impl<'s> Recognizer<'s> {
         let update = self
             .pending_sources
             .prepare_add(source, self.engine.fed(), governor)?;
+        let candidate = pending
+            .candidate_start()
+            .map(|start| {
+                self.pending_candidates
+                    .prepare_add(start, self.engine.fed(), governor)
+            })
+            .transpose()?;
         let arrival = self
             .arrivals
             .checked_add(1)
             .ok_or_else(|| governor.stop_resource(Resource::Work))?;
         governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
         update.apply(&mut self.pending_sources);
+        if let Some(update) = candidate {
+            update.apply(&mut self.pending_candidates);
+        }
         self.queued.bytes += QUEUED_REPORT;
         self.arrivals = arrival;
         self.pending
@@ -1912,11 +2084,18 @@ impl<'s> Recognizer<'s> {
             let update = self
                 .pending_sources
                 .prepare_remove(pending.source_start(), governor)?;
+            let candidate = pending
+                .candidate_start()
+                .map(|start| self.pending_candidates.prepare_remove(start, governor))
+                .transpose()?;
             let (_, pending) = self
                 .pending
                 .pop_first()
                 .expect("pending minimum was just read");
             update.apply(&mut self.pending_sources);
+            if let Some(update) = candidate {
+                update.apply(&mut self.pending_candidates);
+            }
             ready.push((ready.len(), pending.at(), pending));
         }
         if ready.is_empty() {
@@ -1956,6 +2135,7 @@ impl<'s> Recognizer<'s> {
         // Marker tables appended by step are not projection inputs; their
         // queued reports arrive here before affecting the projected turn.
         self.frontier_memo = None;
+        self.ownership_memo = None;
         governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
         let mut frame = Frame {
             top: self.turn.top,

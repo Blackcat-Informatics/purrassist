@@ -36,6 +36,11 @@ use core::ops::Range;
 #[path = "stream_revision.rs"]
 mod revision;
 use revision::RevisionWitnesses;
+#[path = "stream_hold.rs"]
+mod hold;
+use hold::CandidateCoverage;
+const _: () =
+    assert!(core::mem::size_of::<(CandidateCoverage, usize, Option<usize>, ScratchLease)>() <= 128);
 
 /// Portable admission for constructing and handing off one event.
 /// Four native slots also admit the collector insertion per event.
@@ -569,6 +574,10 @@ struct AdvanceKey {
 /// Nothing here resolves a prefix, replays source or snapshots a governor.
 pub(super) struct EventCursor {
     history: u32,
+    pub(super) visited_end: usize,
+    normalization_from: Option<usize>,
+    coverage: CandidateCoverage,
+    ownership_metadata: ScratchLease,
     /// A successful traversal depends on immutable native ancestry and the
     /// normalized end. Reasoning embedding can change, but its text and the
     /// stored call readings inspected here do not. Include end so a pending
@@ -586,9 +595,21 @@ pub(super) struct EventCursor {
 }
 
 impl EventCursor {
+    pub(super) fn prepare_ownership(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        self.ownership_metadata = governor.lease_scratch(128)?;
+        Ok(())
+    }
+    pub(super) const fn history_checkpoint(&self) -> u32 {
+        self.history
+    }
+
     pub(super) fn new(governor: &Governor) -> Self {
         Self {
             history: 0,
+            visited_end: 0,
+            normalization_from: None,
+            coverage: CandidateCoverage::new(governor),
+            ownership_metadata: ScratchLease::empty(governor),
             advance_key: None,
             content_end: 0,
             normalization_owner: None,
@@ -621,6 +642,11 @@ impl EventCursor {
             if step.end > end {
                 break;
             }
+            if step.end < self.visited_end || step.end > source.len() {
+                return Err(invalid_input(
+                    "native ownership checkpoint is out of source order",
+                ));
+            }
             if let Some(span) = step.content {
                 self.live_content(&span, source, governor, sink)?;
             }
@@ -628,6 +654,7 @@ impl EventCursor {
                 self.segment(segment, source, tools, governor, sink)?;
             }
             self.history = step.history;
+            self.visited_end = step.end;
         }
         if let Some((start, end)) = frontier.content {
             self.live_content(&(start..end), source, governor, sink)?;
@@ -644,6 +671,22 @@ impl EventCursor {
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
+        match segment {
+            Segment::Call(call) => self.coverage.append(&call.span, source.len(), governor)?,
+            Segment::Rejected { span, .. } => self.coverage.append(span, source.len(), governor)?,
+            Segment::Reasoning(block) => {
+                for call in &block.embedded {
+                    governor.charge(Resource::Work, 1)?;
+                    if call.span.start < block.span.start || call.span.end > block.span.end {
+                        return Err(invalid_input(
+                            "embedded candidate exceeds its reasoning block",
+                        ));
+                    }
+                    self.coverage.append(&call.span, source.len(), governor)?;
+                }
+            }
+            Segment::Content(_) | Segment::Result(_) => {}
+        }
         let owner = NormalizationOwner::of(segment, governor)?;
         if let Some(owner) = owner
             && self.normalization_owner.is_none()
@@ -714,8 +757,32 @@ impl EventCursor {
     ) -> Result<(), StopReason> {
         if self.normalization_owner.is_none() {
             self.content(span, source, governor, sink)?;
+        } else {
+            let start = span.start.max(self.content_end);
+            if start < span.end {
+                if span.end > source.len() {
+                    return Err(invalid_input("normalization ownership exceeds source"));
+                }
+                self.normalization_from =
+                    Some(self.normalization_from.map_or(start, |old| old.min(start)));
+            }
         }
         Ok(())
+    }
+
+    pub(super) fn ownership_counts(
+        &mut self,
+        n: usize,
+        native: Option<usize>,
+        normalized: usize,
+        governor: &mut Governor,
+    ) -> Result<(usize, usize), StopReason> {
+        let candidate = native
+            .into_iter()
+            .chain(self.normalization_from)
+            .min()
+            .unwrap_or(n);
+        self.coverage.counts(n, candidate, normalized, governor)
     }
 
     fn content(
@@ -1177,7 +1244,57 @@ impl<'s> ToolCallStream<'s> {
     /// Cancel future interpretation. The first governor refusal is preserved.
     /// Subsequent feeds still contribute their bytes to the source digest.
     pub fn cancel(&mut self) {
-        self.governor.cancel();
+        self.intake.cancel(&mut self.governor);
+    }
+
+    /// Bytes still owned by lexical prefixes or UTF-8 boundaries, excluding
+    /// candidate coverage. Reading this cached count allocates and charges nothing.
+    /// A shared cancellation request is observed at the next mutable operation.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{ToolSet, ToolRecoveryRequest}};
+    /// let tools = ToolSet::compile([], Budget::default()).unwrap();
+    /// let mut stream = tools.stream(ToolRecoveryRequest::default());
+    /// let _ = stream.feed_collect(&[0xf0, 0x9f, 0x98]);
+    /// assert_eq!(stream.held_bytes(), 3);
+    /// ```
+    #[must_use]
+    pub const fn held_bytes(&self) -> usize {
+        self.intake.held_bytes()
+    }
+
+    /// Unique source bytes owned by live candidates or pending interpretation.
+    /// Closed frames awaiting final semantics remain counted; receipt storage
+    /// alone is excluded. Late discriminators and open reasoning can grow this
+    /// count without a fixed bound. Refusal or explicit cancellation disposes
+    /// these owners. Reading the cache allocates and charges nothing.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{ToolSet, ToolRecoveryRequest}};
+    /// let tools = ToolSet::compile([], Budget::default()).unwrap();
+    /// let mut stream = tools.stream(ToolRecoveryRequest::default());
+    /// let _ = stream.feed_collect(b"plain content");
+    /// assert_eq!(stream.candidate_bytes(), 0);
+    /// ```
+    #[must_use]
+    pub const fn candidate_bytes(&self) -> usize {
+        self.intake.candidate_bytes()
+    }
+
+    /// Maximum lexical and UTF-8 boundary holdback for this request's dialects.
+    /// The compiled bound includes at least three UTF-8 carry bytes and scalar
+    /// backoff before custom byte openers. Candidate bytes are separate. The
+    /// bound remains available when stream preparation refuses.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, tool_call::{ToolSet, ToolRecoveryRequest}};
+    /// let tools = ToolSet::compile([], Budget::default()).unwrap();
+    /// let stream = tools.stream(ToolRecoveryRequest::default());
+    /// assert!(stream.hold_back_bound() >= 3);
+    /// ```
+    #[must_use]
+    pub const fn hold_back_bound(&self) -> usize {
+        self.intake.hold_back_bound()
     }
 
     /// Finish the existing recognizer using the model's actual stop reason.

@@ -3162,7 +3162,10 @@ struct RecognizedInput {
 enum BoundaryKind {
     Prefix,
     Content,
+    Ownership,
 }
+const _: () =
+    assert!(core::mem::size_of::<(Option<(usize, usize)>, [usize; 3], ScratchLease)>() <= 64);
 
 /// Shared byte intake for batch recovery and the live stream facade.
 /// It owns source storage without lending it to its live recognizer. Every
@@ -3183,6 +3186,11 @@ pub(super) struct RecoveryIntake<'s> {
     /// cannot change a scalar boundary already behind the encoding cursor.
     prefix_boundary: Option<(usize, usize)>,
     content_boundary: Option<(usize, usize)>,
+    ownership_boundary: Option<(usize, usize)>,
+    held_bytes: usize,
+    candidate_bytes: usize,
+    hold_back_bound: usize,
+    ownership_metadata: ScratchLease,
     events: EventCursor,
 }
 
@@ -3206,6 +3214,14 @@ impl<'s> RecoveryIntake<'s> {
             progress: ContinuationFrontier::default(),
             prefix_boundary: None,
             content_boundary: None,
+            ownership_boundary: None,
+            held_bytes: 0,
+            candidate_bytes: 0,
+            hold_back_bound: dialects.hold_back_bound(matches!(
+                request.reasoning,
+                ReasoningPolicy::Separate { .. }
+            )),
+            ownership_metadata: ScratchLease::empty(governor),
             events: EventCursor::new(governor),
         };
         let result = (|| {
@@ -3223,6 +3239,8 @@ impl<'s> RecoveryIntake<'s> {
                 },
             };
             let forced = recovery.preconditions(governor)?;
+            intake.ownership_metadata = governor.lease_scratch(64)?;
+            intake.events.prepare_ownership(governor)?;
             intake.setup = Some(IntakeSetup {
                 recognizer: Recognizer::with_tools(dialects, tools, request.reasoning, governor)?,
                 policies: recovery.policies,
@@ -3231,9 +3249,47 @@ impl<'s> RecoveryIntake<'s> {
             Ok(())
         })();
         if let Err(reason) = result {
-            intake.failed = Some(reason);
+            intake.abandon(reason, governor);
         }
         intake
+    }
+
+    pub(super) const fn held_bytes(&self) -> usize {
+        self.held_bytes
+    }
+    pub(super) const fn candidate_bytes(&self) -> usize {
+        self.candidate_bytes
+    }
+    pub(super) const fn hold_back_bound(&self) -> usize {
+        self.hold_back_bound
+    }
+
+    /// Cleanup never charges, allocates diagnostics, or replaces a first
+    /// nonsemantic refusal. Admitted receipt source remains independently owned.
+    fn abandon(&mut self, reason: StopReason, governor: &Governor) {
+        if self
+            .failed
+            .as_ref()
+            .is_none_or(|old| matches!(old, StopReason::InvalidInput(_)))
+        {
+            self.failed = Some(reason);
+        }
+        self.setup = None;
+        self.ownership_metadata = ScratchLease::empty(governor);
+        self.events = EventCursor::new(governor);
+        self.encoding = EncodingCursor::new(governor);
+        self.progress = ContinuationFrontier::default();
+        self.prefix_boundary = None;
+        self.content_boundary = None;
+        self.ownership_boundary = None;
+        self.held_bytes = 0;
+        self.candidate_bytes = 0;
+    }
+
+    pub(super) fn cancel(&mut self, governor: &mut Governor) {
+        let reason = governor.check().err().unwrap_or(StopReason::Cancelled);
+        governor.cancel();
+        self.abandon(reason, governor);
     }
 
     /// Hash all supplied bytes, even after refusal. An interpretation error
@@ -3260,6 +3316,10 @@ impl<'s> RecoveryIntake<'s> {
         content: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) {
         self.digest.update(bytes);
+        // Even an empty mutable feed observes a shared cancellation request.
+        if let Err(reason) = governor.check() {
+            self.abandon(reason, governor);
+        }
         for &byte in bytes {
             if self.capture.is_none() {
                 continue;
@@ -3276,8 +3336,7 @@ impl<'s> RecoveryIntake<'s> {
                 // Source refusal takes precedence over a semantic request
                 // error: the complete input could not be retained.
                 self.capture = None;
-                self.setup = None;
-                self.failed = Some(reason);
+                self.abandon(reason, governor);
                 continue;
             }
             if self.failed.is_none()
@@ -3285,8 +3344,7 @@ impl<'s> RecoveryIntake<'s> {
                     .interpret_byte(byte, governor)
                     .and_then(|()| self.report_progress(governor, progress, content))
             {
-                self.setup = None;
-                self.failed = Some(reason);
+                self.abandon(reason, governor);
             }
         }
     }
@@ -3346,6 +3404,29 @@ impl<'s> RecoveryIntake<'s> {
             governor,
             content,
         )?;
+        let (lexical, candidate) = self
+            .setup
+            .as_mut()
+            .expect("healthy ownership projection owns its recognizer")
+            .recognizer
+            .ownership_floors(self.events.history_checkpoint(), governor)?;
+        let cutoff = lexical
+            .into_iter()
+            .chain(candidate)
+            .min()
+            .unwrap_or(self.received)
+            .min(utf8);
+        let normalized = self.cached_source_boundary(cutoff, BoundaryKind::Ownership, governor)?;
+        let (held, candidates) =
+            self.events
+                .ownership_counts(self.received, candidate, normalized, governor)?;
+        if held > self.hold_back_bound {
+            return Err(invalid_input(
+                "lexical ownership exceeds its compiled UTF-8 bound",
+            ));
+        }
+        self.held_bytes = held;
+        self.candidate_bytes = candidates;
         Ok(())
     }
 
@@ -3362,6 +3443,7 @@ impl<'s> RecoveryIntake<'s> {
         let cached = match kind {
             BoundaryKind::Prefix => self.prefix_boundary,
             BoundaryKind::Content => self.content_boundary,
+            BoundaryKind::Ownership => self.ownership_boundary,
         };
         if let Some((known, normalized)) = cached
             && known == end
@@ -3373,6 +3455,7 @@ impl<'s> RecoveryIntake<'s> {
         match kind {
             BoundaryKind::Prefix => self.prefix_boundary = cached,
             BoundaryKind::Content => self.content_boundary = cached,
+            BoundaryKind::Ownership => self.ownership_boundary = cached,
         }
         Ok(normalized)
     }
