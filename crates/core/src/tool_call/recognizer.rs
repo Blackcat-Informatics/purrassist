@@ -76,6 +76,7 @@
 //! inside an argument value never affects other calls.
 use super::context::{ContextTracker, RECORD_BYTES};
 use super::dialect::{DialectId, DialectSet};
+use super::failed_prefix::{BuildProofs, Certificate, FailureProofs, PathProof, PieceProof};
 use super::ir::{
     ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
     RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment, Spanned,
@@ -91,8 +92,8 @@ use crate::grammar::CaptureKind;
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
 use crate::grammar::engine::{
-    CompletedParts, Engine, Event, Opening, Part, PartEnvelope, Salvaged, SourceEnvelope,
-    retained_context,
+    CompletedParts, Engine, Event, FailureWitness, HeaderSpan, Opening, Part, PartEnvelope,
+    Salvaged, SourceEnvelope, retained_context,
 };
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
@@ -101,6 +102,7 @@ use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod envelopes;
+mod failures;
 mod trailing;
 use envelopes::SourceEnvelopes;
 
@@ -418,6 +420,7 @@ struct Turn {
     store: Vec<Segment>,
     /// Source proof addressed only by immutable stored call and reading indices.
     envelopes: SourceEnvelopes,
+    failure_proofs: ScratchMap<u32, Certificate>,
     /// Aligned embedded origins retained for reasoning's late completions.
     embedded_origins: ScratchMap<u32, ScratchVec<u32>>,
     top: Option<Top>,
@@ -1708,6 +1711,7 @@ impl<'s> Recognizer<'s> {
             nodes: vec![root],
             store: Vec::new(),
             envelopes: SourceEnvelopes::new(governor),
+            failure_proofs: ScratchMap::new(governor),
             embedded_origins: ScratchMap::new(governor),
             top: (!starts_open).then_some(Top {
                 cost: 0,
@@ -1791,6 +1795,7 @@ impl<'s> Recognizer<'s> {
                 Ok(())
             }
             Err(reason) => {
+                self.engine.discard_failure_headers(governor);
                 self.failed = Some(reason.clone());
                 Err(reason)
             }
@@ -2583,12 +2588,15 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        if let Err(reason) = self.forget_native_frame(ended.attempt, governor) {
-            let charged = salvage.as_ref().map_or(0, |salvage| salvage.charged);
-            drop(salvage);
-            let _ = governor.release_scratch(charged);
-            return Err(reason);
-        }
+        let witnessed = match self.ended_witness(&ended, governor) {
+            Ok(witnessed) => witnessed,
+            Err(reason) => {
+                let charged = salvage.as_ref().map_or(0, |salvage| salvage.charged);
+                drop(salvage);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
+        };
         self.turn.weak_headers.remove(&ended.attempt);
         let removed = self.turn.interps.remove(&ended.attempt);
         // An opening reasoning marker the attempt read over cuts it: the
@@ -2619,7 +2627,9 @@ impl<'s> Recognizer<'s> {
         self.prune_blocked(governor)?;
         let Some((_, interps)) = removed else {
             if let Some(salvage) = salvage {
-                governor.release_scratch(salvage.charged)?;
+                let charged = salvage.charged;
+                drop(salvage);
+                governor.release_scratch(charged)?;
             }
             return Ok(());
         };
@@ -2662,12 +2672,7 @@ impl<'s> Recognizer<'s> {
                 governor,
             );
         }
-        let segment = Segment::Rejected {
-            span: ended.start..ended.at,
-            dialect,
-            reason: ended.reason,
-        };
-        let index = self.turn.store(segment, governor)?;
+        let index = self.store_failed_segment(&ended, dialect, witnessed, governor)?;
         if outread {
             return Ok(());
         }
@@ -2679,6 +2684,67 @@ impl<'s> Recognizer<'s> {
             }
         }
         Ok(())
+    }
+
+    /// Consume the attempt's complete source proof before retiring its metadata.
+    fn ended_witness(
+        &mut self,
+        ended: &Ended,
+        governor: &mut Governor,
+    ) -> Result<Option<(FailureWitness, Option<HeaderSpan>)>, StopReason> {
+        let witness = self.engine.take_failure_header(ended.attempt, governor)?;
+        let frame = if witness.is_some() {
+            governor.charge(
+                Resource::Work,
+                u64::from(self.turn.native_frames.len().bit_width() + 1).saturating_add(24),
+            )?;
+            self.turn
+                .native_frames
+                .get(&ended.attempt)
+                .map(|&(start, end)| HeaderSpan { start, end })
+        } else {
+            None
+        };
+        self.forget_native_frame(ended.attempt, governor)?;
+        Ok(witness.map(|witness| (witness, frame)))
+    }
+
+    fn store_failed_segment(
+        &mut self,
+        ended: &Ended,
+        dialect: DialectId,
+        witnessed: Option<(FailureWitness, Option<HeaderSpan>)>,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let certificate = match witnessed {
+            Some((witness, native)) if !ended.outread && witness.reason == ended.reason => {
+                Certificate::new(
+                    witness,
+                    &(ended.start..ended.at),
+                    &dialect,
+                    native,
+                    governor,
+                )?
+            }
+            _ => None,
+        };
+        let segment = Segment::Rejected {
+            span: ended.start..ended.at,
+            dialect,
+            reason: ended.reason,
+        };
+        let index = self.turn.store(segment, governor)?;
+        if let Some(certificate) = certificate {
+            governor.charge(
+                Resource::Work,
+                size(self.turn.failure_proofs.len())
+                    .saturating_mul(24)
+                    .saturating_add(u64::from(self.turn.failure_proofs.len().bit_width() + 1))
+                    .saturating_add(32),
+            )?;
+            self.turn.failure_proofs.insert(index, certificate)?;
+        }
+        Ok(index)
     }
 
     /// The first part of a completed attempt that read over an opening
@@ -3103,7 +3169,7 @@ impl<'s> Recognizer<'s> {
             output,
             example_regions: None,
         };
-        let pieces = builder.pieces(last, governor)?;
+        let (pieces, failure_proofs) = builder.pieces(last, governor)?;
         let Builder {
             forest,
             example_regions,
@@ -3142,12 +3208,19 @@ impl<'s> Recognizer<'s> {
             forest,
             cost: top.cost,
             attempted,
+            failure_proofs,
         })
     }
 }
 
 /// The fenced and inline regions shared by normalization and attempt reporting.
 type ExampleRegions = (Vec<Range<usize>>, Vec<Range<usize>>);
+
+struct BuiltReading {
+    segments: Vec<Segment>,
+    cost: u64,
+    proofs: PathProof,
+}
 
 /// Builds the factorized pieces and their derivations.
 struct Builder<'t> {
@@ -3182,13 +3255,49 @@ impl Builder<'_> {
         Ok(frontier.pop_first().expect("paths meet at the root"))
     }
 
-    fn segment(&self, node: u32) -> (Segment, u64) {
+    fn segment(
+        &self,
+        node: u32,
+        governor: &mut Governor,
+    ) -> Result<(Segment, u64, Option<Certificate>), StopReason> {
         let TurnNode { end, kind, .. } = self.turn.nodes[node as usize];
-        match kind {
-            TurnKind::Content(start) => (Segment::Content(start..end), 0),
-            TurnKind::Stored(index, cost) => (self.turn.store[index as usize].clone(), cost),
+        Ok(match kind {
+            TurnKind::Content(start) => (Segment::Content(start..end), 0, None),
+            TurnKind::Stored(index, cost) => {
+                let proof = if self.turn.failure_proofs.is_empty() {
+                    None
+                } else {
+                    governor.charge(
+                        Resource::Work,
+                        u64::from(self.turn.failure_proofs.len().bit_width() + 1)
+                            .saturating_add(24),
+                    )?;
+                    self.turn.failure_proofs.get(&index).copied()
+                };
+                (self.turn.store[index as usize].clone(), cost, proof)
+            }
             TurnKind::Root | TurnKind::Pack(_) => unreachable!("not a segment"),
+        })
+    }
+
+    fn path_reading(
+        &self,
+        path: &[u32],
+        governor: &mut Governor,
+    ) -> Result<BuiltReading, StopReason> {
+        let mut reading = BuiltReading {
+            segments: Vec::with_capacity(path.len()),
+            cost: 0,
+            proofs: PathProof::new(governor),
+        };
+        for &step in path.iter().rev() {
+            let (segment, cost, proof) = self.segment(step, governor)?;
+            reading.cost = reading.cost.saturating_add(cost);
+            let index = reading.segments.len();
+            push_merged(&mut reading.segments, segment);
+            reading.proofs.push(index, proof, governor)?;
         }
+        Ok(reading)
     }
 
     /// Every distinct segmentation from `stop` to `node`.
@@ -3197,22 +3306,21 @@ impl Builder<'_> {
         node: u32,
         stop: u32,
         governor: &mut Governor,
-    ) -> Result<Vec<(Vec<Segment>, u64)>, StopReason> {
-        let mut readings: Vec<(Vec<Segment>, u64)> = Vec::new();
+    ) -> Result<Vec<BuiltReading>, StopReason> {
+        let mut readings: Vec<BuiltReading> = Vec::new();
         let mut stack = vec![(node, Vec::<u32>::new())];
         while let Some((current, mut path)) = stack.pop() {
             governor.charge(Resource::Work, K_CAPTURE)?;
             if current == stop {
-                let mut segments = Vec::with_capacity(path.len());
-                let mut cost = 0_u64;
-                for &step in path.iter().rev() {
-                    let (segment, segment_cost) = self.segment(step);
-                    cost = cost.saturating_add(segment_cost);
-                    push_merged(&mut segments, segment);
-                }
-                if !readings.iter().any(|(known, _)| *known == segments) {
+                let reading = self.path_reading(&path, governor)?;
+                if let Some(known) = readings
+                    .iter_mut()
+                    .find(|known| known.segments == reading.segments)
+                {
+                    known.proofs.intersect(&reading.proofs, governor)?;
+                } else {
                     governor.charge(Resource::Candidates, 1)?;
-                    readings.push((segments, cost));
+                    readings.push(reading);
                 }
                 continue;
             }
@@ -3231,8 +3339,14 @@ impl Builder<'_> {
         Ok(readings)
     }
 
-    fn pieces(&mut self, last: u32, governor: &mut Governor) -> Result<Vec<Piece>, StopReason> {
+    fn pieces(
+        &mut self,
+        last: u32,
+        governor: &mut Governor,
+    ) -> Result<(Vec<Piece>, FailureProofs), StopReason> {
+        let active = !self.turn.failure_proofs.is_empty();
         let mut reversed: Vec<Piece> = Vec::new();
+        let mut reverse_proofs = BuildProofs::new(active, governor);
         let mut node = last;
         while node != 0 {
             match self.turn.nodes[node as usize].kind {
@@ -3240,45 +3354,67 @@ impl Builder<'_> {
                     let stop = self.dominator(node, governor)?;
                     let mut readings = self.paths(node, stop, governor)?;
                     if readings.len() == 1 {
-                        let (segments, _) = readings.pop().expect("one reading");
-                        reversed.extend(segments.into_iter().rev().map(Piece::Segment));
+                        let reading = readings.pop().expect("one reading");
+                        for (index, segment) in reading.segments.into_iter().enumerate().rev() {
+                            reverse_proofs
+                                .shared(reading.proofs.get(index, governor)?, governor)?;
+                            reversed.push(Piece::Segment(segment));
+                        }
                     } else {
-                        let span =
-                            self.turn.nodes[stop as usize].end..self.turn.nodes[node as usize].end;
+                        let mut derivations = Vec::with_capacity(readings.len());
+                        let mut options = Vec::with_capacity(readings.len());
+                        let mut proofs = ScratchVec::new(governor);
+                        for reading in readings {
+                            derivations.push(Derivation::new(Digest::of(b""), reading.cost));
+                            options.push(reading.segments);
+                            if active {
+                                crate::contract::push_scratch(
+                                    &mut proofs,
+                                    reading.proofs,
+                                    governor,
+                                )?;
+                            }
+                        }
+                        reverse_proofs.push(PieceProof::Choice(proofs), governor)?;
                         reversed.push(Piece::Choice(Choice {
-                            span,
-                            derivations: readings
-                                .iter()
-                                .map(|(_, cost)| Derivation::new(Digest::of(b""), *cost))
-                                .collect(),
-                            readings: readings.into_iter().map(|(segments, _)| segments).collect(),
+                            span: self.turn.nodes[stop as usize].end
+                                ..self.turn.nodes[node as usize].end,
+                            derivations,
+                            readings: options,
                         }));
                     }
                     node = stop;
                 }
                 TurnKind::Content(_) | TurnKind::Stored(..) => {
-                    reversed.push(Piece::Segment(self.segment(node).0));
+                    let (segment, _, proof) = self.segment(node, governor)?;
+                    reverse_proofs.shared(proof, governor)?;
+                    reversed.push(Piece::Segment(segment));
                     node = self.turn.nodes[node as usize].prev;
                 }
                 TurnKind::Root => break,
             }
         }
-        let mut pieces: Vec<Piece> = Vec::with_capacity(reversed.len());
+        let mut pieces = Vec::with_capacity(reversed.len());
+        let mut proofs = BuildProofs::new(active, governor);
         for piece in reversed.into_iter().rev() {
-            match (pieces.last_mut(), piece) {
-                (
-                    Some(Piece::Segment(Segment::Content(last))),
-                    Piece::Segment(Segment::Content(next)),
-                ) if last.end == next.start => {
-                    last.end = next.end;
-                }
-                (_, piece) => pieces.push(piece),
+            let proof = reverse_proofs.pop(governor)?;
+            if let (
+                Some(Piece::Segment(Segment::Content(last))),
+                Piece::Segment(Segment::Content(next)),
+            ) = (pieces.last_mut(), &piece)
+                && last.end == next.start
+            {
+                last.end = next.end;
+            } else {
+                pieces.push(piece);
+                proofs.push(proof, governor)?;
             }
         }
-        self.suppress_examples(&mut pieces, governor)?;
+        self.suppress_examples(&mut pieces, &mut proofs, governor)?;
         self.mark_examples(&mut pieces, governor)?;
-        self.annotate(&mut pieces, governor)?;
-        Ok(pieces)
+        self.annotate(&mut pieces, &mut proofs, governor)?;
+        let proofs = proofs.finish(&pieces, governor)?;
+        Ok((pieces, proofs))
     }
 
     /// Normalize every segmentation of an examples-as-content grammar before
@@ -3286,6 +3422,7 @@ impl Builder<'_> {
     fn suppress_examples(
         &mut self,
         pieces: &mut Vec<Piece>,
+        proofs: &mut BuildProofs,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mut spans = Vec::new();
@@ -3312,74 +3449,7 @@ impl Builder<'_> {
         let inline =
             self.context
                 .strict_inline(&spans, &fenced, regions.protocol.as_slice(), governor)?;
-        governor.charge(
-            Resource::ScratchBytes,
-            size(pieces.len()).saturating_mul(EXAMPLE_RECORD_BYTES),
-        )?;
-        let mut normalized = Vec::new();
-        for piece in core::mem::take(pieces) {
-            match piece {
-                Piece::Segment(mut segment) => {
-                    self.suppress_segment(&mut segment, &fenced, &inline, governor)?;
-                    normalized.push(Piece::Segment(segment));
-                }
-                Piece::Choice(mut choice) => {
-                    let segment_count: usize = choice.readings.iter().map(Vec::len).sum();
-                    governor.charge(
-                        Resource::ScratchBytes,
-                        size(segment_count)
-                            .saturating_mul(EXAMPLE_RECORD_BYTES.saturating_mul(2))
-                            .saturating_add(size(choice.readings.len()).saturating_mul(64)),
-                    )?;
-                    let mut readings: Vec<Vec<Segment>> = Vec::new();
-                    let mut derivations = Vec::new();
-                    for (reading, derivation) in choice.readings.into_iter().zip(choice.derivations)
-                    {
-                        let mut segments = Vec::new();
-                        for mut segment in reading {
-                            self.suppress_segment(&mut segment, &fenced, &inline, governor)?;
-                            push_merged(&mut segments, segment);
-                        }
-                        let mut duplicate = false;
-                        for previous in &readings {
-                            if same_example_reading(&segments, previous, governor)? {
-                                duplicate = true;
-                                break;
-                            }
-                        }
-                        if !duplicate {
-                            readings.push(segments);
-                            derivations.push(derivation);
-                        }
-                    }
-                    if readings.len() == 1 {
-                        normalized.extend(
-                            readings
-                                .pop()
-                                .expect("one reading")
-                                .into_iter()
-                                .map(Piece::Segment),
-                        );
-                    } else {
-                        choice.readings = readings;
-                        choice.derivations = derivations;
-                        normalized.push(Piece::Choice(choice));
-                    }
-                }
-            }
-        }
-        for piece in normalized {
-            if let (
-                Some(Piece::Segment(Segment::Content(before))),
-                Piece::Segment(Segment::Content(after)),
-            ) = (pieces.last_mut(), &piece)
-                && before.end == after.start
-            {
-                before.end = after.end;
-            } else {
-                pieces.push(piece);
-            }
-        }
+        self.normalize_examples(pieces, proofs, &fenced, &inline, governor)?;
         self.example_regions = Some((fenced, inline));
         governor.check()
     }
@@ -3555,11 +3625,12 @@ impl Builder<'_> {
     fn annotate(
         &mut self,
         pieces: &mut [Piece],
+        proofs: &mut BuildProofs,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mut order = 0;
         let mut inherited: Vec<NodeId> = Vec::new();
-        for piece in pieces {
+        for (piece_index, piece) in pieces.iter_mut().enumerate() {
             match piece {
                 Piece::Segment(segment) => {
                     self.segment_derivations(segment, &mut order, &mut inherited, governor)?;
@@ -3592,6 +3663,7 @@ impl Builder<'_> {
                         outcomes.push((local_order, local_inherited));
                     }
                     let ranked = Forest::rank(&derivations);
+                    proofs.reorder(piece_index, &ranked, governor)?;
                     choice.readings = permute(&choice.readings, &ranked);
                     choice.derivations = permute(&derivations, &ranked);
                     let (selected_order, selected_inherited) = outcomes.swap_remove(ranked[0]);
@@ -4109,6 +4181,7 @@ pub struct RecognizedTurn {
     forest: Forest,
     cost: u64,
     attempted: Vec<(usize, DialectId)>,
+    failure_proofs: FailureProofs,
 }
 
 /// Scratch bytes charged per recorded rejected attempt.
@@ -4126,6 +4199,7 @@ impl PartialEq for RecognizedTurn {
             && self.pieces == other.pieces
             && self.cost == other.cost
             && self.attempted == other.attempted
+            && self.failure_proofs == other.failure_proofs
             && self.forest.nodes() == other.forest.nodes()
     }
 }
@@ -4133,6 +4207,10 @@ impl PartialEq for RecognizedTurn {
 impl Eq for RecognizedTurn {}
 
 impl RecognizedTurn {
+    pub(super) fn take_failure_proofs(&mut self, governor: &Governor) -> FailureProofs {
+        core::mem::replace(&mut self.failure_proofs, FailureProofs::new(governor))
+    }
+
     /// The SHA-256 digest of the recognized output.
     ///
     /// See [`RecognizedTurn::selected`] for an example.

@@ -2,6 +2,17 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Failed native Mistral framing and its Hermes marker-projected shadow now carry
+private selected-failure header certificates through source retirement, stored
+segments, Builder normalization and resolution. Exact source capture geometry and
+the unread JSON object-body route establish the narrow relation; every retained
+packed branch and duplicate origin must agree. Late equivalence folding can keep
+the native rejection and its exterior content while retaining every member's
+dialect evidence and original rejection span. Initial support is one rejection
+and otherwise content. The original unclosed-arguments prose fixture, raw weak
+alternative and chunk parity have named behavioral coverage; execution and
+resource qualification remain pending normal verification.
+
 Internal grammar repair proposals retain only their saturated search cost.
 Actual edit provenance stays in the parser history and is still published by
 the existing resolver. A cost-only proposal refuses a parent that carries

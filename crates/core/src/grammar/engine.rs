@@ -68,7 +68,8 @@ use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
 use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchMeter, ScratchVec, StopReason, format_output_governed,
+    Governor, Resource, ScratchCharge, ScratchMap, ScratchMeter, ScratchVec, StopReason,
+    format_output_governed,
 };
 use crate::digest::Digest;
 use crate::pattern::{DerivativeDfa, DfaState};
@@ -84,6 +85,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod class_run;
 mod envelope;
+mod failure_header;
+pub(crate) use failure_header::{FailureWitness, HeaderSpan};
 mod insertion;
 pub(crate) use envelope::{CompletedParts, PartEnvelope, SourceEnvelope, retained_context};
 
@@ -570,6 +573,12 @@ impl ScratchCharge for Deferred {
     };
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailureOrigin {
+    Other,
+    UnreadBody,
+}
+
 /// A configuration that could not consume the byte at `at`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Failure {
@@ -581,6 +590,7 @@ pub(crate) struct Failure {
     /// repair it, as every other repair of the attempt is proposed at the
     /// step where it runs out of configurations.
     pub(crate) respell: bool,
+    pub(crate) origin: FailureOrigin,
 }
 
 impl ScratchCharge for Failure {
@@ -746,6 +756,7 @@ impl<'s> Step<'_, 's> {
             at,
             reason,
             respell: false,
+            origin: FailureOrigin::Other,
         })
     }
 
@@ -2107,7 +2118,13 @@ impl<'s> Step<'_, 's> {
                     // where the value stopped decoding (not at the end of its
                     // body), so what follows is read as the attempt's markup
                     // only as far as its closer or bracket shows it is.
-                    return Self::fail(out, thread, at, Rejection::Malformed { at });
+                    return out.failed.push(Failure {
+                        thread,
+                        at,
+                        reason: Rejection::Malformed { at },
+                        respell: false,
+                        origin: FailureOrigin::UnreadBody,
+                    });
                 }
                 Err(Finished::Fault(fault)) => {
                     return Self::fail(out, thread, thread.pos, rejection(fault));
@@ -5030,6 +5047,7 @@ impl ScratchCharge for GrammarRuntime<'_> {
 /// The segment-candidate layer over every table of a dialect set.
 pub(crate) struct Engine<'s> {
     tables: Vec<Table<'s>>,
+    failure_headers: ScratchMap<u64, failure_header::State>,
     /// Fixed admitted proof slots, retained even while every slot is empty.
     class_runs: ScratchVec<Option<class_run::ClassRun>>,
     /// Empty occupancy skips invalidation probes and whole-slot reset sweeps.
@@ -5145,6 +5163,7 @@ impl<'s> Engine<'s> {
         let class_runs = class_run::slots(tables.len(), governor)?;
         Ok(Self {
             tables,
+            failure_headers: ScratchMap::new(governor),
             class_runs,
             class_run_count: 0,
             grammars,
@@ -5477,7 +5496,7 @@ impl<'s> Engine<'s> {
                 .copied()
                 .chain(held)
                 .collect();
-            self.note_failure(table, record.id, &failures, eof.is_none());
+            self.note_failure(table, record.id, &failures, eof.is_none(), governor)?;
             self.note_boundary(table, record.id, &failures, governor)?;
             let until = if eof.is_some() { at } else { at + 1 };
             // Even a repair with no surviving state can resolve a shared
@@ -5907,6 +5926,17 @@ impl<'s> Engine<'s> {
                 } else {
                     None
                 };
+                if let Some(end) = native_frame_end {
+                    failure_header::native(
+                        &mut self.failure_headers,
+                        attempt,
+                        HeaderSpan {
+                            start: record.start,
+                            end,
+                        },
+                        governor,
+                    )?;
+                }
                 self.events.push(Event::Opened {
                     attempt,
                     start: record.start,
@@ -6000,12 +6030,19 @@ impl<'s> Engine<'s> {
     }
 
     /// Record why (and where) an attempt left with no configuration failed.
-    fn note_failure(&mut self, table: usize, attempt: u64, failures: &[Failure], midway: bool) {
+    fn note_failure(
+        &mut self,
+        table: usize,
+        attempt: u64,
+        failures: &[Failure],
+        midway: bool,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         // Where the attempt failed is where its own configurations ran out,
         // not where an earlier sibling's literal did (a respelling seed).
         let current = || failures.iter().filter(|failure| !failure.respell);
         let Some(first) = current().min_by_key(|failure| (failure.at, failure.reason)) else {
-            return;
+            return Ok(());
         };
         // The rejected span ends where the furthest failing token began: a
         // partial literal may start the next opener.
@@ -6017,15 +6054,22 @@ impl<'s> Engine<'s> {
             })
             .max()
             .unwrap_or(first.at);
-        let record = self.tables[table]
+        // This is the existing live-record lookup; its stable index remains
+        // valid while certification changes only the private witness owner.
+        let record_index = self.tables[table]
             .attempts
-            .as_mut_slice()
-            .iter_mut()
-            .find(|other| other.id == attempt)
-            .expect("attempt is live");
+            .iter()
+            .position(|record| record.id == attempt)
+            .expect("INVARIANT: noting failure of a live attempt");
+        let previous = self.tables[table].attempts[record_index];
+        if previous.failure_end == FailureEnd::Resynced && previous.failure.is_some() {
+            return Ok(());
+        }
+        self.note_failure_header(table, attempt, failures, first, end, governor)?;
+        let record = &mut self.tables[table].attempts.as_mut_slice()[record_index];
         if record.failure_end == FailureEnd::Resynced {
             if record.failure.is_some() {
-                return;
+                return Ok(());
             }
         } else {
             // A slot configuration that failed before its own position
@@ -6043,6 +6087,7 @@ impl<'s> Engine<'s> {
         record.failure = Some(first.reason);
         record.end = Some(end);
         record.stuck = midway;
+        Ok(())
     }
 
     /// For a grouped program, record where the failing configurations of
@@ -6530,9 +6575,11 @@ impl<'s> Engine<'s> {
                     salvage,
                     outread: false,
                 };
+                let ended = self.finalize_failure_end(ended, skipped.is_some(), governor)?;
                 self.defer(table, &record, whole, ended, governor)?;
             } else {
                 self.take_boundary(table, record.id);
+                self.forget_failure_header(record.id, governor)?;
             }
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
@@ -7517,6 +7564,14 @@ impl<'s> Engine<'s> {
         chained: Result<Chained, Rejection>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if chained.is_ok()
+            && let Err(reason) = self.forget_failure_header(thread.attempt, governor)
+        {
+            if let Ok(chained) = chained {
+                let _ = HeldBody::Chain(chained).discard(governor);
+            }
+            return Err(reason);
+        }
         let record = self.tables[table]
             .attempts
             .as_mut_slice()
@@ -7664,6 +7719,13 @@ impl<'s> Engine<'s> {
             .scratch_meter()
             .total_charged()
             .saturating_sub(before);
+        if segmentations.is_ok()
+            && let Err(reason) = self.forget_failure_header(thread.attempt, governor)
+        {
+            drop(segmentations);
+            let _ = governor.release_scratch(charged);
+            return Err(reason);
+        }
         let attempts = self.tables[table].attempts.as_mut_slice();
         let record = attempts
             .iter_mut()
@@ -7823,6 +7885,7 @@ impl<'s> Engine<'s> {
                 entries.pop();
             }
         }
+        self.forget_failure_header(attempt, governor)?;
         self.clear_class_runs(governor)?;
         for table in &mut self.tables {
             governor.charge(
@@ -7948,6 +8011,7 @@ impl<'s> Engine<'s> {
         let threads: Vec<Thread> = self.tables[table].threads.as_slice().to_vec();
         let grouped = self.tables[table].program.grouped;
         for record in records {
+            self.forget_failure_header(record.id, governor)?;
             // Its reading beside another, held until now, may complete it.
             self.release_past(table, record.id, governor)?;
             let record = self.tables[table]
@@ -8092,6 +8156,7 @@ mod tests {
             at: entry,
             reason: Rejection::Malformed { at: entry },
             respell: false,
+            origin: FailureOrigin::Other,
         }
     }
 

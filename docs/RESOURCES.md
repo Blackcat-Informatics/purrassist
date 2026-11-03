@@ -267,6 +267,65 @@ write; empty occupancy performs no sweep. Initialization still admits every slot
 Short or changing runs, refused admissions and unrelated live proofs can add
 Work without a later hit; these fees are part of any future workload comparison.
 
+### Failed native frame certificates
+
+Failed Mistral V3 and Hermes marker-projected calls can retain a private
+selected-failure header certificate. A producer tag identifies the actual
+unread-body failure route. The compiled terminal must be a JSON or JSON-arguments
+slot with an open Arguments capture exactly at its entry and a written object
+prefix. A governed history DAG walk checks both branches of every Pack. It
+supports completed name and optional ID captures, one completed leading Dropped
+capture, and the open argument body; edits, values, deferred Links, skipped calls
+and later-call boundaries decline proof. This is framing evidence, not a repaired
+argument value or an invocation inferred from rejected text.
+
+Only failures tied on the actual minimum failure-offset/reason key contribute
+header facts. Their proofs intersect; aggregate rejection end and consumed
+position remain separate. An unproved same-key contributor stays unproved across
+later updates. A different selected key follows the existing record overwrite;
+an already recorded first resynchronization failure preserves its original
+certificate. The existing physically consumed native opener supplies its frame.
+
+One fallible attempt-ID map owns these facts through source/history retirement
+and queued Ended delivery. Event, Pending and Attempt layouts do not grow.
+Completion, abandonment, cut, consumption and fatal queue/processing cleanup
+retire the corresponding state. Final rejection changes, salvage and extended
+skipped ranges decline qualification. Refusal drops materialized completion or
+salvage buffers before releasing their existing reservations.
+
+Portable admissions are 192 bytes per attempt state, 160 per optional history
+summary, 256 per stored certificate or addressed certificate row, 64 per path
+owner and 80 per piece owner. Their vectors and maps retain all spare capacity
+until owner drop. Each sorted-map operation admits a conservative bound of
+`32 * length + 4 * (bit_width(length) + 1) + 64` Work units for searches,
+state copies and possible movement. Memoization prevents exponential packed-path
+expansion; sorted insertion still has a charged quadratic worst case in the
+number of reachable history nodes. History visits, joins, byte inspection,
+structural lookups, duplicate intersection, copying and permutation also admit
+Work. No history-sized global index or per-byte certificate-map scan is added.
+
+Immutable stored rejection addresses enter a sparse Builder companion. Both
+path deduplication and example-normalization deduplication intersect proofs from
+all collapsed origins. Suppression clears a rejected segment's proof; merging,
+choice collapse and ranking move the companion with their actual output.
+The final private RecognizedTurn owner uses piece/option/segment addresses.
+Recovery moves it out before dropping the recognized turn, validates those
+addresses through resolution, and retains it through option folding. These are
+identity joins; equal source spans alone never attach a certificate.
+
+Inside an existing equivalence group, a proved weak failed frame can become
+ineligible as representative when a native member proves the same failed object
+body and complete source partition, with precisely its exterior leading content
+preserved. The initial relation supports one rejection and otherwise content.
+Eligibility is determined against the complete group before existing ranking;
+every member still contributes its dialect evidence at its own opener. Original
+weak and native rejection spans remain intact. Unproved alternatives keep their
+existing ranking. Public raw-call and segment construction remains unchanged.
+The named stripped-framing regression covers the original Mistral prose fixture,
+retained weak rejection and chunk parity. This source has been formatted and
+inspected; compilation, execution, resource qualification and portability checks
+have not run locally.
+
 ### Runtime segmentation costs
 
 Flat and chained completion producers carry each original reading's materialized

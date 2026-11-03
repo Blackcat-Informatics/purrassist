@@ -141,6 +141,7 @@
 //! and its call openers.
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
+use super::failed_prefix::{FailureChoice, FailureProofs};
 use super::recognizer::{edit_entries, escaped, same_source_text, same_source_tree};
 use super::resolve::loss_kind;
 use super::{
@@ -4347,15 +4348,18 @@ impl Recovery<'_> {
         let mut recognizer =
             Recognizer::with_tools(self.dialects, self.tools, self.request.reasoning, governor)?;
         recognizer.push(self.output, governor)?;
-        let turn =
+        let mut turn =
             recognizer.finish_over(self.request.stop.clone(), Some(self.output), governor)?;
         let resolved = resolve_forest(self.tools, &turn, &self.policies, governor)?;
         let attempted = turn.rejected_attempts().to_vec();
+        let failure_proofs = turn.take_failure_proofs(governor);
+        failure_proofs.validate(&resolved, governor)?;
         drop(turn);
         let readings = self.readings(
             &resolved,
             &encoding,
             &attempted,
+            &failure_proofs,
             forced.as_deref(),
             governor,
         )?;
@@ -4434,6 +4438,7 @@ impl Recovery<'_> {
         turn: &ResolvedTurn,
         encoding: &CallLedger,
         attempted: &[(usize, DialectId)],
+        failure_proofs: &FailureProofs,
         forced: Option<&str>,
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
@@ -4455,6 +4460,7 @@ impl Recovery<'_> {
                     self.output,
                     following,
                     !matches!(self.request.tool_choice, ToolChoice::ForcedStrict(_)),
+                    FailureChoice::new(failure_proofs, index, &choice.span, governor)?,
                     governor,
                 )?);
             }
@@ -5826,6 +5832,7 @@ fn fold_options<'t>(
     output: &[u8],
     following: Option<&ResolvedCall>,
     prefer_native_json: bool,
+    failures: FailureChoice<'_>,
     governor: &mut Governor,
 ) -> Result<Vec<Fold<'t>>, StopReason> {
     // Each group: its member indices, in option order.
@@ -5846,18 +5853,7 @@ fn fold_options<'t>(
     }
     let mut folds = Vec::with_capacity(groups.len());
     for members in &groups {
-        let mut kept = members[0];
-        for &member in &members[1..] {
-            let preference = |index: usize| {
-                let exact = options[index].iter().filter(|segment| {
-                    matches!(segment, ResolvedSegment::Call(call) if !call.dialect.grammar().is_derived())
-                }).count();
-                (exact, Fold::body_evidence(&options[index], output))
-            };
-            if preference(member) > preference(kept) {
-                kept = member;
-            }
-        }
+        let kept = equivalent_representative(options, members, output, &failures, governor)?;
         let mut fold = Fold::new(&options[kept], governor)?;
         for &member in members.iter().filter(|&&member| member != kept) {
             fold.absorb(&options[member], governor)?;
@@ -5926,6 +5922,38 @@ fn fold_options<'t>(
     // The readings' order is the order of the kept segmentations.
     folds.sort_unstable_by_key(|(kept, _)| *kept);
     Ok(folds.into_iter().map(|(_, fold)| fold).collect())
+}
+
+/// Eligibility is decided against the complete group before ordinary ranking.
+fn equivalent_representative(
+    options: &[Vec<ResolvedSegment>],
+    members: &[usize],
+    output: &[u8],
+    failures: &FailureChoice<'_>,
+    governor: &mut Governor,
+) -> Result<usize, StopReason> {
+    let mut kept = None;
+    for &member in members {
+        if failures.dominated(member, members, options, governor)? {
+            continue;
+        }
+        let preference = |index: usize| {
+            let exact = options[index]
+                .iter()
+                .filter(|segment| {
+                    matches!(segment,ResolvedSegment::Call(call)
+                    if !call.dialect.grammar().is_derived())
+                })
+                .count();
+            (exact, Fold::body_evidence(&options[index], output))
+        };
+        if kept.is_none_or(|current| preference(member) > preference(current)) {
+            kept = Some(member);
+        }
+    }
+    let kept =
+        kept.ok_or_else(|| invalid_input("failed frame preference removed every representative"))?;
+    Ok(kept)
 }
 
 /// Record on a reading built from folded options the dialects of every

@@ -339,6 +339,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     assert_eq!(result.receipt.alternatives.len(), 0);
 
     assert_nested_arguments_remain_data();
+    assert_failed_native_frame_preserves_content();
 
     let reasoning = format!("<think>{array}</think>");
     let result = tools().recover(
@@ -378,6 +379,94 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     for fenced in [format!("```json\n{array}\n```"), prefaced] {
         assert_fenced_calls_not_usable(&fenced);
     }
+}
+
+/// Failed projection framing cannot swallow prose before a native marker.
+fn assert_failed_native_frame_preserves_content() {
+    use purrassist_core::tool_call::{Effects, Piece, Rejection, Segment};
+    let input = "Checking. [TOOL_CALLS] [{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.txt\" oops. Sorry, my answer is 42 (see {1,2} set).";
+    let golden = purrassist_core::json::parse(include_str!(
+        "data/tool-call-goldens/mistral3_prose_after_unclosed_arguments.json"
+    ))
+    .expect("Mistral prose golden");
+    assert_eq!(
+        golden
+            .get("input")
+            .and_then(purrassist_core::json::Node::as_str),
+        Some(input)
+    );
+    let declaration = golden.get("tools_openai").expect("golden tools").to_json();
+    let tools = ToolSet::from_openai(&declaration, Budget::default()).expect("golden tools");
+    let effects = match golden
+        .pointer("/effects/read_file")
+        .and_then(purrassist_core::json::Node::as_str)
+    {
+        Some("read_only") => Effects::ReadOnly,
+        other => panic!("unexpected golden read_file effects: {other:?}"),
+    };
+    let request = ToolRecoveryRequest::default().effects("read_file", effects);
+    let result = tools.recover(input.as_bytes(), &request, DialectSet::built_in());
+    assert_eq!(result.receipt.sources[0].bytes, input.as_bytes());
+    let Outcome::Resolved(calls) = result.outcome else {
+        panic!("native failed frame preserves exterior content: {result:?}");
+    };
+    assert_eq!(calls.calls.len(), 0);
+    assert_eq!(calls.rejected.len(), 1);
+    let rejection = &calls.rejected[0];
+    assert_eq!(rejection.span, 10..72);
+    assert_eq!(rejection.reason, Rejection::Malformed { at: 72 });
+    assert_eq!(
+        rejection.candidate_dialects,
+        [DialectId::MistralV11, DialectId::MistralV3]
+    );
+    assert_eq!(
+        calls
+            .content
+            .iter()
+            .map(|span| &input[span.clone()])
+            .collect::<Vec<_>>(),
+        [
+            "Checking. ",
+            "oops. Sorry, my answer is 42 (see {1,2} set)."
+        ]
+    );
+
+    let set = set([DialectId::HermesStripped, DialectId::MistralV3]);
+    let mut turns = Vec::new();
+    // Split inside the physically consumed marker, before either failure.
+    for chunks in [
+        vec![input.as_bytes()],
+        vec![&input.as_bytes()[..16], &input.as_bytes()[16..]],
+    ] {
+        let mut governor = Governor::new(Budget::default());
+        let mut recognizer = Recognizer::with_tools(&set, &tools, request.reasoning, &mut governor)
+            .expect("recognizer");
+        for chunk in chunks {
+            recognizer.push(chunk, &mut governor).expect("chunk");
+        }
+        turns.push(
+            recognizer
+                .finish(GenerationStop::Stop, &mut governor)
+                .expect("finish"),
+        );
+    }
+    assert_eq!(turns[0], turns[1]);
+    let mut segments = Vec::new();
+    for piece in turns[0].pieces() {
+        match piece {
+            Piece::Segment(segment) => segments.push(segment),
+            Piece::Choice(choice) => segments.extend(choice.readings.iter().flatten()),
+        }
+    }
+    assert!(
+        segments.iter().any(|segment| matches!(segment,
+        Segment::Rejected { span,dialect,reason:Rejection::Malformed{at:72} }
+        if *span==(0..72) && *dialect==DialectId::HermesStripped)),
+        "the original weak rejection remains an alternative"
+    );
+    assert!(segments.iter().any(|segment| matches!(segment,
+        Segment::Rejected { span,dialect,reason:Rejection::Malformed{at:72} }
+        if *span==(10..72) && *dialect==DialectId::MistralV3)));
 }
 
 fn assert_nested_arguments_remain_data() {
