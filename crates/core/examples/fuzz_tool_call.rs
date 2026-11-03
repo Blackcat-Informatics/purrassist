@@ -1940,6 +1940,39 @@ fn main() {
 mod tests {
     use super::*;
 
+    /// A closer discovered after reasoning owns its following malformed body.
+    #[test]
+    fn late_reasoning_closer_finalizes_its_call_body() {
+        let output = b"{\n      \"type\": \"function\",\"id\"\t:\t\"call_6182</think>```:{\t\"name\"\t:\t\"delete_path\",\t\"argh\",\t\"arguments\"\t\t:\"{\\\"path\\\":[\\\"beta gamma \\\\n  block\\\\n\\\",\\\"\\\\n  block\\\\n\\\"]}\"\t\t}\t}\n{\n\t\t\t\t\"type\": \"function\"\t,\"function\":{\t\"arguments\":\"{\\\"path\\\":\\\"alpha\\\",\\\"limit\\\":-32}\"\t\t,\t\t\"name\":\t\t\"read_file\"\t\t}\t\t,\"id\":\t\t\"call_e427bb79\"\t\t}";
+        let tools = fixed_tools();
+        // The captured turn closes a block that was open before generation.
+        let request = request(0x10, 2, None, output);
+        let result = tools.recover(output, &request, DialectSet::built_in());
+        let readings = match &result.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => core::slice::from_ref(calls),
+            Outcome::Ambiguous(readings) => readings.as_slice(),
+            Outcome::Unresolved => panic!("{:?}", result.receipt.stopped),
+        };
+        let mut observed = false;
+        for calls in readings {
+            check_no_call_body(output, calls);
+            for rejected in &calls.rejected {
+                if rejected.span.start == 52
+                    && rejected.dialect.as_ref() == Some(&DialectId::DeepSeekV3Stripped)
+                {
+                    assert_eq!(rejected.reason, Rejection::Malformed { at: 52 });
+                    assert_eq!(rejected.span, 52..168);
+                    assert_eq!(rejected.raw, output[52..168]);
+                    observed = true;
+                }
+            }
+        }
+        assert!(
+            observed,
+            "the reasoning closer must retain its rejected body"
+        );
+    }
+
     /// Initial markup retains the malformed id's string until its real
     /// closing quote; later call members justify the rejected body, not prose.
     #[test]

@@ -4678,52 +4678,63 @@ impl Recovery<'_> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         for index in 0..value.rejected.len() {
-            // Unparsed markup (no allowed dialect read it) stays content.
-            if matches!(
-                value.rejected[index].reason,
-                Rejection::UnsupportedDialect { .. }
-            ) {
-                continue;
-            }
-            let Some(dialect) = value.rejected[index].dialect.clone() else {
-                continue;
-            };
-            let span = value.rejected[index].span.clone();
-            // The segments after the attempt, in order.
-            let mut boundaries: Vec<(Range<usize>, bool)> = value
-                .calls
-                .iter()
-                .map(|call| (call.span.clone(), true))
-                .chain(value.reasoning.iter().map(|range| (range.clone(), false)))
-                .chain(
-                    value
-                        .rejected
-                        .iter()
-                        .enumerate()
-                        .filter(|(other, _)| *other != index)
-                        .map(|(_, rejected)| {
-                            // An inner attempt is passed over like an inner
-                            // call; reported unparsed markup stays content
-                            // and bounds the scan.
-                            let inner =
-                                !matches!(rejected.reason, Rejection::UnsupportedDialect { .. });
-                            (rejected.span.clone(), inner)
-                        }),
-                )
-                .filter(|(range, _)| range.start >= span.end && !range.is_empty())
-                .collect();
-            boundaries.sort_by_key(|(range, _)| range.start);
-            let reason = value.rejected[index].reason;
-            let end = rejected_end(self.output, &span, &dialect, reason, &boundaries, governor)?;
-            if end <= span.end {
-                continue;
-            }
-            governor.charge(Resource::ScratchBytes, size(end - span.end))?;
-            remove_range(&mut value.content, &(span.end..end));
-            let rejected = &mut value.rejected[index];
-            rejected.span.end = end;
-            rejected.raw = self.output[rejected.span.clone()].to_vec();
+            self.close_rejection(value, index, governor)?;
         }
+        Ok(())
+    }
+
+    /// Finalize one rejection against every currently present source boundary.
+    fn close_rejection(
+        &self,
+        value: &mut ToolCalls,
+        index: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        // Unparsed markup (no allowed dialect read it) stays content.
+        if matches!(
+            value.rejected[index].reason,
+            Rejection::UnsupportedDialect { .. }
+        ) {
+            return Ok(());
+        }
+        let Some(dialect) = value.rejected[index].dialect.clone() else {
+            return Ok(());
+        };
+        let span = value.rejected[index].span.clone();
+        // The segments after the attempt, in order.
+        let mut boundaries: Vec<(Range<usize>, bool)> = value
+            .calls
+            .iter()
+            .map(|call| (call.span.clone(), true))
+            .chain(value.reasoning.iter().map(|range| (range.clone(), false)))
+            .chain(
+                value
+                    .rejected
+                    .iter()
+                    .enumerate()
+                    .filter(|(other, _)| *other != index)
+                    .map(|(_, rejected)| {
+                        // An inner attempt is passed over like an inner
+                        // call; reported unparsed markup stays content
+                        // and bounds the scan.
+                        let inner =
+                            !matches!(rejected.reason, Rejection::UnsupportedDialect { .. });
+                        (rejected.span.clone(), inner)
+                    }),
+            )
+            .filter(|(range, _)| range.start >= span.end && !range.is_empty())
+            .collect();
+        boundaries.sort_by_key(|(range, _)| range.start);
+        let reason = value.rejected[index].reason;
+        let end = rejected_end(self.output, &span, &dialect, reason, &boundaries, governor)?;
+        if end <= span.end {
+            return Ok(());
+        }
+        governor.charge(Resource::ScratchBytes, size(end - span.end))?;
+        remove_range(&mut value.content, &(span.end..end));
+        let rejected = &mut value.rejected[index];
+        rejected.span.end = end;
+        rejected.raw = self.output[rejected.span.clone()].to_vec();
         Ok(())
     }
 
@@ -4891,8 +4902,8 @@ impl Recovery<'_> {
     /// it ran into, so none is left as content: see
     /// [`Self::closers_of_rejected`], [`Self::closers_of_calls`] and
     /// [`Self::closers_after_blocks`]. Each found closer of an attempt is
-    /// reported as a rejected attempt of its dialect over the closer alone
-    /// (the block's bytes stay reasoning).
+    /// reported as a rejected attempt of its dialect, finalized by the same
+    /// source-body scan as earlier rejections (the block stays reasoning).
     fn closers_after_cut(
         &self,
         reading: &mut Reading,
@@ -4901,6 +4912,7 @@ impl Recovery<'_> {
         let mut found = self.closers_of_rejected(reading, governor)?;
         self.closers_of_calls(reading, governor)?;
         self.closers_after_blocks(reading, &mut found, governor)?;
+        let first_new = reading.value.rejected.len();
         for (span, dialect, candidates) in found {
             governor.charge(
                 Resource::ScratchBytes,
@@ -4917,6 +4929,12 @@ impl Recovery<'_> {
                 repairs: CallLedger::default(),
             });
             reading.parts.push(Part::Rejected(index));
+        }
+        // The earlier pass could not finalize these newly discovered owners.
+        // Append all of them first so each scan sees every new boundary too.
+        for index in first_new..reading.value.rejected.len() {
+            governor.charge(Resource::Work, 1)?;
+            self.close_rejection(&mut reading.value, index, governor)?;
         }
         sort_rejected(reading);
         Ok(())
