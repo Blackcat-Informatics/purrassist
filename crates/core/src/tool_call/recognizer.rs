@@ -24,7 +24,10 @@
 //!    completed ends as a call (or result), or as a rejected segment
 //!    costing [`cost::REJECT`](crate::grammar::cost::REJECT). Equal-cost
 //!    segmentations of the same span are packed and reported as a local
-//!    [`Choice`]; independent choices are never multiplied out. A choice is
+//!    [`Choice`]; independent choices are never multiplied out. An alternative
+//!    is also retained at its actual higher cost when an erased final marker
+//!    leaves a source-proven trailing extraction over later completed calls.
+//!    Unrelated repairs retain ordinary least-cost selection. A choice is
 //!    recognition-level: dialects sharing an opener each reject their own
 //!    attempt at it, so the recognized turn keeps one segmentation per
 //!    dialect. Recovery ([`ToolSet::recover`](super::ToolSet::recover))
@@ -93,6 +96,8 @@ use core::fmt;
 use core::fmt::Write as _;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod trailing;
 
 /// Why the model stopped generating: the recognizer's end-of-output input.
 ///
@@ -166,7 +171,8 @@ enum TurnKind {
     Content(usize),
     /// A stored segment and its cost.
     Stored(u32, u64),
-    /// Two equal-cost segmentations: `prev` or this operand.
+    /// Two admitted segmentations: `prev` or this operand. Stored nodes
+    /// retain each branch's actual cost; dispatch uses their minimum.
     Pack(u32),
 }
 
@@ -509,36 +515,70 @@ impl Turn {
         Ok((base.cost.saturating_add(cost), hist))
     }
 
-    /// Least-cost merge of `candidates` into the content state at `at`;
-    /// equal costs pack.
+    /// Least-cost dispatch, preserving equal costs and source-proven trailing
+    /// extraction alternatives whose final marker the recipe erased.
     fn revive(
         &mut self,
-        mut candidates: Vec<(u64, u32)>,
+        candidates: Vec<(u64, u32)>,
         at: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some(best) = candidates.iter().map(|(cost, _)| *cost).min() else {
+        let Some(candidate_cost) = candidates.iter().map(|(cost, _)| *cost).min() else {
             return Ok(());
         };
-        if let Some(top) = self.top {
-            if top.cost < best {
+        let best = self
+            .top
+            .map_or(candidate_cost, |top| top.cost.min(candidate_cost));
+        if let Some(top) = self.top
+            && top.cost < candidate_cost
+        {
+            let mut possible = false;
+            for &(_, hist) in &candidates {
+                if trailing::possible(self, hist, at, governor)? {
+                    possible = true;
+                    break;
+                }
+            }
+            if !possible {
                 return Ok(());
             }
-            if top.cost == best {
-                let closed = self.close(top, at, governor)?;
-                candidates.push((best, closed));
+        }
+        let mut hists = ScratchVec::new(governor);
+        for &(cost, hist) in &candidates {
+            if cost == best {
+                crate::contract::push_scratch(&mut hists, hist, governor)?;
             }
         }
-        let mut hists: Vec<u32> = candidates
-            .into_iter()
-            .filter(|(cost, _)| *cost == best)
-            .map(|(_, hist)| hist)
-            .collect();
-        hists.sort_unstable();
-        hists.dedup();
+        if let Some(top) = self.top
+            && top.cost == best
+        {
+            let closed = self.close(top, at, governor)?;
+            crate::contract::push_scratch(&mut hists, closed, governor)?;
+        }
+        let minimums = hists.len();
+        for &(cost, hist) in &candidates {
+            if cost > best {
+                trailing::preserve(self, hist, at, minimums, &mut hists, governor)?;
+            }
+        }
+        if let Some(top) = self.top
+            && top.cost > best
+        {
+            trailing::preserve(self, top.hist, at, minimums, &mut hists, governor)?;
+        }
+        governor.charge(
+            Resource::Work,
+            size(hists.len()).saturating_mul(u64::from(hists.len().bit_width() + 1)),
+        )?;
+        hists.as_mut_slice().sort_unstable();
         let mut hist = hists[0];
-        for &other in &hists[1..] {
+        let mut previous = hist;
+        for &other in &hists.as_slice()[1..] {
+            if other == previous {
+                continue;
+            }
             hist = self.push(hist, at, TurnKind::Pack(other), governor)?;
+            previous = other;
         }
         self.top = Some(Top {
             cost: best,
@@ -4305,6 +4345,88 @@ mod tests {
     use super::*;
     use crate::Budget;
     use crate::json::{Member, Node, Value};
+
+    /// Erased endings preserve a completed invocation versus trailing loss;
+    /// a retained ending or plain prose still follows ordinary least cost.
+    #[test]
+    fn trailing_extraction_needs_erased_endings_and_a_completed_later_call() {
+        use crate::Outcome;
+        use crate::grammar::{CallAnchor, GrammarRecipe, Suppression};
+        use crate::tool_call::{Param, ToolDefinition, ToolRecoveryRequest};
+        const SOURCE: &str = r#"
+            grammar "tail-source.v1";
+            closer end = "<end>";
+            name = /[a-z]+/;
+            ws = /[ \t\r\n]+/;
+            trailing = /[^<\s][^<]*/;
+            call = "<call>" name:name arguments:slot(json, "<end>")
+                   (ws? dropped:trailing)? ws? (ENDING);
+            result = "<result>";
+            declaration = "<declaration>";
+        "#;
+        let tools = ToolSet::compile(
+            ["f", "g"].map(|name| ToolDefinition::new(name).param("x", Param::number())),
+            Budget::default(),
+        )
+        .expect("tools");
+        let input = b"f{\"x\":1}\ng{\"x\":2}";
+        for (ending, preserve) in [("end", true), ("end | \"!\"", false)] {
+            let source = SOURCE.replace("ENDING", ending);
+            let grammar = GrammarRecipe::derived(
+                "tail-projected.v1",
+                &source,
+                &["<call>", "<end>"],
+                Suppression::ProtocolMarkers,
+                CallAnchor::LineStartArguments,
+            )
+            .compile_governed(&mut Governor::new(Budget::default()))
+            .expect("projection");
+            let set = DialectSet::new(
+                [DialectId::custom(grammar)],
+                &mut Governor::new(Budget::default()),
+            )
+            .expect("set");
+            let result = tools.recover(input, &ToolRecoveryRequest::default(), &set);
+            assert_eq!(result.receipt.sources[0].bytes, input);
+            if preserve {
+                let Outcome::Ambiguous(readings) = &result.outcome else {
+                    panic!("both source readings: {result:?}");
+                };
+                assert_eq!(readings[0].calls.len(), 2);
+                assert!(readings.iter().zip(&result.receipt.alternatives).any(
+                    |(reading, receipt)| {
+                        reading.calls.len() == 1
+                            && receipt.cost > result.receipt.alternatives[0].cost
+                            && reading.calls[0].repairs.losses.iter().any(|loss| {
+                                loss.loss.evidence.rule == "tool_call.extract.prose"
+                                    && loss.loss.original == "g{\"x\":2}"
+                            })
+                    }
+                ));
+                let prose = tools.recover(
+                    b"f{\"x\":1}\nnot a call",
+                    &ToolRecoveryRequest::default(),
+                    &set,
+                );
+                let Outcome::Resolved(calls) = &prose.outcome else {
+                    panic!("prose follows ordinary least cost: {prose:?}");
+                };
+                assert_eq!(calls.calls.len(), 1);
+                assert!(calls.calls[0].repairs.losses.is_empty());
+            } else {
+                let Outcome::Resolved(calls) = &result.outcome else {
+                    panic!("mixed endings follow ordinary least cost: {result:?}");
+                };
+                assert_eq!(calls.calls.len(), 2);
+                assert!(
+                    calls
+                        .calls
+                        .iter()
+                        .all(|call| call.repairs.losses.is_empty())
+                );
+            }
+        }
+    }
 
     fn string_at(start: usize, end: usize) -> Node {
         Node {

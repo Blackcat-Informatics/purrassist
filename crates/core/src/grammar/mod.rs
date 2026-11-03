@@ -819,6 +819,8 @@ pub struct CompiledGrammar {
     pub(crate) id: String,
     pub(crate) digest: Digest,
     pub(crate) origin: GrammarOrigin,
+    /// Every original call-ending terminal is wholly removed by the recipe.
+    pub(crate) all_call_endings_erased: bool,
     joint_captures: crate::contract::ScratchVec<partition::JointCapture>,
     pub(crate) literals: crate::contract::ScratchVec<Literal>,
     pub(crate) literal_tables: crate::contract::ScratchVec<LiteralTables>,

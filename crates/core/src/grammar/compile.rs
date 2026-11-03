@@ -2410,13 +2410,14 @@ pub(crate) fn compile(
     digest: Digest,
     governor: &mut Governor,
 ) -> Result<CompiledGrammar, GrammarError> {
-    compile_policy(document, digest, false, false, governor)
+    compile_policy(document, digest, false, false, false, governor)
 }
 
 pub(super) fn compile_derived(
     document: Document,
     digest: Digest,
     anchor: super::CallAnchor,
+    all_call_endings_erased: bool,
     governor: &mut Governor,
 ) -> Result<CompiledGrammar, GrammarError> {
     compile_policy(
@@ -2424,6 +2425,7 @@ pub(super) fn compile_derived(
         digest,
         true,
         anchor == super::CallAnchor::LineStartArguments,
+        all_call_endings_erased,
         governor,
     )
 }
@@ -2433,6 +2435,7 @@ fn compile_policy(
     digest: Digest,
     derived: bool,
     argument_anchor: bool,
+    all_call_endings_erased: bool,
     governor: &mut Governor,
 ) -> Result<CompiledGrammar, GrammarError> {
     let mut builder = Builder::new(governor);
@@ -2507,6 +2510,7 @@ fn compile_policy(
         id: document.id.into_string(),
         digest,
         origin: GrammarOrigin::from_derived(derived),
+        all_call_endings_erased,
         joint_captures,
         literals,
         literal_tables,

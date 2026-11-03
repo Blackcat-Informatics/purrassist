@@ -10,6 +10,8 @@ use crate::contract::{
 };
 use crate::digest::{Digest, DigestBuilder};
 
+mod endings;
+
 /// Why a recipe suppresses its explicitly enumerated protocol markers.
 ///
 /// These are format contracts. No model, tokenizer or network operation runs here.
@@ -165,13 +167,14 @@ impl<'a> GrammarRecipe<'a> {
                 return Err(GrammarError::EmptyLiteral { offset: 0 });
             }
         }
+        let all_call_endings_erased = endings::all_erased(&document, markers, governor)?;
         project(&mut document, markers, anchor, governor)?;
         let mut name = ScratchString::new(governor);
         governor.charge(Resource::Work, saturating_size(id.len()))?;
         name.push_str(id)?;
         document.id = name;
         let digest = identity(id, source, markers, suppression, anchor, governor)?;
-        compile::compile_derived(document, digest, anchor, governor)
+        compile::compile_derived(document, digest, anchor, all_call_endings_erased, governor)
     }
 }
 

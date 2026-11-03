@@ -228,6 +228,23 @@ Stalled repairs retain their existing merge path and invalidate commit reuse
 when attempted. Remaining completion, refusal and retirement processing stays
 on its existing path. Runtime savings and cost-budget acceptance are unverified.
 
+The marker projection also proves, on the original positioned grammar, whether
+every possible call ending is wholly erased. References, choices and nullable
+suffixes contribute to that proof; retained or mixed endings remain ineligible.
+Its memo owns fallible portable eight-byte slots and releases after compilation.
+The resulting private flag is inline; no new retained heap owner is introduced.
+Runtime source comparison may preserve one invocation with trailing prose loss
+beside that same invocation followed by completed calls inside the exact lost
+tail. It requires an identical history prefix, source captures, native argument
+metadata (including adoption state) and all other edits. The extraction's
+registered cost accounts for the entire difference; subsequent calls must be
+complete and cost nothing. Stored histories keep actual costs while dispatch
+uses their minimum. Governed visited frontiers follow packed history operands
+without multiplying independent choices. Existing distinct-segmentation and
+recovery-product candidate admissions still apply. Mixed endings, plain prose,
+rejected or reasoning suffixes and other repair differences retain ordinary
+least-cost pruning. This preservation path has not been compiled or executed.
+
 ## Schema bundle identity construction
 
 `Schema::compile_governed` and `with_resources_governed` stream their complete
