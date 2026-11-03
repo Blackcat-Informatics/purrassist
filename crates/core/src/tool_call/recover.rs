@@ -144,7 +144,7 @@ use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{ContinuationFrontier, edit_entries, escaped};
 use super::resolve::loss_kind;
-use super::stream::{EventCursor, PreparedEvent};
+use super::stream::EventCursor;
 use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
     FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
@@ -3179,9 +3179,6 @@ pub(super) struct RecoveryIntake<'s> {
     /// cannot change a scalar boundary already behind the encoding cursor.
     prefix_boundary: Option<(usize, usize)>,
     content_boundary: Option<(usize, usize)>,
-    /// Only the contiguous native content prefix is published so far. Later
-    /// content can still be removed by rejection/stray-closer normalization.
-    content_end: usize,
     events: EventCursor,
 }
 
@@ -3205,7 +3202,6 @@ impl<'s> RecoveryIntake<'s> {
             progress: ContinuationFrontier::default(),
             prefix_boundary: None,
             content_boundary: None,
-            content_end: 0,
             events: EventCursor::new(governor),
         };
         let result = (|| {
@@ -3244,8 +3240,9 @@ impl<'s> RecoveryIntake<'s> {
     }
 
     /// Native frontier notifications use the same byte fold and event charges
-    /// as batch's discard sink. Live content currently covers only the initial
-    /// native run; shared native segments also produce call and reasoning facts.
+    /// as batch's discard sink. One source-order cursor publishes content while
+    /// earlier native segments have no unresolved normalization owner; shared
+    /// native segments also produce call and reasoning facts.
     /// The source range and copied raw payload have byte-derived boundaries,
     /// independent of the caller's feed boundaries. The payload is admitted and
     /// built under temporary ownership through sink handoff, including batch's
@@ -3324,13 +3321,8 @@ impl<'s> RecoveryIntake<'s> {
         };
         if frontier != self.progress {
             governor.charge(Resource::Work, K_EVENT)?;
-            let delta = self.content_delta(frontier, governor)?;
             self.progress = frontier;
             progress(frontier);
-            if let Some(delta) = delta {
-                self.content_end = delta.content_end(governor)?;
-                delta.publish(content)?;
-            }
         }
         let source = self
             .capture
@@ -3346,7 +3338,7 @@ impl<'s> RecoveryIntake<'s> {
                 .recognizer,
             source,
             self.tools,
-            frontier.prefix_end,
+            frontier,
             governor,
             content,
         )?;
@@ -3426,35 +3418,6 @@ impl<'s> RecoveryIntake<'s> {
             }
         }
         Ok(end)
-    }
-
-    /// Initial content precedes every native call, attempt and reasoning block.
-    /// Final recovery can only add unsupported-markup reports over these bytes:
-    /// those reports keep their bytes as content. Rejection extension and stray
-    /// closer removal start after a structural segment, so later native content
-    /// is deliberately withheld until those owners have an incremental form.
-    fn content_delta(
-        &self,
-        frontier: ContinuationFrontier,
-        governor: &mut Governor,
-    ) -> Result<Option<PreparedEvent>, StopReason> {
-        let Some((0, end)) = frontier.content else {
-            return Ok(None);
-        };
-        if end <= self.content_end {
-            return Ok(None);
-        }
-        let span = self.content_end..end;
-        let source = self
-            .capture
-            .as_ref()
-            .and_then(|capture| capture.bytes.as_slice().get(span.clone()))
-            .ok_or_else(|| invalid_input("content frontier exceeds admitted source"))?;
-        governor.charge(Resource::Work, K_EVENT.saturating_add(size(source.len())))?;
-        let mut raw = ScratchVec::new(governor);
-        raw.reserve(source.len())?;
-        raw.extend(source.iter().copied())?;
-        StreamEvent::content(span, raw, governor).map(Some)
     }
 
     fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
@@ -3576,8 +3539,7 @@ impl<'s> RecoveryIntake<'s> {
                     .expect("completed recovery owns admitted source")
                     .bytes
                     .as_slice();
-                self.events
-                    .finish(calls, self.content_end, source, governor, sink)?;
+                self.events.finish(calls, source, governor, sink)?;
             }
             Ok(done)
         });

@@ -4354,6 +4354,9 @@ pub(crate) struct Engine<'s> {
     spawned: Vec<(u64, usize)>,
     /// Ended reports held by [`Self::defer`], with their attempts' start.
     deferred: Vec<(usize, Event)>,
+    /// Cached minimum of immutable attempt and deferred-report origins. Every
+    /// insertion or removal invalidates it before changing those collections.
+    continuation_floor: Option<Option<usize>>,
     /// The openers where an attempt read a whole call, while a held report
     /// or a live attempt at them remains (see [`Self::defer`]).
     whole: Vec<usize>,
@@ -4439,6 +4442,7 @@ impl<'s> Engine<'s> {
             quoted_openers: Vec::new(),
             spawned: Vec::new(),
             deferred: Vec::new(),
+            continuation_floor: None,
             whole: Vec::new(),
             tools,
             events: Vec::new(),
@@ -4454,9 +4458,13 @@ impl<'s> Engine<'s> {
     /// Attempts retain their record while live threads, held completions or
     /// trails need it; deferred end reports retain their own origin afterward.
     pub(crate) fn continuation_floor(
-        &self,
+        &mut self,
         governor: &mut Governor,
     ) -> Result<Option<usize>, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if let Some(earliest) = self.continuation_floor {
+            return Ok(earliest);
+        }
         let mut earliest = None;
         for table in &self.tables {
             governor.charge(Resource::Work, size(table.attempts.len()))?;
@@ -4469,6 +4477,7 @@ impl<'s> Engine<'s> {
         for (start, _) in &self.deferred {
             earliest = Some(earliest.map_or(*start, |known| known.min(*start)));
         }
+        self.continuation_floor = Some(earliest);
         Ok(earliest)
     }
 
@@ -4571,6 +4580,7 @@ impl<'s> Engine<'s> {
         if program.starts_with(byte) && program.openers.iter().any(opener_allowed) {
             let id = self.next_attempt;
             self.next_attempt += 1;
+            self.continuation_floor = None;
             self.tables[table].attempts.push(Attempt {
                 id,
                 start: at,
@@ -5678,6 +5688,7 @@ impl<'s> Engine<'s> {
             } else {
                 self.take_boundary(table, record.id);
             }
+            self.continuation_floor = None;
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
@@ -5724,6 +5735,7 @@ impl<'s> Engine<'s> {
                 });
         if reads_on {
             governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+            self.continuation_floor = None;
             self.deferred.push((record.start, ended));
         } else {
             // Another attempt at the opener may have read a whole call and
@@ -5764,6 +5776,7 @@ impl<'s> Engine<'s> {
                 index += 1;
                 continue;
             }
+            self.continuation_floor = None;
             let (_, mut ended) = self.deferred.remove(index);
             if let Event::Ended { outread, .. } = &mut ended {
                 *outread = self.whole.contains(&start);
@@ -6828,6 +6841,7 @@ impl<'s> Engine<'s> {
                 entries.pop();
             }
         }
+        self.continuation_floor = None;
         for table in &mut self.tables {
             governor.charge(
                 Resource::Work,
@@ -6901,6 +6915,7 @@ impl<'s> Engine<'s> {
                 self.settle(table, end, Some(generation), governor)?;
             }
             self.tables[table].threads.clear();
+            self.continuation_floor = None;
             self.tables[table].attempts.clear();
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();

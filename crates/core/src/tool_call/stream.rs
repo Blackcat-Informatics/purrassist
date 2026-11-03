@@ -13,7 +13,7 @@
 
 use super::recover::RecoveryIntake;
 use super::{
-    ArgLeaf, CallOutcome, CallSegment, DialectId, DialectSet, GenerationStop, Piece,
+    ArgLeaf, CallOutcome, CallSegment, Closure, DialectId, DialectSet, GenerationStop, Piece,
     RecognizedTurn, Recognizer, Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest,
     ToolSet, UnresolvedReason,
 };
@@ -22,6 +22,7 @@ use crate::contract::{
     StopReason, invalid_input, push_scratch, reserve_failure, saturating_size as size,
 };
 use crate::grammar::CaptureKind;
+use crate::grammar::cost::K_EVENT;
 use crate::grammar::edit::{EditOperator, MarkupEdit, OPERATOR_COUNT, OPERATOR_TABLE, OPERATORS};
 use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
@@ -95,9 +96,9 @@ fn revision_operator(
 /// Use the final result's outcomes, losses and inferences to assess certainty.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StreamEvent {
-    /// Newly settled content bytes. Live notifications currently cover the
-    /// initial native content run; EOF flushes later content of a unique final
-    /// reading. Notifications do not overlap.
+    /// Newly settled content bytes, including runs after closed native frames
+    /// whose earlier history has no unresolved normalization owner. Other
+    /// content waits for a unique final reading. Notifications do not overlap.
     ContentDelta {
         /// The exact range in the original output.
         span: Range<usize>,
@@ -199,18 +200,6 @@ pub(super) struct PreparedEvent {
 }
 
 impl PreparedEvent {
-    pub(super) fn content_end(&self, governor: &mut Governor) -> Result<usize, StopReason> {
-        match &self.event {
-            StreamEvent::ContentDelta { span, .. } => Ok(span.end),
-            _ => Err(StopReason::InvalidInput(
-                crate::contract::format_output_governed(
-                    format_args!("content producer prepared a different event"),
-                    governor,
-                )?,
-            )),
-        }
-    }
-
     /// Caller sinks and collectors own their memory from inception. Release
     /// producer storage after handoff, including a refused collector insertion.
     pub(super) fn publish(
@@ -708,6 +697,42 @@ impl ScratchCharge for ArgumentFact {
 }
 const _: () = assert!(core::mem::size_of::<ArgumentFact>() <= ArgumentFact::CHARGE);
 
+/// An earlier segment whose content normalization still needs the final turn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NormalizationOwner {
+    Rejection,
+    Reasoning,
+    SuppressibleFrame,
+    UnsettledFrame,
+}
+
+impl NormalizationOwner {
+    fn of(segment: &Segment, governor: &mut Governor) -> Result<Option<Self>, StopReason> {
+        Ok(match segment {
+            Segment::Call(call) | Segment::Result(call) => {
+                governor.charge(Resource::Work, size(call.readings.len()).saturating_mul(2))?;
+                if call.readings.iter().any(|raw| {
+                    raw.dialect.grammar().examples_content()
+                        || (raw.bare && raw.dialect.grammar().declaration_content())
+                }) {
+                    Some(Self::SuppressibleFrame)
+                } else if call
+                    .readings
+                    .iter()
+                    .any(|raw| raw.closure != Closure::Closed)
+                {
+                    Some(Self::UnsettledFrame)
+                } else {
+                    None
+                }
+            }
+            Segment::Rejected { .. } => Some(Self::Rejection),
+            Segment::Reasoning(_) => Some(Self::Reasoning),
+            Segment::Content(_) => None,
+        })
+    }
+}
+
 /// One monotone traversal of native shared history plus EOF capture facts.
 /// Nothing here resolves a prefix, replays source or snapshots a governor.
 pub(super) struct EventCursor {
@@ -716,7 +741,13 @@ pub(super) struct EventCursor {
     /// normalized end. Reasoning embedding can change, but its text and the
     /// stored call readings inspected here do not. Include end so a pending
     /// step beyond the previous cutoff is reconsidered when it advances.
-    advance_key: Option<(u32, usize)>,
+    advance_key: Option<(u32, usize, Option<(usize, usize)>)>,
+    /// Earlier content is fully published before this source watermark moves.
+    content_end: usize,
+    /// Preserve the first outstanding owner and its source origin. Rejection
+    /// extension, reasoning-adjacent closers and frame suppression still use
+    /// final normalization; none of their later content is published early.
+    normalization_owner: Option<(usize, NormalizationOwner)>,
     indexed: bool,
     reasoning_end: usize,
     calls: ScratchVec<LiveCall>,
@@ -729,6 +760,8 @@ impl EventCursor {
         Self {
             history: 0,
             advance_key: None,
+            content_end: 0,
+            normalization_owner: None,
             indexed: true,
             reasoning_end: 0,
             calls: ScratchVec::new(governor),
@@ -742,11 +775,12 @@ impl EventCursor {
         recognizer: &Recognizer<'_>,
         source: &[u8],
         tools: &ToolSet,
-        end: usize,
+        frontier: super::recognizer::ContinuationFrontier,
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
-        let key = (recognizer.settled_history_id(), end);
+        let end = frontier.prefix_end;
+        let key = (recognizer.settled_history_id(), end, frontier.content);
         governor.charge(Resource::Work, 1)?;
         if self.advance_key == Some(key) {
             return Ok(());
@@ -755,58 +789,119 @@ impl EventCursor {
             if step.end > end {
                 break;
             }
-            match step.segment {
-                Some(Segment::Reasoning(block)) => {
-                    if !block.text.is_empty() {
-                        StreamEvent::reasoning(block.text.clone(), source, governor)?
-                            .publish(sink)?;
-                    }
-                    self.reasoning_end = block.text.end;
-                }
-                Some(Segment::Call(call)) if self.indexed => {
-                    governor.charge(Resource::Work, size(call.readings.len()))?;
-                    if call.readings.iter().any(|raw| {
-                        raw.dialect.grammar().examples_content()
-                            || (raw.bare && raw.dialect.grammar().declaration_content())
-                    }) {
-                        // Final context/schema normalization may turn this
-                        // call into content, changing every later call index.
-                        self.indexed = false;
-                    } else {
-                        let index = self.calls.len();
-                        StreamEvent::started(
-                            index,
-                            call.span.start,
-                            call.readings.iter().map(|raw| raw.dialect.clone()),
-                            governor,
-                        )?
-                        .publish(sink)?;
-                        let name = unique_name(call, tools, governor)?;
-                        if let Some(name) = name {
-                            StreamEvent::name(index, name, governor)?.publish(sink)?;
-                        }
-                        let arguments = argument_span(call, governor)?;
-                        if let Some(span) = &arguments {
-                            StreamEvent::argument(index, span.clone(), source, governor)?
-                                .publish(sink)?;
-                        }
-                        push_scratch(
-                            &mut self.calls,
-                            LiveCall {
-                                start: call.span.start,
-                                end: call.span.end,
-                                named: name.is_some(),
-                                arguments: arguments.is_some(),
-                            },
-                            governor,
-                        )?;
-                    }
-                }
-                _ => {}
+            if let Some(span) = step.content {
+                self.live_content(span, source, governor, sink)?;
+            }
+            if let Some(segment) = step.segment {
+                self.segment(segment, source, tools, governor, sink)?;
             }
             self.history = step.history;
         }
+        if let Some((start, end)) = frontier.content {
+            self.live_content(start..end, source, governor, sink)?;
+        }
         self.advance_key = Some(key);
+        Ok(())
+    }
+
+    fn segment(
+        &mut self,
+        segment: &Segment,
+        source: &[u8],
+        tools: &ToolSet,
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> Result<(), StopReason> {
+        let owner = NormalizationOwner::of(segment, governor)?;
+        if let Some(owner) = owner
+            && self.normalization_owner.is_none()
+        {
+            self.normalization_owner = Some((segment.span().start, owner));
+        }
+        match segment {
+            Segment::Reasoning(block) => {
+                if !block.text.is_empty() {
+                    StreamEvent::reasoning(block.text.clone(), source, governor)?.publish(sink)?;
+                }
+                self.reasoning_end = block.text.end;
+            }
+            Segment::Call(call) if self.indexed => {
+                if owner == Some(NormalizationOwner::SuppressibleFrame) {
+                    // Final context/schema normalization may turn this
+                    // call into content, changing every later call index.
+                    self.indexed = false;
+                } else {
+                    let index = self.calls.len();
+                    StreamEvent::started(
+                        index,
+                        call.span.start,
+                        call.readings.iter().map(|raw| raw.dialect.clone()),
+                        governor,
+                    )?
+                    .publish(sink)?;
+                    let name = unique_name(call, tools, governor)?;
+                    if let Some(name) = name {
+                        StreamEvent::name(index, name, governor)?.publish(sink)?;
+                    }
+                    let arguments = argument_span(call, governor)?;
+                    if let Some(span) = &arguments {
+                        StreamEvent::argument(index, span.clone(), source, governor)?
+                            .publish(sink)?;
+                    }
+                    push_scratch(
+                        &mut self.calls,
+                        LiveCall {
+                            start: call.span.start,
+                            end: call.span.end,
+                            named: name.is_some(),
+                            arguments: arguments.is_some(),
+                        },
+                        governor,
+                    )?;
+                }
+            }
+            Segment::Result(result) => {
+                // Final recovery maps the exact result span to content.
+                // Publish it before any following content watermark moves.
+                self.live_content(result.span.clone(), source, governor, sink)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The same source-order publisher handles initial, historical, trailing
+    /// and final content. A live range is admitted only while no earlier
+    /// segment can still remove content or insert unreported content before it.
+    fn live_content(
+        &mut self,
+        span: Range<usize>,
+        source: &[u8],
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> Result<(), StopReason> {
+        if self.normalization_owner.is_none() {
+            self.content(span, source, governor, sink)?;
+        }
+        Ok(())
+    }
+
+    fn content(
+        &mut self,
+        span: Range<usize>,
+        source: &[u8],
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+    ) -> Result<(), StopReason> {
+        let start = span.start.max(self.content_end);
+        if start < span.end {
+            governor.charge(Resource::Work, K_EVENT)?;
+            let end = span.end;
+            let span = start..end;
+            let raw = StreamEvent::bytes(span.clone(), source, governor)?;
+            StreamEvent::content(span, raw, governor)?.publish(sink)?;
+            self.content_end = end;
+        }
         Ok(())
     }
 
@@ -912,21 +1007,15 @@ impl EventCursor {
     /// Flush only facts from a complete, unique whole-message reading. This is
     /// EOF completion of the live producer, not another recovery operation.
     pub(super) fn finish(
-        &self,
+        &mut self,
         calls: &ToolCalls,
-        content_end: usize,
         source: &[u8],
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
         for range in &calls.content {
             governor.charge(Resource::Work, 1)?;
-            let start = range.start.max(content_end);
-            if start < range.end {
-                let span = start..range.end;
-                let raw = StreamEvent::bytes(span.clone(), source, governor)?;
-                StreamEvent::content(span, raw, governor)?.publish(sink)?;
-            }
+            self.content(range.clone(), source, governor, sink)?;
         }
         for block in &calls.reasoning_blocks {
             governor.charge(Resource::Work, 1)?;

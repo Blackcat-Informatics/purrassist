@@ -206,12 +206,13 @@ struct FrontierMemo {
 }
 
 /// One next node of the structurally shared native history. Source content has
-/// no stored segment; callers still advance its history cursor exactly once.
+/// no stored segment; its original range still advances the same cursor once.
 #[derive(Debug)]
 pub(super) struct SettledStep<'a> {
     pub(super) history: u32,
     pub(super) end: usize,
     pub(super) segment: Option<&'a Segment>,
+    pub(super) content: Option<Range<usize>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1788,9 +1789,9 @@ impl<'s> Recognizer<'s> {
                 "settled native event history diverged from its published prefix",
             ));
         }
-        let segment = match current.kind {
-            TurnKind::Stored(index, _) => Some(&self.turn.store[index as usize]),
-            TurnKind::Content(_) => None,
+        let (segment, content) = match current.kind {
+            TurnKind::Stored(index, _) => (Some(&self.turn.store[index as usize]), None),
+            TurnKind::Content(start) => (None, Some(start..current.end)),
             TurnKind::Root | TurnKind::Pack(_) => {
                 return Err(crate::contract::invalid_input(
                     "settled native event history contains a non-segment node",
@@ -1801,6 +1802,7 @@ impl<'s> Recognizer<'s> {
             history: node,
             end: current.end,
             segment,
+            content,
         }))
     }
 

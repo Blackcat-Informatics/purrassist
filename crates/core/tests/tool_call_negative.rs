@@ -25,9 +25,10 @@
 use core::ops::Range;
 use purrassist_core::tool_call::{
     CallOutcome, DialectId, DialectSet, Effects, Finish, GenerationStop, Param, Rejection,
-    RepairPolicy, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet, UnresolvedReason,
+    RepairPolicy, StreamEvent, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    UnresolvedReason,
 };
-use purrassist_core::{Budget, Governor, Outcome};
+use purrassist_core::{AssistResult, Budget, Governor, Outcome};
 
 /// A call to `f` with one parameter `a` = `x`, in canonical layout.
 const CALL: &str =
@@ -203,19 +204,83 @@ fn trailing_text_inside_wrapper() {
     assert_rejected(input, &[(0..90, Rejection::Malformed { at: 66 })]);
 }
 
+/// Compare complete results and source-ordered content events at every split.
+/// A repaired frame waits for final normalization; a closed native frame can
+/// publish its trailing content as the fixed settlement cutoff advances.
+fn stream_content(
+    tools: &ToolSet,
+    dialects: &DialectSet,
+    input: &str,
+    tail: usize,
+    live: bool,
+) -> AssistResult<ToolCalls> {
+    let request = ToolRecoveryRequest::default();
+    let batch = tools.recover(input.as_bytes(), &request, dialects);
+    for split in 0..=input.len() {
+        let mut stream = tools.stream_with_dialects(request.clone(), dialects);
+        let mut events = Vec::new();
+        stream.feed(&input.as_bytes()[..split], &mut events);
+        stream.feed(&input.as_bytes()[split..], &mut events);
+        let live_end = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ContentDelta { span, .. } => Some(span.end),
+                _ => None,
+            })
+            .next_back();
+        if live {
+            assert_eq!(
+                live_end,
+                Some(input.len() - dialects.lookbehind()),
+                "closed frame withheld its settled content at split {split}"
+            );
+        } else {
+            assert!(live_end.is_none(), "repaired frame at split {split}");
+        }
+        let result = stream.finish_with_events(GenerationStop::Stop, &mut events);
+        assert_eq!(result, batch, "whole result differs at split {split}");
+        let mut next = tail;
+        for event in events {
+            if let StreamEvent::ContentDelta { span, raw } = event {
+                assert_eq!(span.start, next, "content order at split {split}");
+                assert!(span.start < span.end && span.end <= input.len());
+                assert_eq!(raw.as_slice(), &input.as_bytes()[span.clone()]);
+                next = span.end;
+            }
+        }
+        assert_eq!(next, input.len(), "content coverage at split {split}");
+    }
+    batch
+}
+
 /// Repeated closers after an ambiguous body tail remain markup; only the
-/// prose after them stays content.
+/// prose after them stays content. Streaming preserves both the repaired
+/// frame's deferred tail and a closed native frame's live content.
 #[test]
 fn stray_closers_after_ambiguous_body_tail() {
     let input = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\nthat is all</function>\n</tool_call>\n</tool_call> tail";
     let tail = input.len() - " tail".len();
     assert_ambiguous_tail(input, "x\n</parameter>\nthat is all");
     for effects in PROFILES {
-        let calls = recover(input, effects);
-        assert_never_usable(input, &calls);
-        assert_no_markup_in_content(input, &calls);
+        let tools = tools(effects);
+        let dialects = DialectSet::new(
+            [DialectId::Qwen3CoderXml],
+            &mut Governor::new(Budget::default()),
+        )
+        .expect("dialect set");
+        let result = stream_content(&tools, &dialects, input, tail, false);
+        let calls = match &result.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
+            other => panic!("{effects:?}: expected one reading, got {other:?}"),
+        };
+        assert_never_usable(input, calls);
+        assert_no_markup_in_content(input, calls);
         assert!(calls.rejected.is_empty(), "{effects:?}");
         assert_eq!(calls.content, vec![tail..input.len()], "{effects:?}");
+        // The short native-frame control extends only beyond the actual
+        // compiled settlement bound, so live tail publication is required.
+        let closed = format!("{CALL} tail{}", " ".repeat(dialects.lookbehind() + 1));
+        stream_content(&tools, &dialects, &closed, CALL.len(), true);
     }
 }
 

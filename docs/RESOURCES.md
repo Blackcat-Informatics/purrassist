@@ -1013,9 +1013,17 @@ workload fits its Work or scratch budget. Frontier updates read the cached exact
 minimum without scanning the pending
 queue.
 
+The engine caches its exact minimum live source origin. A lookup admits one
+work unit; a miss scans every attempt and deferred report under its original
+per-entry admission and stores the minimum only after the complete scan succeeds.
+Attempt insertion, retirement, abandonment and EOF clearing, and deferred-report
+insertion/removal, invalidate this cache before mutating the owner collections.
+Their source origins are immutable; flag changes and input-buffer compaction
+cannot alter the minimum. No owner index or additional heap storage is created.
+
 A successful native projection retains an exact memo of its engine and
 pending-source floors, final ownership barrier and effective cutoff. Every byte
-still scans the engine owners with their original admissions, then admits one
+still reads the admitted engine minimum, then admits one
 work unit for a fixed-key lookup. With both floors unchanged and no processed
 turn report, the memo is reused only when the advancing lexical cutoff capped
 by its saved barrier equals the prior effective cutoff. A stationary candidate
@@ -1043,11 +1051,12 @@ sequences retain their exact boundaries. Batch uses the
 same producer with a discard sink. Feed count and chunk boundaries do not
 decide notification boundaries. These notifications
 carry native ownership metadata, not resolved calls or permission to execute.
-The same intake also constructs owned `ContentDelta` events for advances
-of the initial native content run, before any call, attempt or reasoning block.
-Each payload copies only the newly exposed source range into a temporary
-`ScratchVec`, admitting its capacity and `K_EVENT` plus one work unit per copied
-byte before notification. Every event additionally admits 512 bytes for its
+The same intake also constructs owned `ContentDelta` events in source order.
+One cursor handles initial content, stored native content nodes, safe trailing
+content and the final reading's remaining ranges. Each payload copies only the
+newly exposed source range into a temporary `ScratchVec`, admitting its capacity,
+`K_EVENT`, one range-lookup work unit and one work unit per copied byte before
+notification. Every event additionally admits 512 bytes for its
 record and per-event collector insertion, plus four work units for amortized
 collector insertion and relocation. The record reservation covers four native
 slots, including a fresh collector receiving one event. A prepared event owns
@@ -1068,21 +1077,29 @@ no events, and input chunks do not set event boundaries. A closed
 native content node contributes its full settled range, including when the
 lexical boundary lands exactly on its end.
 
-Live content after a structural segment is still withheld: final rejection extension
-and stray-closer handling can remove such bytes from native content. Unsupported
-markup reports over the initial content run preserve its content bytes. This
-producer never replays source. At EOF, one completed whole-message reading
-flushes its remaining content and reasoning ranges from the existing result.
-Both batch discard and streaming sinks run that same final producer.
+Closed native call and result frames permit subsequent live content when every
+earlier frame is immune to examples-as-content and declaration-as-content
+suppression. A result contributes its exact final content span before any later
+range is published. The cursor retains the source origin and kind of the first
+rejection, reasoning block, suppressible frame or frame needing repairs; content
+after that owner still waits for final normalization. These owners can extend
+rejected markup, remove closers after reasoning or add previously unpublished
+content. Unsupported-markup reports preserve content bytes. No source is replayed.
+At EOF, one completed whole-message reading flushes its remaining content through
+the same cursor, followed by remaining reasoning ranges. Both batch discard and
+streaming sinks run this producer. This does not complete the longest semantic
+prefix, lexical holdback or candidate-byte contracts.
 
 A native event cursor follows the structurally shared history exactly once.
 Its direct fixed-key lookup admits one work unit. A successful traversal is
-cached by settled native history identity and normalized end; an unchanged key
+cached by settled native history identity, normalized end and current content
+range; an unchanged key
 skips repeated ancestry traversal and its charges. A changed end reconsiders a
 step held beyond the earlier cutoff. Stored native ancestry is immutable;
 late reasoning embedding changes neither the text ranges nor the call readings
-this event cursor inspects. Progress and content callbacks still precede this
-traversal, and feed boundaries do not affect either cache.
+this event cursor inspects. Progress callbacks precede traversal; historical
+content is published during traversal before the current native content tail.
+Feed boundaries do not affect either cache.
 The next-node lookup uses existing skip ancestry and admits every traversal;
 it does not rebuild or resolve prefix turns. Stored reasoning segments publish
 their exact marker-free text. Calls publish `CallStarted` only when every native
