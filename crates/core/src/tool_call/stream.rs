@@ -790,7 +790,7 @@ impl EventCursor {
                 break;
             }
             if let Some(span) = step.content {
-                self.live_content(span, source, governor, sink)?;
+                self.live_content(&span, source, governor, sink)?;
             }
             if let Some(segment) = step.segment {
                 self.segment(segment, source, tools, governor, sink)?;
@@ -798,7 +798,7 @@ impl EventCursor {
             self.history = step.history;
         }
         if let Some((start, end)) = frontier.content {
-            self.live_content(start..end, source, governor, sink)?;
+            self.live_content(&(start..end), source, governor, sink)?;
         }
         self.advance_key = Some(key);
         Ok(())
@@ -863,7 +863,7 @@ impl EventCursor {
             Segment::Result(result) => {
                 // Final recovery maps the exact result span to content.
                 // Publish it before any following content watermark moves.
-                self.live_content(result.span.clone(), source, governor, sink)?;
+                self.live_content(&result.span, source, governor, sink)?;
             }
             _ => {}
         }
@@ -875,7 +875,7 @@ impl EventCursor {
     /// segment can still remove content or insert unreported content before it.
     fn live_content(
         &mut self,
-        span: Range<usize>,
+        span: &Range<usize>,
         source: &[u8],
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
@@ -888,7 +888,7 @@ impl EventCursor {
 
     fn content(
         &mut self,
-        span: Range<usize>,
+        span: &Range<usize>,
         source: &[u8],
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
@@ -1015,7 +1015,7 @@ impl EventCursor {
     ) -> Result<(), StopReason> {
         for range in &calls.content {
             governor.charge(Resource::Work, 1)?;
-            self.content(range.clone(), source, governor, sink)?;
+            self.content(range, source, governor, sink)?;
         }
         for block in &calls.reasoning_blocks {
             governor.charge(Resource::Work, 1)?;
