@@ -1,0 +1,16 @@
+{
+  "description": "Capture pending automatic execution: the retained ab12 header has an explicit ab/12 name and ID interpretation. The only declared tool is ab; the selected boundary must remain a guess.",
+  "tools": [
+    {
+      "name": "ab",
+      "effects": "read_only",
+      "policy": "tolerant"
+    }
+  ],
+  "dialects": [
+    "mistral-v11-stripped.v1"
+  ],
+  "stop": "stop",
+  "input": "ab12{}",
+  "outcome": null
+}

@@ -43,6 +43,21 @@
         "path": "x"
       },
       "candidate_dialects": [
+        "hermes-stripped.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.extract.prose",
+        "tool_call.markup.terminal-confusable",
+        "tool_call.reasoning.embedded-call"
+      ]
+    },
+    {
+      "tool": "read_file",
+      "arguments": {
+        "path": "x"
+      },
+      "candidate_dialects": [
         "anthropic-tool-use.v1"
       ],
       "outcome": "best_guess",
@@ -59,6 +74,9 @@
   ],
   "failed_validations": [],
   "ledger_rules": [
+    "tool_call.extract.prose",
+    "tool_call.markup.terminal-confusable",
+    "tool_call.reasoning.embedded-call",
     "tool_call.reasoning.embedded-call"
   ]
 }
