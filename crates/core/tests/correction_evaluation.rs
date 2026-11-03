@@ -661,6 +661,19 @@ fn diagnostic_native_state(
     }
 }
 
+/// Exact corpus input; malformed UTF-8 is retained through `input_hex`.
+fn tool_call_bytes(case: &Node) -> Vec<u8> {
+    optional_text(case, "input_hex").map_or_else(
+        || text_field(case, "input").as_bytes().to_vec(),
+        |hex| {
+            (0..hex.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex input"))
+                .collect()
+        },
+    )
+}
+
 /// Every case recovered under its request and scored. The answer is the
 /// calls the caller may run when it accepts guesses
 /// ([`ToolCalls::usable_accepting_guesses`]): `Resolved` calls and `BestGuess`
@@ -688,17 +701,7 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
     for case in &cases {
         let (request, dialects) = tool_call_corpus::request(case);
         let set = tool_call_corpus::tools_for(case, &tools, &adapter);
-        // A case whose output is not well-formed UTF-8 carries its exact
-        // bytes as `input_hex`.
-        let bytes: Vec<u8> = optional_text(case, "input_hex").map_or_else(
-            || text_field(case, "input").as_bytes().to_vec(),
-            |hex| {
-                (0..hex.len())
-                    .step_by(2)
-                    .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex input"))
-                    .collect()
-            },
-        );
+        let bytes = tool_call_bytes(case);
         let result = set.recover(&bytes, &request, &dialects);
         let answer: Option<Vec<(String, Node)>> = match &result.outcome {
             Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {

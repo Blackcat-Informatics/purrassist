@@ -3261,16 +3261,7 @@ impl<'s> Step<'_, 's> {
             };
             let boundaries: Vec<(usize, u64)> =
                 cuts.iter().map(|&(_, at, cost)| (at, cost)).collect();
-            let shape_of = |parts: &[PartReadings]| -> Vec<bool> {
-                parts
-                    .iter()
-                    .map(|part| matches!(part, PartReadings::Rejected(..)))
-                    .collect()
-            };
-            let found = groups.iter().position(|(known, parts)| {
-                *known == boundaries && shape_of(parts) == shape_of(&calls)
-            });
-            let Some(index) = found else {
+            let Some(index) = matching_group(&groups, &boundaries, &calls, governor)? else {
                 groups.push((boundaries, calls));
                 continue;
             };
@@ -3289,54 +3280,86 @@ impl<'s> Step<'_, 's> {
                 rejection.unwrap_or(Rejection::Malformed { at: shape.span.end })
             ));
         }
-        for (_, parts) in &mut groups {
-            for part in parts {
-                if let PartReadings::Call(readings) = part {
-                    self.expand_joint(readings, governor)?;
-                }
-            }
-        }
         let mut leads: Vec<Vec<MarkupEdit>> = Vec::with_capacity(groups.len());
-        let mut segmentations: Vec<Parts> = groups
-            .into_iter()
-            .map(|(boundaries, mut calls)| {
-                leads.push(match calls.first_mut() {
-                    Some(PartReadings::Rejected(_, _, lead)) => core::mem::take(lead),
-                    _ => Vec::new(),
-                });
-                calls
-                    .into_iter()
-                    .enumerate()
-                    .map(|(part, readings)| {
+        let mut segmentations: Vec<Parts> = Vec::with_capacity(groups.len());
+        for (boundaries, mut calls) in groups {
+            leads.push(match calls.first_mut() {
+                Some(PartReadings::Rejected(_, _, lead)) => core::mem::take(lead),
+                _ => Vec::new(),
+            });
+            let mut parts = Vec::with_capacity(calls.len());
+            for (part, readings) in calls.into_iter().enumerate() {
+                let built = match readings {
+                    PartReadings::Rejected(span, reason, _) => {
                         let before = if part == 0 { 0 } else { boundaries[part - 1].1 };
                         let through = boundaries.get(part).map_or(shape.cost, |&(_, cost)| cost);
-                        let cost = through.saturating_sub(before);
-                        match readings {
-                            PartReadings::Rejected(span, reason, _) => {
-                                (Part::Rejected { span, reason }, cost)
-                            }
-                            PartReadings::Call(readings) => {
-                                let span = readings[0].span.clone();
-                                let weight = self.undeclared(shape.kind, &readings);
-                                (
-                                    Part::Call(CallSegment {
-                                        span,
-                                        readings,
-                                        derivations: Vec::new(),
-                                    }),
-                                    cost.saturating_add(weight),
-                                )
-                            }
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
+                        (
+                            Part::Rejected { span, reason },
+                            through.saturating_sub(before),
+                        )
+                    }
+                    PartReadings::Call(mut readings) => {
+                        // Original readings share this materialized cost.
+                        // Joint-capture alternatives retain their extra cost
+                        // without charging it to the original reading.
+                        let cost = readings[0].cost;
+                        let span = readings[0].span.clone();
+                        self.expand_joint(&mut readings, governor)?;
+                        let weight = self.undeclared(shape.kind, &readings);
+                        (
+                            Part::Call(CallSegment {
+                                span,
+                                readings,
+                                derivations: Vec::new(),
+                            }),
+                            cost.saturating_add(weight),
+                        )
+                    }
+                };
+                parts.push(built);
+            }
+            segmentations.push(parts);
+        }
         for (parts, lead) in segmentations.iter_mut().zip(leads) {
             lead_split(parts, &lead);
         }
         Ok(Ok(segmentations))
     }
+}
+
+/// Find the same boundaries, rejected-part shape and materialized call costs.
+fn matching_group(
+    groups: &[Grouped],
+    boundaries: &[(usize, u64)],
+    calls: &[PartReadings],
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    for (index, (known, parts)) in groups.iter().enumerate() {
+        governor.charge(
+            Resource::Work,
+            size(known.len()).saturating_mul(2).saturating_add(1),
+        )?;
+        if known.as_slice() != boundaries {
+            continue;
+        }
+        governor.charge(Resource::Work, size(parts.len()).saturating_mul(2))?;
+        // Materialization can add capture losses to equal-cost histories.
+        // Keep each correlated sequence's part costs.
+        if parts
+            .iter()
+            .zip(calls)
+            .all(|(known, call)| match (known, call) {
+                (PartReadings::Call(known), PartReadings::Call(call)) => {
+                    known[0].cost == call[0].cost
+                }
+                (PartReadings::Rejected(..), PartReadings::Rejected(..)) => true,
+                _ => false,
+            })
+        {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
 }
 
 /// Combine histories with the same boundaries and rejected-part shape.
@@ -3764,8 +3787,8 @@ impl Step<'_, '_> {
     }
 
     /// One part of a history: its `paths` between the cut before it and the
-    /// span's `end`. The part, its cost (the cost `span` carries less the
-    /// cost at the cut before it, and the undeclared weight of a call), and
+    /// span's `end`. The part, its materialized cost (including capture
+    /// losses and the undeclared weight of a call), and
     /// the tokens read as omitted at the start when it is the first part and
     /// was skipped; or the rejection of a call with no reading. `None` when
     /// its paths do not all read alike (some skipped, or one without a
@@ -3821,6 +3844,15 @@ impl Step<'_, '_> {
                 Err(reason) if paths.len() == 1 => return Ok(Built::Failed(reason)),
                 Err(_) => return Ok(Built::Mixed),
             };
+            governor.charge(Resource::Work, 1)?;
+            if readings
+                .first()
+                .is_some_and(|known| known.cost != call.cost)
+            {
+                // The flat producer keeps differently weighted correlated
+                // histories in separate segmentations.
+                return Ok(Built::Mixed);
+            }
             if !readings.contains(&call) {
                 // Every reading beyond the first competes.
                 if !readings.is_empty() {
@@ -3829,6 +3861,7 @@ impl Step<'_, '_> {
                 readings.push(call);
             }
         }
+        let cost = readings[0].cost;
         self.expand_joint(&mut readings, governor)?;
         let weight = self.undeclared(shape.kind, &readings);
         let span = readings[0].span.clone();
@@ -3837,7 +3870,7 @@ impl Step<'_, '_> {
             readings,
             derivations: Vec::new(),
         });
-        Ok(Built::Part(part, shape.cost.saturating_add(weight), None))
+        Ok(Built::Part(part, cost.saturating_add(weight), None))
     }
 
     /// What the `next` node `node` closes, built (with the nodes before it
@@ -4314,6 +4347,7 @@ enum PartReadings {
 
 /// The readings of one segmentation while they are collected: where each
 /// later call begins (with the cost so far), and each part's readings.
+/// Original readings of a call part share one materialized baseline cost.
 type Grouped = (Vec<(usize, u64)>, Vec<PartReadings>);
 
 /// Whether dropped text is only a code-fence marker: a run of at least

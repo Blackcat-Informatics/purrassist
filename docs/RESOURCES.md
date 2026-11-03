@@ -208,6 +208,18 @@ The existing lazy class DFA constructor remains the only constructor. This
 removes repeated class operations; current budget, scale and portability checks
 remain unverified for this source change.
 
+### Runtime segmentation costs
+
+Flat and chained completion producers carry each original reading's materialized
+cost into turn selection, including invalid UTF-8 capture edits and dropped-text
+losses. Flat grouping compares each part's cost before merging histories;
+differently weighted chained histories use that same flat producer. Comparisons
+admit Work without allocating a comparison key. Joint name/ID alternatives retain
+their additional costs without increasing the original reading's baseline.
+Rejected-part costs, undeclared-name weights and split-cost transfers retain
+their existing rules. This source change is formatted and source-inspected;
+compilation, corpus behavior and runtime admission remain unverified.
+
 ## Schema bundle identity construction
 
 `Schema::compile_governed` and `with_resources_governed` stream their complete
