@@ -263,6 +263,49 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     );
     assert_eq!(result.receipt.alternatives.len(), 0);
 
+    assert_nested_arguments_remain_data();
+
+    let reasoning = format!("<think>{array}</think>");
+    let result = tools().recover(
+        reasoning.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let readings = match result.outcome {
+        Outcome::Resolved(reading) | Outcome::BestGuess(reading) => vec![reading],
+        Outcome::Ambiguous(readings) => readings,
+        other @ Outcome::Unresolved => panic!("reasoning evidence: {other:?}"),
+    };
+    assert!(readings.iter().any(|reading| !reading.embedded.is_empty()));
+    for reading in readings {
+        assert!(reading.calls.is_empty(), "{reading:?}");
+        assert!(
+            reading
+                .embedded
+                .iter()
+                .all(|call| call.outcome != purrassist_core::tool_call::CallOutcome::Resolved)
+        );
+    }
+    let prefaced = format!("\nFor example:\n```json\n{input}\n```\n");
+    let (turn, _) = recognize(&prefaced, DialectId::HermesStripped);
+    assert_ne!(turn.calls().len(), 0);
+    for call in turn.calls() {
+        for reading in &call.readings {
+            assert!(
+                reading
+                    .edits
+                    .iter()
+                    .any(|edit| edit.operator == EditOperator::ContextFencedExample),
+                "{reading:?}"
+            );
+        }
+    }
+    for fenced in [format!("```json\n{array}\n```"), prefaced] {
+        assert_fenced_calls_not_usable(&fenced);
+    }
+}
+
+fn assert_nested_arguments_remain_data() {
     // Retained exact-looking objects inside arguments are data of the outer
     // weak call, even though a separate exact grammar knows their shape.
     let nested = r#"f{"data":{"name":"f","arguments":{"text":"nested"}}}"#;
@@ -304,45 +347,6 @@ hmm {"name":"f","input":{"data":{"name":"f","arguments":{"text":"nested"}}}} don
         nested_calls.embedded[0].arguments.get("data").is_some(),
         "{nested_calls:?}"
     );
-
-    let reasoning = format!("<think>{array}</think>");
-    let result = tools().recover(
-        reasoning.as_bytes(),
-        &ToolRecoveryRequest::default(),
-        DialectSet::built_in(),
-    );
-    let readings = match result.outcome {
-        Outcome::Resolved(reading) | Outcome::BestGuess(reading) => vec![reading],
-        Outcome::Ambiguous(readings) => readings,
-        other @ Outcome::Unresolved => panic!("reasoning evidence: {other:?}"),
-    };
-    assert!(readings.iter().any(|reading| !reading.embedded.is_empty()));
-    for reading in readings {
-        assert!(reading.calls.is_empty(), "{reading:?}");
-        assert!(
-            reading
-                .embedded
-                .iter()
-                .all(|call| call.outcome != purrassist_core::tool_call::CallOutcome::Resolved)
-        );
-    }
-    let prefaced = format!("\nFor example:\n```json\n{input}\n```\n");
-    let (turn, _) = recognize(&prefaced, DialectId::HermesStripped);
-    assert_ne!(turn.calls().len(), 0);
-    for call in turn.calls() {
-        for reading in &call.readings {
-            assert!(
-                reading
-                    .edits
-                    .iter()
-                    .any(|edit| edit.operator == EditOperator::ContextFencedExample),
-                "{reading:?}"
-            );
-        }
-    }
-    for fenced in [format!("```json\n{array}\n```"), prefaced] {
-        assert_fenced_calls_not_usable(&fenced);
-    }
 }
 
 /// Exterior framing cannot turn a possible example into a usable call.
