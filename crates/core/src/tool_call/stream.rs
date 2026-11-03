@@ -33,6 +33,10 @@ use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
 use core::ops::Range;
 
+#[path = "stream_revision.rs"]
+mod revision;
+use revision::RevisionWitnesses;
+
 /// Portable admission for constructing and handing off one event.
 /// Four native slots also admit the collector insertion per event.
 const EVENT_BYTES: u64 = 512;
@@ -858,6 +862,7 @@ impl EventCursor {
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
         let fact = selected_fact(origins, publication.native)?;
+        let mut witnesses = None;
         for (position, edit) in fact.edits.iter().enumerate() {
             if edit.end > publication.limit {
                 break;
@@ -865,6 +870,17 @@ impl EventCursor {
             let Some(agreement) = publication.revision(index, position, edit, governor)? else {
                 break;
             };
+            if witnesses.is_none() {
+                witnesses = Some(RevisionWitnesses::build(publication, index, governor)?);
+            }
+            // The only None branch above either prepares Some or returns.
+            if !witnesses
+                .as_ref()
+                .expect("a shared revision prepared its ledger witnesses")
+                .contains_all(edit, governor)?
+            {
+                break;
+            }
             if edit.before.is_empty() && edit.after.is_empty() {
                 continue;
             }
@@ -885,27 +901,10 @@ struct RevisionAgreement<'a> {
     parameter: Option<&'a str>,
 }
 
-fn retains_revision(
-    ledger: &super::CallLedger,
-    edit: &EditFact,
-    governor: &mut Governor,
-) -> Result<bool, StopReason> {
-    for evidence in &ledger.evidence {
-        if revision_operator(&evidence.rule, governor)? == Some(edit.operator)
-            && evidence
-                .span
-                .as_ref()
-                .is_some_and(|span| span.bytes.start == edit.at && span.bytes.end == edit.end)
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 impl FinalPublication<'_> {
     /// Edits form an ordered common prefix. The caller stops at its first
-    /// disagreement, including conflicting insertions at the cutoff itself.
+    /// native disagreement, including conflicting insertions at the cutoff
+    /// itself, before admitting the shared ledger witness index.
     fn revision<'a>(
         &self,
         index: usize,
@@ -915,22 +914,22 @@ impl FinalPublication<'_> {
     ) -> Result<Option<RevisionAgreement<'a>>, StopReason> {
         let mut parameter = edit.parameter.as_ref().map(ScratchString::as_str);
         for view in self.readings {
-            let call = view
-                .calls
-                .calls
-                .get(index)
-                .ok_or_else(|| invalid_input("revision has no final call counterpart"))?;
+            governor.charge(Resource::Work, 1)?;
+            if view.calls.calls.get(index).is_none() {
+                return Err(invalid_input("revision has no final call counterpart"));
+            }
             let origins = view
                 .origins
                 .calls
                 .get(index)
                 .ok_or_else(|| invalid_input("revision has no final native correlation"))?;
             for &id in &origins.0 {
+                governor.charge(Resource::Work, 1)?;
                 let row = self.native.call(id)?;
                 let competing = row.readings.get(..row.competing).ok_or_else(|| {
                     invalid_input("revision native competition exceeds its readings")
                 })?;
-                for (semantic, &origin) in competing.iter().enumerate() {
+                for &origin in competing {
                     governor.charge(Resource::Work, 4)?;
                     let fact = self.native.fact(origin)?;
                     let Some(other) = fact.edits.get(position) else {
@@ -941,22 +940,6 @@ impl FinalPublication<'_> {
                         || edit.end != other.end
                         || !edit.same_payload(other, governor)?
                     {
-                        return Ok(None);
-                    }
-                    let ledger = if semantic == 0 {
-                        &call.repairs
-                    } else {
-                        &call
-                            .alternatives
-                            .get(semantic - 1)
-                            .ok_or_else(|| {
-                                invalid_input(
-                                    "revision semantic competitor has no retained reading",
-                                )
-                            })?
-                            .repairs
-                    };
-                    if !retains_revision(ledger, other, governor)? {
                         return Ok(None);
                     }
                     governor.charge(

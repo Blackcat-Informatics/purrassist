@@ -1164,6 +1164,17 @@ The final producer uses these origins directly, replacing global span-based
 capture and edit inference. A discarded raw candidate cannot veto the selected
 argument capture merely because it shares a call span.
 
+After the first shared eligible native edit, a call-local witness index scans
+each actual competing semantic ledger once. Its portable 40-byte keys combine
+the operator and source range with final-view and semantic slots; equivalent
+native origins share the same ledger identity. Governed heapsort charges each
+visited comparison, swap and loop before deduplication. Sorting `E` witness keys
+costs `O(E log E)` work; each revision uses two `O(log E)` numeric prefix searches
+to require a witness in every competing ledger. Evidence visits and registry
+comparisons admit their actual work. Native agreement still visits every
+correlated competing origin for each edit. The index releases on every exit;
+calls without an eligible shared edit allocate no witness index.
+
 No synthetic result, cloned alternative or source replay supplies this prefix.
 Refusal preserves the ordinary explicit failure and source-retention contract.
 
