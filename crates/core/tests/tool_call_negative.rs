@@ -627,7 +627,10 @@ fn stream_owner_disposal(tools: &ToolSet) {
         StopReason::BudgetExceeded(Resource::InputBytes)
     );
     assert_eq!(refused.receipt.source, Digest::of(&scalar[..3]));
-    assert!(refused.receipt.sources.is_empty());
+    assert_eq!(
+        refused.receipt.sources,
+        [] as [purrassist_core::contract::SourceDocument; 0]
+    );
 
     let mut stream = tools.stream_with_dialects(
         request.clone().budget(Budget {
@@ -645,7 +648,7 @@ fn stream_owner_disposal(tools: &ToolSet) {
     );
 
     let invalid_request = request.tool_choice(ToolChoice::Forced("absent".into()));
-    let mut stream = tools.stream_with_dialects(invalid_request.clone(), &ascii);
+    let mut stream = tools.stream_with_dialects(invalid_request, &ascii);
     let _ = stream.feed_collect(b"source");
     assert_eq!((stream.held_bytes(), stream.candidate_bytes()), (0, 0));
     let invalid = stream.finish(GenerationStop::Stop);
