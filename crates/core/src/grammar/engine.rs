@@ -7810,7 +7810,6 @@ impl<'s> Engine<'s> {
         attempt: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        self.clear_class_runs(governor)?;
         fn keep<T: Copy + ScratchCharge>(entries: &mut ScratchVec<T>, kept: impl Fn(&T) -> bool) {
             let mut write = 0;
             for read in 0..entries.len() {
@@ -7824,6 +7823,7 @@ impl<'s> Engine<'s> {
                 entries.pop();
             }
         }
+        self.clear_class_runs(governor)?;
         for table in &mut self.tables {
             governor.charge(
                 Resource::Work,

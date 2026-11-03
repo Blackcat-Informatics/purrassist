@@ -313,6 +313,8 @@ impl Engine<'_> {
     ) -> Result<bool, StopReason> {
         let current = &self.tables[table];
         let runtime = &self.grammars[current.grammar];
+        let owner_id = owner.id;
+        let owner_start = owner.start;
         let mut previous = None;
         for thread in &current.threads {
             // Full state equality twice, thread/owner guards, merge ordering,
@@ -323,8 +325,8 @@ impl Engine<'_> {
             else {
                 return Ok(false);
             };
-            if thread.attempt != owner.id
-                || thread.start != owner.start
+            if thread.attempt != owner_id
+                || thread.start != owner_start
                 || thread.opened
                 || thread.past
                 || thread.pending != 0
