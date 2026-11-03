@@ -1019,9 +1019,11 @@ Height growth separately promotes the old root through child zero in each newly
 exposed ancestor. Promotions and the new source path can touch different words
 of the same level. Preparation overlays those promotions while validating the
 source path; apply publishes promotions before its path deltas. Removing a cached
-minimum descends only affected nonempty lanes. Descent shares paired reads while
-lane coordinates agree, then reads each distinct coordinate; an empty lane checks
-its zero root without descending. Every final minimum must have a live count.
+minimum starts at that lane's last changed row: zero propagation has already
+proved every earlier source prefix empty. A nonempty row supplies the successor
+branch and descent visits only levels below that pivot. Paired reads are shared
+only when both level and coordinate agree; an empty lane must have reached its
+zero logical root and does not descend. Every final minimum must have a live count.
 Root, source-bound, page, subset, occupancy and arithmetic failures remain explicit.
 Dividing source coordinates before adding one preserves inclusive EOF offsets at
 the native addressability limit.
@@ -1033,9 +1035,9 @@ page/count/cache application. Cached-minimum count validation separately admits
 two Work per distinct additional source lookup. Each visited changed path row
 admits five Work for planning and eventual application, including both coordinate
 computations and the paired write. Each actual promoted row admits three Work.
-Minimum replacement admits three Work per distinct paired row lookup/overlay,
-one per scanned lane with checked coordinate advance, and two per distinct final
-count lookup. Growth separately admits two level visits, initialized directory,
+Minimum replacement admits one Work per affected lane for checked pivot setup,
+three per distinct paired row lookup/overlay, one per scanned lane with checked
+coordinate advance, and two per distinct final count lookup. Growth separately admits two level visits, initialized directory,
 count and bitmap slots, and live slots potentially relocated by capacity growth.
 These charges describe actual retained computation; no fixed maximum-height fee
 or separate candidate-index update remains.
@@ -1048,8 +1050,9 @@ until queue admission succeeds. Apply has no fallible admission and publishes
 both lanes together. Scratch owners retain their capacity until recognizer drop.
 The existing held-marker production case crosses source pages and active heights;
 a focused typed-minimum case additionally covers mixed routing/candidate reports
-at one origin and queue-admission refusal before page handoff. Source review and
-runtime qualification of this combined-index unit remain pending.
+at one origin, different lane pivots sharing coordinate zero, and queue-admission
+refusal before page handoff. Runtime qualification of the resource optimizations
+remains pending.
 
 The engine caches its exact minimum live source origin. A lookup admits one
 work unit; a miss scans every attempt and deferred report under its original
@@ -1160,15 +1163,50 @@ unvisited payloads remain owned. Typed payload minima and jump links skip alread
 visited ancestry. Packed histories preserve the earliest actual uncertain payload.
 Native thread phases merge only across equal-ranked configurations; current
 winning configurations determine ownership independently of historical opening.
-Cached engine minima invalidate when threads or retained payload owners change;
-unchanged candidate bodies do not trigger full configuration scans per byte.
-Pending candidate reports use the candidate lane of the shared typed source
-index above; report and candidate origins share addressing and path admission.
+Derived native thread minima activate only at their first actual ownership query.
+That query admits two Work per surviving thread while bootstrapping every table;
+its ordinary per-table and trail, past, held and deferred-owner admissions remain.
+Only a complete successful projection publishes activation and the global cache.
+A failed bootstrap can leave partial derived table values, which remain inactive
+and are rebuilt on retry or discarded with the recognizer. Activation is sticky.
+Thereafter the existing admitted reductions and invalidations maintain exact
+minima without full configuration scans per byte. Direct recognizer users that
+never query ownership perform no unused thread-minimum reductions; native phase
+propagation, merging, repair and interpretation still run. Pending candidate
+reports use the candidate lane of the shared typed source index above.
+
+After a completed byte fold, intake admits three Work to check that retained
+source length and recognizer consumption equal the current input length, and that
+pending UTF-8 bytes end exactly there. The encoding cursor's publication cap is
+already a source boundary: either the current end, or the start of its viable
+incomplete scalar. A cutoff at that cap uses the certified coordinate. Earlier
+cutoffs can reuse a normalized prefix/content coordinate from the same snapshot
+only when their original raw keys agree, or an append-stable cached coordinate.
+Each actual cutoff request retains one lookup Work. Only a genuine miss executes
+the existing twelve-Work scalar-boundary helper, preserving arbitrary custom-byte
+backoff. A normalized result must not exceed its raw cutoff.
+
+The structural frontier memo also retains its raw marker lexical coordinate.
+Both successful memo reuse and a fresh projection update this field; a stationary
+structural barrier cannot freeze the advancing raw marker coordinate. Ownership
+projection admits one Work for its cached marker read instead of repeating the
+marker table lookup and source subtraction. Processed turn reports and failed
+byte folds invalidate the relevant memos. A missing completed marker projection
+or a coordinate beyond consumed source fails explicitly.
 
 Settled calls and rejections append their exact source spans to an ordered merged
 coverage list. Reasoning appends its sorted embedded semantic spans. Each retained
-interval reserves 24 portable bytes and stores cumulative union coverage; two
-cached prefix queries use admitted binary search on misses. For interpreted length
+interval reserves 24 portable bytes and stores cumulative union coverage. A
+48-byte optional affine basis replaces the two prior prefix-query records. It is
+keyed by candidate start `c` and `m = min(u, c)` under one unchanged interval union,
+and retains discarded prefix `c - F(c)`, coverage before `m`, and held coverage.
+A matching basis returns candidate coverage by checked subtraction from the
+advancing input length. Exact prior coordinates can reuse their prefix evidence;
+other queries retain admitted binary search. An actual union extension or new
+interval invalidates the basis, while empty or contained appends leave it valid.
+Only a successful checked result publishes a replacement basis. When both
+cutoffs equal the current end, the final interval's end and total coverage are
+checked against the source, then its complete coverage is returned directly. For interpreted length
 `n`, candidate suffix start `c` and normalized lexical/encoding boundary `u`, let
 `F(x)` be finite interval coverage before `x`. Candidate coverage is
 `F(c) + n - c`; held coverage is zero when `u >= c`, otherwise
@@ -1176,10 +1214,15 @@ cached prefix queries use admitted binary search on misses. For interpreted leng
 the native candidate, lexical and encoding floors. Candidate start `c` and actual
 suppressed content retain their original source boundaries. Source bounds, interval order, ancestry, coverage and arithmetic
 invariants fail explicitly. Finite records remain until EOF consumption or
-abandonment.
+abandonment. Each count request admits two Work for coordinate/union bounds and
+basis selection, plus one for a checked matching-basis or complete-coverage
+result. A miss admits four for checked discarded, overlap, held and basis/result
+records, each actual prefix lookup admits one and each visited binary-search step
+two. Reconstructing coverage from a matching prior candidate coordinate admits
+one additional Work. No query allocates another coverage owner.
 
 Added retained metadata reserves 64 bytes per dialect set, 64 bytes per intake,
-128 bytes per event cursor, 576 bytes per recognizer and 32 bytes per engine table
+128 bytes per event cursor, 640 bytes per recognizer and 32 bytes per engine table
 plus 64 bytes per engine. Layout assertions cover these portable reservations.
 Counter and bound reads allocate nothing, admit no work and do not poll the
 governor or cancellation token. A shared token requests cancellation; counts

@@ -352,6 +352,33 @@ impl PendingSources {
         Ok(path)
     }
 
+    /// The last cleared row is the first possible successor of a global minimum.
+    fn minimum_pivot(
+        update: &SourceUpdate,
+        lane: usize,
+        governor: &mut Governor,
+    ) -> Result<(usize, usize), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let prefix = update.path.levels[lane];
+        if prefix == 0 || prefix > update.height || update.height > LEVELS {
+            return Err(invalid_input(
+                "pending source minimum has an invalid changed prefix",
+            ));
+        }
+        let level = prefix - 1;
+        let portable = u64::try_from(update.source)
+            .map_err(|_| invalid_input("pending source exceeds the portable offset domain"))?;
+        // level <= 10, so this shift never reaches the domain's 64-bit edge.
+        let index = usize::try_from((portable >> (6 * level)) / 64)
+            .map_err(|_| invalid_input("pending source pivot exceeds the offset domain"))?;
+        if update.active[lane] == 0 && (prefix != update.height || index != 0) {
+            return Err(invalid_input(
+                "empty pending source lane did not reach its root",
+            ));
+        }
+        Ok((level, index))
+    }
+
     fn minimum_after(
         &self,
         update: &mut SourceUpdate,
@@ -364,23 +391,33 @@ impl PendingSources {
         });
         let mut descending = needed;
         let mut coordinates = [0_usize; 2];
-        for level in (0..update.height).rev() {
+        let mut pivots = [0_usize; 2];
+        let mut height = 0;
+        for (lane, needed) in needed.iter().copied().enumerate() {
+            if needed {
+                let (level, index) = Self::minimum_pivot(update, lane, governor)?;
+                pivots[lane] = level;
+                coordinates[lane] = index;
+                height = height.max(level + 1);
+            }
+        }
+        for level in (0..height).rev() {
             if !descending[0] && !descending[1] {
                 break;
             }
             let mut cached = None;
             for lane in 0..2 {
-                if !descending[lane] {
+                if !descending[lane] || level > pivots[lane] {
                     continue;
                 }
-                let pair = if let Some((_, pair)) =
-                    cached.filter(|(known, _)| *known == coordinates[lane])
-                {
+                let pair = if let Some((_, _, pair)) = cached.filter(|(known_level, known, _)| {
+                    *known_level == level && *known == coordinates[lane]
+                }) {
                     pair
                 } else {
                     governor.charge(Resource::Work, MINIMUM_READ_WORK)?;
                     let pair = self.after_word(level, coordinates[lane], update)?;
-                    cached = Some((coordinates[lane], pair));
+                    cached = Some((level, coordinates[lane], pair));
                     pair
                 };
                 governor.charge(Resource::Work, 1)?;
@@ -577,7 +614,7 @@ mod tests {
     fn typed_minima_survive_mixed_reports_and_unapplied_queue_admission() {
         let mut governor = Governor::new(Budget::default());
         let mut sources = PendingSources::new(&governor);
-        for (source, candidate) in [(63, false), (4096, true), (63, true)] {
+        for (source, candidate) in [(63, false), (4096, true), (63, true), (64, false)] {
             sources
                 .prepare_add(source, candidate, 4096, &mut governor)
                 .expect("queued report")
@@ -588,16 +625,24 @@ mod tests {
             (Some(63), Some(63))
         );
         sources
-            .prepare_remove(63, true, &mut governor)
-            .expect("candidate leaves")
+            .prepare_remove(63, false, &mut governor)
+            .expect("routing report leaves its candidate")
             .apply(&mut sources);
         assert_eq!(
             (sources.floor(), sources.candidate_floor()),
-            (Some(63), Some(4096))
+            (Some(63), Some(63))
         );
         sources
-            .prepare_remove(63, false, &mut governor)
-            .expect("routing report leaves")
+            .prepare_remove(63, true, &mut governor)
+            .expect("report and candidate have different successor pivots")
+            .apply(&mut sources);
+        assert_eq!(
+            (sources.floor(), sources.candidate_floor()),
+            (Some(64), Some(4096))
+        );
+        sources
+            .prepare_remove(64, false, &mut governor)
+            .expect("routing successor leaves")
             .apply(&mut sources);
         assert_eq!(
             (sources.floor(), sources.candidate_floor()),

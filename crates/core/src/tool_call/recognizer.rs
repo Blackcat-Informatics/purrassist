@@ -208,6 +208,7 @@ struct FrontierMemo {
     report_floor: Option<usize>,
     barrier: Option<usize>,
     limit: usize,
+    lexical: usize,
 }
 
 /// One next node of the structurally shared native history. Source content has
@@ -327,7 +328,12 @@ mod sources;
 use sources::PendingSources;
 
 const _: () = assert!(
-    core::mem::size_of::<(PendingSources, Option<(u32, Option<usize>)>, ScratchLease)>() <= 576
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease
+    )>() <= 640
 );
 
 /// The changes one offset's reports make, applied together.
@@ -1287,7 +1293,7 @@ impl<'s> Recognizer<'s> {
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         let engine = Engine::new(&set.dialects, tools, governor)?;
-        let ownership_metadata = governor.lease_scratch(576)?;
+        let ownership_metadata = governor.lease_scratch(640)?;
         let context = ContextTracker::new(engine.protocol_fences());
         let starts_open = matches!(policy, ReasoningPolicy::Separate { starts_open: true });
         let root = TurnNode {
@@ -1383,14 +1389,16 @@ impl<'s> Recognizer<'s> {
         if matches!(self.policy, ReasoningPolicy::Separate { .. })
             && self.set.marker_matcher.is_some()
         {
-            let held = self.set.marker_prefix_len(self.marker, governor)?;
-            if held != 0 {
-                let start = self
-                    .fed()
-                    .checked_sub(held)
-                    .ok_or_else(|| invalid_input("marker ownership exceeds consumed source"))?;
-                lexical = source_min(lexical, Some(start));
+            governor.charge(Resource::Work, 1)?;
+            let marker = self
+                .frontier_memo
+                .as_ref()
+                .ok_or_else(|| invalid_input("ownership has no completed marker projection"))?
+                .lexical;
+            if marker > self.fed() {
+                return Err(invalid_input("marker projection exceeds consumed source"));
             }
+            lexical = source_min(lexical, Some(marker));
         }
         candidate = source_min(candidate, self.pending_sources.candidate_floor());
         let turn_floor = if let Some((_, floor)) =
@@ -1465,6 +1473,8 @@ impl<'s> Recognizer<'s> {
                 Ok(())
             }
             Err(reason) => {
+                self.frontier_memo = None;
+                self.ownership_memo = None;
                 self.failed = Some(reason.clone());
                 Err(reason)
             }
@@ -1539,11 +1549,12 @@ impl<'s> Recognizer<'s> {
             .checked_sub(held)
             .ok_or_else(|| invalid_input("reasoning marker prefix exceeds consumed source"))?;
         governor.charge(Resource::Work, 1)?;
-        if let Some(memo) = previous
+        if let Some(mut memo) = previous
             && memo.engine_floor == engine_floor
             && memo.report_floor == report_floor
             && memo.limit == memo.barrier.map_or(lexical, |floor| lexical.min(floor))
         {
+            memo.lexical = lexical;
             self.frontier_memo = Some(memo);
             return Ok(());
         }
@@ -1604,6 +1615,7 @@ impl<'s> Recognizer<'s> {
             report_floor,
             barrier,
             limit,
+            lexical,
         });
         Ok(())
     }

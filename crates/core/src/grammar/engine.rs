@@ -4049,7 +4049,7 @@ impl Event {
 
 type OwnershipFloors = (Option<usize>, Option<usize>);
 const _: () = assert!(core::mem::size_of::<OwnershipFloors>() <= 32);
-const _: () = assert!(core::mem::size_of::<(Option<OwnershipFloors>, ScratchLease)>() <= 64);
+const _: () = assert!(core::mem::size_of::<(Option<OwnershipFloors>, bool, ScratchLease)>() <= 64);
 
 fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
     if thread.ownership & 1 != 0 {
@@ -4464,6 +4464,7 @@ pub(crate) struct Engine<'s> {
     /// insertion or removal invalidates it before changing those collections.
     continuation_floor: ContinuationFloor,
     ownership: Option<OwnershipFloors>,
+    ownership_active: bool,
     _ownership_metadata: ScratchLease,
     /// The openers where an attempt read a whole call, while a held report
     /// or a live attempt at them remains (see [`Self::defer`]).
@@ -4504,8 +4505,16 @@ impl<'s> Engine<'s> {
         let include = |floor: &mut Option<usize>, start| {
             *floor = Some(floor.map_or(start, |old| old.min(start)));
         };
-        for table in &self.tables {
+        for table in &mut self.tables {
             governor.charge(Resource::Work, 1)?;
+            if !self.ownership_active {
+                let mut owned = (None, None);
+                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                for thread in &table.threads {
+                    note_ownership(&mut owned, thread);
+                }
+                table.thread_ownership = owned;
+            }
             if let Some(start) = table.thread_ownership.0 {
                 include(&mut lexical, start);
             }
@@ -4536,6 +4545,7 @@ impl<'s> Engine<'s> {
                 include(&mut candidate, start);
             }
         }
+        self.ownership_active = true;
         self.ownership = Some((lexical, candidate));
         Ok((lexical, candidate))
     }
@@ -4607,6 +4617,7 @@ impl<'s> Engine<'s> {
             deferred: Vec::new(),
             continuation_floor: ContinuationFloor::Invalid,
             ownership: None,
+            ownership_active: false,
             _ownership_metadata: ownership_metadata,
             whole: Vec::new(),
             tools,
@@ -4922,7 +4933,7 @@ impl<'s> Engine<'s> {
             let opened = self.open(table, governor)?;
             let keep = self.last_written(table, opened, governor)?;
             Self::stop_past(&mut live, opened, &keep, governor)?;
-            if opened.is_some() {
+            if opened.is_some() && self.ownership_active {
                 let mut owned = (None, None);
                 governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
                 for thread in &live {
@@ -4954,21 +4965,30 @@ impl<'s> Engine<'s> {
         // The attempts whose body reads on past closers, noted in the merge.
         let mut reading: Vec<u64> = Vec::new();
         let mut owned = (None, None);
-        governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+        let tracking = self.ownership_active;
+        if tracking {
+            governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+        }
         merge_noting(live, &mut self.arena, governor, |thread| {
-            note_ownership(&mut owned, thread);
+            if tracking {
+                note_ownership(&mut owned, thread);
+            }
             if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
                 reading.push(thread.attempt);
             }
         })?;
         if self.repair_stalled(table, at, eof, &reading, live, completed, governor)? {
-            owned = (None, None);
-            governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
-            merge_noting(live, &mut self.arena, governor, |thread| {
-                note_ownership(&mut owned, thread);
-            })?;
+            if tracking {
+                owned = (None, None);
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                merge_noting(live, &mut self.arena, governor, |thread| {
+                    note_ownership(&mut owned, thread);
+                })?;
+            } else {
+                merge(live, &mut self.arena, governor)?;
+            }
         }
-        if self.tables[table].thread_ownership != owned {
+        if tracking && self.tables[table].thread_ownership != owned {
             self.ownership = None;
             self.tables[table].thread_ownership = owned;
         }
@@ -7017,10 +7037,12 @@ impl<'s> Engine<'s> {
         self.ownership = None;
         for table in &mut self.tables {
             Self::stop_past(&mut table.threads, Some(start), &[], governor)?;
-            table.thread_ownership = (None, None);
-            governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
-            for thread in &table.threads {
-                note_ownership(&mut table.thread_ownership, thread);
+            if self.ownership_active {
+                table.thread_ownership = (None, None);
+                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                for thread in &table.threads {
+                    note_ownership(&mut table.thread_ownership, thread);
+                }
             }
         }
         Ok(())
@@ -7058,10 +7080,12 @@ impl<'s> Engine<'s> {
                 size(table.threads.len() + table.attempts.len() + table.trails.len()),
             )?;
             keep(&mut table.threads, |thread| thread.attempt != attempt);
-            table.thread_ownership = (None, None);
-            governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
-            for thread in &table.threads {
-                note_ownership(&mut table.thread_ownership, thread);
+            if self.ownership_active {
+                table.thread_ownership = (None, None);
+                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                for thread in &table.threads {
+                    note_ownership(&mut table.thread_ownership, thread);
+                }
             }
             keep(&mut table.attempts, |record| record.id != attempt);
             governor.charge(

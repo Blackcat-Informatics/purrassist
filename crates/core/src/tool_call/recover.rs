@@ -3349,6 +3349,47 @@ impl<'s> RecoveryIntake<'s> {
         }
     }
 
+    /// Certify the current UTF-8 publication boundary from this completed byte.
+    fn certified_source_boundary(&self, governor: &mut Governor) -> Result<usize, StopReason> {
+        // Source snapshot, recognizer snapshot, and pending encoding tuple.
+        governor.charge(Resource::Work, 3)?;
+        let captured = self
+            .capture
+            .as_ref()
+            .ok_or_else(|| invalid_input("encoding boundary has no admitted source"))?
+            .bytes
+            .len();
+        let recognized = self
+            .setup
+            .as_ref()
+            .ok_or_else(|| invalid_input("encoding boundary has no live recognizer"))?
+            .recognizer
+            .fed();
+        if captured != self.received || recognized != self.received {
+            return Err(invalid_input(
+                "encoding boundary uses a different source snapshot",
+            ));
+        }
+        let boundary = if self.encoding.len == 0 {
+            self.received
+        } else {
+            if self.encoding.len > 3
+                || self.encoding.start.checked_add(self.encoding.len) != Some(self.received)
+            {
+                return Err(invalid_input(
+                    "pending encoding does not end at the source snapshot",
+                ));
+            }
+            // A successful encoding step leaves only a viable incomplete scalar;
+            // its first byte cannot lie inside an earlier complete scalar.
+            self.encoding.start
+        };
+        if boundary > self.received {
+            return Err(invalid_input("encoding boundary exceeds admitted source"));
+        }
+        Ok(boundary)
+    }
+
     fn report_progress(
         &mut self,
         governor: &mut Governor,
@@ -3361,22 +3402,21 @@ impl<'s> RecoveryIntake<'s> {
             .expect("live interpretation owns a recognizer")
             .recognizer
             .continuation_frontier();
-        let utf8 = if self.encoding.len == 0 {
-            self.received
-        } else {
-            self.encoding.start
-        };
+        let utf8 = self.certified_source_boundary(governor)?;
         let prefix = frontier.prefix_end.min(utf8);
         frontier.prefix_end =
-            self.cached_source_boundary(prefix, BoundaryKind::Prefix, governor)?;
+            self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix, None, governor)?;
+        let normalized_prefix = (prefix, frontier.prefix_end);
+        let mut normalized_content = None;
         frontier.content = match frontier.content {
             Some((start, end)) => {
-                let end = end.min(utf8);
-                let end = if end == prefix {
+                let raw = end.min(utf8);
+                let end = if raw == prefix {
                     frontier.prefix_end
                 } else {
-                    self.cached_source_boundary(end, BoundaryKind::Content, governor)?
+                    self.cached_source_boundary(raw, utf8, BoundaryKind::Content, None, governor)?
                 };
+                normalized_content = Some((raw, end));
                 (start < end).then_some((start, end))
             }
             None => None,
@@ -3404,6 +3444,17 @@ impl<'s> RecoveryIntake<'s> {
             governor,
             content,
         )?;
+        self.refresh_ownership(utf8, normalized_prefix, normalized_content, governor)
+    }
+
+    /// Commit cached metrics only after the byte's source and event fold succeeds.
+    fn refresh_ownership(
+        &mut self,
+        utf8: usize,
+        prefix: (usize, usize),
+        content: Option<(usize, usize)>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         let (lexical, candidate) = self
             .setup
             .as_mut()
@@ -3416,7 +3467,13 @@ impl<'s> RecoveryIntake<'s> {
             .min()
             .unwrap_or(self.received)
             .min(utf8);
-        let normalized = self.cached_source_boundary(cutoff, BoundaryKind::Ownership, governor)?;
+        let known = if cutoff == prefix.0 {
+            Some(prefix)
+        } else {
+            content
+        };
+        let normalized =
+            self.cached_source_boundary(cutoff, utf8, BoundaryKind::Ownership, known, governor)?;
         let (held, candidates) =
             self.events
                 .ownership_counts(self.received, candidate, normalized, governor)?;
@@ -3436,21 +3493,36 @@ impl<'s> RecoveryIntake<'s> {
     fn cached_source_boundary(
         &mut self,
         end: usize,
+        certified: usize,
         kind: BoundaryKind,
+        known: Option<(usize, usize)>,
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
         governor.charge(Resource::Work, 1)?;
+        if end > certified || certified > self.received {
+            return Err(invalid_input(
+                "source cutoff exceeds its certified boundary",
+            ));
+        }
         let cached = match kind {
             BoundaryKind::Prefix => self.prefix_boundary,
             BoundaryKind::Content => self.content_boundary,
             BoundaryKind::Ownership => self.ownership_boundary,
         };
-        if let Some((known, normalized)) = cached
-            && known == end
-        {
-            return Ok(normalized);
+        let normalized = if end == certified {
+            end
+        } else if let Some((_, normalized)) = known.filter(|(raw, _)| *raw == end) {
+            normalized
+        } else if let Some((_, normalized)) = cached.filter(|(raw, _)| *raw == end) {
+            normalized
+        } else {
+            self.source_boundary(end, governor)?
+        };
+        if normalized > end {
+            return Err(invalid_input(
+                "normalized cutoff exceeds its raw source boundary",
+            ));
         }
-        let normalized = self.source_boundary(end, governor)?;
         let cached = Some((end, normalized));
         match kind {
             BoundaryKind::Prefix => self.prefix_boundary = cached,
