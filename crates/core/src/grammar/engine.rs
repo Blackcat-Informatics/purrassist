@@ -7297,7 +7297,7 @@ impl<'s> Engine<'s> {
         governor.charge(Resource::Work, size(original.len()))?;
         let inserted = match insertion::absorbing(&self.arena, trail.thread.hist, start, governor)?
         {
-            Some(tail) => tail.absorb(&mut self.arena, start, stop, &original, governor)?,
+            Some(wrapper) => wrapper.absorb(&mut self.arena, start, stop, &original, governor)?,
             None => None,
         };
         if let Some(prev) = inserted {
