@@ -4318,8 +4318,7 @@ fn bare_json_calls() {
 }
 
 /// Call markup no allowed dialect reads is never silent content: each
-/// family not built in yet, and each built-in dialect left out of the
-/// allow-list, is one rejected attempt with
+/// built-in dialect left out of the allow-list is one rejected attempt with
 /// `Rejection::UnsupportedDialect` naming the family, whose bytes stay
 /// content, and the turn finishes `Unresolved`. Text that is not call
 /// markup (prose with parentheses, math, a Python code block) is never
@@ -4334,14 +4333,11 @@ fn unparsed_markup_is_reported() {
             MarkupFamily::Gemma3ToolCode,
         ),
         ("unparsed_glm45_not_allowed", MarkupFamily::Glm45),
-        ("unparsed_kimi_k2_stripped", MarkupFamily::KimiK2Stripped),
-        ("unparsed_harmony_stripped", MarkupFamily::HarmonyStripped),
+        ("stripped_kimi_k2", MarkupFamily::KimiK2Stripped),
+        ("stripped_harmony", MarkupFamily::HarmonyStripped),
+        ("stripped_deepseek_v3", MarkupFamily::DeepSeekV3Stripped),
         (
-            "unparsed_deepseek_v3_stripped",
-            MarkupFamily::DeepSeekV3Stripped,
-        ),
-        (
-            "unparsed_name_arguments_stripped",
+            "stripped_name_arguments",
             MarkupFamily::NameArgumentsStripped,
         ),
         ("unparsed_mistral_v3_not_allowed", MarkupFamily::MistralV3),
@@ -4353,7 +4349,26 @@ fn unparsed_markup_is_reported() {
         ("unparsed_hermes_not_allowed", MarkupFamily::Hermes),
         ("unparsed_kimi_not_allowed", MarkupFamily::KimiK2),
     ] {
-        let (_, result) = golden(name);
+        let (golden, result) = golden(name);
+        // These primary fixtures now record supported derived grammars.
+        // This assertion keeps their allow-list exclusion behavior explicit.
+        let excluded = matches!(
+            family,
+            MarkupFamily::KimiK2Stripped
+                | MarkupFamily::HarmonyStripped
+                | MarkupFamily::DeepSeekV3Stripped
+                | MarkupFamily::NameArgumentsStripped
+        );
+        let result = if excluded {
+            let allowed =
+                DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default()))
+                    .expect("native-only allow-list");
+            golden
+                .tools
+                .recover(&golden.input, &golden.request, &allowed)
+        } else {
+            result
+        };
         let calls = reading(&result);
         assert!(calls.calls.is_empty(), "{name}");
         assert_eq!(calls.finish, Finish::Unresolved, "{name}");
@@ -4364,9 +4379,21 @@ fn unparsed_markup_is_reported() {
             .collect();
         assert_eq!(reported.len(), 1, "{name}: {:#?}", calls.rejected);
         let rejected = reported[0];
+        if excluded {
+            assert_eq!(rejected.span, 0..golden.input.len(), "{name}");
+            assert_eq!(rejected.raw, golden.input, "{name}");
+        }
         assert_eq!(rejected.dialect, family.dialect(), "{name}");
-        assert!(rejected.candidate_dialects.is_empty(), "{name}");
-        assert_eq!(family.built_in(), name.ends_with("_not_allowed"), "{name}");
+        let candidates: &[DialectId] = if family == MarkupFamily::NameArgumentsStripped {
+            &[
+                DialectId::DeepSeekV31Stripped,
+                DialectId::MistralV11Stripped,
+            ]
+        } else {
+            &[]
+        };
+        assert_eq!(rejected.candidate_dialects, candidates, "{name}");
+        assert!(family.built_in(), "{name}");
         // The bytes stay content.
         assert!(
             calls

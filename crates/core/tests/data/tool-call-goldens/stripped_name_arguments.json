@@ -1,0 +1,94 @@
+{
+  "description": "A bare name followed by JSON arguments retains competing source readings: DeepSeek V3.1 and Kimi share one reading, while Mistral v11 retains its distinct ID interpretation.",
+  "tools_openai": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ]
+            }
+          },
+          "required": [
+            "city"
+          ]
+        }
+      }
+    }
+  ],
+  "stop": "stop",
+  "input": "get_weather{\"city\": \"Paris\"}",
+  "outcome": "ambiguous",
+  "stopped": "completed",
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.id.dedup"
+  ],
+  "readings": [
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 1,
+        "accepting_guesses": 1
+      },
+      "calls": [
+        {
+          "tool": "get_weather",
+          "arguments": {
+            "city": "Paris"
+          },
+          "candidate_dialects": [
+            "deepseek-v3.1-stripped.v1",
+            "kimi-k2-stripped.v1"
+          ],
+          "outcome": "resolved",
+          "rules": []
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [],
+      "reasoning_text": []
+    },
+    {
+      "finish": "calls",
+      "openai_finish_reason": "tool_calls",
+      "verdict": "run",
+      "usable_calls": {
+        "strict": 1,
+        "accepting_guesses": 1
+      },
+      "calls": [
+        {
+          "tool": "get_weather",
+          "arguments": {
+            "city": "Paris"
+          },
+          "candidate_dialects": [
+            "mistral-v11-stripped.v1"
+          ],
+          "outcome": "resolved",
+          "rules": [
+            "tool_call.id.dedup"
+          ]
+        }
+      ],
+      "rejected": [],
+      "embedded": [],
+      "content": [],
+      "reasoning_text": []
+    }
+  ]
+}
