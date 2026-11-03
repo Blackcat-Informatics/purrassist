@@ -857,7 +857,7 @@ fn correlated_eof_revision_prefix(tools: &ToolSet) {
                         );
                         if rule == "tool_call.markup.missing-token" {
                             assert_eq!(span, input.len()..input.len());
-                            assert!(before.is_empty());
+                            assert_eq!(before, [] as [u8; 0]);
                             assert_eq!(after, b"B");
                             shared_eof_insertion = true;
                         }
