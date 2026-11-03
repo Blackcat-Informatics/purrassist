@@ -2,6 +2,14 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Unopened failure-header selections defer only negative persistence until actual
+repair and resynchronization finish. Six empty whole-table owner sources prove
+terminality; otherwise the same selected key retains sticky absence before a
+later commit. Opened certification keeps its original source/history boundary.
+This removes unused certificate-map work from proved terminal preambles without
+changing budgets, source preservation or parser anchors. Resource acceptance
+remains pending normal verification.
+
 Grouped argument-anchored projections can reuse a settled Class run only at
 compiler-proved initial-call PCs that are unreachable after every `next`.
 All existing pristine-owner, side-work, history, native-DFA, name-follower,

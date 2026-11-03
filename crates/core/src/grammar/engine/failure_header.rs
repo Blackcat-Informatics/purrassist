@@ -3,7 +3,7 @@
 
 //! Selected failed-body facts, completed before histories and source retire.
 
-use super::{Engine, Failure, FailureOrigin, HistKind, Inst, Sub};
+use super::{Attempt, Engine, Failure, FailureOrigin, HistKind, Inst, Sub};
 use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchMap, ScratchVec, StopReason, invalid_input,
     push_scratch, saturating_size as size,
@@ -256,30 +256,29 @@ impl Engine<'_> {
     }
 
     /// This runs only when the actual selected failure changes, never per byte.
-    pub(super) fn note_failure_header(
+    pub(super) fn note_failure_header<'f>(
         &mut self,
         table: usize,
-        attempt: u64,
+        record: &Attempt,
         failures: &[Failure],
-        first: &Failure,
+        first: &'f Failure,
         end: usize,
         governor: &mut Governor,
-    ) -> Result<(), StopReason> {
+    ) -> Result<Option<(&'f Failure, usize)>, StopReason> {
         if self.tables[table].kind != ProductionKind::Call
             || !matches!(
                 self.dialect(super::index_u32(table)),
                 DialectId::MistralV3 | DialectId::HermesStripped
             )
         {
-            return Ok(());
+            return Ok(None);
         }
-        let mut selected = Selected {
-            at: first.at,
-            reason: first.reason,
-            end,
-            consumed_to: first.thread.pos,
-            header: None,
-        };
+        if !record.opened {
+            // No unopened contributor can certify; decide retention only
+            // after actual repair and resynchronization have finished.
+            governor.charge(Resource::Work, 1)?;
+            return Ok(Some((first, end)));
+        }
         let mut header = None;
         let mut seen = false;
         for failure in failures.iter().filter(|failure| !failure.respell) {
@@ -295,7 +294,26 @@ impl Engine<'_> {
                 seen = true;
             }
         }
-        selected.header = header;
+        self.retain_failure_header(record.id, first, end, header, governor)?;
+        Ok(None)
+    }
+
+    /// One persistence path for proved headers and surviving negative selections.
+    pub(super) fn retain_failure_header(
+        &mut self,
+        attempt: u64,
+        first: &Failure,
+        end: usize,
+        header: Option<HeaderFacts>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut selected = Selected {
+            at: first.at,
+            reason: first.reason,
+            end,
+            consumed_to: first.thread.pos,
+            header,
+        };
         map_work(self.failure_headers.len(), governor)?;
         let mut state = self
             .failure_headers

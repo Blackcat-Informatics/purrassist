@@ -424,7 +424,10 @@ fn per_call_competition_scales_with_calls() {
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     let Outcome::BestGuess(calls) = &result.outcome else {
-        panic!("{:?}", result.receipt.stopped)
+        panic!(
+            "{:?}; usage={:?}",
+            result.receipt.stopped, result.receipt.usage
+        )
     };
     assert_eq!(calls.calls.len(), 64);
     assert!(

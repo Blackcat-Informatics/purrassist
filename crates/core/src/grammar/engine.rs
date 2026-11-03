@@ -5496,7 +5496,8 @@ impl<'s> Engine<'s> {
                 .copied()
                 .chain(held)
                 .collect();
-            self.note_failure(table, record.id, &failures, eof.is_none(), governor)?;
+            let pending_header =
+                self.note_failure(table, record.id, &failures, eof.is_none(), governor)?;
             self.note_boundary(table, record.id, &failures, governor)?;
             let until = if eof.is_some() { at } else { at + 1 };
             // Even a repair with no surviving state can resolve a shared
@@ -5513,6 +5514,22 @@ impl<'s> Engine<'s> {
             // repair that reads it costs less and wins where it completes.
             if eof.is_none() {
                 self.resync(table, record, until, &mut live, governor)?;
+            }
+            if let Some((first, end)) = pending_header {
+                governor.charge(Resource::Work, 6)?;
+                let current = &self.tables[table];
+                let terminal = live.is_empty()
+                    && completed.is_empty()
+                    && current.trails.is_empty()
+                    && current.stalled.is_empty()
+                    && current.past.is_empty()
+                    && current.held.by_attempt.is_empty();
+                // No later settlement producer can revive an owner when
+                // all six sources are empty. Any possible continuation
+                // keeps its sticky negative selection before commit.
+                if !terminal {
+                    self.retain_failure_header(record.id, first, end, None, governor)?;
+                }
             }
         }
         self.hold_failures(table, &failed, &live, governor)?;
@@ -6030,19 +6047,19 @@ impl<'s> Engine<'s> {
     }
 
     /// Record why (and where) an attempt left with no configuration failed.
-    fn note_failure(
+    fn note_failure<'f>(
         &mut self,
         table: usize,
         attempt: u64,
-        failures: &[Failure],
+        failures: &'f [Failure],
         midway: bool,
         governor: &mut Governor,
-    ) -> Result<(), StopReason> {
+    ) -> Result<Option<(&'f Failure, usize)>, StopReason> {
         // Where the attempt failed is where its own configurations ran out,
         // not where an earlier sibling's literal did (a respelling seed).
         let current = || failures.iter().filter(|failure| !failure.respell);
         let Some(first) = current().min_by_key(|failure| (failure.at, failure.reason)) else {
-            return Ok(());
+            return Ok(None);
         };
         // The rejected span ends where the furthest failing token began: a
         // partial literal may start the next opener.
@@ -6063,13 +6080,13 @@ impl<'s> Engine<'s> {
             .expect("INVARIANT: noting failure of a live attempt");
         let previous = self.tables[table].attempts[record_index];
         if previous.failure_end == FailureEnd::Resynced && previous.failure.is_some() {
-            return Ok(());
+            return Ok(None);
         }
-        self.note_failure_header(table, attempt, failures, first, end, governor)?;
+        let pending = self.note_failure_header(table, &previous, failures, first, end, governor)?;
         let record = &mut self.tables[table].attempts.as_mut_slice()[record_index];
         if record.failure_end == FailureEnd::Resynced {
             if record.failure.is_some() {
-                return Ok(());
+                return Ok(None);
             }
         } else {
             // A slot configuration that failed before its own position
@@ -6087,7 +6104,7 @@ impl<'s> Engine<'s> {
         record.failure = Some(first.reason);
         record.end = Some(end);
         record.stuck = midway;
-        Ok(())
+        Ok(pending)
     }
 
     /// For a grouped program, record where the failing configurations of

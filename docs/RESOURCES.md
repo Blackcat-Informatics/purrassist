@@ -318,6 +318,26 @@ later updates. A different selected key follows the existing record overwrite;
 an already recorded first resynchronization failure preserves its original
 certificate. The existing physically consumed native opener supplies its frame.
 
+Opened attempts certify at the original pre-repair boundary. An unopened
+tracked attempt cannot certify a header: its selected failure and end remain
+borrowed from the current failure buffer until actual repair and resynchronization
+finish. One Work unit admits that deferral; six admit whole-table emptiness
+checks for live and completed configurations, trails, stalled failures, past
+readings and held completions. Only when all six are empty is negative
+persistence omitted. No remaining settlement producer can then revive that
+attempt. Every possible continuation retains its sticky negative selection
+through the same map/intersection path before later commit; an existing row
+still retires normally. No new heap owner or Attempt field is introduced.
+
+For one unsupported unopened failure, one attempt and an otherwise empty map,
+the former loop, certification, insertion and retirement fees totaled 188 Work.
+The proved terminal path now pays seven for deferral and owner checks. This
+can also avoid the map's first 800-byte reservation when no other state needs
+it; removing an existing row does not release reserved map capacity. These are
+source-derived local costs, not measured recovery savings, a universal scaling
+claim or a resource-pass result. Existing budgets and acceptance checks remain
+unchanged.
+
 One fallible attempt-ID map owns these facts through source/history retirement
 and queued Ended delivery. Event, Pending and Attempt layouts do not grow.
 Completion, abandonment, cut, consumption and fatal queue/processing cleanup
