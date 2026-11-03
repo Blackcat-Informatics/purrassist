@@ -325,7 +325,8 @@ fn busy_turn_resolves_every_call_under_sized() {
     assert_eq!(preset.outcome, Outcome::Unresolved);
     assert_eq!(
         preset.receipt.stopped,
-        StopReason::BudgetExceeded(Resource::Candidates)
+        StopReason::BudgetExceeded(Resource::Candidates),
+        "{preset:#?}"
     );
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
