@@ -195,7 +195,7 @@ impl Matcher {
         governor.charge(Resource::Work, work)?;
         let mut values = ScratchVec::new(governor);
         values.reserve(self.depth.len())?;
-        for row in self.delta.chunks_exact(256) {
+        for row in self.delta.as_chunks::<256>().0 {
             let mut viable = 0;
             for &next in row {
                 let depth = self
