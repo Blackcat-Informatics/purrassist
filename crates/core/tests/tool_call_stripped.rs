@@ -291,7 +291,9 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     }
     // The same-frame exception must not promote a native-shaped payload
     // nested inside the projected call's arguments in closed reasoning.
-    let nested_reasoning = r#"<think>hmm {"name":"f","input":{"data":{"name":"f","arguments":{"text":"nested"}}}} done</think>"#;
+    // The projected call's opener must be at the start of a source line.
+    let nested_reasoning = r#"<think>
+hmm {"name":"f","input":{"data":{"name":"f","arguments":{"text":"nested"}}}} done</think>"#;
     let nested_calls = recovered(
         nested_reasoning,
         &set([DialectId::HermesStripped, DialectId::BareJson]),
