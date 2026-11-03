@@ -82,6 +82,7 @@ use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod class_run;
 mod envelope;
 mod insertion;
 pub(crate) use envelope::{CompletedParts, PartEnvelope, SourceEnvelope, retained_context};
@@ -5029,6 +5030,10 @@ impl ScratchCharge for GrammarRuntime<'_> {
 /// The segment-candidate layer over every table of a dialect set.
 pub(crate) struct Engine<'s> {
     tables: Vec<Table<'s>>,
+    /// Fixed admitted proof slots, retained even while every slot is empty.
+    class_runs: ScratchVec<Option<class_run::ClassRun>>,
+    /// Empty occupancy skips invalidation probes and whole-slot reset sweeps.
+    class_run_count: usize,
     grammars: ScratchVec<GrammarRuntime<'s>>,
     buffer: ScratchVec<u8>,
     base: usize,
@@ -5137,8 +5142,11 @@ impl<'s> Engine<'s> {
                 });
             }
         }
+        let class_runs = class_run::slots(tables.len(), governor)?;
         Ok(Self {
             tables,
+            class_runs,
+            class_run_count: 0,
             grammars,
             protocol_fences,
             buffer: ScratchVec::new(governor),
@@ -5181,11 +5189,16 @@ impl<'s> Engine<'s> {
         index_u32((program.insts.len() + 1) * (grammar.longest + 2))
     }
 
-    fn split(&mut self, table: usize) -> (Step<'_, 's>, &mut ScratchVec<Thread>, &mut Out) {
+    fn split(
+        &mut self,
+        table: usize,
+        governor: &mut Governor,
+    ) -> Result<(Step<'_, 's>, &mut ScratchVec<Thread>, &mut Out), StopReason> {
+        self.invalidate_class_run(table, governor)?;
         let stall_cap = self.stall_cap(table);
         let runtime = &mut self.grammars.as_mut_slice()[self.tables[table].grammar];
         let table = &mut self.tables[table];
-        (
+        Ok((
             Step {
                 grammar: runtime.grammar,
                 program: table.program,
@@ -5206,7 +5219,7 @@ impl<'s> Engine<'s> {
             },
             &mut self.stack,
             &mut self.out,
-        )
+        ))
     }
 
     /// Consume one byte.
@@ -5232,6 +5245,46 @@ impl<'s> Engine<'s> {
         self.protocol_fences
     }
 
+    /// Preserve ordinary opener admission independently of class-run reuse.
+    fn opener_allowed(
+        program: &Program,
+        grammar: &CompiledGrammar,
+        line_blank: bool,
+        pc: u32,
+        byte: u8,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        // Start a projected call at its first retained byte. An attempt
+        // on indentation could overlap the preceding call's trailing
+        // whitespace and absorb the later, non-overlapping attempt.
+        if program.line_start_openers.contains(&pc)
+            && (!line_blank || (grammar.is_derived() && byte.is_ascii_whitespace()))
+        {
+            return Ok(false);
+        }
+        // Class-leading programs are admitted only by the derived compiler.
+        if matches!(program.insts[pc as usize], Inst::Class { .. }) {
+            return program.class_starts_with(pc, byte, governor);
+        }
+        let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+            return Ok(false);
+        };
+        let repairs = &grammar.literal_tables[lit as usize];
+        Ok(grammar.literals[lit as usize].bytes.first() == Some(&byte)
+            || repairs
+                .variants
+                .trie
+                .first_bytes()
+                .chain(repairs.confusables.trie.first_bytes())
+                .chain(
+                    repairs
+                        .json
+                        .iter()
+                        .flat_map(|table| table.trie.first_bytes()),
+                )
+                .any(|first| first == byte))
+    }
+
     fn step_table(
         &mut self,
         table: usize,
@@ -5244,35 +5297,7 @@ impl<'s> Engine<'s> {
         let line_blank = self.line_blank;
         let grammar = self.grammars[self.tables[table].grammar].grammar;
         let opener_allowed = |pc: &u32, governor: &mut Governor| {
-            // Start a projected call at its first retained byte. An attempt
-            // on indentation could overlap the preceding call's trailing
-            // whitespace and absorb the later, non-overlapping attempt.
-            if program.line_start_openers.contains(pc)
-                && (!line_blank || (grammar.is_derived() && byte.is_ascii_whitespace()))
-            {
-                return Ok(false);
-            }
-            // Class-leading programs are admitted only by the derived compiler.
-            if matches!(program.insts[*pc as usize], Inst::Class { .. }) {
-                return program.class_starts_with(*pc, byte, governor);
-            }
-            let Inst::Lit { lit, .. } = program.insts[*pc as usize] else {
-                return Ok(false);
-            };
-            let repairs = &grammar.literal_tables[lit as usize];
-            Ok(grammar.literals[lit as usize].bytes.first() == Some(&byte)
-                || repairs
-                    .variants
-                    .trie
-                    .first_bytes()
-                    .chain(repairs.confusables.trie.first_bytes())
-                    .chain(
-                        repairs
-                            .json
-                            .iter()
-                            .flat_map(|table| table.trie.first_bytes()),
-                    )
-                    .any(|first| first == byte))
+            Self::opener_allowed(program, grammar, line_blank, *pc, byte, governor)
         };
         if program.starts_with(byte)
             && program.openers.iter().try_fold(false, |found, pc| {
@@ -5283,6 +5308,16 @@ impl<'s> Engine<'s> {
                 }
             })?
         {
+            // Invalidate before either admission path changes the attempt or
+            // appends threads: a new attempt never inherits a settled proof.
+            if class_run::eligible(&self.tables[table]) {
+                class_run::invalidate(
+                    &mut self.class_runs,
+                    &mut self.class_run_count,
+                    table,
+                    governor,
+                )?;
+            }
             let id = self.next_attempt;
             self.next_attempt += 1;
             self.tables[table].attempts.push(Attempt {
@@ -5334,6 +5369,12 @@ impl<'s> Engine<'s> {
         {
             return Ok(());
         }
+        // The existing idle return stays ahead of cache work. Immutable
+        // dispatch also excludes result, grouped and non-anchored tables.
+        let class_candidate = class_run::eligible(&self.tables[table]);
+        if class_candidate && self.reuse_class_run(table, byte, at, governor)? {
+            return Ok(());
+        }
         {
             let threads = &mut self.tables[table].threads;
             self.stack.clear();
@@ -5342,12 +5383,16 @@ impl<'s> Engine<'s> {
             }
         }
         self.out.clear();
-        let (mut step, stack, out) = self.split(table);
+        let (mut step, stack, out) = self.split(table, governor)?;
         if let Some(thread) = spawned {
             step.closure(thread, thread.pc, at, stack, out, governor)?;
         }
         step.advance(stack, at + 1, false, out, governor)?;
-        self.settle(table, at, None, governor)
+        self.settle(table, at, None, governor)?;
+        if class_candidate {
+            self.remember_class_run(table, byte, at + 1, governor)?;
+        }
+        Ok(())
     }
 
     /// Resolve one table's step: merge, complete, repair, and retire
@@ -5637,7 +5682,7 @@ impl<'s> Engine<'s> {
                 // The output has ended: they take their end-of-input
                 // transitions now.
                 self.out.clear();
-                let (mut step, _, out) = self.split(table);
+                let (mut step, _, out) = self.split(table, governor)?;
                 step.advance(&mut ending, at, true, out, governor)?;
                 for thread in self.out.completed.as_slice() {
                     completed.push(*thread)?;
@@ -5801,7 +5846,7 @@ impl<'s> Engine<'s> {
                     Sub::Body(_, slot) => slot,
                     _ => None,
                 };
-                let (mut step, _, _) = self.split(table);
+                let (mut step, _, _) = self.split(table, governor)?;
                 step.weak_call_evidence(thread.hist, active, !program.argument_anchor, governor)?
             } else {
                 program.commits(thread.pc)
@@ -6325,7 +6370,7 @@ impl<'s> Engine<'s> {
         }
         let kind = self.tables[table].kind;
         let dialect = self.grammars[self.tables[table].grammar].dialect.clone();
-        let (step, _, _) = self.split(table);
+        let (step, _, _) = self.split(table, governor)?;
         let shape = Shape {
             span: record.start..boundary.at,
             dialect: &dialect,
@@ -7416,7 +7461,7 @@ impl<'s> Engine<'s> {
                 }
                 let mut thread = candidate;
                 if thread.pending != 0 {
-                    let (mut step, _, _) = self.split(table);
+                    let (mut step, _, _) = self.split(table, governor)?;
                     let Some(added) = step.resolve(thread.pending, governor)? else {
                         continue;
                     };
@@ -7579,7 +7624,7 @@ impl<'s> Engine<'s> {
         if thread.pending != 0 {
             // A deferred body's value is read now: a value no repair reads
             // leaves no completion (this reading beside another is dropped).
-            let (mut step, _, _) = self.split(table);
+            let (mut step, _, _) = self.split(table, governor)?;
             let Some(added) = step.resolve(thread.pending, governor)? else {
                 return Ok(());
             };
@@ -7588,7 +7633,7 @@ impl<'s> Engine<'s> {
         }
         let kind = self.tables[table].kind;
         let dialect = self.grammars[self.tables[table].grammar].dialect.clone();
-        let (mut step, _, _) = self.split(table);
+        let (mut step, _, _) = self.split(table, governor)?;
         // A length stop inside a character a class run had begun: the
         // capture keeps the whole characters (as a cut-off slot does).
         let open_end = match (step.program.insts[thread.pc as usize], thread.sub) {
@@ -7610,7 +7655,7 @@ impl<'s> Engine<'s> {
         {
             return self.hold_chained(table, &thread, dangling, chained, governor);
         }
-        let (step, _, _) = self.split(table);
+        let (step, _, _) = self.split(table, governor)?;
         let before = governor.scratch_meter().total_charged();
         let segmentations = step.segment(thread.hist, &shape, governor)?;
         // Materializing charges only retained scratch (no lease), so the
@@ -7665,7 +7710,7 @@ impl<'s> Engine<'s> {
         eof: Option<&GenerationStop>,
         governor: &mut Governor,
     ) -> Result<Vec<Repaired>, StopReason> {
-        let (step, _, _) = self.split(table);
+        let (step, _, _) = self.split(table, governor)?;
         let seeds: Vec<RepairState<'_, 's>> = failures
             .iter()
             .filter_map(|failure| RepairState::seed(&step, failure, eof, record.opened))
@@ -7718,6 +7763,7 @@ impl<'s> Engine<'s> {
             })
             .min();
         let Some(earliest) = earliest else {
+            self.clear_class_runs(governor)?;
             self.arena.reset(governor)?;
             self.buffer.clear();
             self.base = self.fed;
@@ -7746,6 +7792,7 @@ impl<'s> Engine<'s> {
         start: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        self.clear_class_runs(governor)?;
         for table in &mut self.tables {
             Self::stop_past(&mut table.threads, Some(start), &[], governor)?;
         }
@@ -7763,6 +7810,7 @@ impl<'s> Engine<'s> {
         attempt: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        self.clear_class_runs(governor)?;
         fn keep<T: Copy + ScratchCharge>(entries: &mut ScratchVec<T>, kept: impl Fn(&T) -> bool) {
             let mut write = 0;
             for read in 0..entries.len() {
@@ -7825,6 +7873,7 @@ impl<'s> Engine<'s> {
         generation: &GenerationStop,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        self.clear_class_runs(governor)?;
         let end = self.fed;
         for table in 0..self.tables.len() {
             if self.tables[table].threads.is_empty() && self.tables[table].attempts.is_empty() {
@@ -7842,7 +7891,7 @@ impl<'s> Engine<'s> {
                         self.stack.push(thread)?;
                     }
                 }
-                let (mut step, stack, out) = self.split(table);
+                let (mut step, stack, out) = self.split(table, governor)?;
                 step.advance(stack, end, true, out, governor)?;
                 // At the end every configuration has resolved: nothing stays live.
                 self.out.live.clear();
@@ -7894,6 +7943,7 @@ impl<'s> Engine<'s> {
     /// least-cost configurations, except that a call whose arguments value
     /// was complete at the cut completes.
     fn cut(&mut self, table: usize, governor: &mut Governor) -> Result<(), StopReason> {
+        self.invalidate_class_run(table, governor)?;
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         let threads: Vec<Thread> = self.tables[table].threads.as_slice().to_vec();
         let grouped = self.tables[table].program.grouped;
@@ -7914,7 +7964,7 @@ impl<'s> Engine<'s> {
                 let mut stack = ScratchVec::new(governor);
                 let mut whole = Out::new(governor);
                 for thread in threads.iter().filter(|thread| thread.attempt == record.id) {
-                    let (mut step, _, _) = self.split(table);
+                    let (mut step, _, _) = self.split(table, governor)?;
                     let Some((hist, added)) =
                         step.cut_thread(*thread, &mut stack, &mut whole, governor)?
                     else {

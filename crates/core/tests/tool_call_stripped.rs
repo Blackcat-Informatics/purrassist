@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Marker projections retain source evidence, ambiguity and native class semantics.
-use purrassist_core::grammar::GrammarRecipe;
 use purrassist_core::grammar::edit::EditOperator;
+use purrassist_core::grammar::{CaptureKind, GrammarRecipe};
 use purrassist_core::tool_call::{
     DialectId, DialectSet, GenerationStop, MarkupFamily, ReasoningPolicy, RecognizedTurn,
     Recognizer, ToolCalls, ToolRecoveryRequest, ToolSet,
@@ -86,6 +86,64 @@ fn stripped_variants_parse() {
     }
 }
 
+fn assert_chunk_parity(input: &str, dialect: DialectId, splits: &[usize]) {
+    let (whole, _) = recognize(input, dialect.clone());
+    let set = set([dialect]);
+    let tools = tools();
+    for &split in splits {
+        let mut governor = Governor::new(Budget::default());
+        let mut recognizer =
+            Recognizer::with_tools(&set, &tools, ReasoningPolicy::default(), &mut governor)
+                .expect("recognizer");
+        for chunk in [&input.as_bytes()[..split], &input.as_bytes()[split..]] {
+            recognizer.push(chunk, &mut governor).expect("chunk");
+        }
+        let turn = recognizer
+            .finish(GenerationStop::Stop, &mut governor)
+            .expect("finish");
+        assert_eq!(turn, whole, "split at {split}: {input:?}");
+    }
+}
+
+fn assert_long_preamble_retains_source() {
+    // A long dropped preamble crosses UTF-8 and ends at the JSON opener;
+    // extraction preserves the captured name, arguments and original source.
+    let preamble = format!("{}é ", "p".repeat(64));
+    let input = format!(r#"{preamble}{{"name":"f","arguments":{{"text":"retained"}}}}"#);
+    let (turn, _) = recognize(&input, DialectId::HermesStripped);
+    let calls = turn.calls();
+    assert_eq!(calls.len(), 1);
+    let raw = &calls[0].readings[0];
+    let name = raw.name.as_ref().expect("retained name");
+    assert_eq!(name.value, "f");
+    assert_eq!(&input[name.span.clone()], "f");
+    assert_eq!(raw.span, 0..input.len());
+    assert_eq!(
+        raw.arguments
+            .root
+            .get("text")
+            .and_then(purrassist_core::json::Node::as_str),
+        Some("retained")
+    );
+    assert!(raw.captures.iter().any(|capture| {
+        capture.kind == CaptureKind::Dropped && &input[capture.span.clone()] == preamble
+    }));
+    assert!(raw.captures.iter().any(|capture| {
+        capture.kind == CaptureKind::Arguments
+            && &input[capture.span.clone()] == r#"{"text":"retained"}"#
+    }));
+    assert!(raw.edits.iter().any(|edit| {
+        edit.operator == EditOperator::ExtractProse
+            && edit.original == preamble.as_bytes()
+            && edit.replacement.is_empty()
+    }));
+    assert_chunk_parity(
+        &input,
+        DialectId::HermesStripped,
+        &[32, 64, 65, preamble.len(), preamble.len() + 1, input.len()],
+    );
+}
+
 #[test]
 fn weak_names_without_retained_json_evidence_stay_content() {
     for body in [
@@ -110,6 +168,8 @@ fn weak_names_without_retained_json_evidence_stay_content() {
             );
         }
     }
+    let long_name = "f".repeat(64);
+    let unicode_boundary = format!("{long_name}é");
     for dialect in [
         DialectId::DeepSeekV31Stripped,
         DialectId::KimiK2Stripped,
@@ -122,6 +182,8 @@ fn weak_names_without_retained_json_evidence_stay_content() {
             "f is an ordinary word.",
             "  f is an ordinary word.\n",
             "functions.f:0 is prose.",
+            &long_name,
+            &unicode_boundary,
         ] {
             let calls = recovered(input, &set([dialect.clone()]));
             assert!(
@@ -134,8 +196,21 @@ fn weak_names_without_retained_json_evidence_stay_content() {
                 "{}: {input:?}: {calls:?}",
                 dialect.id()
             );
+            if input == long_name || input == unicode_boundary {
+                assert_eq!(
+                    calls.content,
+                    [0..input.len()],
+                    "{}: {input:?}",
+                    dialect.id()
+                );
+            }
+        }
+        for input in [&long_name, &unicode_boundary] {
+            assert_chunk_parity(input, dialect.clone(), &[32, 64, input.len()]);
         }
     }
+
+    assert_long_preamble_retains_source();
 }
 
 #[test]

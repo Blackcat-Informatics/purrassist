@@ -208,6 +208,65 @@ The existing lazy class DFA constructor remains the only constructor. This
 removes repeated class operations; current budget, scale and portability checks
 remain unverified for this source change.
 
+A settled, unopened argument-anchored call can retain one exact ASCII class-run
+certificate per table. Admission requires one pristine attempt, only unique Class
+threads, no side owners or pending report for that attempt, and successful cached
+nondead self-loops for the same byte and complete native DFA states. Every thread
+has reached the current input position, has no pending character/body or past
+reading, and has consumed at least 32 bytes of its terminal. Literal name-follower
+boundaries decline admission. Immutable history evidence without a deferred Link
+must lack either a completed name or a value, proving that commit remains false.
+Before owner, queue or per-thread proof work, the last eight written bytes must
+repeat the same ASCII byte. Recent source is inspected backwards and stops at
+the first difference. A retired older suffix declines this optional proof; an
+inconsistent current input position, window or byte is an explicit engine error.
+
+All table certificate slots, including empty and spare slots, retain a portable
+32-byte admission until engine drop. Initialization, admission guards, owner-queue
+scans, complete state comparisons, invalidation, and slot writes admit Work before
+processing. Cache work follows the existing idle return and is limited to resident
+call tables with an immutable argument anchor and no grouping. An occupancy count
+skips slot probes and reset sweeps when every certificate is empty. Reuse compares
+the exact byte and absolute input position, then admits both thread-position stores
+and the retained cursor update before advancing any thread. The proved zero stall
+is unchanged, and the next ordinary VM step clears its own outgoing vectors.
+The retained proof replaces the ordinary advance, merge, commit and settle passes
+and their class-cache queries for that unchanged step. Input buffering, opener
+admission, line context, global markers and collection still run normally. Any new
+attempt, including directly appended opener threads, forces ordinary processing.
+
+Ordinary table processing invalidates a mismatched proof before mutation; new
+attempt admission invalidates before either opener path changes its subject.
+VM borrowing, external stops, abandonment, end-of-input handling, length cuts and
+arena reset invalidate their affected proofs. Absolute positions survive source-window relocation; saved
+self-loop facts remain valid when another table replaces a shared query-cache row.
+The proof keeps no thread snapshot, parsed value or source pointer. Resource
+refusal stays explicit. Runtime savings and applicability to particular workloads
+have not been measured for this source change.
+
+For a hit over T settled threads, cache work is exactly `2 * T + 5`: one slot
+probe, two key comparisons, two position stores per thread, the next-position
+computation and cursor write. A populated-key miss costs five Work units before
+ordinary processing. An empty slot costs one probe only while another proof is
+occupied; invalidating a populated slot costs three. Ordinary eligible processing
+also pays admission: one for the ASCII guard, five for the first-thread/position/
+length guard, five for recent-source position and suffix bounds, then one for
+each of the one to eight actual source-byte probes. Only a complete repeat
+qualifier reaches the 24 pristine-owner checks, two per global queue entry,
+40 per thread inspected and two for a successful slot/count write. A complete
+admission over T threads and Q queued entries costs `45 + 40 * T + 2 * Q`.
+After the length guard, alternating bytes stop after two source probes and
+paired-byte churn after two or three; their admission fees are 13 or 14 Work
+units before any residual empty-slot probes. Runs of exactly eight copies can
+still pay one complete admission without a hit, followed by a five-unit key miss
+when the byte changes. A repeat ending before eight copies cannot reach the
+expensive proof, but still pays the short-circuit qualifier's actual probes.
+An eligible normal VM borrow can add one empty-slot probe while another table
+owns a proof. Nonempty bulk invalidation costs one per table slot plus one count
+write; empty occupancy performs no sweep. Initialization still admits every slot.
+Short or changing runs, refused admissions and unrelated live proofs can add
+Work without a later hit; these fees are part of any future workload comparison.
+
 ### Runtime segmentation costs
 
 Flat and chained completion producers carry each original reading's materialized
