@@ -100,7 +100,9 @@ use core::fmt::Write as _;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod envelopes;
 mod trailing;
+use envelopes::SourceEnvelopes;
 
 /// Why the model stopped generating: the recognizer's end-of-output input.
 ///
@@ -415,7 +417,7 @@ struct Turn {
     nodes: Vec<TurnNode>,
     store: Vec<Segment>,
     /// Source proof addressed only by immutable stored call and reading indices.
-    envelopes: ScratchMap<(u32, usize), SourceEnvelope>,
+    envelopes: SourceEnvelopes,
     /// Aligned embedded origins retained for reasoning's late completions.
     embedded_origins: ScratchMap<u32, ScratchVec<u32>>,
     top: Option<Top>,
@@ -479,14 +481,8 @@ impl Turn {
         for certificate in certificates {
             governor.charge(Resource::Work, 1)?;
             if certificate.part == part {
-                governor.charge(
-                    Resource::Work,
-                    size(self.envelopes.len())
-                        .saturating_mul(2)
-                        .saturating_add(1),
-                )?;
                 self.envelopes
-                    .insert((index, certificate.reading), certificate.source)?;
+                    .push(index, certificate.reading, certificate.source, governor)?;
             }
         }
         Ok(index)
@@ -779,7 +775,7 @@ fn insert_embedded(
     origins: &mut ScratchVec<u32>,
     mut incoming: CallSegment,
     origin: u32,
-    envelopes: &ScratchMap<(u32, usize), SourceEnvelope>,
+    envelopes: &SourceEnvelopes,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     if origins.len() != embedded.len() {
@@ -866,7 +862,7 @@ fn embedded_relation(
     left: &CallSegment,
     right: &CallSegment,
     origins: (u32, u32),
-    envelopes: &ScratchMap<(u32, usize), SourceEnvelope>,
+    envelopes: &SourceEnvelopes,
     governor: &mut Governor,
 ) -> Result<EmbeddedRelation, StopReason> {
     governor.charge(
@@ -898,11 +894,7 @@ fn embedded_relation(
     // A native object inside the arguments of a genuinely enclosing call is
     // data. Protect alternatives only after proving the same lexical envelope.
     for (index, reading) in shadow.readings.iter().enumerate() {
-        governor.charge(
-            Resource::Work,
-            u64::from(envelopes.len().bit_width() + 1).saturating_mul(2),
-        )?;
-        let source = envelopes.get(&(origin, index));
+        let source = envelopes.get(origin, index, governor)?;
         if !same_embedded_envelope(reading, &native.span, source, governor)? {
             return Ok(EmbeddedRelation::Geometry);
         }
@@ -1715,7 +1707,7 @@ impl<'s> Recognizer<'s> {
         let turn = Turn {
             nodes: vec![root],
             store: Vec::new(),
-            envelopes: ScratchMap::new(governor),
+            envelopes: SourceEnvelopes::new(governor),
             embedded_origins: ScratchMap::new(governor),
             top: (!starts_open).then_some(Top {
                 cost: 0,

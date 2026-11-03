@@ -245,6 +245,15 @@ recovery-product candidate admissions still apply. Mixed endings, plain prose,
 rejected or reasoning suffixes and other repair differences retain ordinary
 least-cost pruning. This preservation path has not been compiled or executed.
 
+Source certificates for embedded framing use immutable stored-call and reading
+indices. Their keys strictly increase, so the private table appends each record
+after a three-unit Work admission for the last-key check. Each record reserves
+48 portable scratch bytes; insertion and actual buffer relocation use the
+existing governed scratch-vector operation. Embedded comparisons admit a
+logarithmic binary search over those keys. The separate late-reasoning origin
+map still supports removal and reinsertion. No resource budget is changed;
+runtime acceptance of this table remains pending.
+
 ## Schema bundle identity construction
 
 `Schema::compile_governed` and `with_resources_governed` stream their complete
