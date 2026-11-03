@@ -1142,7 +1142,9 @@ outside a valid UTF-8 scalar by the same boundary helper used during live intake
 Rejected attempts publish only when their complete source spans fit before the
 cutoff. Calls can publish a shared start, canonical name and raw argument prefix
 before an internal disagreement; completion and typed parameters require whole
-call agreement. Later common suffixes stay withheld.
+call agreement. Native captures, ordered edits and semantic values determine
+interior cutoffs. Differences confined to final numbering or other call metadata
+stop publication at the call's end. Later common suffixes stay withheld.
 
 Private structural call identities distinguish pieces, choice branches, segments
 and reasoning-local embedded positions. Semantic slots retain their original raw

@@ -341,84 +341,6 @@ fn fact_difference(
     Ok(limit)
 }
 
-fn entries_difference<T: PartialEq>(
-    left: &[T],
-    right: &[T],
-    fallback: usize,
-    governor: &mut Governor,
-    mut admit: impl FnMut(&T, &mut Governor) -> Result<Option<usize>, StopReason>,
-) -> Result<Option<usize>, StopReason> {
-    let mut limit = None;
-    for index in 0..left.len().max(right.len()) {
-        governor.charge(Resource::Work, 2)?;
-        let a = left.get(index);
-        let b = right.get(index);
-        let mut at = None;
-        for value in a.into_iter().chain(b) {
-            at = earliest(at, admit(value, governor)?);
-        }
-        if a != b {
-            limit = earliest(limit, Some(at.unwrap_or(fallback)));
-        }
-    }
-    Ok(limit)
-}
-
-fn ledger_difference(
-    left: &CallLedger,
-    right: &CallLedger,
-    fallback: usize,
-    governor: &mut Governor,
-) -> Result<Option<usize>, StopReason> {
-    let mut limit = entries_difference(
-        &left.evidence,
-        &right.evidence,
-        fallback,
-        governor,
-        |value, governor| {
-            admit_evidence(value, governor)?;
-            Ok(value.span.as_ref().map(|span| span.bytes.start))
-        },
-    )?;
-    limit = earliest(
-        limit,
-        entries_difference(
-            &left.losses,
-            &right.losses,
-            fallback,
-            governor,
-            |value, governor| {
-                admit_evidence(&value.loss.evidence, governor)?;
-                governor.charge(
-                    Resource::Work,
-                    size(value.loss.original.len()).saturating_add(1),
-                )?;
-                Ok(value
-                    .loss
-                    .evidence
-                    .span
-                    .as_ref()
-                    .map(|span| span.bytes.start))
-            },
-        )?,
-    );
-    limit = earliest(
-        limit,
-        entries_difference(
-            &left.inferences,
-            &right.inferences,
-            fallback,
-            governor,
-            |value, governor| {
-                admit_evidence(&value.evidence, governor)?;
-                governor.charge(Resource::Work, size(value.value.len()).saturating_add(1))?;
-                Ok(value.evidence.span.as_ref().map(|span| span.bytes.start))
-            },
-        )?,
-    );
-    Ok(limit)
-}
-
 /// Include local semantic competitors even when there is one whole-turn row.
 /// Higher-cost diagnostic alternatives retain their origins but are not live
 /// competing interpretations of its selected call.
@@ -466,15 +388,6 @@ pub(super) fn call_limit(
                 if !optional_text(call.tool.as_deref(), alternative.tool.as_deref(), governor)? {
                     limit = earliest(limit, Some(base.name_start().min(fact.name_start())));
                 }
-                limit = earliest(
-                    limit,
-                    ledger_difference(
-                        &call.repairs,
-                        &alternative.repairs,
-                        call.span.end,
-                        governor,
-                    )?,
-                );
                 limit = earliest(limit, Some(call.span.end));
             }
         }
@@ -509,25 +422,10 @@ fn call_difference(
             governor,
         )?,
     );
-    limit = earliest(
-        limit,
-        ledger_difference(
-            &left.repairs,
-            &right.repairs,
-            left.span.end.min(right.span.end),
-            governor,
-        )?,
-    );
-    limit = earliest(
-        limit,
-        entries_difference(
-            &left.distinguishing,
-            &right.distinguishing,
-            left.span.end.min(right.span.end),
-            governor,
-            provenance_anchor,
-        )?,
-    );
+    // Native captures, ordered edits and semantic values anchor interior
+    // facts above. Final numbering and provenance metadata can disagree
+    // over the whole call without changing its shared name or raw arguments;
+    // those differences still prevent completion at the call's end.
     if !same_call(left, right, governor)? {
         limit = earliest(limit, Some(left.span.end.min(right.span.end)));
     }
@@ -874,27 +772,6 @@ fn outcome(
         }
     }
     Ok(left == right)
-}
-
-fn provenance_anchor(
-    value: &ProvenanceNode,
-    governor: &mut Governor,
-) -> Result<Option<usize>, StopReason> {
-    governor.charge(Resource::Work, 1)?;
-    let evidence = match value {
-        ProvenanceNode::Evidence(value) => value,
-        ProvenanceNode::Loss(value) => {
-            governor.charge(Resource::Work, size(value.original.len()))?;
-            &value.evidence
-        }
-        ProvenanceNode::Inference(value) => {
-            governor.charge(Resource::Work, size(value.value.len()))?;
-            &value.evidence
-        }
-        ProvenanceNode::Validation(..) => return Ok(None),
-    };
-    admit_evidence(evidence, governor)?;
-    Ok(evidence.span.as_ref().map(|span| span.bytes.start))
 }
 
 fn provenance(
