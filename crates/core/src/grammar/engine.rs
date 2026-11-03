@@ -626,6 +626,7 @@ pub(crate) struct Step<'a, 's> {
     /// closer text; see `Step::repaired_delimiter`).
     pub(crate) kind: ProductionKind,
     pub(crate) dfas: &'a mut [Option<DerivativeDfa<'s>>],
+    class_steps: &'a mut [Option<ClassStep>],
     pub(crate) arena: &'a mut Arena,
     pub(crate) buffer: &'a [u8],
     pub(crate) base: usize,
@@ -667,6 +668,35 @@ impl<'s> Step<'_, 's> {
             );
         }
         Ok(slot.as_mut().expect("the class automaton was initialized"))
+    }
+
+    /// Reuse one successful query over the class's stable operation-owned DFA.
+    /// State identity includes UTF-8 position and every zero-width context flag.
+    fn class_step(
+        &mut self,
+        class: u32,
+        state: DfaState,
+        byte: u8,
+        governor: &mut Governor,
+    ) -> Result<(DfaState, bool), StopReason> {
+        // Fixed row access, complete state/byte comparisons and result handoff.
+        governor.charge(Resource::Work, 12)?;
+        if let Some(cached) = self.class_steps[class as usize]
+            && cached.state == state
+            && cached.byte == byte
+        {
+            return Ok((cached.stepped, cached.dead));
+        }
+        let dfa = self.class_dfa(class, governor)?;
+        let stepped = dfa.step(state, byte, governor)?;
+        let dead = dfa.is_dead(stepped, governor)?;
+        self.class_steps[class as usize] = Some(ClassStep {
+            state,
+            byte,
+            stepped,
+            dead,
+        });
+        Ok((stepped, dead))
     }
 
     pub(crate) const fn byte(&self, pos: usize) -> u8 {
@@ -1460,9 +1490,9 @@ impl<'s> Step<'_, 's> {
                     & (1 << (byte & 63))
                     != 0
         };
+        let (stepped, dead) = self.class_step(class, state, byte, governor)?;
         let dfa = self.class_dfa(class, governor)?;
-        let stepped = dfa.step(state, byte, governor)?;
-        if !dfa.is_dead(stepped, governor)? {
+        if !dead {
             if literal_boundary && thread.entry < pos && dfa.accepting(state, governor)? {
                 // A removed separator can join a name to a retained channel
                 // word. Keep the maximal class and the grammar's literal
@@ -4926,16 +4956,42 @@ enum Verdict {
     Reject,
 }
 
+/// One successful transition/deadness query within one class DFA session.
+/// Its term IDs remain valid: the session only appends terms until drop.
+#[derive(Clone, Copy)]
+struct ClassStep {
+    state: DfaState,
+    byte: u8,
+    stepped: DfaState,
+    dead: bool,
+}
+
+impl ScratchCharge for Option<ClassStep> {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 64);
+        64
+    };
+}
+
 struct GrammarRuntime<'s> {
     grammar: &'s CompiledGrammar,
     dialect: DialectId,
     dfas: Vec<Option<DerivativeDfa<'s>>>,
+    /// Every reserved cache slot, including empty/spare slots, stays admitted.
+    class_steps: ScratchVec<Option<ClassStep>>,
+}
+
+impl ScratchCharge for GrammarRuntime<'_> {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 96);
+        96
+    };
 }
 
 /// The segment-candidate layer over every table of a dialect set.
 pub(crate) struct Engine<'s> {
     tables: Vec<Table<'s>>,
-    grammars: Vec<GrammarRuntime<'s>>,
+    grammars: ScratchVec<GrammarRuntime<'s>>,
     buffer: ScratchVec<u8>,
     base: usize,
     fed: usize,
@@ -4989,28 +5045,34 @@ const RELEASE_VECTOR_BYTES: u64 = 40;
 const DEFERRED_BYTES: u64 = 64;
 
 impl<'s> Engine<'s> {
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "Keep the recognizer's exclusive operation-governor boundary while class allocation is deferred to its first transition"
-    )]
     pub(crate) fn new(
         dialects: &'s [DialectId],
         tools: Option<&'s ToolSet>,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         governor.check()?;
-        let mut grammars = Vec::with_capacity(dialects.len());
+        let mut grammars = ScratchVec::new(governor);
+        grammars.reserve(dialects.len())?;
         let mut tables = Vec::with_capacity(dialects.len() * 2);
         let mut protocol_fences = false;
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
             protocol_fences |= grammar.protocol_fences();
             let dfas = (0..grammar.classes.len()).map(|_| None).collect();
-            grammars.push(GrammarRuntime {
-                grammar,
-                dialect: dialect.clone(),
-                dfas,
-            });
+            let mut class_steps = ScratchVec::new(governor);
+            governor.charge(Resource::Work, size(grammar.classes.len()))?;
+            class_steps.reserve(grammar.classes.len())?;
+            class_steps.extend(core::iter::repeat_n(None, grammar.classes.len()))?;
+            crate::contract::push_scratch(
+                &mut grammars,
+                GrammarRuntime {
+                    grammar,
+                    dialect: dialect.clone(),
+                    dfas,
+                    class_steps,
+                },
+                governor,
+            )?;
             for (kind, program) in [ProductionKind::Call, ProductionKind::Result]
                 .into_iter()
                 .zip(&grammar.programs)
@@ -5077,7 +5139,7 @@ impl<'s> Engine<'s> {
 
     fn split(&mut self, table: usize) -> (Step<'_, 's>, &mut ScratchVec<Thread>, &mut Out) {
         let stall_cap = self.stall_cap(table);
-        let runtime = &mut self.grammars[self.tables[table].grammar];
+        let runtime = &mut self.grammars.as_mut_slice()[self.tables[table].grammar];
         let table = &mut self.tables[table];
         (
             Step {
@@ -5085,6 +5147,7 @@ impl<'s> Engine<'s> {
                 program: table.program,
                 kind: table.kind,
                 dfas: &mut runtime.dfas,
+                class_steps: runtime.class_steps.as_mut_slice(),
                 arena: &mut self.arena,
                 buffer: self.buffer.as_slice(),
                 base: self.base,

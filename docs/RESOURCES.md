@@ -182,6 +182,32 @@ their original semantics. JSON repair spellings are not added to call metadata.
 Refusals drop unpublished partial tables and completed metadata from earlier
 steps; a successful borrow does not allocate or readmit the prepared bytes.
 
+### Repeated runtime class queries
+
+Each grammar's operation-owned class runtime retains one successful
+transition/deadness query per class. The key includes the full native DFA state
+and input byte: term identity, matched and zero-width context flags, and the
+complete UTF-8 decoding position. Class sessions append derivative terms without
+remapping existing IDs, so later session growth cannot change a saved answer.
+Call and result tables share their grammar's existing class sessions and cache.
+
+A fixed twelve Work units admit each cache query. A miss runs the original DFA
+transition and deadness checks with their existing admission; only their joint
+success updates the cache. Errors and governor state are never cached. Accepting
+state checks, literal-boundary alternatives, capture boundaries and every
+permitted opener remain on the original production path.
+
+The fallible cache vector admits initialization Work and all reserved slots,
+including empty and spare slots, at a portable 64 bytes per slot. Its storage
+releases when the engine drops, including construction or processing refusal.
+The grammar runtime metadata uses its own fallible scratch vector, with portable
+96-byte rows covering the added owner handle and all reserved metadata slots.
+The existing table and DFA-slot vectors retain their earlier allocation paths;
+this change does not complete runtime allocation governance.
+The existing lazy class DFA constructor remains the only constructor. This
+removes repeated class operations; current budget, scale and portability checks
+remain unverified for this source change.
+
 ## Schema bundle identity construction
 
 `Schema::compile_governed` and `with_resources_governed` stream their complete
