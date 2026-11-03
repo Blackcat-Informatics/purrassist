@@ -289,6 +289,17 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
             "{input}: {calls:?}"
         );
     }
+    // The same-frame exception must not promote a native-shaped payload
+    // nested inside the projected call's arguments in closed reasoning.
+    let nested_reasoning = r#"<think>hmm {"name":"f","input":{"data":{"name":"f","arguments":{"text":"nested"}}}} done</think>"#;
+    let nested_calls = recovered(
+        nested_reasoning,
+        &set([DialectId::HermesStripped, DialectId::BareJson]),
+    );
+    assert!(nested_calls.calls.is_empty());
+    assert_eq!(nested_calls.embedded.len(), 1, "{nested_calls:?}");
+    assert!(nested_calls.embedded[0].arguments.get("data").is_some());
+
     let reasoning = format!("<think>{array}</think>");
     let result = tools().recover(
         reasoning.as_bytes(),

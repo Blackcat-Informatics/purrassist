@@ -87,10 +87,14 @@ partitions remain alternatives; this does not establish a unique turn outcome.
 
 Inside closed reasoning, containment alone does not replace a native Bare JSON
 or Anthropic invocation with a projected Hermes reading of the same JSON
-frame. The projected reading must first prove that trimming only exterior
-`Dropped` captures and their matching extraction edits leaves the native whole
-frame. A native JSON object nested inside another call's arguments does not
-meet this condition and remains data within that call.
+frame. The projected reading must first prove that exterior `Dropped` captures
+have matching extraction edits. Its remaining frame may include surrounding
+spaces, tabs, carriage returns or newlines only when a certificate made from
+actual source bytes proves those margins. The certificate stays attached to
+its own completed part and reading, and must match the current retained frame.
+The resulting frame must equal the native whole frame. A native JSON object
+nested inside another call's arguments does not meet this condition and
+remains data within that call.
 
 For the same frame, folding requires a single canonical native reading, equal
 source captures, ordered argument values and source spans, exact number

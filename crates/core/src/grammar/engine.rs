@@ -82,6 +82,9 @@ use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod envelope;
+pub(crate) use envelope::{CompletedParts, PartEnvelope, SourceEnvelope, retained_context};
+
 /// Original name capture and optional beginning of its chained call.
 type CapturedName = (Range<usize>, Option<usize>);
 
@@ -4533,7 +4536,7 @@ pub(crate) struct Opening {
 }
 
 /// A notification to the turn-level segmentation.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum Event {
     /// Attempt `attempt` (opener at `start`) finished its opener at `at`.
     Opened {
@@ -4551,7 +4554,7 @@ pub(crate) enum Event {
         table: u32,
         attempt: u64,
         at: usize,
-        parts: Parts,
+        parts: CompletedParts,
         charged: u64,
     },
     /// Attempt `attempt` has no configuration left at `at`.
@@ -4579,10 +4582,10 @@ pub(crate) enum Event {
 /// segmentation of the span from the attempt's start to `at`, where the
 /// failing call begins, and the scratch materializing them charged (as for
 /// [`Event::Completed`]).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct Salvaged {
     pub(crate) at: usize,
-    pub(crate) segmentations: Vec<Parts>,
+    pub(crate) segmentations: ScratchVec<CompletedParts>,
     pub(crate) charged: u64,
 }
 
@@ -5075,8 +5078,14 @@ const CLOSE_PENDING_BYTES: u64 = {
 /// table slot (24) and its keep flag (1), rounded up.
 const RELEASE_VECTOR_BYTES: u64 = 40;
 
-/// Scratch bytes charged per held ended report or recorded opener.
+/// Scratch bytes charged per recorded opener.
 const DEFERRED_BYTES: u64 = 64;
+
+/// A deferred report also owns the inline carrier of its source certificates.
+const DEFERRED_REPORT_BYTES: u64 = {
+    assert!(core::mem::size_of::<(usize, Event)>() <= 128);
+    128
+};
 
 impl<'s> Engine<'s> {
     pub(crate) fn new(
@@ -6350,11 +6359,34 @@ impl<'s> Engine<'s> {
             .scratch_meter()
             .total_charged()
             .saturating_sub(before);
+        let charged = if segmentations.len() == 1 { charged } else { 0 };
+        let mut certified = ScratchVec::new(governor);
+        for parts in segmentations {
+            let envelopes =
+                match envelope::certify(&parts, self.base, self.buffer.as_slice(), governor) {
+                    Ok(envelopes) => envelopes,
+                    Err(reason) => {
+                        drop(parts);
+                        drop(certified);
+                        let _ = governor.release_scratch(charged);
+                        return Err(reason);
+                    }
+                };
+            if let Err(reason) = crate::contract::push_scratch(
+                &mut certified,
+                CompletedParts { parts, envelopes },
+                governor,
+            ) {
+                drop(certified);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
+        }
         Ok(Some((
             Salvaged {
                 at: boundary.at,
-                charged: if segmentations.len() == 1 { charged } else { 0 },
-                segmentations,
+                charged,
+                segmentations: certified,
             },
             boundary.reason,
         )))
@@ -6501,7 +6533,7 @@ impl<'s> Engine<'s> {
                         })
                 });
         if reads_on {
-            governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+            governor.charge(Resource::ScratchBytes, DEFERRED_REPORT_BYTES)?;
             self.deferred.push((record.start, ended));
         } else {
             // Another attempt at the opener may have read a whole call and
@@ -6547,7 +6579,7 @@ impl<'s> Engine<'s> {
                 *outread = self.whole.contains(&start);
             }
             self.events.push(ended);
-            governor.release_scratch(DEFERRED_BYTES)?;
+            governor.release_scratch(DEFERRED_REPORT_BYTES)?;
         }
         let before = self.whole.len();
         let (tables, deferred) = (&self.tables, &self.deferred);
@@ -6680,11 +6712,24 @@ impl<'s> Engine<'s> {
     ) -> Result<(), StopReason> {
         match body {
             HeldBody::Event(mut event, costs) => {
-                if let Event::Completed { parts, .. } = &mut event
-                    && let Err(reason) = self.normalize_deepseek_layout(table, parts, governor)
-                {
-                    let _ = HeldBody::Event(event, costs).discard(governor);
-                    return Err(reason);
+                if let Event::Completed { parts, .. } = &mut event {
+                    let finalized = self
+                        .normalize_deepseek_layout(table, &mut parts.parts, governor)
+                        .and_then(|()| {
+                            envelope::certify(
+                                &parts.parts,
+                                self.base,
+                                self.buffer.as_slice(),
+                                governor,
+                            )
+                        });
+                    match finalized {
+                        Ok(envelopes) => parts.envelopes = envelopes,
+                        Err(reason) => {
+                            let _ = HeldBody::Event(event, costs).discard(governor);
+                            return Err(reason);
+                        }
+                    }
                 }
                 self.events.push(event);
             }
@@ -6703,11 +6748,21 @@ impl<'s> Engine<'s> {
                     let _ = HeldBody::Chain(chained).discard(governor);
                     return Err(reason);
                 }
+                let envelopes =
+                    match envelope::certify(&parts, self.base, self.buffer.as_slice(), governor) {
+                        Ok(envelopes) => envelopes,
+                        Err(reason) => {
+                            drop(parts);
+                            let _ = governor.release_scratch(charged);
+                            let _ = HeldBody::Chain(chained).discard(governor);
+                            return Err(reason);
+                        }
+                    };
                 let event = Event::Completed {
                     table: chained.table,
                     attempt: chained.attempt,
                     at: chained.at,
-                    parts,
+                    parts: CompletedParts { parts, envelopes },
                     charged,
                 };
                 if let Err(reason) = HeldBody::Chain(chained).discard(governor) {
@@ -7563,18 +7618,34 @@ impl<'s> Engine<'s> {
                 let charged = if segmentations.len() == 1 { charged } else { 0 };
                 for parts in segmentations {
                     governor.charge(Resource::Work, super::cost::K_EVENT)?;
+                    let envelopes = match envelope::certify(
+                        &parts,
+                        self.base,
+                        self.buffer.as_slice(),
+                        governor,
+                    ) {
+                        Ok(envelopes) => envelopes,
+                        Err(reason) => {
+                            drop(parts);
+                            let _ = governor.release_scratch(charged);
+                            return Err(reason);
+                        }
+                    };
                     let event = Event::Completed {
                         table: index_u32(table),
                         attempt: thread.attempt,
                         at: thread.pos,
-                        parts,
+                        parts: CompletedParts { parts, envelopes },
                         charged,
                     };
                     if grouped {
                         let (costs, arguments) = match &event {
                             Event::Completed { parts, .. } => (
-                                parts.iter().map(|(_, cost)| *cost).collect(),
-                                parts.last().is_some_and(|(part, _)| began_arguments(part)),
+                                parts.parts.iter().map(|(_, cost)| *cost).collect(),
+                                parts
+                                    .parts
+                                    .last()
+                                    .is_some_and(|(part, _)| began_arguments(part)),
                             ),
                             _ => (Vec::new(), false),
                         };

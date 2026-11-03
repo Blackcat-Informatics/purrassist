@@ -435,7 +435,29 @@ fn expression(
             retain(literals, |literal| !literal.is_empty());
             None
         }
-        PExpr::Capture { inner, .. } | PExpr::Repeat { inner, .. } => {
+        PExpr::Capture { kind, at, inner } => {
+            governor.charge(
+                Resource::Work,
+                saturating_size(kind.len()).saturating_add(1),
+            )?;
+            let dropped_literal = kind.as_str() == "dropped"
+                && matches!(inner.get(), PExpr::Literal { bytes, .. } if !bytes.is_empty());
+            expression(
+                inner.get_mut(),
+                markers,
+                removed,
+                anchor,
+                depth + 1,
+                governor,
+            )?;
+            // Only a nonempty literal erased by this recipe loses its
+            // synthetic Dropped wrapper. Authentic empty captures and all
+            // nonempty source captures retain their original annotations.
+            (dropped_literal
+                && matches!(inner.get(), PExpr::Sequence(items, ..) if items.is_empty()))
+            .then_some(*at)
+        }
+        PExpr::Repeat { inner, .. } => {
             expression(
                 inner.get_mut(),
                 markers,

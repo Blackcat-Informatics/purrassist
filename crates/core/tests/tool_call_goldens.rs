@@ -34,10 +34,10 @@ use purrassist_core::grammar::edit::LossKind;
 use purrassist_core::json::{Member, Node, Value, parse};
 use purrassist_core::tool_call::rules::RULES;
 use purrassist_core::tool_call::{
-    AmbiguityPolicy, CallOutcome, DeclarationForm, DialectId, DialectSet, Effects, Finish,
+    AmbiguityPolicy, CallOutcome, Closure, DeclarationForm, DialectId, DialectSet, Effects, Finish,
     GenerationStop, IdPolicy, ObjectSpec, Param, ParameterSpec, PolicySelection, ReasoningPolicy,
-    RepairPolicy, StrictForced, ToolCall, ToolCalls, ToolChoice, ToolDefinition,
-    ToolRecoveryRequest, ToolSet, UnknownParameters, UnresolvedReason,
+    Recognizer, RepairPolicy, Segment, StrictForced, ToolCall, ToolCalls, ToolChoice,
+    ToolDefinition, ToolRecoveryRequest, ToolSet, UnknownParameters, UnresolvedReason,
 };
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason};
 use std::path::{Path, PathBuf};
@@ -4874,7 +4874,60 @@ fn reasoning_never_swallows_calls() {
         let (fixture, result) = golden(&name);
         let calls = reading(&result);
         assert!(calls.calls.is_empty(), "{name}");
-        assert_eq!(calls.embedded.len(), 1, "{name}");
+        if matches!(dialect, "bare_json" | "anthropic") {
+            let native = if dialect == "bare_json" {
+                DialectId::BareJson
+            } else {
+                DialectId::AnthropicToolUse
+            };
+            assert_eq!(calls.embedded.len(), 2, "{name}: preserve both frames");
+            assert!(calls.embedded.iter().any(|call| call.dialect == native));
+            assert!(calls.embedded.iter().any(|call| {
+                call.dialect == DialectId::HermesStripped
+                    && rules_of(call).contains(&"tool_call.extract.prose")
+            }));
+
+            // Source framing must not turn Repaired extraction into the
+            // Closed-only equality preference or lose the native object.
+            let mut governor = Governor::new(Budget::default());
+            let mut recognizer = Recognizer::new(
+                DialectSet::built_in(),
+                ReasoningPolicy::Separate { starts_open: true },
+                &mut governor,
+            )
+            .expect("fixture recognizer");
+            recognizer
+                .push(&fixture.input, &mut governor)
+                .expect("fixture input");
+            let turn = recognizer
+                .finish(GenerationStop::Stop, &mut governor)
+                .expect("closed reasoning");
+            let block = turn
+                .selected()
+                .into_iter()
+                .find_map(|segment| match segment {
+                    Segment::Reasoning(block) => Some(block),
+                    _ => None,
+                })
+                .expect("reasoning block");
+            let mut raw = block.embedded.iter().flat_map(|call| &call.readings);
+            let exact = raw
+                .clone()
+                .find(|reading| reading.dialect == native)
+                .expect("native object");
+            let projected = raw
+                .find(|reading| reading.dialect == DialectId::HermesStripped)
+                .expect("projected reading");
+            assert_eq!(exact.closure, Closure::Closed, "{name}");
+            assert_eq!(projected.closure, Closure::Repaired, "{name}");
+            assert_eq!(
+                &fixture.input[projected.span.start..exact.span.start],
+                b"hmm "
+            );
+            assert_eq!(&fixture.input[exact.span.end..projected.span.end], b" ");
+        } else {
+            assert_eq!(calls.embedded.len(), 1, "{name}");
+        }
         let end = fixture.input.len() - "Answer.".len();
         assert_eq!(calls.reasoning, only(0..end), "{name}: ends after </think>");
         assert_eq!(calls.content, only(end..fixture.input.len()), "{name}");

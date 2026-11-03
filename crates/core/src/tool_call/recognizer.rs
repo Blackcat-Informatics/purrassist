@@ -90,7 +90,10 @@ use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
-use crate::grammar::engine::{Engine, Event, Opening, Part, Salvaged};
+use crate::grammar::engine::{
+    CompletedParts, Engine, Event, Opening, Part, PartEnvelope, Salvaged, SourceEnvelope,
+    retained_context,
+};
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
@@ -411,6 +414,10 @@ struct Frame {
 struct Turn {
     nodes: Vec<TurnNode>,
     store: Vec<Segment>,
+    /// Source proof addressed only by immutable stored call and reading indices.
+    envelopes: ScratchMap<(u32, usize), SourceEnvelope>,
+    /// Aligned embedded origins retained for reasoning's late completions.
+    embedded_origins: ScratchMap<u32, ScratchVec<u32>>,
     top: Option<Top>,
     think: Option<Think>,
     /// Each attempt with an interpretation, until its end is reported:
@@ -457,6 +464,32 @@ impl Turn {
         governor.charge(Resource::ScratchBytes, segment_bytes(&segment))?;
         self.store.push(segment);
         Ok(u32::try_from(self.store.len() - 1).unwrap_or(u32::MAX))
+    }
+
+    /// Transfer a completion's structurally addressed source proof. A cut
+    /// segment uses ordinary storage and cannot inherit the original proof.
+    fn store_certified(
+        &mut self,
+        segment: Segment,
+        part: usize,
+        certificates: &[PartEnvelope],
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let index = self.store(segment, governor)?;
+        for certificate in certificates {
+            governor.charge(Resource::Work, 1)?;
+            if certificate.part == part {
+                governor.charge(
+                    Resource::Work,
+                    size(self.envelopes.len())
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                )?;
+                self.envelopes
+                    .insert((index, certificate.reading), certificate.source)?;
+            }
+        }
+        Ok(index)
     }
 
     /// The scratch charged for the stored segments no segmentation ending
@@ -608,6 +641,7 @@ impl Turn {
             think.start,
         );
         let mut embedded = Vec::new();
+        let mut origins = ScratchVec::new(governor);
         for &index in &think.embedded {
             let (Segment::Call(segment) | Segment::Result(segment)) = &self.store[index as usize]
             else {
@@ -616,10 +650,22 @@ impl Turn {
             if segment.span.end > end {
                 continue;
             }
+            let origin = if marker.is_some_and(|marker| segment.span.end > marker) {
+                u32::MAX
+            } else {
+                index
+            };
             let Some(segment) = cut_at_marker(segment, marker) else {
                 continue;
             };
-            insert_embedded(&mut embedded, segment, governor)?;
+            insert_embedded(
+                &mut embedded,
+                &mut origins,
+                segment,
+                origin,
+                &self.envelopes,
+                governor,
+            )?;
         }
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
@@ -631,6 +677,15 @@ impl Turn {
             }),
             governor,
         )?;
+        if !origins.is_empty() {
+            governor.charge(
+                Resource::Work,
+                size(self.embedded_origins.len())
+                    .saturating_mul(2)
+                    .saturating_add(1),
+            )?;
+            self.embedded_origins.insert(index, origins)?;
+        }
         self.blocks
             .entry(think.start)
             .or_default()
@@ -665,6 +720,11 @@ impl Turn {
         let whole = call.clone();
         for (marker, index) in blocks {
             governor.charge(Resource::Work, 1)?;
+            let origin = if marker.is_some_and(|marker| whole.span.end > marker) {
+                u32::MAX
+            } else {
+                part
+            };
             let Some(call) = cut_at_marker(&whole, marker) else {
                 continue;
             };
@@ -672,7 +732,31 @@ impl Turn {
             let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
                 continue;
             };
-            insert_embedded(&mut reasoning.embedded, call, governor)?;
+            governor.charge(
+                Resource::Work,
+                size(self.embedded_origins.len())
+                    .saturating_mul(2)
+                    .saturating_add(1),
+            )?;
+            let mut origins = self
+                .embedded_origins
+                .remove(&index)
+                .unwrap_or_else(|| ScratchVec::new(governor));
+            insert_embedded(
+                &mut reasoning.embedded,
+                &mut origins,
+                call,
+                origin,
+                &self.envelopes,
+                governor,
+            )?;
+            governor.charge(
+                Resource::Work,
+                size(self.embedded_origins.len())
+                    .saturating_mul(2)
+                    .saturating_add(1),
+            )?;
+            self.embedded_origins.insert(index, origins)?;
             let after = segment_bytes(&self.store[index as usize]);
             governor.charge(Resource::ScratchBytes, after.saturating_sub(before))?;
         }
@@ -692,13 +776,27 @@ enum EmbeddedRelation {
 /// candidate must not leave a partially normalized reasoning block.
 fn insert_embedded(
     embedded: &mut Vec<CallSegment>,
+    origins: &mut ScratchVec<u32>,
     mut incoming: CallSegment,
+    origin: u32,
+    envelopes: &ScratchMap<(u32, usize), SourceEnvelope>,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
+    if origins.len() != embedded.len() {
+        return Err(StopReason::InvalidInput(
+            "embedded call origins lost structural alignment".into(),
+        ));
+    }
     let mut remove = ScratchVec::new(governor);
     for (index, existing) in embedded.iter().enumerate() {
         governor.charge(Resource::Work, 1)?;
-        match embedded_relation(existing, &incoming, governor)? {
+        match embedded_relation(
+            existing,
+            &incoming,
+            (origins[index], origin),
+            envelopes,
+            governor,
+        )? {
             EmbeddedRelation::Left => return Ok(()),
             EmbeddedRelation::Right => remove.push(index)?,
             EmbeddedRelation::Both => {}
@@ -730,19 +828,36 @@ fn insert_embedded(
         Resource::Work,
         size(embedded.len()).saturating_mul(3).saturating_add(1),
     )?;
+    // Admit the aligned owner's growth and every metadata relocation before
+    // either collection changes. No fallible step separates their mutations.
+    governor.charge(
+        Resource::Work,
+        size(origins.len()).saturating_mul(3).saturating_add(1),
+    )?;
+    origins.reserve(1)?;
     let mut index = 0;
+    let mut kept = 0;
     let mut removals = remove.as_slice().iter().peekable();
     embedded.retain(|_| {
         let keep = removals.peek().copied().copied() != Some(index);
-        if !keep {
+        if keep {
+            let source = origins[index];
+            origins.as_mut_slice()[kept] = source;
+            kept += 1;
+        } else {
             let _ = removals.next();
         }
         index += 1;
         keep
     });
+    while origins.len() > kept {
+        origins.pop();
+    }
     let at = embedded.partition_point(|other| {
         (other.span.start, other.span.end) < (incoming.span.start, incoming.span.end)
     });
+    origins.push(origin)?;
+    origins.as_mut_slice()[at..].rotate_right(1);
     embedded.insert(at, incoming);
     Ok(())
 }
@@ -750,6 +865,8 @@ fn insert_embedded(
 fn embedded_relation(
     left: &CallSegment,
     right: &CallSegment,
+    origins: (u32, u32),
+    envelopes: &ScratchMap<(u32, usize), SourceEnvelope>,
     governor: &mut Governor,
 ) -> Result<EmbeddedRelation, StopReason> {
     governor.charge(
@@ -771,17 +888,22 @@ fn embedded_relation(
                 reading.dialect == DialectId::HermesStripped && reading.span == segment.span
             })
     };
-    let (native, shadow, preference) = if native(left) && shadow(right) {
-        (left, right, EmbeddedRelation::Left)
+    let (native, shadow, origin, preference) = if native(left) && shadow(right) {
+        (left, right, origins.1, EmbeddedRelation::Left)
     } else if native(right) && shadow(left) {
-        (right, left, EmbeddedRelation::Right)
+        (right, left, origins.0, EmbeddedRelation::Right)
     } else {
         return Ok(EmbeddedRelation::Geometry);
     };
     // A native object inside the arguments of a genuinely enclosing call is
     // data. Protect alternatives only after proving the same lexical envelope.
-    for reading in &shadow.readings {
-        if !same_embedded_envelope(reading, &native.span, governor)? {
+    for (index, reading) in shadow.readings.iter().enumerate() {
+        governor.charge(
+            Resource::Work,
+            u64::from(envelopes.len().bit_width() + 1).saturating_mul(2),
+        )?;
+        let source = envelopes.get(&(origin, index));
+        if !same_embedded_envelope(reading, &native.span, source, governor)? {
             return Ok(EmbeddedRelation::Geometry);
         }
     }
@@ -800,11 +922,14 @@ fn embedded_relation(
 fn same_embedded_envelope(
     shadow: &RawCall,
     frame: &Range<usize>,
+    source: Option<&SourceEnvelope>,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
+    let retained = retained_context(shadow, governor)?;
+    governor.charge(Resource::Work, 4)?;
     if shadow.span.start > frame.start
         || shadow.span.end < frame.end
-        || retained_context(shadow, governor)? != *frame
+        || (retained != *frame && !source.is_some_and(|source| source.matches(&retained, frame)))
     {
         return Ok(false);
     }
@@ -1590,6 +1715,8 @@ impl<'s> Recognizer<'s> {
         let turn = Turn {
             nodes: vec![root],
             store: Vec::new(),
+            envelopes: ScratchMap::new(governor),
+            embedded_origins: ScratchMap::new(governor),
             top: (!starts_open).then_some(Top {
                 cost: 0,
                 hist: 0,
@@ -1852,11 +1979,12 @@ impl<'s> Recognizer<'s> {
             }) => {
                 let kind = self.engine.kind(table);
                 let dialect = self.engine.dialect(table).clone();
+                let CompletedParts { parts, envelopes } = parts;
                 let parts = parts
                     .into_iter()
                     .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
                     .collect();
-                self.completed(frame, attempt, parts, charged, governor)?;
+                self.completed(frame, attempt, parts, envelopes, charged, governor)?;
             }
             Pending::Engine(Event::Ended {
                 table,
@@ -2341,11 +2469,13 @@ impl<'s> Recognizer<'s> {
     /// The segments of `attempt` ended: one call (or result), or each
     /// call of an attempt whose production separates calls with `next`,
     /// in order, each with its cost.
+    #[allow(clippy::too_many_arguments)]
     fn completed(
         &mut self,
         frame: &mut Frame,
         attempt: u64,
         parts: Vec<(Segment, u64)>,
+        envelopes: ScratchVec<PartEnvelope>,
         charged: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
@@ -2387,7 +2517,12 @@ impl<'s> Recognizer<'s> {
                 cut_part = Some((self.turn.store(trimmed, governor)?, cost, marker));
             }
             let end = segment.span().end;
-            stored.push((self.turn.store(segment, governor)?, cost, end));
+            stored.push((
+                self.turn
+                    .store_certified(segment, index, &envelopes, governor)?,
+                cost,
+                end,
+            ));
         }
         for &interp in &interps {
             match interp {
@@ -2787,12 +2922,18 @@ impl<'s> Recognizer<'s> {
         } else {
             None
         };
-        for parts in salvage.segmentations {
+        let (segmentations, _owner) = salvage.segmentations.into_owned_parts();
+        for CompletedParts { parts, envelopes } in segmentations {
             let mut stored = Vec::with_capacity(parts.len());
-            for (part, cost) in parts {
+            for (index, (part, cost)) in parts.into_iter().enumerate() {
                 let segment = part_segment(kind, dialect, part);
                 let end = segment.span().end;
-                stored.push((self.turn.store(segment, governor)?, cost, end));
+                stored.push((
+                    self.turn
+                        .store_certified(segment, index, &envelopes, governor)?,
+                    cost,
+                    end,
+                ));
             }
             for interp in interps {
                 match *interp {
@@ -3665,57 +3806,6 @@ fn example_call(
     Ok(())
 }
 
-/// Only exterior extraction can move a context boundary. An enclosing native
-/// protocol still protects every interior byte, including dropped fence text.
-/// Source spans provide identical geometry with or without the whole input.
-fn retained_context(
-    reading: &RawCall,
-    governor: &mut Governor,
-) -> Result<Range<usize>, StopReason> {
-    let mut span = reading.span.clone();
-    for edit in &reading.edits {
-        governor.charge(Resource::Work, 1)?;
-        if edit.span.start == span.start
-            && edit.span.end <= span.end
-            && context_extraction(reading, edit, governor)?
-        {
-            span.start = edit.span.end;
-        }
-    }
-    for edit in reading.edits.iter().rev() {
-        governor.charge(Resource::Work, 1)?;
-        if edit.span.end == span.end
-            && edit.span.start >= span.start
-            && context_extraction(reading, edit, governor)?
-        {
-            span.end = edit.span.start;
-        }
-    }
-    Ok(span)
-}
-
-/// Retained capture bytes cannot be removed from Markdown protection.
-fn context_extraction(
-    reading: &RawCall,
-    edit: &MarkupEdit,
-    governor: &mut Governor,
-) -> Result<bool, StopReason> {
-    if edit.span.is_empty()
-        || !matches!(
-            edit.operator,
-            EditOperator::ExtractProse | EditOperator::ExtractFence
-        )
-    {
-        return Ok(false);
-    }
-    governor.charge(Resource::Work, size(reading.captures.len()))?;
-    Ok(!reading.captures.iter().any(|capture| {
-        capture.kind != crate::grammar::CaptureKind::Dropped
-            && capture.span.start < edit.span.end
-            && edit.span.start < capture.span.end
-    }))
-}
-
 /// Insert the same source-ordered contextual guess into one raw reading.
 fn mark_example(
     call: &mut RawCall,
@@ -4412,7 +4502,7 @@ mod tests {
                     panic!("prose follows ordinary least cost: {prose:?}");
                 };
                 assert_eq!(calls.calls.len(), 1);
-                assert!(calls.calls[0].repairs.losses.is_empty());
+                assert_eq!(calls.calls[0].repairs.losses, []);
             } else {
                 let Outcome::Resolved(calls) = &result.outcome else {
                     panic!("mixed endings follow ordinary least cost: {result:?}");
