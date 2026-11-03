@@ -683,7 +683,9 @@ fn stream_ambiguous_prefix(
             assert_eq!(
                 (partial_started, partial_named),
                 (1, 1),
-                "common name for {input:?}, request {request:?}, split {split}"
+                "common name for {input:?}, request {request:?}, split {split}; stopped {:?}, usage {:?}; readings {readings:#?}",
+                expected.receipt.stopped,
+                expected.receipt.usage
             );
             assert_eq!(content, expected_content, "common prefix at split {split}");
             assert_eq!(

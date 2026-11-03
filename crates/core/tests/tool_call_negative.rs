@@ -291,10 +291,25 @@ fn stray_closers_after_ambiguous_body_tail() {
         assert_no_markup_in_content(input, calls);
         assert!(calls.rejected.is_empty(), "{effects:?}");
         assert_eq!(calls.content, vec![tail..input.len()], "{effects:?}");
-        // The short native-frame control extends only beyond the actual
-        // compiled settlement bound, so live tail publication is required.
-        let closed = format!("{CALL} tail{}", " ".repeat(dialects.lookbehind() + 1));
-        stream_content(&tools, &dialects, &closed, &request, CALL.len(), true);
+        // Qwen's verbatim body can still read past its canonical closer.
+        // A self-delimiting Hermes JSON body supplies a settled native-frame
+        // control, extended beyond its own compiled settlement bound.
+        let settled_dialects =
+            DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default()))
+                .expect("settled dialect set");
+        let frame = r#"<tool_call>{"name":"f","arguments":{"a":"x"}}</tool_call>"#;
+        let closed = format!(
+            "{frame} tail{}",
+            " ".repeat(settled_dialects.lookbehind() + 1)
+        );
+        stream_content(
+            &tools,
+            &settled_dialects,
+            &closed,
+            &request,
+            frame.len(),
+            true,
+        );
     }
     let tools = tools(Effects::ReadOnly);
     lexical_content_frontier(&tools);
