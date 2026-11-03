@@ -3,6 +3,7 @@
 
 //! Borrowed EOF source order and the prefix shared by resident final readings.
 use super::recover::ReasoningBlock;
+use super::stream_capture::{FinalOrigins, NativeFact, NativeTrace, Origins};
 use super::{
     CallLedger, CallOutcome, CallReading, RejectedCall, ToolCall, ToolCalls, UnresolvedReason,
 };
@@ -62,12 +63,23 @@ pub(super) fn source_boundary(
     Ok(end)
 }
 
+/// Actual final values paired with their private native correlation row.
+#[derive(Clone, Copy)]
+pub(super) struct FinalView<'a> {
+    pub(super) calls: &'a ToolCalls,
+    pub(super) origins: &'a FinalOrigins,
+}
+impl ScratchCharge for FinalView<'_> {
+    const CHARGE: usize = 16;
+}
+const _: () = assert!(core::mem::size_of::<FinalView<'_>>() <= FinalView::CHARGE);
+
 /// A borrowed item; overlapping rejected wrappers remain separate source facts.
 #[derive(Clone, Copy)]
 pub(super) enum FinalItem<'a> {
     Content(&'a Range<usize>),
     Reasoning(&'a ReasoningBlock),
-    Call(&'a ToolCall),
+    Call(&'a ToolCall, &'a Origins),
     Rejected(&'a RejectedCall),
 }
 
@@ -76,7 +88,7 @@ impl FinalItem<'_> {
         match self {
             Self::Content(span) => span,
             Self::Reasoning(block) => &block.span,
-            Self::Call(call) => &call.span,
+            Self::Call(call, _) => &call.span,
             Self::Rejected(rejected) => &rejected.span,
         }
     }
@@ -85,7 +97,7 @@ impl FinalItem<'_> {
         let rank = match self {
             Self::Content(_) => 0,
             Self::Reasoning(_) => 1,
-            Self::Call(_) => 2,
+            Self::Call(..) => 2,
             Self::Rejected(_) => 3,
         };
         (self.span().start, rank, self.span().end)
@@ -95,18 +107,20 @@ impl FinalItem<'_> {
 /// Four monotone indices into one existing final reading, without payload copies.
 pub(super) struct FinalCursor<'a> {
     calls: &'a ToolCalls,
+    origins: &'a FinalOrigins,
     next: [usize; 4],
 }
 
 impl ScratchCharge for FinalCursor<'_> {
-    const CHARGE: usize = 40;
+    const CHARGE: usize = 48;
 }
 const _: () = assert!(core::mem::size_of::<FinalCursor<'_>>() <= FinalCursor::CHARGE);
 
 impl<'a> FinalCursor<'a> {
-    pub(super) const fn new(calls: &'a ToolCalls) -> Self {
+    pub(super) const fn new(view: FinalView<'a>) -> Self {
         Self {
-            calls,
+            calls: view.calls,
+            origins: view.origins,
             next: [0; 4],
         }
     }
@@ -118,7 +132,10 @@ impl<'a> FinalCursor<'a> {
                 .reasoning_blocks
                 .get(self.next[1])
                 .map(FinalItem::Reasoning),
-            self.calls.calls.get(self.next[2]).map(FinalItem::Call),
+            self.calls
+                .calls
+                .get(self.next[2])
+                .map(|call| FinalItem::Call(call, &self.origins.calls[self.next[2]])),
             self.calls
                 .rejected
                 .get(self.next[3])
@@ -146,22 +163,20 @@ impl<'a> FinalCursor<'a> {
 }
 
 /// Plan before publishing, so an equal wrapper cannot hide a later-discovered
-/// disagreement inside its span. Complete differing calls stop at their start;
-/// finer intra-call commitment still needs correlated native capture identities.
+/// disagreement inside its span. Calls retain their correlated native source
+/// facts so a differing call can still publish its earlier shared facts.
 pub(super) fn common_prefix(
-    readings: &[ToolCalls],
+    readings: &[FinalView<'_>],
+    native: &NativeTrace,
     length: usize,
     governor: &mut Governor,
 ) -> Result<usize, StopReason> {
     let Some(first) = readings.first() else {
         return Err(invalid_input("completed recovery has no final reading"));
     };
-    if readings.len() == 1 {
-        return Ok(length);
-    }
     let mut cursors = ScratchVec::new(governor);
     for reading in readings {
-        push_scratch(&mut cursors, FinalCursor::new(reading), governor)?;
+        push_scratch(&mut cursors, FinalCursor::new(*reading), governor)?;
     }
     let mut limit = length;
     loop {
@@ -178,10 +193,17 @@ pub(super) fn common_prefix(
         }
         governor.charge(Resource::Work, CURSOR_WORK)?;
         let base = cursors[0].peek().map(|(_, item)| item);
+        for cursor in &cursors {
+            if let Some((_, FinalItem::Call(call, origins))) = cursor.peek()
+                && let Some(at) = call_limit(call, origins, native, governor)?
+            {
+                limit = limit.min(at);
+            }
+        }
         for cursor in &cursors.as_slice()[1..] {
             governor.charge(Resource::Work, CURSOR_WORK)?;
             let other = cursor.peek().map(|(_, item)| item);
-            if let Some(at) = difference(base, other, governor)? {
+            if let Some(at) = difference(base, other, native, governor)? {
                 limit = limit.min(at);
             }
         }
@@ -192,10 +214,18 @@ pub(super) fn common_prefix(
     // Embedded calls are semantic facts inside reasoning even though they do
     // not receive top-level call indices or independent completion events.
     for reading in &readings[1..] {
-        for index in 0..first.embedded.len().max(reading.embedded.len()) {
+        for index in 0..first.calls.embedded.len().max(reading.calls.embedded.len()) {
             governor.charge(Resource::Work, 8)?;
-            let left = first.embedded.get(index).map(FinalItem::Call);
-            let right = reading.embedded.get(index).map(FinalItem::Call);
+            let left = first
+                .calls
+                .embedded
+                .get(index)
+                .map(|call| FinalItem::Call(call, &first.origins.embedded[index]));
+            let right = reading
+                .calls
+                .embedded
+                .get(index)
+                .map(|call| FinalItem::Call(call, &reading.origins.embedded[index]));
             if left
                 .into_iter()
                 .chain(right)
@@ -205,7 +235,19 @@ pub(super) fn common_prefix(
             {
                 break;
             }
-            if let Some(at) = difference(left, right, governor)? {
+            if let Some(at) = difference(left, right, native, governor)? {
+                limit = limit.min(at);
+            }
+        }
+    }
+    for reading in readings {
+        for (call, origins) in reading
+            .calls
+            .embedded
+            .iter()
+            .zip(reading.origins.embedded.iter())
+        {
+            if let Some(at) = call_limit(call, origins, native, governor)? {
                 limit = limit.min(at);
             }
         }
@@ -224,9 +266,373 @@ fn range_difference(left: &Range<usize>, right: &Range<usize>) -> Option<usize> 
     }
 }
 
+fn earliest(left: Option<usize>, right: Option<usize>) -> Option<usize> {
+    left.into_iter().chain(right).min()
+}
+
+pub(super) fn selected_fact<'a>(
+    origins: &Origins,
+    native: &'a NativeTrace,
+) -> Result<&'a NativeFact, StopReason> {
+    let id = origins
+        .0
+        .first()
+        .ok_or_else(|| invalid_input("final call has no native origin"))?;
+    let row = native.call(*id)?;
+    let selected = row
+        .readings
+        .first()
+        .ok_or_else(|| invalid_input("native call has no selected semantic origin"))?;
+    native.fact(*selected)
+}
+
+fn fact_difference(
+    left: &NativeFact,
+    right: &NativeFact,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    let mut limit = left.header_difference(right, governor)?;
+    for index in 0..left.arguments.len().max(right.arguments.len()) {
+        governor.charge(Resource::Work, 4)?;
+        let at = match (left.arguments.get(index), right.arguments.get(index)) {
+            (Some(&(a, b)), Some(&(c, d))) if a == c => (b != d).then_some(b.min(d)),
+            (Some(&(a, _)), Some(&(b, _))) => Some(a.min(b)),
+            (Some(&(at, _)), None) | (None, Some(&(at, _))) => Some(at),
+            (None, None) => None,
+        };
+        limit = earliest(limit, at);
+    }
+    for index in 0..left.edits.len().max(right.edits.len()) {
+        governor.charge(Resource::Work, 4)?;
+        let a = left.edits.get(index);
+        let b = right.edits.get(index);
+        let equal = match (a, b) {
+            (Some(a), Some(b)) => {
+                governor.charge(
+                    Resource::Work,
+                    size(
+                        a.parameter
+                            .as_ref()
+                            .map_or(0, crate::contract::ScratchString::len),
+                    )
+                    .saturating_add(size(
+                        b.parameter
+                            .as_ref()
+                            .map_or(0, crate::contract::ScratchString::len),
+                    ))
+                    .saturating_add(1),
+                )?;
+                a.operator == b.operator
+                    && a.at == b.at
+                    && a.end == b.end
+                    && a.same_payload(b, governor)?
+                    && a.parameter == b.parameter
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !equal {
+            limit = earliest(limit, a.into_iter().chain(b).map(|edit| edit.at).min());
+        }
+    }
+    if left.closure != right.closure {
+        limit = earliest(limit, Some(left.span.end.min(right.span.end)));
+    }
+    Ok(limit)
+}
+
+fn entries_difference<T: PartialEq>(
+    left: &[T],
+    right: &[T],
+    fallback: usize,
+    governor: &mut Governor,
+    mut admit: impl FnMut(&T, &mut Governor) -> Result<Option<usize>, StopReason>,
+) -> Result<Option<usize>, StopReason> {
+    let mut limit = None;
+    for index in 0..left.len().max(right.len()) {
+        governor.charge(Resource::Work, 2)?;
+        let a = left.get(index);
+        let b = right.get(index);
+        let mut at = None;
+        for value in a.into_iter().chain(b) {
+            at = earliest(at, admit(value, governor)?);
+        }
+        if a != b {
+            limit = earliest(limit, Some(at.unwrap_or(fallback)));
+        }
+    }
+    Ok(limit)
+}
+
+fn ledger_difference(
+    left: &CallLedger,
+    right: &CallLedger,
+    fallback: usize,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    let mut limit = entries_difference(
+        &left.evidence,
+        &right.evidence,
+        fallback,
+        governor,
+        |value, governor| {
+            admit_evidence(value, governor)?;
+            Ok(value.span.as_ref().map(|span| span.bytes.start))
+        },
+    )?;
+    limit = earliest(
+        limit,
+        entries_difference(
+            &left.losses,
+            &right.losses,
+            fallback,
+            governor,
+            |value, governor| {
+                admit_evidence(&value.loss.evidence, governor)?;
+                governor.charge(
+                    Resource::Work,
+                    size(value.loss.original.len()).saturating_add(1),
+                )?;
+                Ok(value
+                    .loss
+                    .evidence
+                    .span
+                    .as_ref()
+                    .map(|span| span.bytes.start))
+            },
+        )?,
+    );
+    limit = earliest(
+        limit,
+        entries_difference(
+            &left.inferences,
+            &right.inferences,
+            fallback,
+            governor,
+            |value, governor| {
+                admit_evidence(&value.evidence, governor)?;
+                governor.charge(Resource::Work, size(value.value.len()).saturating_add(1))?;
+                Ok(value.evidence.span.as_ref().map(|span| span.bytes.start))
+            },
+        )?,
+    );
+    Ok(limit)
+}
+
+/// Include local semantic competitors even when there is one whole-turn row.
+/// Higher-cost diagnostic alternatives retain their origins but are not live
+/// competing interpretations of its selected call.
+pub(super) fn call_limit(
+    call: &ToolCall,
+    origins: &Origins,
+    native: &NativeTrace,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    let base = selected_fact(origins, native)?;
+    let mut limit = None;
+    for &id in &origins.0 {
+        governor.charge(Resource::Work, 4)?;
+        let row = native.call(id)?;
+        if row.readings.len()
+            != call
+                .alternatives
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| invalid_input("semantic capture count overflows"))?
+            || row.competing == 0
+            || row.competing > row.readings.len()
+        {
+            return Err(invalid_input(
+                "final semantic readings and native origins disagree",
+            ));
+        }
+        let header = native.fact(row.header)?;
+        limit = earliest(limit, base.header_difference(header, governor)?);
+        for (index, &raw) in row.readings.iter().take(row.competing).enumerate() {
+            let fact = native.fact(raw)?;
+            if fact.span != call.span {
+                return Err(invalid_input(
+                    "native capture span differs from its resolved call",
+                ));
+            }
+            limit = earliest(limit, fact_difference(base, fact, governor)?);
+            if index > 0 {
+                let alternative = &call.alternatives[index - 1];
+                let fallback = base.argument_start().min(fact.argument_start());
+                limit = earliest(
+                    limit,
+                    tree_difference(&call.arguments, &alternative.arguments, fallback, governor)?,
+                );
+                if !optional_text(call.tool.as_deref(), alternative.tool.as_deref(), governor)? {
+                    limit = earliest(limit, Some(base.name_start().min(fact.name_start())));
+                }
+                limit = earliest(
+                    limit,
+                    ledger_difference(
+                        &call.repairs,
+                        &alternative.repairs,
+                        call.span.end,
+                        governor,
+                    )?,
+                );
+                limit = earliest(limit, Some(call.span.end));
+            }
+        }
+    }
+    Ok(limit)
+}
+
+fn call_difference(
+    left: &ToolCall,
+    left_origins: &Origins,
+    right: &ToolCall,
+    right_origins: &Origins,
+    native: &NativeTrace,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    if left.index != right.index || left.span.start != right.span.start {
+        return Ok(Some(left.span.start.min(right.span.start)));
+    }
+    let a = selected_fact(left_origins, native)?;
+    let b = selected_fact(right_origins, native)?;
+    let mut limit = fact_difference(a, b, governor)?;
+    limit = earliest(limit, range_difference(&left.span, &right.span));
+    if !optional_text(left.tool.as_deref(), right.tool.as_deref(), governor)? {
+        limit = earliest(limit, Some(a.name_start().min(b.name_start())));
+    }
+    limit = earliest(
+        limit,
+        tree_difference(
+            &left.arguments,
+            &right.arguments,
+            a.argument_start().min(b.argument_start()),
+            governor,
+        )?,
+    );
+    limit = earliest(
+        limit,
+        ledger_difference(
+            &left.repairs,
+            &right.repairs,
+            left.span.end.min(right.span.end),
+            governor,
+        )?,
+    );
+    limit = earliest(
+        limit,
+        entries_difference(
+            &left.distinguishing,
+            &right.distinguishing,
+            left.span.end.min(right.span.end),
+            governor,
+            provenance_anchor,
+        )?,
+    );
+    if !same_call(left, right, governor)? {
+        limit = earliest(limit, Some(left.span.end.min(right.span.end)));
+    }
+    Ok(limit)
+}
+
+struct TreePair<'a> {
+    left: &'a crate::json::Node,
+    right: &'a crate::json::Node,
+    depth: u64,
+}
+impl ScratchCharge for TreePair<'_> {
+    const CHARGE: usize = 24;
+}
+const _: () = assert!(core::mem::size_of::<TreePair<'_>>() <= TreePair::CHARGE);
+
+fn tree_difference(
+    left: &crate::json::Node,
+    right: &crate::json::Node,
+    fallback: usize,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    use crate::json::Value;
+    let mut stack = ScratchVec::new(governor);
+    push_scratch(
+        &mut stack,
+        TreePair {
+            left,
+            right,
+            depth: 0,
+        },
+        governor,
+    )?;
+    let mut limit = None;
+    while let Some(TreePair { left, right, depth }) = stack.pop() {
+        governor.charge(Resource::Work, 4)?;
+        governor.charge(Resource::Depth, depth)?;
+        let at = left
+            .span
+            .as_ref()
+            .into_iter()
+            .chain(right.span.as_ref())
+            .map(|span| span.start)
+            .min()
+            .unwrap_or(fallback);
+        let span_difference = match (&left.span, &right.span) {
+            (Some(a), Some(b)) => range_difference(a, b),
+            (None, None) => None,
+            _ => Some(at),
+        };
+        limit = earliest(limit, span_difference);
+        match (&left.value, &right.value) {
+            (Value::Null, Value::Null) => {}
+            (Value::Bool(a), Value::Bool(b)) if a == b => {}
+            (Value::String(a), Value::String(b)) if text(a, b, governor)? => {}
+            (Value::Number(a), Value::Number(b)) if text(a.as_str(), b.as_str(), governor)? => {}
+            (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
+                for (left, right) in a.iter().zip(b) {
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    push_scratch(
+                        &mut stack,
+                        TreePair {
+                            left,
+                            right,
+                            depth: depth.saturating_add(1),
+                        },
+                        governor,
+                    )?;
+                }
+            }
+            (Value::Object(a), Value::Object(b)) if a.len() == b.len() => {
+                for (left, right) in a.iter().zip(b) {
+                    if left.key_span != right.key_span || !text(&left.key, &right.key, governor)? {
+                        let key = left
+                            .key_span
+                            .as_ref()
+                            .into_iter()
+                            .chain(right.key_span.as_ref())
+                            .map(|span| span.start)
+                            .min()
+                            .unwrap_or(at);
+                        limit = earliest(limit, Some(key));
+                    }
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    push_scratch(
+                        &mut stack,
+                        TreePair {
+                            left: &left.value,
+                            right: &right.value,
+                            depth: depth.saturating_add(1),
+                        },
+                        governor,
+                    )?;
+                }
+            }
+            _ => limit = earliest(limit, Some(at)),
+        }
+    }
+    Ok(limit)
+}
+
 fn difference(
     left: Option<FinalItem<'_>>,
     right: Option<FinalItem<'_>>,
+    native: &NativeTrace,
     governor: &mut Governor,
 ) -> Result<Option<usize>, StopReason> {
     governor.charge(Resource::Work, 16)?;
@@ -245,7 +651,9 @@ fn difference(
             .into_iter()
             .chain(range_difference(&a.text, &b.text))
             .min(),
-        (FinalItem::Call(a), FinalItem::Call(b)) if same_call(a, b, governor)? => None,
+        (FinalItem::Call(a, left), FinalItem::Call(b, right)) => {
+            call_difference(a, left, b, right, native, governor)?
+        }
         (FinalItem::Rejected(a), FinalItem::Rejected(b)) if same_rejected(a, b, governor)? => None,
         _ => Some(start),
     })
@@ -280,7 +688,7 @@ fn dialects(
     Ok(true)
 }
 
-fn same_call(
+pub(super) fn same_call(
     left: &ToolCall,
     right: &ToolCall,
     governor: &mut Governor,
@@ -466,6 +874,27 @@ fn outcome(
         }
     }
     Ok(left == right)
+}
+
+fn provenance_anchor(
+    value: &ProvenanceNode,
+    governor: &mut Governor,
+) -> Result<Option<usize>, StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let evidence = match value {
+        ProvenanceNode::Evidence(value) => value,
+        ProvenanceNode::Loss(value) => {
+            governor.charge(Resource::Work, size(value.original.len()))?;
+            &value.evidence
+        }
+        ProvenanceNode::Inference(value) => {
+            governor.charge(Resource::Work, size(value.value.len()))?;
+            &value.evidence
+        }
+        ProvenanceNode::Validation(..) => return Ok(None),
+    };
+    admit_evidence(evidence, governor)?;
+    Ok(evidence.span.as_ref().map(|span| span.bytes.start))
 }
 
 fn provenance(

@@ -66,6 +66,7 @@ pub mod rules;
 mod scope;
 mod shape;
 mod stream;
+mod stream_capture;
 mod stream_finish;
 mod toolset;
 

@@ -601,59 +601,84 @@ fn stream_ambiguous_prefix(
     let Outcome::Ambiguous(readings) = &batch.outcome else {
         panic!("expected whole-message ambiguity: {:?}", batch.outcome);
     };
-    for split in 0..=input.len() {
-        let mut stream = tools.stream_with_dialects(ToolRecoveryRequest::default(), dialects);
-        let mut events = Vec::new();
-        stream.feed(&input[..split], &mut events);
-        stream.feed(&input[split..], &mut events);
-        let result = stream.finish_with_events(GenerationStop::Stop, &mut events);
-        assert_eq!(&result, batch, "whole result/usage at split {split}");
-        let mut content = Vec::new();
-        let mut previous = 0;
-        let mut completed = 0;
-        for event in events {
-            match event {
-                StreamEvent::ContentDelta { span, raw } => {
-                    assert!(span.start >= previous && span.start < span.end);
-                    assert_eq!(raw.as_slice(), &input[span.clone()]);
-                    for reading in readings {
-                        assert!(
-                            reading.content.iter().any(|range| {
+    let reject_request = ToolRecoveryRequest::default().ambiguity(AmbiguityPolicy::Reject);
+    let rejected = tools.recover(input, &reject_request, dialects);
+    assert_eq!(rejected.outcome, Outcome::Unresolved);
+    for (request, expected) in [
+        (ToolRecoveryRequest::default(), batch),
+        (reject_request, &rejected),
+    ] {
+        for split in 0..=input.len() {
+            let mut stream = tools.stream_with_dialects(request.clone(), dialects);
+            let mut events = Vec::new();
+            stream.feed(&input[..split], &mut events);
+            stream.feed(&input[split..], &mut events);
+            let result = stream.finish_with_events(GenerationStop::Stop, &mut events);
+            assert_eq!(&result, expected, "whole result/usage at split {split}");
+            let mut content = Vec::new();
+            let mut previous = 0;
+            let mut completed = 0;
+            let (mut partial_started, mut partial_named) = (0, 0);
+            for event in events {
+                match event {
+                    StreamEvent::ContentDelta { span, raw } => {
+                        assert!(span.start >= previous && span.start < span.end);
+                        assert_eq!(raw.as_slice(), &input[span.clone()]);
+                        for reading in readings {
+                            assert!(reading.content.iter().any(|range| {
                                 range.start <= span.start && span.end <= range.end
-                            })
+                            }));
+                        }
+                        previous = span.end;
+                        content.extend(raw);
+                    }
+                    StreamEvent::CallStarted {
+                        index,
+                        offset,
+                        dialect_candidates,
+                    } if index == shared_calls => {
+                        for reading in readings {
+                            assert_eq!(offset, reading.calls[index].span.start);
+                            assert!(dialect_candidates.contains(&reading.calls[index].dialect));
+                        }
+                        partial_started += 1;
+                    }
+                    StreamEvent::CallName { index, tool } if index == shared_calls => {
+                        for reading in readings {
+                            assert_eq!(Some(tool.as_str()), reading.calls[index].tool.as_deref());
+                        }
+                        partial_named += 1;
+                    }
+                    StreamEvent::CallStarted { index, .. }
+                    | StreamEvent::CallName { index, .. }
+                    | StreamEvent::ArgumentDelta { index, .. }
+                    | StreamEvent::Revision { index, .. }
+                    | StreamEvent::ParameterComplete { index, .. } => {
+                        assert!(
+                            index < shared_calls,
+                            "event passed the first different call"
                         );
                     }
-                    previous = span.end;
-                    content.extend(raw);
-                }
-                StreamEvent::CallStarted { index, .. }
-                | StreamEvent::CallName { index, .. }
-                | StreamEvent::ArgumentDelta { index, .. }
-                | StreamEvent::Revision { index, .. }
-                | StreamEvent::ParameterComplete { index, .. } => {
-                    assert!(
-                        index < shared_calls,
-                        "event passed the first different call"
-                    );
-                }
-                StreamEvent::CallComplete { index, outcome } => {
-                    assert_eq!(index, completed);
-                    assert!(index < shared_calls);
-                    for reading in readings {
-                        assert_eq!(outcome, reading.calls[index].outcome);
+                    StreamEvent::CallComplete { index, outcome } => {
+                        assert_eq!(index, completed);
+                        assert!(index < shared_calls);
+                        for reading in readings {
+                            assert_eq!(outcome, reading.calls[index].outcome);
+                        }
+                        completed += 1;
                     }
-                    completed += 1;
-                }
-                StreamEvent::ReasoningDelta { .. } | StreamEvent::CallRejected { .. } => {
-                    panic!("no reasoning or rejection belongs to the shared prefix");
+                    StreamEvent::ReasoningDelta { .. } | StreamEvent::CallRejected { .. } => {
+                        panic!("no reasoning or rejection belongs to the shared prefix");
+                    }
                 }
             }
+            assert_eq!((partial_started, partial_named), (1, 1));
+            assert_eq!(content, expected_content, "common prefix at split {split}");
+            assert_eq!(
+                completed, shared_calls,
+                "common completion at split {split}"
+            );
         }
-        assert_eq!(content, expected_content, "common prefix at split {split}");
-        assert_eq!(
-            completed, shared_calls,
-            "common completion at split {split}"
-        );
     }
 }
 
@@ -678,6 +703,164 @@ fn ambiguous_eof_common_facts(
         &extended,
     );
     stream_ambiguous_prefix(tools, &extended, shared.as_bytes(), b" say ", 1, &batch);
+}
+
+/// A losing raw capture of the same span cannot suppress the selected JSON
+/// capture. A later differing native id still blocks completion and suffixes.
+fn correlated_eof_argument_prefix(tools: &ToolSet) {
+    let grammar = r#"grammar "capture-prefix.v1";
+        ident = /[A-Za-z_][A-Za-z0-9_]*/;
+        call = "<capture>" name:ident ":"
+          (arguments:slot(json, "\x00") ":" id:ident
+           | arguments:slot(raw, "</capture>")) "</capture>";
+        result = "<capture-result>" content:until("</capture-result>") "</capture-result>";
+        declaration = "<capture-declaration>" name:ident "</capture-declaration>";"#;
+    let other = grammar
+        .replace("capture-prefix.v1", "capture-content.v1")
+        .replace("id:ident", "content:ident");
+    let dialects = set(&[custom(grammar), custom(&other)]);
+    let input = b"before <capture>f:{}:tag</capture> after";
+    let request = ToolRecoveryRequest::default();
+    let batch = tools.recover(input, &request, &dialects);
+    let readings = match &batch.outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => core::slice::from_ref(calls),
+        Outcome::Ambiguous(readings) => readings.as_slice(),
+        Outcome::Unresolved => panic!("the native JSON capture must remain viable"),
+    };
+    for reading in readings {
+        assert_eq!(reading.calls.len(), 1);
+        assert_eq!(reading.calls[0].arguments.to_json(), "{}");
+        assert!(reading.calls[0].alternatives.iter().any(|alternative| {
+            alternative.arguments.as_str() == Some("{}:tag")
+                && alternative.blocker == Some(UnresolvedReason::ArgumentsNotObject)
+        }));
+    }
+    for split in 0..=input.len() {
+        let mut stream = tools.stream_with_dialects(request.clone(), &dialects);
+        let mut events = Vec::new();
+        stream.feed(&input[..split], &mut events);
+        stream.feed(&input[split..], &mut events);
+        assert_eq!(
+            stream.finish_with_events(GenerationStop::Stop, &mut events),
+            batch
+        );
+        let (mut raw_arguments, mut content) = (Vec::new(), Vec::new());
+        let (mut started, mut named) = (0, 0);
+        for event in events {
+            match event {
+                StreamEvent::CallStarted { index: 0, .. } => started += 1,
+                StreamEvent::CallName { index: 0, tool } => {
+                    assert_eq!(tool, "f");
+                    named += 1;
+                }
+                StreamEvent::ArgumentDelta { index: 0, raw } => raw_arguments.extend(raw),
+                StreamEvent::ContentDelta { raw, .. } => content.extend(raw),
+                other => panic!("event passed the native id disagreement: {other:?}"),
+            }
+        }
+        assert_eq!((started, named), (1, 1));
+        assert_eq!(raw_arguments, b"{}");
+        assert_eq!(content, b"before ");
+    }
+}
+
+/// Conflicting native insertions at the first differing source coordinate
+/// stay private; a genuinely shared insertion at EOF is still reported.
+fn correlated_eof_revision_prefix(tools: &ToolSet) {
+    let grammar = r#"grammar "revision-id.v1";
+        closer revision-end = "</revision>";
+        ident = /[A-Za-z_][A-Za-z0-9_]*/;
+        call = "<revision>" name:ident ":" arguments:slot(json, "\x00")
+               insert("A") id:revision-end;
+        result = "<revision-result>" content:until("</revision-result>") "</revision-result>";
+        declaration = "<revision-declaration>" name:ident "</revision-declaration>";"#;
+    let other = grammar
+        .replace("revision-id.v1", "revision-other.v1")
+        .replace(
+            "insert(\"A\") id:revision-end",
+            "insert(\"B\") revision-end",
+        );
+    let a = custom(grammar);
+    let b = custom(&other);
+    let both = set(&[a, b.clone()]);
+    let single = set(&[b]);
+    for (input, dialects, conflict) in [
+        (
+            b"before <revision>f:{}</revision> after".as_slice(),
+            &both,
+            true,
+        ),
+        (b"before <revision>f:{}".as_slice(), &single, false),
+    ] {
+        let request = ToolRecoveryRequest::default();
+        let batch = tools.recover(input, &request, dialects);
+        let readings = match &batch.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => core::slice::from_ref(calls),
+            Outcome::Ambiguous(readings) => readings.as_slice(),
+            Outcome::Unresolved => panic!("the native inserted-token call remains a reading"),
+        };
+        if conflict {
+            assert!(matches!(batch.outcome, Outcome::Ambiguous(_)));
+        }
+        let at = input
+            .windows(b"</revision>".len())
+            .position(|window| window == b"</revision>")
+            .unwrap_or(input.len());
+        for reading in readings {
+            assert_eq!(reading.calls.len(), 1);
+            assert!(reading.calls[0].repairs.evidence.iter().any(|entry| {
+                entry.rule == "tool_call.markup.missing-token"
+                    && entry
+                        .span
+                        .as_ref()
+                        .is_some_and(|span| span.bytes == (at..at))
+            }));
+        }
+        for split in 0..=input.len() {
+            let mut stream = tools.stream_with_dialects(request.clone(), dialects);
+            let mut events = Vec::new();
+            stream.feed(&input[..split], &mut events);
+            stream.feed(&input[split..], &mut events);
+            assert_eq!(
+                stream.finish_with_events(GenerationStop::Stop, &mut events),
+                batch
+            );
+            let (mut arguments, mut content, mut shared_eof_insertion) =
+                (Vec::new(), Vec::new(), false);
+            for event in events {
+                match event {
+                    StreamEvent::Revision {
+                        span,
+                        before,
+                        after,
+                        rule,
+                        ..
+                    } => {
+                        assert!(
+                            !conflict,
+                            "a conflicting zero-width revision escaped: {after:?}"
+                        );
+                        if rule == "tool_call.markup.missing-token" {
+                            assert_eq!(span, input.len()..input.len());
+                            assert!(before.is_empty());
+                            assert_eq!(after, b"B");
+                            shared_eof_insertion = true;
+                        }
+                    }
+                    StreamEvent::ArgumentDelta { raw, .. } => arguments.extend(raw),
+                    StreamEvent::ContentDelta { raw, .. } => content.extend(raw),
+                    StreamEvent::CallStarted { .. } | StreamEvent::CallName { .. } => {}
+                    StreamEvent::CallComplete { .. } | StreamEvent::ParameterComplete { .. } => {
+                        assert!(!conflict)
+                    }
+                    other => panic!("unexpected inserted-token event: {other:?}"),
+                }
+            }
+            assert_eq!(arguments, b"{}");
+            assert_eq!(content, b"before ");
+            assert_eq!(shared_eof_insertion, !conflict);
+        }
+    }
 }
 
 #[test]
@@ -745,6 +928,8 @@ fn strict_ambiguity_rejects() {
     assert_eq!(values.len(), 2);
     assert_eq!(report.receipt.alternatives.len(), 2);
     ambiguous_eof_common_facts(&tools, &both, output, &report);
+    correlated_eof_argument_prefix(&tools);
+    correlated_eof_revision_prefix(&tools);
     let dialects: Vec<&str> = values
         .iter()
         .map(|value| value.calls[0].dialect.name())

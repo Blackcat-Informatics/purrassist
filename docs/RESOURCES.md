@@ -1093,14 +1093,16 @@ after that owner still waits for final normalization. These owners can extend
 rejected markup, remove closers after reasoning or add previously unpublished
 content. Unsupported-markup reports preserve content bytes. No source is replayed.
 At EOF, completed unique and ambiguous outcomes borrow their existing resident
-readings. A single final producer merges content, reasoning, calls and rejected
-attempts in source order. Unique outcomes use that same path without alternative
-comparison. Both batch discard and streaming sinks run the producer. This does
+readings. Ambiguity rejection retains those actual values privately for shared
+source events; exact-effort, resource and other refusal paths retain their barriers.
+A single final producer merges content, reasoning, calls and rejected attempts
+in source order, including local semantic competitors within one turn reading.
+Both batch discard and streaming sinks run the producer. This does
 not complete the longest semantic prefix, lexical holdback or candidate-byte
 contracts.
 
 For whole-message ambiguity, a fallible scratch cursor per alternative retains
-four native indices and one borrowed reading reference, with a portable 40-byte
+four native indices and borrowed value/origin references, with a portable 48-byte
 reservation. A complete prefix-planning pass precedes new EOF publication.
 Every source-family lookup and checked cursor advance admits bounded work;
 string, ledger, diagnostic and provenance comparisons admit their actual visited
@@ -1114,10 +1116,29 @@ Planning continues through overlapping owners before publication: an equal
 rejected wrapper cannot hide an earlier disagreement in a call inside it.
 Content and reasoning ranges are clipped to the common cutoff, normalized
 outside a valid UTF-8 scalar by the same boundary helper used during live intake.
-Calls and rejected attempts publish only when their complete source spans fit
-before the cutoff. Later common suffixes stay withheld. A differing complete
-call currently stops the plan at its start; maximal agreement inside that call
-still needs native capture and edit facts correlated with each final reading.
+Rejected attempts publish only when their complete source spans fit before the
+cutoff. Calls can publish a shared start, canonical name and raw argument prefix
+before an internal disagreement; completion and typed parameters require whole
+call agreement. Later common suffixes stay withheld.
+
+Private structural call identities distinguish pieces, choice branches, segments
+and reasoning-local embedded positions. Semantic slots retain their original raw
+reading through content deduplication and ranking; the legacy raw-zero header
+remains separate. Compact native records retain name/id spans and decoded text,
+all argument capture ranges and the full ordered native edit identity, including
+silent operators, with authentic payloads and leaf ownership. Revision agreement
+precedes omission of empty payloads from events; empty byte owners allocate no
+payload storage.
+They release the native argument trees and forest before final reading construction.
+Only the existing equivalent-option and whole-reading correspondence proofs admit
+origin unions. Whole-turn publication order permutes origin rows with values;
+ambiguity-rejected per-call derivation order never permutes whole-turn rows.
+Metadata, payload copies, lookup, comparison, union and relocation use admitted
+work and fallible scratch owners with portable charges and checked identities.
+The final producer uses these origins directly, replacing global span-based
+capture and edit inference. A discarded raw candidate cannot veto the selected
+argument capture merely because it shares a call span.
+
 No synthetic result, cloned alternative or source replay supplies this prefix.
 Refusal preserves the ordinary explicit failure and source-retention contract.
 

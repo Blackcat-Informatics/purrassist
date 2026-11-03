@@ -8,16 +8,19 @@
 //! source facts from the common interpretation prefix of completed readings,
 //! without replaying input. Completion events retain final certainty and typed
 //! values, while native revisions retain their actual operator payloads.
-//! Maximal agreement inside a differing call, full live semantic-prefix
-//! equivalence, semantic-search revisions, decoding queries and stream cloning
-//! are not implemented yet.
+//! EOF capture identities follow semantic selection and equivalent branch
+//! folding, permitting shared source facts inside a differing call. Full live
+//! semantic-prefix equivalence, semantic-search revisions, decoding queries
+//! and stream cloning are not implemented yet.
 
 use super::recover::RecoveryIntake;
-use super::stream_finish::{FinalCursor, FinalItem, common_prefix};
+use super::stream_capture::{EditFact, NativeTrace, Origins, copy_bytes};
+use super::stream_finish::{
+    FinalCursor, FinalItem, FinalView, call_limit, common_prefix, same_call, selected_fact,
+};
 use super::{
-    ArgLeaf, CallOutcome, CallSegment, Closure, DialectId, DialectSet, GenerationStop, Piece,
-    RecognizedTurn, Recognizer, Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest,
-    ToolSet, UnresolvedReason,
+    CallOutcome, CallSegment, Closure, DialectId, DialectSet, GenerationStop, Recognizer,
+    Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest, ToolSet, UnresolvedReason,
 };
 use crate::contract::{
     AssistResult, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec,
@@ -25,7 +28,7 @@ use crate::contract::{
 };
 use crate::grammar::CaptureKind;
 use crate::grammar::cost::K_EVENT;
-use crate::grammar::edit::{EditOperator, MarkupEdit, OPERATOR_COUNT, OPERATOR_TABLE, OPERATORS};
+use crate::grammar::edit::{EditOperator, OPERATOR_COUNT, OPERATOR_TABLE, OPERATORS};
 use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
 use core::ops::Range;
@@ -429,14 +432,6 @@ impl StreamEvent {
     }
 }
 
-fn copy_bytes(bytes: &[u8], governor: &mut Governor) -> Result<ScratchVec<u8>, StopReason> {
-    governor.charge(Resource::Work, size(bytes.len()).saturating_add(1))?;
-    let mut copied = ScratchVec::new(governor);
-    copied.reserve(bytes.len())?;
-    copied.extend(bytes.iter().copied())?;
-    Ok(copied)
-}
-
 /// Blocker text remains transient until the whole event has been admitted.
 /// Field order drops the copied value before refunding its storage lease.
 struct OwnedOutcome {
@@ -508,171 +503,6 @@ fn copy_reason(
     })
 }
 
-/// One original leaf position and the greatest end in its balanced subtree.
-#[derive(Clone, Copy)]
-struct LeafInterval {
-    original: usize,
-    max_end: usize,
-}
-
-impl ScratchCharge for LeafInterval {
-    const CHARGE: usize = 16;
-}
-const _: () = assert!(core::mem::size_of::<LeafInterval>() <= LeafInterval::CHARGE);
-
-/// Borrowed source intervals prepared once per raw reading with edit payloads.
-/// Every enclosing leaf must agree; overlapping different pointers stay unknown.
-struct LeafPointers<'a> {
-    leaves: &'a [ArgLeaf],
-    intervals: ScratchVec<LeafInterval>,
-}
-
-impl<'a> LeafPointers<'a> {
-    fn new(leaves: &'a [ArgLeaf], governor: &mut Governor) -> Result<Self, StopReason> {
-        let mut intervals = ScratchVec::new(governor);
-        intervals.reserve(leaves.len())?;
-        for (original, leaf) in leaves.iter().enumerate() {
-            push_scratch(
-                &mut intervals,
-                LeafInterval {
-                    original,
-                    max_end: leaf.raw.end,
-                },
-                governor,
-            )?;
-        }
-        let levels = intervals.len().bit_width() + 1;
-        governor.charge(
-            Resource::Work,
-            size(intervals.len())
-                .saturating_mul(u64::from(levels))
-                .saturating_mul(3),
-        )?;
-        intervals.as_mut_slice().sort_unstable_by_key(|interval| {
-            let leaf = &leaves[interval.original];
-            (leaf.raw.start, leaf.raw.end, interval.original)
-        });
-        let mut index = Self { leaves, intervals };
-        index.prepare(0, index.intervals.len(), governor)?;
-        Ok(index)
-    }
-
-    /// Halving the index range bounds native recursion by the index's bit width.
-    fn prepare(
-        &mut self,
-        low: usize,
-        high: usize,
-        governor: &mut Governor,
-    ) -> Result<usize, StopReason> {
-        governor.charge(Resource::Work, 1)?;
-        if low == high {
-            return Ok(0);
-        }
-        let middle = low + (high - low) / 2;
-        let end = self.intervals[middle].max_end;
-        let left = self.prepare(low, middle, governor)?;
-        let right = self.prepare(middle + 1, high, governor)?;
-        let end = end.max(left).max(right);
-        self.intervals.as_mut_slice()[middle].max_end = end;
-        Ok(end)
-    }
-
-    fn parameter(
-        &self,
-        span: &Range<usize>,
-        governor: &mut Governor,
-    ) -> Result<Option<&'a str>, StopReason> {
-        let mut found = None;
-        let unanimous = self.enclosing(0, self.intervals.len(), span, &mut found, governor)?;
-        Ok(if unanimous { found } else { None })
-    }
-
-    fn enclosing(
-        &self,
-        low: usize,
-        high: usize,
-        span: &Range<usize>,
-        found: &mut Option<&'a str>,
-        governor: &mut Governor,
-    ) -> Result<bool, StopReason> {
-        governor.charge(Resource::Work, 1)?;
-        if low == high {
-            return Ok(true);
-        }
-        let middle = low + (high - low) / 2;
-        let interval = self.intervals[middle];
-        let first = &self.leaves[self.intervals[low].original];
-        // Strict comparisons preserve inclusive empty-span endpoints: leaves
-        // ending and beginning at an insertion can both enclose that insertion.
-        if interval.max_end < span.end || first.raw.start > span.start {
-            return Ok(true);
-        }
-        if !self.enclosing(low, middle, span, found, governor)? {
-            return Ok(false);
-        }
-        let leaf = &self.leaves[interval.original];
-        if leaf.raw.start <= span.start && span.end <= leaf.raw.end {
-            if let Some(known) = *found {
-                governor.charge(
-                    Resource::Work,
-                    size(known.len().min(leaf.pointer.len())).saturating_add(1),
-                )?;
-                if known != leaf.pointer.as_str() {
-                    return Ok(false);
-                }
-            }
-            *found = Some(leaf.pointer.as_str());
-        }
-        self.enclosing(middle + 1, high, span, found, governor)
-    }
-}
-
-/// Owned transient copies of real operator payloads, never reconstructed from
-/// a human explanation or guessed from the final value tree.
-#[derive(Debug)]
-struct EditFact {
-    call_start: usize,
-    call_end: usize,
-    operator: EditOperator,
-    at: usize,
-    end: usize,
-    before: ScratchVec<u8>,
-    after: ScratchVec<u8>,
-    parameter: Option<ScratchString>,
-}
-
-impl ScratchCharge for EditFact {
-    const CHARGE: usize = 192;
-}
-const _: () = assert!(core::mem::size_of::<EditFact>() <= EditFact::CHARGE);
-
-impl EditFact {
-    const fn key(&self) -> (usize, usize, EditOperator, usize, usize) {
-        (
-            self.call_start,
-            self.call_end,
-            self.operator,
-            self.at,
-            self.end,
-        )
-    }
-
-    fn same_payload(&self, other: &Self, governor: &mut Governor) -> Result<bool, StopReason> {
-        governor.charge(
-            Resource::Work,
-            size(self.before.len())
-                .saturating_add(size(self.after.len()))
-                .saturating_add(
-                    self.parameter
-                        .as_ref()
-                        .map_or(0, |pointer| size(pointer.len())),
-                )
-                .saturating_add(1),
-        )?;
-        Ok(self.before == other.before && self.after == other.after)
-    }
-}
-
 /// Metadata only: payload ownership has already transferred to the caller.
 #[derive(Debug)]
 struct LiveCall {
@@ -686,18 +516,6 @@ impl ScratchCharge for LiveCall {
     const CHARGE: usize = 24;
 }
 const _: () = assert!(core::mem::size_of::<LiveCall>() <= LiveCall::CHARGE);
-
-#[derive(Clone, Copy, Debug)]
-struct ArgumentFact {
-    start: usize,
-    end: usize,
-    capture: Option<(usize, usize)>,
-}
-
-impl ScratchCharge for ArgumentFact {
-    const CHARGE: usize = 40;
-}
-const _: () = assert!(core::mem::size_of::<ArgumentFact>() <= ArgumentFact::CHARGE);
 
 /// An earlier segment whose content normalization still needs the final turn.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -761,8 +579,6 @@ pub(super) struct EventCursor {
     indexed: bool,
     reasoning_end: usize,
     calls: ScratchVec<LiveCall>,
-    arguments: ScratchVec<ArgumentFact>,
-    edits: ScratchVec<EditFact>,
 }
 
 impl EventCursor {
@@ -775,8 +591,6 @@ impl EventCursor {
             indexed: true,
             reasoning_end: 0,
             calls: ScratchVec::new(governor),
-            arguments: ScratchVec::new(governor),
-            edits: ScratchVec::new(governor),
         }
     }
 
@@ -919,126 +733,34 @@ impl EventCursor {
         Ok(())
     }
 
-    /// The final native turn already exists; retain only capture offsets before
-    /// resolution consumes it. Alternative readings must agree on the capture.
-    pub(super) fn remember_final(
-        &mut self,
-        turn: &RecognizedTurn,
-        governor: &mut Governor,
-    ) -> Result<(), StopReason> {
-        for piece in turn.pieces() {
-            governor.charge(Resource::Work, 1)?;
-            match piece {
-                Piece::Segment(segment) => self.remember(segment, governor)?,
-                Piece::Choice(choice) => {
-                    for reading in &choice.readings {
-                        for segment in reading {
-                            self.remember(segment, governor)?;
-                        }
-                    }
-                }
-            }
-        }
-        let levels = self.arguments.len().bit_width() + 1;
-        governor.charge(
-            Resource::Work,
-            size(self.arguments.len()).saturating_mul(u64::from(levels)),
-        )?;
-        self.arguments
-            .as_mut_slice()
-            .sort_unstable_by_key(|fact| (fact.start, fact.end));
-        let levels = self.edits.len().bit_width() + 1;
-        governor.charge(
-            Resource::Work,
-            size(self.edits.len())
-                .saturating_mul(u64::from(levels))
-                .saturating_mul(5),
-        )?;
-        self.edits
-            .as_mut_slice()
-            .sort_unstable_by_key(EditFact::key);
-        Ok(())
-    }
-
-    fn remember(&mut self, segment: &Segment, governor: &mut Governor) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 1)?;
-        if let Segment::Call(call) = segment {
-            let capture = argument_span(call, governor)?.map(|span| (span.start, span.end));
-            push_scratch(
-                &mut self.arguments,
-                ArgumentFact {
-                    start: call.span.start,
-                    end: call.span.end,
-                    capture,
-                },
-                governor,
-            )?;
-            for raw in &call.readings {
-                governor.charge(Resource::Work, size(raw.edits.len()))?;
-                if !raw
-                    .edits
-                    .iter()
-                    .any(|edit| !edit.original.is_empty() || !edit.replacement.is_empty())
-                {
-                    continue;
-                }
-                let leaves = LeafPointers::new(&raw.arguments.leaves, governor)?;
-                for edit in &raw.edits {
-                    self.remember_edit(call, &leaves, edit, governor)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn remember_edit(
-        &mut self,
-        call: &CallSegment,
-        leaves: &LeafPointers<'_>,
-        edit: &MarkupEdit,
-        governor: &mut Governor,
-    ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 1)?;
-        if edit.original.is_empty() && edit.replacement.is_empty() {
-            return Ok(());
-        }
-        let parameter = leaves.parameter(&edit.span, governor)?;
-        let fact = EditFact {
-            call_start: call.span.start,
-            call_end: call.span.end,
-            operator: edit.operator,
-            at: edit.span.start,
-            end: edit.span.end,
-            before: copy_bytes(&edit.original, governor)?,
-            after: copy_bytes(&edit.replacement, governor)?,
-            parameter: parameter
-                .map(|pointer| ScratchString::copy_from(pointer, governor))
-                .transpose()?,
-        };
-        push_scratch(&mut self.edits, fact, governor)
-    }
-
     /// Flush the source-ordered interpretation prefix shared by final readings.
     /// Planning visits overlapping owners before any EOF event is published.
     pub(super) fn finish(
         &mut self,
-        readings: &[ToolCalls],
+        readings: &[FinalView<'_>],
+        native: &NativeTrace,
         source: &[u8],
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
-        let limit = common_prefix(readings, source.len(), governor)?;
+        let limit = common_prefix(readings, native, source.len(), governor)?;
         let limit = super::stream_finish::source_boundary(source, limit, governor)?;
         let first = readings
             .first()
             .ok_or_else(|| invalid_input("completed recovery has no final reading"))?;
-        let mut cursor = FinalCursor::new(first);
+        let publication = FinalPublication {
+            readings,
+            native,
+            source,
+            limit,
+        };
+        let mut cursor = FinalCursor::new(*first);
         while let Some(item) = cursor.next(governor)? {
             let span = item.span();
             if span.start > span.end || span.end > source.len() {
                 return Err(invalid_input("final event owner exceeds admitted source"));
             }
-            if span.start >= limit {
+            if span.start > limit {
                 break;
             }
             match item {
@@ -1053,14 +775,14 @@ impl EventCursor {
                         self.reasoning_end = end;
                     }
                 }
-                FinalItem::Call(call) if call.span.end <= limit => {
-                    self.finish_call(call, source, governor, sink)?;
+                FinalItem::Call(call, origins) if publication.shared_start(call, governor)? => {
+                    self.finish_call(call, origins, &publication, governor, sink)?;
                 }
                 FinalItem::Rejected(rejected) if rejected.span.end <= limit => {
                     StreamEvent::rejected(rejected.span.clone(), rejected.reason, governor)?
                         .publish(sink)?;
                 }
-                FinalItem::Call(_) | FinalItem::Rejected(_) => {}
+                FinalItem::Call(..) | FinalItem::Rejected(_) => {}
             }
         }
         governor.check()
@@ -1069,7 +791,8 @@ impl EventCursor {
     fn finish_call(
         &self,
         call: &ToolCall,
-        source: &[u8],
+        origins: &Origins,
+        publication: &FinalPublication<'_>,
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
@@ -1086,27 +809,43 @@ impl EventCursor {
             StreamEvent::started(
                 index,
                 call.span.start,
-                call.candidate_dialects.iter().cloned(),
+                publication
+                    .readings
+                    .iter()
+                    .flat_map(|row| row.calls.calls[index].candidate_dialects.iter().cloned()),
                 governor,
             )?
             .publish(sink)?;
         }
+        let first = origins
+            .0
+            .first()
+            .ok_or_else(|| invalid_input("final call has no capture owner"))?;
+        let header = publication
+            .native
+            .fact(publication.native.call(*first)?.header)?;
         if live.is_none_or(|live| !live.named)
+            && header.name_end() <= publication.limit
             && let Some(tool) = &call.tool
         {
             StreamEvent::name(index, tool, governor)?.publish(sink)?;
         }
-        if live.is_none_or(|live| !live.arguments)
-            && let Some(span) = self.final_arguments(&call.span, governor)?
-        {
-            StreamEvent::argument(index, span, source, governor)?.publish(sink)?;
+        if live.is_none_or(|live| !live.arguments) {
+            let fact = selected_fact(origins, publication.native)?;
+            for &(start, end) in &fact.arguments {
+                let end = end.min(publication.limit);
+                if start < end {
+                    StreamEvent::argument(index, start..end, publication.source, governor)?
+                        .publish(sink)?;
+                }
+            }
         }
-        self.revisions(index, call, governor, sink)?;
-        StreamEvent::completed(index, &call.outcome, governor)?.publish(sink)?;
-        // All typed parameter events follow completion, including mutating
-        // calls. Ambiguous/unresolved values are not presented as settled.
-        if matches!(call.outcome, CallOutcome::Resolved | CallOutcome::BestGuess) {
-            parameters(index, &call.arguments, governor, sink)?;
+        self.revisions(index, origins, publication, governor, sink)?;
+        if publication.complete(call, origins, governor)? {
+            StreamEvent::completed(index, &call.outcome, governor)?.publish(sink)?;
+            if matches!(call.outcome, CallOutcome::Resolved | CallOutcome::BestGuess) {
+                parameters(index, &call.arguments, governor, sink)?;
+            }
         }
         Ok(())
     }
@@ -1114,82 +853,164 @@ impl EventCursor {
     fn revisions(
         &self,
         index: usize,
-        call: &ToolCall,
+        origins: &Origins,
+        publication: &FinalPublication<'_>,
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
-        for evidence in &call.repairs.evidence {
-            let Some(operator) = revision_operator(&evidence.rule, governor)? else {
-                continue;
+        let fact = selected_fact(origins, publication.native)?;
+        for (position, edit) in fact.edits.iter().enumerate() {
+            if edit.end > publication.limit {
+                break;
+            }
+            let Some(agreement) = publication.revision(index, position, edit, governor)? else {
+                break;
             };
-            let Some(span) = &evidence.span else {
-                continue;
-            };
-            let key = (
-                call.span.start,
-                call.span.end,
-                operator,
-                span.bytes.start,
-                span.bytes.end,
-            );
-            let levels = self.edits.len().bit_width() + 1;
-            governor.charge(Resource::Work, u64::from(levels).saturating_mul(5))?;
-            let first = self.edits.partition_point(|edit| edit.key() < key);
-            let Some(edit) = self.edits.as_slice().get(first) else {
-                continue;
-            };
-            if edit.key() != key {
+            if edit.before.is_empty() && edit.after.is_empty() {
                 continue;
             }
-            let mut shared = true;
-            let mut parameter = edit.parameter.as_ref().map(ScratchString::as_str);
-            for other in &self.edits.as_slice()[first + 1..] {
-                governor.charge(Resource::Work, 5)?;
-                if other.key() != key {
-                    break;
-                }
-                if !edit.same_payload(other, governor)? {
-                    shared = false;
-                    break;
-                }
-                if parameter != other.parameter.as_ref().map(ScratchString::as_str) {
-                    parameter = None;
-                }
-            }
-            if shared {
-                StreamEvent::revision(index, edit, parameter, governor)?.publish(sink)?;
-            }
+            StreamEvent::revision(index, edit, agreement.parameter, governor)?.publish(sink)?;
         }
         Ok(())
     }
+}
 
-    fn final_arguments(
+struct FinalPublication<'a> {
+    readings: &'a [FinalView<'a>],
+    native: &'a NativeTrace,
+    source: &'a [u8],
+    limit: usize,
+}
+
+struct RevisionAgreement<'a> {
+    parameter: Option<&'a str>,
+}
+
+fn retains_revision(
+    ledger: &super::CallLedger,
+    edit: &EditFact,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    for evidence in &ledger.evidence {
+        if revision_operator(&evidence.rule, governor)? == Some(edit.operator)
+            && evidence
+                .span
+                .as_ref()
+                .is_some_and(|span| span.bytes.start == edit.at && span.bytes.end == edit.end)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+impl FinalPublication<'_> {
+    /// Edits form an ordered common prefix. The caller stops at its first
+    /// disagreement, including conflicting insertions at the cutoff itself.
+    fn revision<'a>(
         &self,
-        span: &Range<usize>,
+        index: usize,
+        position: usize,
+        edit: &'a EditFact,
         governor: &mut Governor,
-    ) -> Result<Option<Range<usize>>, StopReason> {
-        let key = (span.start, span.end);
-        let levels = self.arguments.len().bit_width() + 1;
-        governor.charge(Resource::Work, u64::from(levels))?;
-        let first = self
-            .arguments
-            .partition_point(|fact| (fact.start, fact.end) < key);
-        let Some(fact) = self.arguments.as_slice().get(first) else {
-            return Ok(None);
-        };
-        if (fact.start, fact.end) != key {
-            return Ok(None);
-        }
-        for other in &self.arguments.as_slice()[first + 1..] {
-            governor.charge(Resource::Work, 1)?;
-            if (other.start, other.end) != key {
-                break;
+    ) -> Result<Option<RevisionAgreement<'a>>, StopReason> {
+        let mut parameter = edit.parameter.as_ref().map(ScratchString::as_str);
+        for view in self.readings {
+            let call = view
+                .calls
+                .calls
+                .get(index)
+                .ok_or_else(|| invalid_input("revision has no final call counterpart"))?;
+            let origins = view
+                .origins
+                .calls
+                .get(index)
+                .ok_or_else(|| invalid_input("revision has no final native correlation"))?;
+            for &id in &origins.0 {
+                let row = self.native.call(id)?;
+                let competing = row.readings.get(..row.competing).ok_or_else(|| {
+                    invalid_input("revision native competition exceeds its readings")
+                })?;
+                for (semantic, &origin) in competing.iter().enumerate() {
+                    governor.charge(Resource::Work, 4)?;
+                    let fact = self.native.fact(origin)?;
+                    let Some(other) = fact.edits.get(position) else {
+                        return Ok(None);
+                    };
+                    if edit.operator != other.operator
+                        || edit.at != other.at
+                        || edit.end != other.end
+                        || !edit.same_payload(other, governor)?
+                    {
+                        return Ok(None);
+                    }
+                    let ledger = if semantic == 0 {
+                        &call.repairs
+                    } else {
+                        &call
+                            .alternatives
+                            .get(semantic - 1)
+                            .ok_or_else(|| {
+                                invalid_input(
+                                    "revision semantic competitor has no retained reading",
+                                )
+                            })?
+                            .repairs
+                    };
+                    if !retains_revision(ledger, other, governor)? {
+                        return Ok(None);
+                    }
+                    governor.charge(
+                        Resource::Work,
+                        size(parameter.map_or(0, str::len)).saturating_add(size(
+                            other.parameter.as_ref().map_or(0, ScratchString::len),
+                        )),
+                    )?;
+                    if parameter != other.parameter.as_ref().map(ScratchString::as_str) {
+                        parameter = None;
+                    }
+                }
             }
-            if other.capture != fact.capture {
-                return Ok(None);
+        }
+        Ok(Some(RevisionAgreement { parameter }))
+    }
+
+    fn shared_start(&self, call: &ToolCall, governor: &mut Governor) -> Result<bool, StopReason> {
+        for row in self.readings {
+            governor.charge(Resource::Work, 4)?;
+            if row.calls.calls.get(call.index).is_none_or(|other| {
+                other.index != call.index || other.span.start != call.span.start
+            }) {
+                return Ok(false);
             }
         }
-        Ok(fact.capture.map(|(start, end)| start..end))
+        Ok(true)
+    }
+
+    fn complete(
+        &self,
+        call: &ToolCall,
+        origins: &Origins,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if call.span.end > self.limit || call_limit(call, origins, self.native, governor)?.is_some()
+        {
+            return Ok(false);
+        }
+        for row in self.readings.iter().skip(1) {
+            let other = row
+                .calls
+                .calls
+                .get(call.index)
+                .ok_or_else(|| invalid_input("shared call has no final counterpart"))?;
+            if !same_call(call, other, governor)?
+                || call_limit(other, &row.origins.calls[call.index], self.native, governor)?
+                    .is_some()
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -1294,8 +1115,9 @@ fn unique_name<'t>(
 /// bytes supplied after refusal still contribute to its complete source digest.
 ///
 /// See [`StreamEvent`] for source facts and EOF completion events. Final
-/// readings publish only their common interpretation prefix; maximal agreement
-/// inside a differing call and semantic-search revisions remain unfinished.
+/// readings publish their shared source prefix, including correlated names and
+/// raw argument captures inside a differing call. Full live semantic-prefix
+/// equivalence and semantic-search revisions remain unfinished.
 ///
 /// ```
 /// use purrassist_core::{Budget, tool_call::{GenerationStop, ToolSet, ToolRecoveryRequest}};

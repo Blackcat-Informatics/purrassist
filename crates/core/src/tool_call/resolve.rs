@@ -105,6 +105,7 @@
 //! charge as documented on them. Every charge is a function of the
 //! recognized turn and the tool set alone.
 use super::rules::{self, Rule};
+use super::stream_capture::{CallSite, NativeTrace};
 use super::{
     ArgOrigin, CallSegment, Closure, CompiledTool, DialectId, Effects, GenerationStop, ObjectShape,
     ParameterShape, Piece, RawCall, ReasoningSegment, RecognizedTurn, Rejection, RepairPolicy,
@@ -113,7 +114,7 @@ use super::{
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Resource, ScratchVec, SourceSpan,
-    StopReason, Validation,
+    StopReason, Validation, invalid_input, push_scratch,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
@@ -889,6 +890,27 @@ pub fn resolve_forest(
     policies: &Policies,
     governor: &mut Governor,
 ) -> Result<ResolvedTurn, StopReason> {
+    resolve_kernel(tools, turn, policies, governor, None)
+}
+
+pub(super) fn resolve_traced(
+    tools: &ToolSet,
+    turn: &RecognizedTurn,
+    policies: &Policies,
+    governor: &mut Governor,
+) -> Result<(ResolvedTurn, NativeTrace), StopReason> {
+    let mut trace = NativeTrace::new(governor);
+    let resolved = resolve_kernel(tools, turn, policies, governor, Some(&mut trace))?;
+    Ok((resolved, trace))
+}
+
+fn resolve_kernel(
+    tools: &ToolSet,
+    turn: &RecognizedTurn,
+    policies: &Policies,
+    governor: &mut Governor,
+    mut trace: Option<&mut NativeTrace>,
+) -> Result<ResolvedTurn, StopReason> {
     governor.check()?;
     policies.validate(tools)?;
     let mut candidates = Vec::with_capacity(tools.tools().len());
@@ -911,16 +933,29 @@ pub fn resolve_forest(
         candidates,
     };
     let mut pieces = Vec::with_capacity(turn.pieces().len());
-    for piece in turn.pieces() {
+    for (piece_index, piece) in turn.pieces().iter().enumerate() {
         governor.charge(Resource::Work, 1)?;
         pieces.push(match piece {
-            Piece::Segment(segment) => ResolvedPiece::Segment(resolver.segment(segment, governor)?),
+            Piece::Segment(segment) => ResolvedPiece::Segment(resolver.segment(
+                segment,
+                CallSite([piece_index, 0, 0, 0]),
+                trace.as_deref_mut(),
+                governor,
+            )?),
             Piece::Choice(choice) => {
                 let mut readings = Vec::with_capacity(choice.readings.len());
-                for reading in &choice.readings {
+                for (branch, reading) in choice.readings.iter().enumerate() {
                     let mut segments = Vec::with_capacity(reading.len());
-                    for segment in reading {
-                        segments.push(resolver.segment(segment, governor)?);
+                    let branch = branch
+                        .checked_add(1)
+                        .ok_or_else(|| invalid_input("capture branch identity overflows"))?;
+                    for (index, segment) in reading.iter().enumerate() {
+                        segments.push(resolver.segment(
+                            segment,
+                            CallSite([piece_index, branch, index, 0]),
+                            trace.as_deref_mut(),
+                            governor,
+                        )?);
                     }
                     readings.push(segments);
                 }
@@ -1037,6 +1072,110 @@ enum Slot {
     Kept(Member),
 }
 
+struct RankedCall {
+    reading: CallReading,
+    ordered: Vec<CallReading>,
+    native_order: ScratchVec<usize>,
+    competing: usize,
+}
+
+fn rank_readings(
+    groups: Vec<Vec<CallReading>>,
+    traced: bool,
+    governor: &mut Governor,
+) -> Result<RankedCall, StopReason> {
+    let total: usize = groups.iter().map(Vec::len).sum();
+    // The ranking records, the selection slots and the distinct
+    // readings are transient: at most two reading slots and two
+    // ranking-sized records per reading.
+    let _ranking =
+        governor.lease_scratch(size(total).saturating_mul(2 * (RANKED_BYTES + READING_BYTES)))?;
+    let mut slots: Vec<Option<CallReading>> = Vec::with_capacity(total);
+    let mut ranked: Vec<(u64, Digest, Digest, usize)> = Vec::with_capacity(total);
+    let mut raw_slots = ScratchVec::new(governor);
+    for (raw, group) in groups.into_iter().enumerate() {
+        for reading in group {
+            if traced {
+                push_scratch(&mut raw_slots, raw, governor)?;
+            }
+            let (content, full) = reading_digests(&reading, governor)?;
+            ranked.push((reading.cost, full, content, slots.len()));
+            slots.push(Some(reading));
+        }
+    }
+    // A total order: least cost first, then by digest; one reading per
+    // distinct call (tool, arguments, blocker), its best derivation.
+    ranked.sort_by_key(|&(cost, full, _, position)| (cost, full, position));
+    let mut unique: Vec<(Digest, usize)> = Vec::with_capacity(ranked.len());
+    for &(_, _, content, position) in &ranked {
+        if !unique.iter().any(|(known, _)| *known == content) {
+            unique.push((content, position));
+        }
+    }
+    let mut readings: Vec<Option<CallReading>> = unique
+        .iter()
+        .map(|&(_, position)| slots[position].take())
+        .collect();
+    drop(slots);
+    let admitted = |reading: &CallReading| {
+        reading.blocker.is_none()
+            && reading
+                .policy
+                .is_some_and(|policy| reading.repairs.unadmitted(policy).is_none())
+    };
+    let viable = |reading: &CallReading| reading.blocker.is_none();
+    let filter: &dyn Fn(&CallReading) -> bool = if readings.iter().flatten().any(admitted) {
+        &admitted
+    } else {
+        &viable
+    };
+    let first = readings
+        .iter()
+        .position(|reading| reading.as_ref().is_some_and(filter))
+        .unwrap_or(0);
+    let cost = readings[first].as_ref().map_or(0, |reading| reading.cost);
+    let tied: Vec<usize> = (0..readings.len())
+        .filter(|&index| {
+            index != first
+                && readings[index]
+                    .as_ref()
+                    .is_some_and(|reading| filter(reading) && reading.cost == cost)
+        })
+        .collect();
+    let competing = 1 + tied.len();
+    let reading = readings[first].take().expect("the selected reading");
+    // The alternatives are retained.
+    governor.charge(
+        Resource::ScratchBytes,
+        size(readings.len()).saturating_mul(READING_BYTES),
+    )?;
+    let mut native_order = ScratchVec::new(governor);
+    if traced {
+        push_scratch(&mut native_order, raw_slots[unique[first].1], governor)?;
+    }
+    let mut ordered: Vec<CallReading> = Vec::with_capacity(readings.len());
+    for index in tied {
+        if traced {
+            push_scratch(&mut native_order, raw_slots[unique[index].1], governor)?;
+        }
+        ordered.push(readings[index].take().expect("a tied reading"));
+    }
+    for (index, reading) in readings.into_iter().enumerate() {
+        if let Some(reading) = reading {
+            if traced {
+                push_scratch(&mut native_order, raw_slots[unique[index].1], governor)?;
+            }
+            ordered.push(reading);
+        }
+    }
+    Ok(RankedCall {
+        reading,
+        ordered,
+        native_order,
+        competing,
+    })
+}
+
 /// What resolution of one call knows about its context.
 struct Scope<'r> {
     raw: &'r RawCall,
@@ -1054,6 +1193,8 @@ impl<'a> Resolver<'a> {
     fn segment(
         &self,
         segment: &Segment,
+        site: CallSite,
+        mut trace: Option<&mut NativeTrace>,
         governor: &mut Governor,
     ) -> Result<ResolvedSegment, StopReason> {
         Ok(match segment {
@@ -1064,8 +1205,13 @@ impl<'a> Resolver<'a> {
                     size(reasoning.embedded.len()).saturating_mul(CALL_BYTES),
                 )?;
                 let mut embedded = Vec::with_capacity(reasoning.embedded.len());
-                for call in &reasoning.embedded {
-                    embedded.push(self.call(call, governor)?);
+                for (index, call) in reasoning.embedded.iter().enumerate() {
+                    embedded.push(self.call(
+                        call,
+                        site.embedded(index)?,
+                        trace.as_deref_mut(),
+                        governor,
+                    )?);
                 }
                 governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
                 ResolvedSegment::Reasoning {
@@ -1074,8 +1220,11 @@ impl<'a> Resolver<'a> {
                 }
             }
             Segment::Call(segment) => {
-                let call = self.call(segment, governor)?;
+                let call = self.call(segment, site, trace.as_deref_mut(), governor)?;
                 if declaration_content(segment, &call) {
+                    if let Some(trace) = trace {
+                        trace.discard(site, governor)?;
+                    }
                     ResolvedSegment::Content(segment.span.clone())
                 } else {
                     governor.charge(Resource::ScratchBytes, CALL_BYTES)?;
@@ -1140,6 +1289,8 @@ impl<'a> Resolver<'a> {
     fn call(
         &self,
         segment: &CallSegment,
+        site: CallSite,
+        trace: Option<&mut NativeTrace>,
         governor: &mut Governor,
     ) -> Result<ResolvedCall, StopReason> {
         let mut groups: Vec<Vec<CallReading>> = Vec::with_capacity(segment.readings.len());
@@ -1153,70 +1304,12 @@ impl<'a> Resolver<'a> {
             }
             groups.push(readings);
         }
-        let total: usize = groups.iter().map(Vec::len).sum();
-        // The ranking records, the selection slots and the distinct
-        // readings are transient: at most two reading slots and two
-        // ranking-sized records per reading.
-        let _ranking = governor
-            .lease_scratch(size(total).saturating_mul(2 * (RANKED_BYTES + READING_BYTES)))?;
-        let mut slots: Vec<Option<CallReading>> = Vec::with_capacity(total);
-        let mut ranked: Vec<(u64, Digest, Digest, usize)> = Vec::with_capacity(total);
-        for reading in groups.into_iter().flatten() {
-            let (content, full) = reading_digests(&reading, governor)?;
-            ranked.push((reading.cost, full, content, slots.len()));
-            slots.push(Some(reading));
-        }
-        // A total order: least cost first, then by digest; one reading per
-        // distinct call (tool, arguments, blocker), its best derivation.
-        ranked.sort_by_key(|&(cost, full, _, position)| (cost, full, position));
-        let mut unique: Vec<(Digest, usize)> = Vec::with_capacity(ranked.len());
-        for &(_, _, content, position) in &ranked {
-            if !unique.iter().any(|(known, _)| *known == content) {
-                unique.push((content, position));
-            }
-        }
-        let mut readings: Vec<Option<CallReading>> = unique
-            .iter()
-            .map(|&(_, position)| slots[position].take())
-            .collect();
-        drop(slots);
-        let admitted = |reading: &CallReading| {
-            reading.blocker.is_none()
-                && reading
-                    .policy
-                    .is_some_and(|policy| reading.repairs.unadmitted(policy).is_none())
-        };
-        let viable = |reading: &CallReading| reading.blocker.is_none();
-        let filter: &dyn Fn(&CallReading) -> bool = if readings.iter().flatten().any(admitted) {
-            &admitted
-        } else {
-            &viable
-        };
-        let first = readings
-            .iter()
-            .position(|reading| reading.as_ref().is_some_and(filter))
-            .unwrap_or(0);
-        let cost = readings[first].as_ref().map_or(0, |reading| reading.cost);
-        let tied: Vec<usize> = (0..readings.len())
-            .filter(|&index| {
-                index != first
-                    && readings[index]
-                        .as_ref()
-                        .is_some_and(|reading| filter(reading) && reading.cost == cost)
-            })
-            .collect();
-        let competing = 1 + tied.len();
-        let reading = readings[first].take().expect("the selected reading");
-        // The alternatives are retained.
-        governor.charge(
-            Resource::ScratchBytes,
-            size(readings.len()).saturating_mul(READING_BYTES),
-        )?;
-        let mut ordered: Vec<CallReading> = Vec::with_capacity(readings.len());
-        for index in tied {
-            ordered.push(readings[index].take().expect("a tied reading"));
-        }
-        ordered.extend(readings.into_iter().flatten());
+        let RankedCall {
+            reading,
+            ordered,
+            native_order,
+            competing,
+        } = rank_readings(groups, trace.is_some(), governor)?;
         let distinguishing = if competing > 1 {
             distinguishing(&reading, &ordered[0], governor)?
         } else {
@@ -1231,6 +1324,9 @@ impl<'a> Resolver<'a> {
         });
         let mut reading = reading;
         self.label_repeated_choice(&mut reading, &ordered, competing, governor)?;
+        if let Some(trace) = trace {
+            trace.record(site, segment, &native_order, competing, governor)?;
+        }
         let first = &segment.readings[0];
         Ok(ResolvedCall {
             span: segment.span.clone(),

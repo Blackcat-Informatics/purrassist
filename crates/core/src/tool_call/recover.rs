@@ -25,7 +25,7 @@
 //!    range. The bytes are never replaced: content, reasoning, and rejected
 //!    attempts are byte ranges of the retained output.
 //! 4. The [`Recognizer`] segments the turn over the request's dialects and
-//!    reasoning policy and [`resolve_forest`] resolves every call under the
+//!    reasoning policy and [`resolve_forest`](super::resolve_forest) resolves every call under the
 //!    request's policies (see their documentation for every rule).
 //! 5. Every whole-message reading is built: the product of the recognized
 //!    turn's competing segmentations, all charged as
@@ -144,18 +144,22 @@ use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::recognizer::{ContinuationFrontier, edit_entries, escaped};
 use super::resolve::loss_kind;
+use super::resolve::resolve_traced;
 use super::stream::EventCursor;
+use super::stream_capture::{
+    CallSite, FinalOrigins, NativeTrace, OriginRow, Origins, option_origins,
+};
 use super::{
     CallLedger, CallLoss, CallOutcome, CallReading, DialectId, DialectSet, Effects, FromNode,
     FromNodeError, GenerationStop, Policies, PolicySelection, ReasoningPolicy, ReasoningSegment,
     Recognizer, Rejection, RepairPolicy, ResolvedCall, ResolvedPiece, ResolvedSegment,
-    ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, detect_unparsed, resolve_forest, rules,
+    ResolvedTurn, ToolSet, ToolSource, UnresolvedReason, detect_unparsed, rules,
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
     AlternativeReceipt, AssistResult, Budget, Effort, Evidence, Governor, Inference, InferenceKind,
-    Loss, Outcome, Receipt, Resource, ScratchLease, ScratchVec, SourceDocument, SourceSpan,
-    StopReason, Validation, invalid_input, push_scratch, reserve_failure,
+    Loss, Outcome, Receipt, Resource, ScratchCharge, ScratchLease, ScratchVec, SourceDocument,
+    SourceSpan, StopReason, Validation, invalid_input, push_scratch, reserve_failure,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CallEnd;
@@ -3463,7 +3467,6 @@ impl<'s> RecoveryIntake<'s> {
             policies,
             forced,
         } = self.recognize(request, governor)?;
-        self.events.remember_final(&turn, governor)?;
         let recovery = Recovery {
             tools: self.tools,
             request,
@@ -3477,8 +3480,9 @@ impl<'s> RecoveryIntake<'s> {
             source: self.receipt.source,
             policies,
         };
-        let readings = recovery.resolve_turn(turn, &encoding, forced.as_deref(), governor)?;
-        recovery.conclude(readings, governor)
+        let (readings, trace) =
+            recovery.resolve_turn(turn, &encoding, forced.as_deref(), governor)?;
+        recovery.conclude(readings, trace, governor)
     }
 
     pub(super) fn finish(
@@ -3497,20 +3501,32 @@ impl<'s> RecoveryIntake<'s> {
     ) -> AssistResult<ToolCalls> {
         self.receipt.source = core::mem::take(&mut self.digest).finish();
         let completed = self.complete(request, governor).and_then(|done| {
-            let readings = match &done.outcome {
+            let mut readings = ScratchVec::new(governor);
+            match &done.outcome {
                 Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
-                    core::slice::from_ref(calls)
+                    add_final_view(&mut readings, calls, &done, 0, governor)?;
                 }
-                Outcome::Ambiguous(readings) => readings.as_slice(),
+                Outcome::Ambiguous(values) => {
+                    for (index, calls) in values.iter().enumerate() {
+                        add_final_view(&mut readings, calls, &done, index, governor)?;
+                    }
+                }
+                Outcome::Unresolved if !done.rejected_values.is_empty() => {
+                    for (index, calls) in done.rejected_values.iter().enumerate() {
+                        add_final_view(&mut readings, &calls.0, &done, index, governor)?;
+                    }
+                }
                 Outcome::Unresolved => return Ok(done),
-            };
+            }
             let source = self
                 .capture
                 .as_ref()
                 .expect("completed recovery owns admitted source")
                 .bytes
                 .as_slice();
-            self.events.finish(readings, source, governor, sink)?;
+            self.events
+                .finish(&readings, &done.trace, source, governor, sink)?;
+            drop(readings);
             Ok(done)
         });
         let outcome = match completed {
@@ -3548,6 +3564,104 @@ struct Done {
     validations: Vec<Validation>,
     alternatives: Vec<AlternativeReceipt>,
     stopped: StopReason,
+    trace: NativeTrace,
+    origins: ScratchVec<FinalOrigins>,
+    /// Actual resolved values retained only when ambiguity policy rejects them.
+    rejected_values: ScratchVec<RejectedValue>,
+}
+
+struct RejectedValue(ToolCalls);
+impl ScratchCharge for RejectedValue {
+    const CHARGE: usize = 512;
+}
+const _: () = assert!(core::mem::size_of::<RejectedValue>() <= RejectedValue::CHARGE);
+
+struct OriginSlot(Option<FinalOrigins>);
+impl ScratchCharge for OriginSlot {
+    const CHARGE: usize = 88;
+}
+const _: () = assert!(core::mem::size_of::<OriginSlot>() <= OriginSlot::CHARGE);
+
+fn add_final_view<'a>(
+    views: &mut ScratchVec<super::stream_finish::FinalView<'a>>,
+    calls: &'a ToolCalls,
+    done: &'a Done,
+    index: usize,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let origins = done
+        .origins
+        .get(index)
+        .ok_or_else(|| invalid_input("final reading has no capture correlation row"))?;
+    if origins.calls.len() != calls.calls.len() || origins.embedded.len() != calls.embedded.len() {
+        return Err(invalid_input(
+            "final event value and capture counts disagree",
+        ));
+    }
+    for (index, call) in calls.calls.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        if call.index != index {
+            return Err(invalid_input(
+                "final event call index is not its occurrence position",
+            ));
+        }
+    }
+    push_scratch(
+        views,
+        super::stream_finish::FinalView { calls, origins },
+        governor,
+    )
+}
+
+/// Borrow the existing resolved segment together with its structural identity.
+/// A fold supplies only call correspondence already proved equivalent.
+struct LocatedSegment<'a> {
+    segment: &'a ResolvedSegment,
+    site: CallSite,
+    origins: &'a [OriginRow],
+    trace: &'a NativeTrace,
+}
+impl ScratchCharge for LocatedSegment<'_> {
+    const CHARGE: usize = 64;
+}
+const _: () = assert!(core::mem::size_of::<LocatedSegment<'_>>() <= LocatedSegment::CHARGE);
+
+impl LocatedSegment<'_> {
+    fn call_origins(&self, site: CallSite, governor: &mut Governor) -> Result<Origins, StopReason> {
+        if self.site.0[1] == 0 {
+            return Origins::one(self.trace.lookup(site, governor)?, governor);
+        }
+        governor.charge(
+            Resource::Work,
+            u64::from(self.origins.len().bit_width())
+                .saturating_add(1)
+                .saturating_mul(4),
+        )?;
+        let index = self.origins.partition_point(|row| row.site < site);
+        let row = self
+            .origins
+            .get(index)
+            .filter(|row| row.site == site)
+            .ok_or_else(|| invalid_input("folded call has no structural origin correspondence"))?;
+        row.origins.copy(governor)
+    }
+}
+
+fn final_origins(
+    reading: &mut Reading,
+    governor: &mut Governor,
+) -> Result<FinalOrigins, StopReason> {
+    let mut calls = ScratchVec::new(governor);
+    for facts in core::mem::take(&mut reading.facts) {
+        push_scratch(&mut calls, facts.origins, governor)?;
+    }
+    let embedded = core::mem::replace(&mut reading.embedded_origins, ScratchVec::new(governor));
+    if calls.len() != reading.value.calls.len() || embedded.len() != reading.value.embedded.len() {
+        return Err(invalid_input(
+            "final call and capture correlation counts disagree",
+        ));
+    }
+    Ok(FinalOrigins { calls, embedded })
 }
 
 /// One part of a reading's ledger, in output order.
@@ -3562,6 +3676,7 @@ enum Part {
 
 /// What a reading keeps about one call beyond its value.
 struct CallFacts {
+    origins: Origins,
     /// The selected reading's cost.
     cost: u64,
     /// The selected reading's schema validations.
@@ -3574,6 +3689,7 @@ struct CallFacts {
 struct Reading {
     value: ToolCalls,
     facts: Vec<CallFacts>,
+    embedded_origins: ScratchVec<Origins>,
     parts: Vec<Part>,
     /// Validations keyed by the source range they belong to.
     validations: Vec<((usize, usize), Validation)>,
@@ -3641,16 +3757,36 @@ fn more(rest: usize) -> String {
 /// every folded segmentation contributed.
 struct Fold<'t> {
     segments: &'t [ResolvedSegment],
+    branch: usize,
+    origins: ScratchVec<OriginRow>,
     /// The dialects that read each call, by the call's source range.
     calls: BTreeMap<(usize, usize), BTreeSet<DialectId>>,
     /// The dialects that attempted each rejected call, by its opener offset.
     attempts: BTreeMap<usize, BTreeSet<DialectId>>,
 }
 
+impl ScratchCharge for Fold<'_> {
+    const CHARGE: usize = 128;
+}
+const _: () = assert!(core::mem::size_of::<Fold<'_>>() <= Fold::CHARGE);
+
+struct FoldBorrow<'a>(&'a Fold<'a>);
+impl ScratchCharge for FoldBorrow<'_> {
+    const CHARGE: usize = 8;
+}
+const _: () = assert!(core::mem::size_of::<FoldBorrow<'_>>() <= FoldBorrow::CHARGE);
+
 impl<'t> Fold<'t> {
-    fn new(segments: &'t [ResolvedSegment], governor: &mut Governor) -> Result<Self, StopReason> {
+    fn new(
+        segments: &'t [ResolvedSegment],
+        base: CallSite,
+        trace: &NativeTrace,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
         let mut fold = Self {
             segments,
+            branch: base.0[1],
+            origins: option_origins(segments, base, trace, governor)?,
             calls: BTreeMap::new(),
             attempts: BTreeMap::new(),
         };
@@ -3971,6 +4107,7 @@ impl Recovery<'_> {
             ..
         } = intake.recognize(self.request, governor)?;
         self.resolve_turn(turn, &encoding, forced.as_deref(), governor)
+            .map(|(readings, _)| readings)
     }
 
     /// Validate the request once before constructing or advancing a recognizer.
@@ -4016,13 +4153,13 @@ impl Recovery<'_> {
         encoding: &CallLedger,
         forced: Option<&str>,
         governor: &mut Governor,
-    ) -> Result<Vec<Reading>, StopReason> {
-        let resolved = resolve_forest(self.tools, &turn, &self.policies, governor)?;
+    ) -> Result<(Vec<Reading>, NativeTrace), StopReason> {
+        let (resolved, trace) = resolve_traced(self.tools, &turn, &self.policies, governor)?;
         let attempted = turn.rejected_attempts().to_vec();
         drop(turn);
-        let readings = self.readings(&resolved, encoding, &attempted, forced, governor)?;
+        let readings = self.readings(&resolved, &trace, encoding, &attempted, forced, governor)?;
         drop(resolved);
-        Ok(readings)
+        Ok((readings, trace))
     }
 
     /// Publish the invalid runs found by the shared incremental UTF-8 cursor.
@@ -4082,15 +4219,17 @@ impl Recovery<'_> {
     fn readings(
         &self,
         turn: &ResolvedTurn,
+        trace: &NativeTrace,
         encoding: &CallLedger,
         attempted: &[(usize, DialectId)],
         forced: Option<&str>,
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
-        let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
-        for piece in &turn.pieces {
-            if let ResolvedPiece::Choice(choice) = piece {
-                choices.push(fold_options(&choice.readings, self.output, governor)?);
+        let mut choices = ScratchVec::new(governor);
+        for (piece, value) in turn.pieces.iter().enumerate() {
+            if let ResolvedPiece::Choice(choice) = value {
+                let options = fold_options(&choice.readings, piece, trace, self.output, governor)?;
+                push_scratch(&mut choices, options, governor)?;
             }
         }
         if !choices.is_empty() {
@@ -4104,16 +4243,36 @@ impl Recovery<'_> {
         let mut digits = vec![0_usize; choices.len()];
         let mut readings = Vec::new();
         loop {
-            let mut segments = Vec::with_capacity(turn.pieces.len());
-            let mut folds = Vec::with_capacity(choices.len());
+            let mut segments = ScratchVec::new(governor);
+            let mut folds = ScratchVec::new(governor);
             let mut choice = 0;
-            for piece in &turn.pieces {
-                match piece {
-                    ResolvedPiece::Segment(segment) => segments.push(segment),
+            for (piece, value) in turn.pieces.iter().enumerate() {
+                match value {
+                    ResolvedPiece::Segment(segment) => push_scratch(
+                        &mut segments,
+                        LocatedSegment {
+                            segment,
+                            site: CallSite([piece, 0, 0, 0]),
+                            origins: &[],
+                            trace,
+                        },
+                        governor,
+                    )?,
                     ResolvedPiece::Choice(_) => {
                         let fold = &choices[choice][digits[choice]];
-                        segments.extend(fold.segments);
-                        folds.push(fold);
+                        for (index, segment) in fold.segments.iter().enumerate() {
+                            push_scratch(
+                                &mut segments,
+                                LocatedSegment {
+                                    segment,
+                                    site: CallSite([piece, fold.branch, index, 0]),
+                                    origins: &fold.origins,
+                                    trace,
+                                },
+                                governor,
+                            )?;
+                        }
+                        push_scratch(&mut folds, FoldBorrow(fold), governor)?;
                         choice += 1;
                     }
                 }
@@ -4140,7 +4299,7 @@ impl Recovery<'_> {
     /// One whole-message reading over its segments.
     fn reading(
         &self,
-        segments: &[&ResolvedSegment],
+        segments: &[LocatedSegment<'_>],
         cost: u64,
         encoding: &CallLedger,
         attempted: &[(usize, DialectId)],
@@ -4168,6 +4327,7 @@ impl Recovery<'_> {
                 emitted: None,
             },
             facts: Vec::new(),
+            embedded_origins: ScratchVec::new(governor),
             parts: vec![Part::Message(encoding.clone())],
             validations: Vec::new(),
             cost,
@@ -4365,12 +4525,12 @@ impl Recovery<'_> {
     fn segment(
         &self,
         reading: &mut Reading,
-        segment: &ResolvedSegment,
+        located: &LocatedSegment<'_>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         governor.charge(Resource::Work, 1)?;
         governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
-        match segment {
+        match located.segment {
             ResolvedSegment::Content(span) => push_range(&mut reading.value.content, span),
             ResolvedSegment::Result(result) => {
                 push_range(&mut reading.value.content, &result.span);
@@ -4384,10 +4544,12 @@ impl Recovery<'_> {
                     span: reasoning.span.clone(),
                     text: reasoning.text.clone(),
                 });
-                for call in embedded {
+                for (local, call) in embedded.iter().enumerate() {
                     let index = reading.value.embedded.len();
-                    let (built, _) = tool_call(call, index, governor)?;
+                    let origins = located.call_origins(located.site.embedded(local)?, governor)?;
+                    let (built, facts) = tool_call(call, index, origins, governor)?;
                     reading.value.embedded.push(built);
+                    push_scratch(&mut reading.embedded_origins, facts.origins, governor)?;
                 }
                 let ledger = self.reasoning_ledger(reasoning, governor)?;
                 if self.policies.exact {
@@ -4404,7 +4566,8 @@ impl Recovery<'_> {
             }
             ResolvedSegment::Call(call) => {
                 let index = reading.value.calls.len();
-                let (built, facts) = tool_call(call, index, governor)?;
+                let origins = located.call_origins(located.site, governor)?;
+                let (built, facts) = tool_call(call, index, origins, governor)?;
                 reading.cost = reading.cost.saturating_add(facts.cost);
                 for validation in &facts.validations {
                     reading
@@ -5174,6 +5337,7 @@ impl Recovery<'_> {
     fn conclude(
         &self,
         readings: Vec<Reading>,
+        trace: NativeTrace,
         governor: &mut Governor,
     ) -> Result<Done, StopReason> {
         if let Some(reading) = readings.iter().find(|reading| !reading.inexact.is_empty()) {
@@ -5192,6 +5356,9 @@ impl Recovery<'_> {
                 }],
                 alternatives: Vec::new(),
                 stopped: StopReason::NoCandidate,
+                trace,
+                origins: ScratchVec::new(governor),
+                rejected_values: ScratchVec::new(governor),
             });
         }
         let mut readings = same_calls(self, readings, governor)?;
@@ -5249,29 +5416,12 @@ impl Recovery<'_> {
                 governor,
             )?;
         }
-        let (outcome, stopped) = if reject && ambiguous {
-            (Outcome::Unresolved, StopReason::NoCandidate)
-        } else if readings.len() > 1 {
-            let values: Vec<ToolCalls> =
-                readings.into_iter().map(|reading| reading.value).collect();
-            (
-                Outcome::Ambiguous(permute(&values, &published.order)),
-                StopReason::Completed,
-            )
-        } else {
-            let reading = readings.pop().expect("a turn has at least one reading");
-            let doubtful = reading
-                .ledgers()
-                .any(|ledger| ledger.guessed() || ledger.data_loss());
-            (
-                if doubtful {
-                    Outcome::BestGuess(reading.value)
-                } else {
-                    Outcome::Resolved(reading.value)
-                },
-                StopReason::Completed,
-            )
-        };
+        let ConcludedValues {
+            outcome,
+            stopped,
+            origins,
+            rejected_values,
+        } = conclude_values(readings, &published.order, reject && ambiguous, governor)?;
         Ok(Done {
             outcome,
             evidence: published.evidence,
@@ -5280,8 +5430,87 @@ impl Recovery<'_> {
             validations: log.entries,
             alternatives: published.alternatives,
             stopped,
+            trace,
+            origins,
+            rejected_values,
         })
     }
+}
+
+struct ConcludedValues {
+    outcome: Outcome<ToolCalls>,
+    stopped: StopReason,
+    origins: ScratchVec<FinalOrigins>,
+    rejected_values: ScratchVec<RejectedValue>,
+}
+
+fn conclude_values(
+    mut readings: Vec<Reading>,
+    order: &[usize],
+    rejected: bool,
+    governor: &mut Governor,
+) -> Result<ConcludedValues, StopReason> {
+    let mut origins = ScratchVec::new(governor);
+    let mut rejected_values = ScratchVec::new(governor);
+    let (outcome, stopped) = if rejected {
+        // order ranks semantic alternatives when per_call is true,
+        // not whole-message rows. Preserve this domain independently.
+        for mut reading in readings {
+            let row = final_origins(&mut reading, governor)?;
+            push_scratch(&mut origins, row, governor)?;
+            push_scratch(&mut rejected_values, RejectedValue(reading.value), governor)?;
+        }
+        (Outcome::Unresolved, StopReason::NoCandidate)
+    } else if readings.len() > 1 {
+        let mut slots = ScratchVec::new(governor);
+        let mut values = Vec::with_capacity(readings.len());
+        for mut reading in readings {
+            let row = final_origins(&mut reading, governor)?;
+            push_scratch(&mut slots, OriginSlot(Some(row)), governor)?;
+            values.push(reading.value);
+        }
+        if order.len() != slots.len() {
+            return Err(invalid_input(
+                "published whole-message correlation order has the wrong length",
+            ));
+        }
+        for &index in order {
+            governor.charge(Resource::Work, 1)?;
+            let row = slots
+                .as_mut_slice()
+                .get_mut(index)
+                .and_then(|slot| slot.0.take())
+                .ok_or_else(|| {
+                    invalid_input("published whole-message correlation order is not a permutation")
+                })?;
+            push_scratch(&mut origins, row, governor)?;
+        }
+        (
+            Outcome::Ambiguous(permute(&values, order)),
+            StopReason::Completed,
+        )
+    } else {
+        let mut reading = readings.pop().expect("a turn has at least one reading");
+        let doubtful = reading
+            .ledgers()
+            .any(|ledger| ledger.guessed() || ledger.data_loss());
+        let row = final_origins(&mut reading, governor)?;
+        push_scratch(&mut origins, row, governor)?;
+        (
+            if doubtful {
+                Outcome::BestGuess(reading.value)
+            } else {
+                Outcome::Resolved(reading.value)
+            },
+            StopReason::Completed,
+        )
+    };
+    Ok(ConcludedValues {
+        outcome,
+        stopped,
+        origins,
+        rejected_values,
+    })
 }
 
 /// What id assignment needs of one call: its index, the id it carries,
@@ -5414,9 +5643,11 @@ pub(crate) fn assign_ids(
 /// among whole readings that differ only in this span.
 fn fold_options<'t>(
     options: &'t [Vec<ResolvedSegment>],
+    piece: usize,
+    trace: &NativeTrace,
     output: &[u8],
     governor: &mut Governor,
-) -> Result<Vec<Fold<'t>>, StopReason> {
+) -> Result<ScratchVec<Fold<'t>>, StopReason> {
     // Each group: its member indices, in option order.
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for (index, option) in options.iter().enumerate() {
@@ -5433,7 +5664,7 @@ fn fold_options<'t>(
             None => groups.push(vec![index]),
         }
     }
-    let mut folds = Vec::with_capacity(groups.len());
+    let mut folds = ScratchVec::new(governor);
     for members in &groups {
         let mut kept = members[0];
         for &member in &members[1..] {
@@ -5443,15 +5674,52 @@ fn fold_options<'t>(
                 kept = member;
             }
         }
-        let mut fold = Fold::new(&options[kept], governor)?;
+        let kept_branch = kept
+            .checked_add(1)
+            .ok_or_else(|| invalid_input("fold capture branch overflows"))?;
+        let mut fold = Fold::new(
+            &options[kept],
+            CallSite([piece, kept_branch, 0, 0]),
+            trace,
+            governor,
+        )?;
         for &member in members.iter().filter(|&&member| member != kept) {
             fold.absorb(&options[member], governor)?;
+            let branch = member
+                .checked_add(1)
+                .ok_or_else(|| invalid_input("fold capture branch overflows"))?;
+            let origins = option_origins(
+                &options[member],
+                CallSite([piece, branch, 0, 0]),
+                trace,
+                governor,
+            )?;
+            if origins.len() != fold.origins.len() {
+                return Err(invalid_input(
+                    "equivalent fold has a different call correlation count",
+                ));
+            }
+            for (kept, other) in fold.origins.as_mut_slice().iter_mut().zip(origins.iter()) {
+                kept.origins.union(&other.origins, governor)?;
+            }
         }
-        folds.push((kept, fold));
+        push_scratch(&mut folds, (kept, fold), governor)?;
     }
     // The readings' order is the order of the kept segmentations.
-    folds.sort_unstable_by_key(|(kept, _)| *kept);
-    Ok(folds.into_iter().map(|(_, fold)| fold).collect())
+    governor.charge(
+        Resource::Work,
+        size(folds.len())
+            .saturating_mul(u64::from(folds.len().bit_width()).saturating_add(1))
+            .saturating_mul(4),
+    )?;
+    folds.as_mut_slice().sort_unstable_by_key(|(kept, _)| *kept);
+    let mut ordered = ScratchVec::new(governor);
+    while let Some((_, fold)) = folds.pop() {
+        push_scratch(&mut ordered, fold, governor)?;
+    }
+    governor.charge(Resource::Work, size(ordered.len()))?;
+    ordered.as_mut_slice().reverse();
+    Ok(ordered)
 }
 
 /// Record on a reading built from folded options the dialects of every
@@ -5460,12 +5728,12 @@ fn fold_options<'t>(
 /// reading's attempts.
 fn apply_folds(
     reading: &mut Reading,
-    folds: &[&Fold<'_>],
+    folds: &[FoldBorrow<'_>],
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     // Contested spans are disjoint, so each call's range is in one fold.
     let mut calls: BTreeMap<(usize, usize), &BTreeSet<DialectId>> = BTreeMap::new();
-    for fold in folds {
+    for FoldBorrow(fold) in folds {
         for (&start, dialects) in &fold.attempts {
             #[expect(
                 clippy::mutable_key_type,
@@ -5738,6 +6006,24 @@ fn merge(
             .iter()
             .filter_map(|&member| slots[member].as_ref())
             .collect();
+        for other in &members {
+            if reading.facts.len() != other.facts.len()
+                || reading.embedded_origins.len() != other.embedded_origins.len()
+            {
+                return Err(invalid_input("merged call correlation counts disagree"));
+            }
+            for (kept, other) in reading.facts.iter_mut().zip(&other.facts) {
+                kept.origins.union(&other.origins, governor)?;
+            }
+            for (kept, other) in reading
+                .embedded_origins
+                .as_mut_slice()
+                .iter_mut()
+                .zip(other.embedded_origins.iter())
+            {
+                kept.union(other, governor)?;
+            }
+        }
         let calls: Vec<&[ToolCall]> = members.iter().map(|other| &other.value.calls[..]).collect();
         union_call_dialects(&mut reading.value.calls, &calls, governor)?;
         let embedded: Vec<&[ToolCall]> = members
@@ -6005,6 +6291,7 @@ fn ambiguity_diagnostics(readings: &[Reading]) -> Vec<String> {
 fn tool_call(
     resolved: &ResolvedCall,
     index: usize,
+    origins: Origins,
     governor: &mut Governor,
 ) -> Result<(ToolCall, CallFacts), StopReason> {
     let reading = &resolved.reading;
@@ -6036,6 +6323,7 @@ fn tool_call(
             keywords: Vec::new(),
         },
         CallFacts {
+            origins,
             cost: reading.cost,
             validations: reading.validations.clone(),
             competing: resolved.competing,
