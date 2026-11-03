@@ -1451,6 +1451,11 @@ impl fmt::Debug for Recognizer<'_> {
             .field("dialects", &self.set.dialects())
             .field("policy", &self.policy)
             .field("fed", &self.engine.fed())
+            .field("content_state", &self.turn.top)
+            .field("live_interpretations", &self.turn.interps)
+            .field("native_history", &self.turn.nodes)
+            .field("stored_segments", &self.turn.store)
+            .field("pending_reports", &self.pending)
             .finish_non_exhaustive()
     }
 }

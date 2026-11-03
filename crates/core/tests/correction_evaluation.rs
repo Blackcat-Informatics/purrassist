@@ -25,7 +25,9 @@ use purrassist_core::{
     matching::{self, Candidate, MatchRequest, SelectionPolicy},
     paths::PathIndex,
     schema::{Schema, recovery::RecoveryRequest},
-    tool_call::{CallLedger, CallOutcome, ToolCalls},
+    tool_call::{
+        CallLedger, CallOutcome, DialectSet, Recognizer, ToolCalls, ToolRecoveryRequest, ToolSet,
+    },
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -641,6 +643,24 @@ fn diagnostic_recovery_miss(
     1
 }
 
+/// Report retained native history for a bounded number of incorrect decisions.
+/// This uses a separate governor and never changes the scored recovery result.
+fn diagnostic_native_state(
+    tools: &ToolSet,
+    dialects: &DialectSet,
+    request: &ToolRecoveryRequest,
+    bytes: &[u8],
+) {
+    let mut governor = Governor::new(request.budget);
+    match Recognizer::with_tools(dialects, tools, request.reasoning, &mut governor) {
+        Ok(mut recognizer) => {
+            let admission = recognizer.push(bytes, &mut governor);
+            eprintln!("native-state: pre_eof admission={admission:?}; state={recognizer:?}");
+        }
+        Err(reason) => eprintln!("native-state: construction refused: {reason:?}"),
+    }
+}
+
 /// Every case recovered under its request and scored. The answer is the
 /// calls the caller may run when it accepts guesses
 /// ([`ToolCalls::usable_accepting_guesses`]): `Resolved` calls and `BestGuess`
@@ -719,6 +739,9 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
             (Some(_), None) => tally.record(false),
         }
         if tally.incorrect > 0 {
+            if evaluation.tally.incorrect < 4 {
+                diagnostic_native_state(set, &dialects, &request, &bytes);
+            }
             eprintln!(
                 "incorrect: {} answered {:?}; outcome={:?}",
                 text_field(case, "id"),
