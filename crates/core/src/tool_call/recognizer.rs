@@ -450,10 +450,10 @@ impl Turn {
         } else {
             (
                 parent.packed,
-                if parent.plain != prev {
-                    source_min(parent.tail_payload, payload)
-                } else {
+                if parent.plain == prev {
                     None
+                } else {
+                    source_min(parent.tail_payload, payload)
                 },
             )
         };

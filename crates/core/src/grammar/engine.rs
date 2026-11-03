@@ -2210,6 +2210,51 @@ impl<'s> Step<'_, 's> {
         self.closure(thread, next, at, stack, out, governor)
     }
 
+    /// Classify a closure terminal without extending the finite opener phase.
+    fn opener_ownership(
+        &self,
+        ownership: u8,
+        pc: u32,
+        governor: &mut Governor,
+    ) -> Result<u8, StopReason> {
+        Ok(if ownership & 1 != 0 {
+            governor.charge(
+                Resource::Work,
+                size(self.program.openers.len()).saturating_add(1),
+            )?;
+            if self.program.openers.contains(&pc) {
+                ownership
+            } else {
+                2
+            }
+        } else {
+            2
+        })
+    }
+
+    /// Record an explicit grammar token and queue its input-free continuation.
+    fn insert_closure(
+        &mut self,
+        lit: u32,
+        at: usize,
+        (next, hist, cost): (u32, u32, u64),
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let edit = MarkupEdit {
+            operator: EditOperator::MissingToken,
+            span: at..at,
+            original: Vec::new(),
+            replacement: self.grammar.literals[lit as usize]
+                .bytes
+                .as_slice()
+                .to_vec(),
+        };
+        let node = self.arena.edit(hist, edit, governor)?;
+        let cost = cost.saturating_add(EditOperator::MissingToken.rule().cost);
+        self.pending.push((next, node, cost));
+        Ok(())
+    }
+
     /// Follow every input-free transition from `pc` at offset `at`.
     pub(crate) fn closure(
         &mut self,
@@ -2260,18 +2305,7 @@ impl<'s> Step<'_, 's> {
                     continue;
                 }
                 Inst::Insert { lit, next } => {
-                    let edit = MarkupEdit {
-                        operator: EditOperator::MissingToken,
-                        span: at..at,
-                        original: Vec::new(),
-                        replacement: self.grammar.literals[lit as usize]
-                            .bytes
-                            .as_slice()
-                            .to_vec(),
-                    };
-                    let node = self.arena.edit(hist, edit, governor)?;
-                    let cost = cost.saturating_add(EditOperator::MissingToken.rule().cost);
-                    self.pending.push((next, node, cost));
+                    self.insert_closure(lit, at, (next, hist, cost), governor)?;
                     continue;
                 }
                 // A deferred body's value is read when the completion is
@@ -2314,19 +2348,7 @@ impl<'s> Step<'_, 's> {
                     continue;
                 }
             };
-            let ownership = if thread.ownership & 1 != 0 {
-                governor.charge(
-                    Resource::Work,
-                    size(self.program.openers.len()).saturating_add(1),
-                )?;
-                if self.program.openers.contains(&pc) {
-                    thread.ownership
-                } else {
-                    2
-                }
-            } else {
-                2
-            };
+            let ownership = self.opener_ownership(thread.ownership, pc, governor)?;
             let next = Thread {
                 ownership,
                 pc,
@@ -4003,7 +4025,6 @@ impl Event {
     /// Routing-only reports do not retain candidate bytes by themselves.
     pub(crate) fn candidate_start(&self) -> Option<usize> {
         match self {
-            Self::Opened { .. } => None,
             Self::Completed { parts, .. } => parts.first().map(|(part, _)| match part {
                 Part::Call(call) => call.span.start,
                 Part::Rejected { span, .. } => span.start,
@@ -4015,7 +4036,7 @@ impl Event {
                 salvage,
                 ..
             } if !outread || salvage.is_some() => Some(*start),
-            Self::Ended { .. } => None,
+            Self::Opened { .. } | Self::Ended { .. } => None,
         }
     }
 
@@ -4944,7 +4965,7 @@ impl<'s> Engine<'s> {
             owned = (None, None);
             governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
             merge_noting(live, &mut self.arena, governor, |thread| {
-                note_ownership(&mut owned, thread)
+                note_ownership(&mut owned, thread);
             })?;
         }
         if self.tables[table].thread_ownership != owned {

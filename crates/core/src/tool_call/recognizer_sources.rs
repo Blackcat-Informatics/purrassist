@@ -78,10 +78,15 @@ impl SourceUpdate {
             }
         }
         let mut coordinate = self.source;
-        for level in 0..self.path.levels[0].max(self.path.levels[1]) {
+        for (level, words) in sources
+            .occupancy
+            .iter_mut()
+            .enumerate()
+            .take(self.path.levels[0].max(self.path.levels[1]))
+        {
             let index = coordinate / 64;
             let mask = 1_u64 << (coordinate % 64);
-            let pair = &mut sources.occupancy[level].as_mut_slice()[index];
+            let pair = &mut words.as_mut_slice()[index];
             for lane in 0..2 {
                 if level < self.path.levels[lane] {
                     pair.0[lane] = if self.path.adding {
@@ -280,20 +285,20 @@ impl PendingSources {
         }
         Self::reserve_slots(&mut self.counts, needed, governor)?;
         let mut coordinate = source;
-        for level in 0..height {
+        for words in self.occupancy.iter_mut().take(height) {
             // Reserve and later initialize this level in two real traversals.
             governor.charge(Resource::Work, 2)?;
             coordinate /= 64;
-            Self::reserve_slots(&mut self.occupancy[level], coordinate + 1, governor)?;
+            Self::reserve_slots(words, coordinate + 1, governor)?;
         }
         for _ in self.counts.len()..needed {
             self.counts.push(ScratchVec::new(governor))?;
         }
         coordinate = source;
-        for level in 0..height {
+        for words in self.occupancy.iter_mut().take(height) {
             coordinate /= 64;
-            let missing = (coordinate + 1).saturating_sub(self.occupancy[level].len());
-            self.occupancy[level].extend(core::iter::repeat_n(Bits::default(), missing))?;
+            let missing = (coordinate + 1).saturating_sub(words.len());
+            words.extend(core::iter::repeat_n(Bits::default(), missing))?;
         }
         Ok(())
     }

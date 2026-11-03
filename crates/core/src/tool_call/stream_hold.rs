@@ -46,8 +46,7 @@ impl CandidateCoverage {
         if span.is_empty() {
             return Ok(());
         }
-        let mut covered = 0;
-        if let Some(last) = self.intervals.as_mut_slice().last_mut() {
+        let covered = if let Some(last) = self.intervals.as_mut_slice().last_mut() {
             if span.start < last.start {
                 return Err(invalid_input("candidate intervals are not in source order"));
             }
@@ -62,9 +61,11 @@ impl CandidateCoverage {
                 }
                 return Ok(());
             }
-            covered = last.covered;
-        }
-        covered = covered
+            last.covered
+        } else {
+            0
+        };
+        let covered = covered
             .checked_add(span.end - span.start)
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         push_scratch(

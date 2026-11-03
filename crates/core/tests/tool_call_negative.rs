@@ -23,6 +23,7 @@
 //! default allow-list (every built-in dialect): no Llama 3 JSON attempt
 //! commits, so there is no call and no rejected attempt.
 use core::ops::Range;
+use purrassist_core::contract::Resource;
 use purrassist_core::digest::Digest;
 use purrassist_core::grammar::Grammar;
 use purrassist_core::tool_call::{
@@ -30,9 +31,7 @@ use purrassist_core::tool_call::{
     Rejection, RepairPolicy, StreamEvent, ToolCalls, ToolChoice, ToolDefinition,
     ToolRecoveryRequest, ToolSet, UnresolvedReason,
 };
-use purrassist_core::{
-    AssistResult, Budget, CancellationToken, Governor, Outcome, Resource, StopReason,
-};
+use purrassist_core::{AssistResult, Budget, CancellationToken, Governor, Outcome, StopReason};
 
 /// A call to `f` with one parameter `a` = `x`, in canonical layout.
 const CALL: &str =
