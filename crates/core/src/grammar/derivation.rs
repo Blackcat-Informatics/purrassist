@@ -167,14 +167,14 @@ impl<'a> GrammarRecipe<'a> {
                 return Err(GrammarError::EmptyLiteral { offset: 0 });
             }
         }
-        let all_call_endings_erased = endings::all_erased(&document, markers, governor)?;
+        let call_ending_proof = endings::prove(&document, markers, governor)?;
         project(&mut document, markers, anchor, governor)?;
         let mut name = ScratchString::new(governor);
         governor.charge(Resource::Work, saturating_size(id.len()))?;
         name.push_str(id)?;
         document.id = name;
         let digest = identity(id, source, markers, suppression, anchor, governor)?;
-        compile::compile_derived(document, digest, anchor, all_call_endings_erased, governor)
+        compile::compile_derived(document, digest, anchor, call_ending_proof, governor)
     }
 }
 

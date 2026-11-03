@@ -519,7 +519,7 @@ impl Turn {
     /// extraction alternatives whose final marker the recipe erased.
     fn revive(
         &mut self,
-        candidates: Vec<(u64, u32)>,
+        candidates: &[(u64, u32)],
         at: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
@@ -533,7 +533,7 @@ impl Turn {
             && top.cost < candidate_cost
         {
             let mut possible = false;
-            for &(_, hist) in &candidates {
+            for &(_, hist) in candidates {
                 if trailing::possible(self, hist, at, governor)? {
                     possible = true;
                     break;
@@ -544,7 +544,7 @@ impl Turn {
             }
         }
         let mut hists = ScratchVec::new(governor);
-        for &(cost, hist) in &candidates {
+        for &(cost, hist) in candidates {
             if cost == best {
                 crate::contract::push_scratch(&mut hists, hist, governor)?;
             }
@@ -556,7 +556,7 @@ impl Turn {
             crate::contract::push_scratch(&mut hists, closed, governor)?;
         }
         let minimums = hists.len();
-        for &(cost, hist) in &candidates {
+        for &(cost, hist) in candidates {
             if cost > best {
                 trailing::preserve(self, hist, at, minimums, &mut hists, governor)?;
             }
@@ -1814,7 +1814,7 @@ impl<'s> Recognizer<'s> {
             {
                 self.turn.think = Some(think);
             }
-            self.turn.revive(frame.candidates, at, governor)
+            self.turn.revive(&frame.candidates, at, governor)
         })();
         let cleanup = Pending::discard_all(group, governor);
         result.and(cleanup)
@@ -2906,7 +2906,7 @@ impl<'s> Recognizer<'s> {
             hist: think.hist,
         };
         let candidate = self.turn.append(prior, segment, 0, end, governor)?;
-        self.turn.revive(vec![candidate], end, governor)
+        self.turn.revive(&[candidate], end, governor)
     }
 
     /// End the turn and return its packed segmentation.
@@ -2949,7 +2949,7 @@ impl<'s> Recognizer<'s> {
                 // An output that ends where its open block starts (an empty
                 // output under `starts_open`) holds no reasoning to classify.
                 let empty = (think.cost, think.hist);
-                self.turn.revive(vec![empty], end, governor)?;
+                self.turn.revive(&[empty], end, governor)?;
             } else {
                 self.unterminated(&think, end, governor)?;
             }

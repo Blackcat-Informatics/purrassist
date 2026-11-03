@@ -819,8 +819,8 @@ pub struct CompiledGrammar {
     pub(crate) id: String,
     pub(crate) digest: Digest,
     pub(crate) origin: GrammarOrigin,
-    /// Every original call-ending terminal is wholly removed by the recipe.
-    pub(crate) all_call_endings_erased: bool,
+    /// Whether the recipe proved every original call ending wholly erased.
+    pub(crate) call_ending_proof: CallEndingProof,
     joint_captures: crate::contract::ScratchVec<partition::JointCapture>,
     pub(crate) literals: crate::contract::ScratchVec<Literal>,
     pub(crate) literal_tables: crate::contract::ScratchVec<LiteralTables>,
@@ -857,6 +857,15 @@ pub struct CompiledGrammar {
     pub(crate) longest: usize,
     pub(crate) layouts: crate::contract::ScratchVec<Option<crate::contract::ScratchVec<u8>>>,
 }
+
+/// Permission established on the original grammar before marker suppression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallEndingProof {
+    Unproven,
+    AllErased,
+}
+
+const _: () = assert!(core::mem::size_of::<CallEndingProof>() <= 1);
 
 /// Whether recognition uses the original grammar or its marker projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -9,7 +9,7 @@ use super::{
     same_source_tree, size,
 };
 use crate::contract::push_scratch;
-use crate::grammar::CaptureKind;
+use crate::grammar::{CallEndingProof, CaptureKind};
 
 pub(super) fn possible(
     turn: &Turn,
@@ -30,7 +30,10 @@ pub(super) fn possible(
                 && !call.readings.is_empty()
                 && call.readings.iter().all(|raw| {
                     raw.span == call.span
-                        && raw.dialect.grammar().all_call_endings_erased
+                        && matches!(
+                            raw.dialect.grammar().call_ending_proof,
+                            CallEndingProof::AllErased
+                        )
                         && tail(raw).is_some()
                 }))
         }

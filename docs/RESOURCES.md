@@ -232,7 +232,7 @@ The marker projection also proves, on the original positioned grammar, whether
 every possible call ending is wholly erased. References, choices and nullable
 suffixes contribute to that proof; retained or mixed endings remain ineligible.
 Its memo owns fallible portable eight-byte slots and releases after compilation.
-The resulting private flag is inline; no new retained heap owner is introduced.
+The resulting private proof is inline; no new retained heap owner is introduced.
 Runtime source comparison may preserve one invocation with trailing prose loss
 beside that same invocation followed by completed calls inside the exact lost
 tail. It requires an identical history prefix, source captures, native argument

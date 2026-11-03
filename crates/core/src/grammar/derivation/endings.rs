@@ -7,6 +7,7 @@ use super::{Document, GrammarError, PExpr, Statement, symbol};
 use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchString, ScratchVec, saturating_size,
 };
+use crate::grammar::CallEndingProof;
 
 #[derive(Clone, Copy, Default)]
 struct Endings {
@@ -55,11 +56,11 @@ struct Proof<'a> {
     visited: ScratchVec<Visit>,
 }
 
-pub(super) fn all_erased(
+pub(super) fn prove(
     document: &Document,
     markers: &[&str],
     governor: &mut Governor,
-) -> Result<bool, GrammarError> {
+) -> Result<CallEndingProof, GrammarError> {
     let Some(call) = symbol(&document.statements, "call", governor)? else {
         return Err(GrammarError::MissingProduction { name: "call" });
     };
@@ -76,7 +77,11 @@ pub(super) fn all_erased(
         visited,
     }
     .statement(call, 1, governor)?;
-    Ok(!ends.nullable && ends.erased && !ends.retained)
+    Ok(if !ends.nullable && ends.erased && !ends.retained {
+        CallEndingProof::AllErased
+    } else {
+        CallEndingProof::Unproven
+    })
 }
 
 impl<'a> Proof<'a> {
