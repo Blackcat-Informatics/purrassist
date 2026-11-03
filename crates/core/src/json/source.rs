@@ -7,7 +7,7 @@ use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason,
 
 /// Compare exact spellings after admitting both byte lengths; resource refusal
 /// propagates without allocating or publishing a partial comparison.
-pub(crate) fn same_source_text(
+pub fn same_source_text(
     left: &str,
     right: &str,
     governor: &mut Governor,
@@ -34,7 +34,7 @@ const _: () = assert!(core::mem::size_of::<SourceNode<'_>>() <= SourceNode::CHAR
 
 /// Source identity is stricter than semantic JSON equality: preserve every
 /// occurrence, source range and exact number spelling without numeric work.
-pub(crate) fn same_source_tree(
+pub fn same_source_tree(
     left: &crate::json::Node,
     right: &crate::json::Node,
     governor: &mut Governor,
