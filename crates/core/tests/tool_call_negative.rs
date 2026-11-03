@@ -371,13 +371,14 @@ fn lexical_content_frontier(tools: &ToolSet) {
         ] {
             stream.feed(&input.as_bytes()[previous..end], &mut events);
             previous = end;
-            for event in events.drain(..) {
+            for event in &events {
                 let StreamEvent::ContentDelta { span, raw } = event else {
                     panic!("plain prefix produced a non-content event");
                 };
-                assert_eq!(span, content.len()..content.len() + raw.len());
-                content.extend(raw);
+                assert_eq!(span, &(content.len()..content.len() + raw.len()));
+                content.extend_from_slice(raw);
             }
+            events.clear();
             assert_eq!(
                 content,
                 input.as_bytes()[..published],
