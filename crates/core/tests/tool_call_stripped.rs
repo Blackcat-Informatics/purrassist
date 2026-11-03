@@ -126,7 +126,7 @@ fn assert_long_preamble_retains_source() {
         Some("retained")
     );
     assert!(raw.captures.iter().any(|capture| {
-        capture.kind == CaptureKind::Dropped && &input[capture.span.clone()] == preamble
+        capture.kind == CaptureKind::Dropped && input[capture.span.clone()] == preamble
     }));
     assert!(raw.captures.iter().any(|capture| {
         capture.kind == CaptureKind::Arguments
@@ -198,8 +198,8 @@ fn weak_names_without_retained_json_evidence_stay_content() {
             );
             if input == long_name || input == unicode_boundary {
                 assert_eq!(
-                    calls.content,
-                    [0..input.len()],
+                    calls.content.as_slice(),
+                    core::slice::from_ref(&(0..input.len())),
                     "{}: {input:?}",
                     dialect.id()
                 );
@@ -416,7 +416,7 @@ hmm {"name":"f","input":{"data":{"name":"f","arguments":{"text":"nested"}}}} don
         nested_reasoning,
         &set([DialectId::HermesStripped, DialectId::BareJson]),
     );
-    assert!(nested_calls.calls.is_empty());
+    assert_eq!(nested_calls.calls.len(), 0);
     assert_eq!(nested_calls.embedded.len(), 1, "{nested_calls:?}");
     assert!(
         nested_calls.embedded[0].arguments.get("data").is_some(),
