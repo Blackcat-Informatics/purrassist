@@ -1239,9 +1239,10 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
                 || cut
                 || invalid
                 || truncated,
-            "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}",
+            "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}; dialect={dialect:?}; reason={:?}; input={output:?}",
             rejected.span,
-            String::from_utf8_lossy(&output[failed..end])
+            String::from_utf8_lossy(&output[failed..end]),
+            rejected.reason
         );
     }
 }

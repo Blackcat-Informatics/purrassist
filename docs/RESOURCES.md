@@ -977,10 +977,13 @@ index. Paged source-offset counts and hierarchical occupancy bitsets retain the
 exact minimum, including a later-ending report whose source begins earlier.
 Each occupancy level marks nonempty words of the level below it; all levels
 exist from the first origin through one fixed root word. Updates and minimum
-descent visit at most eleven levels on 64-bit targets, or six on 32-bit targets,
-without assuming source origins arrive or leave in order. Every prepared update
-admits 104 Work on either target for bounded planning, validation and writes,
-including the root read and page bookkeeping. Growth separately admits newly
+descent visit at most eleven levels on every target, without assuming source
+origins arrive or leave in order. This portable 64-bit source universe retains
+the native offset's addressability limit; its additional singleton roots on
+32-bit targets preserve identical actual storage and initialization. Every
+prepared update admits 104 Work on either target for bounded planning,
+validation and writes, including the root read and page bookkeeping. Growth
+separately admits newly
 initialized directory entries, count slots and bitmap words, and live slots
 potentially relocated by a capacity increase. Directory and bitmap capacities
 are reserved before their lengths grow. Each touched page reserves exactly 64

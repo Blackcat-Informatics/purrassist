@@ -310,14 +310,16 @@ impl Pending {
     }
 }
 
-/// Six source-coordinate bits per occupancy level, covering the native domain.
-const SOURCE_LEVELS: usize = usize::BITS.div_ceil(6) as usize;
+/// Six source-coordinate bits per level in one portable 64-bit source universe.
+/// Native offsets retain their own addressability limit; the extra singleton
+/// roots on 32-bit targets keep actual storage and initialization identical.
+const SOURCE_LEVELS: usize = 11;
 /// Portable admission for planning, validation, minimum descent and application.
 /// Eight record operations per level plus sixteen fixed operations cover the
 /// maximum eleven levels of a 64-bit source domain, including the root read.
 /// Fixed operations include count-page inspection and prepared-page handoff;
 /// initializing directory entries and page slots is admitted as growth below.
-/// Keep this admission identical on 32-bit targets with fewer stored levels.
+/// Keep both this admission and the stored hierarchy identical on every target.
 const SOURCE_UPDATE_WORK: u64 = 8 * 11 + 16;
 
 type SourceWords = [Option<(usize, u64)>; SOURCE_LEVELS];
