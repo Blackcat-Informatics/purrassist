@@ -442,6 +442,20 @@ fn assert_source_retention_limits(tools: &ToolSet, output: &[u8], built_in: &Dia
     assert_eq!(result.receipt.sources.len(), 0);
 }
 
+/// `levels` nested items, the innermost at object level `levels + 1`.
+fn nested_item_body(levels: usize) -> String {
+    let mut body = String::new();
+    for level in 0..levels {
+        write!(
+            body,
+            "<parameter=children><parameter=name>n{level}</parameter>"
+        )
+        .expect("writing to a String");
+    }
+    body.push_str(&"</parameter>".repeat(levels));
+    body
+}
+
 /// G16 (security review A6 and P1, historical-fit risk 5): the `Depth`
 /// charge of a nested object frame counts the frame being pushed, the
 /// arguments object being level 1, so with `Budget { depth: d, .. }` the
@@ -462,23 +476,10 @@ fn nested_item_depth_is_a_stack_guard() {
         Budget::default(),
     )
     .expect("tools compile");
-    // `levels` nested items, the innermost at object level `levels + 1`.
-    let body = |levels: usize| -> String {
-        let mut body = String::new();
-        for level in 0..levels {
-            write!(
-                body,
-                "<parameter=children><parameter=name>n{level}</parameter>"
-            )
-            .expect("writing to a String");
-        }
-        body.push_str(&"</parameter>".repeat(levels));
-        body
-    };
     let turn = |levels: usize| {
         format!(
             "<tool_call>\n<function=tree>\n{}\n</function>\n</tool_call>",
-            body(levels)
+            nested_item_body(levels)
         )
     };
     let expected = |levels: usize| -> String {
@@ -489,7 +490,7 @@ fn nested_item_depth_is_a_stack_guard() {
         format!(r#"{{"children":[{json}]}}"#)
     };
     let read = |levels: usize, depth: u32| {
-        let text = body(levels);
+        let text = nested_item_body(levels);
         let bytes = text.as_bytes();
         let context = CodecContext {
             shape: tools.argument_shape("tree"),
@@ -865,7 +866,7 @@ fn correlated_eof_revision_prefix(tools: &ToolSet) {
                     StreamEvent::ContentDelta { raw, .. } => content.extend(raw),
                     StreamEvent::CallStarted { .. } | StreamEvent::CallName { .. } => {}
                     StreamEvent::CallComplete { .. } | StreamEvent::ParameterComplete { .. } => {
-                        assert!(!conflict)
+                        assert!(!conflict);
                     }
                     other => panic!("unexpected inserted-token event: {other:?}"),
                 }
