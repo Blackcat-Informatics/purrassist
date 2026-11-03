@@ -3,6 +3,7 @@
 
 //! Borrowed EOF source order and the prefix shared by resident final readings.
 use super::recover::ReasoningBlock;
+use super::source_min;
 use super::stream_capture::{FinalOrigins, NativeFact, NativeTrace, Origins};
 use super::{
     CallLedger, CallOutcome, CallReading, RejectedCall, ToolCall, ToolCalls, UnresolvedReason,
@@ -266,10 +267,6 @@ fn range_difference(left: &Range<usize>, right: &Range<usize>) -> Option<usize> 
     }
 }
 
-fn earliest(left: Option<usize>, right: Option<usize>) -> Option<usize> {
-    left.into_iter().chain(right).min()
-}
-
 pub(super) fn selected_fact<'a>(
     origins: &Origins,
     native: &'a NativeTrace,
@@ -300,7 +297,7 @@ fn fact_difference(
             (Some(&(at, _)), None) | (None, Some(&(at, _))) => Some(at),
             (None, None) => None,
         };
-        limit = earliest(limit, at);
+        limit = source_min(limit, at);
     }
     for index in 0..left.edits.len().max(right.edits.len()) {
         governor.charge(Resource::Work, 4)?;
@@ -332,11 +329,11 @@ fn fact_difference(
             _ => false,
         };
         if !equal {
-            limit = earliest(limit, a.into_iter().chain(b).map(|edit| edit.at).min());
+            limit = source_min(limit, a.into_iter().chain(b).map(|edit| edit.at).min());
         }
     }
     if left.closure != right.closure {
-        limit = earliest(limit, Some(left.span.end.min(right.span.end)));
+        limit = source_min(limit, Some(left.span.end.min(right.span.end)));
     }
     Ok(limit)
 }
@@ -369,7 +366,7 @@ pub(super) fn call_limit(
             ));
         }
         let header = native.fact(row.header)?;
-        limit = earliest(limit, base.header_difference(header, governor)?);
+        limit = source_min(limit, base.header_difference(header, governor)?);
         for (index, &raw) in row.readings.iter().take(row.competing).enumerate() {
             let fact = native.fact(raw)?;
             if fact.span != call.span {
@@ -377,18 +374,18 @@ pub(super) fn call_limit(
                     "native capture span differs from its resolved call",
                 ));
             }
-            limit = earliest(limit, fact_difference(base, fact, governor)?);
+            limit = source_min(limit, fact_difference(base, fact, governor)?);
             if index > 0 {
                 let alternative = &call.alternatives[index - 1];
                 let fallback = base.argument_start().min(fact.argument_start());
-                limit = earliest(
+                limit = source_min(
                     limit,
                     tree_difference(&call.arguments, &alternative.arguments, fallback, governor)?,
                 );
                 if !optional_text(call.tool.as_deref(), alternative.tool.as_deref(), governor)? {
-                    limit = earliest(limit, Some(base.name_start().min(fact.name_start())));
+                    limit = source_min(limit, Some(base.name_start().min(fact.name_start())));
                 }
-                limit = earliest(limit, Some(call.span.end));
+                limit = source_min(limit, Some(call.span.end));
             }
         }
     }
@@ -409,11 +406,11 @@ fn call_difference(
     let a = selected_fact(left_origins, native)?;
     let b = selected_fact(right_origins, native)?;
     let mut limit = fact_difference(a, b, governor)?;
-    limit = earliest(limit, range_difference(&left.span, &right.span));
+    limit = source_min(limit, range_difference(&left.span, &right.span));
     if !optional_text(left.tool.as_deref(), right.tool.as_deref(), governor)? {
-        limit = earliest(limit, Some(a.name_start().min(b.name_start())));
+        limit = source_min(limit, Some(a.name_start().min(b.name_start())));
     }
-    limit = earliest(
+    limit = source_min(
         limit,
         tree_difference(
             &left.arguments,
@@ -427,7 +424,7 @@ fn call_difference(
     // over the whole call without changing its shared name or raw arguments;
     // those differences still prevent completion at the call's end.
     if !same_call(left, right, governor)? {
-        limit = earliest(limit, Some(left.span.end.min(right.span.end)));
+        limit = source_min(limit, Some(left.span.end.min(right.span.end)));
     }
     Ok(limit)
 }
@@ -476,7 +473,7 @@ fn tree_difference(
             (None, None) => None,
             _ => Some(at),
         };
-        limit = earliest(limit, span_difference);
+        limit = source_min(limit, span_difference);
         match (&left.value, &right.value) {
             (Value::Null, Value::Null) => {}
             (Value::Bool(a), Value::Bool(b)) if a == b => {}
@@ -507,7 +504,7 @@ fn tree_difference(
                             .map(|span| span.start)
                             .min()
                             .unwrap_or(at);
-                        limit = earliest(limit, Some(key));
+                        limit = source_min(limit, Some(key));
                     }
                     governor.charge(Resource::Depth, depth.saturating_add(1))?;
                     push_scratch(
@@ -521,7 +518,7 @@ fn tree_difference(
                     )?;
                 }
             }
-            _ => limit = earliest(limit, Some(at)),
+            _ => limit = source_min(limit, Some(at)),
         }
     }
     Ok(limit)

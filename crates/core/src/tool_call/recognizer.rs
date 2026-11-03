@@ -77,11 +77,12 @@ use super::ir::{
     ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
     RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment,
 };
+use super::source_min;
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchLease,
-    ScratchMeter, ScratchVec, SourceSpan, StopReason, invalid_input,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchLease, ScratchMeter,
+    ScratchVec, SourceSpan, StopReason, invalid_input,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
@@ -187,10 +188,6 @@ struct TurnNode {
 
 const TURN_NODE_BYTES: u64 = 112;
 const _: () = assert!(core::mem::size_of::<TurnNode>() as u64 <= TURN_NODE_BYTES);
-
-fn source_min(left: Option<usize>, right: Option<usize>) -> Option<usize> {
-    left.into_iter().chain(right).min()
-}
 
 /// A conservative native continuation boundary, not a resolved stream event.
 /// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
