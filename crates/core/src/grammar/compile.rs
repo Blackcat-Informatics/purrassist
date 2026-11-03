@@ -170,18 +170,30 @@ impl Program {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<bool, crate::contract::StopReason> {
-        governor.charge(Resource::Work, size(self.class_openers.len()))?;
-        let Some(opener) = self.class_openers.iter().find(|opener| opener.pc == pc) else {
-            return Err(crate::contract::StopReason::InvalidInput(
-                format_output_governed(
-                    format_args!(
-                        "compiled class opener at program location {pc} has no first-step dispatch mask"
-                    ),
-                    governor,
-                )?,
-            ));
-        };
-        Ok(opener.first[usize::from(byte >> 6)] & (1 << (byte & 63)) != 0)
+        // Compilation visits the sorted, unique epsilon-closure PCs in order.
+        // Probe that same immutable row set without scanning unrelated rows.
+        let mut low = 0;
+        let mut high = self.class_openers.len();
+        while low < high {
+            governor.charge(Resource::Work, 1)?;
+            let middle = low + (high - low) / 2;
+            let opener = &self.class_openers[middle];
+            match opener.pc.cmp(&pc) {
+                core::cmp::Ordering::Less => low = middle + 1,
+                core::cmp::Ordering::Greater => high = middle,
+                core::cmp::Ordering::Equal => {
+                    return Ok(opener.first[usize::from(byte >> 6)] & (1 << (byte & 63)) != 0);
+                }
+            }
+        }
+        Err(crate::contract::StopReason::InvalidInput(
+            format_output_governed(
+                format_args!(
+                    "compiled class opener at program location {pc} has no first-step dispatch mask"
+                ),
+                governor,
+            )?,
+        ))
     }
 
     /// Whether the program's attempts open at a `commit` rather than at

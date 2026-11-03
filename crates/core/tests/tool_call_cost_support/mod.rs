@@ -129,7 +129,15 @@ pub fn resolved(
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     let Outcome::Resolved(calls) = &result.outcome else {
-        panic!("{:?}", result.receipt.stopped)
+        panic!(
+            "{:?}; input_bytes={}; prefix={:?}; effort={:?}; budget={:?}; usage={:?}",
+            result.receipt.stopped,
+            input.len(),
+            &input.as_bytes()[..input.len().min(96)],
+            request.effort,
+            request.budget,
+            result.receipt.usage,
+        )
     };
     assert_eq!(calls.calls[0].outcome, CallOutcome::Resolved);
     assert_eq!(
