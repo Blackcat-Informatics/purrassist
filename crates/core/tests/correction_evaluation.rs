@@ -720,12 +720,13 @@ fn tool_call_corpus_tally() -> ToolCallEvaluation {
         }
         if tally.incorrect > 0 {
             eprintln!(
-                "incorrect: {} answered {:?}",
+                "incorrect: {} answered {:?}; outcome={:?}",
                 text_field(case, "id"),
                 answer.as_ref().map(|calls| calls
                     .iter()
                     .map(|(tool, arguments)| format!("{tool} {}", arguments.to_json()))
-                    .collect::<Vec<_>>())
+                    .collect::<Vec<_>>()),
+                result.outcome
             );
         }
         if truth.is_none() {

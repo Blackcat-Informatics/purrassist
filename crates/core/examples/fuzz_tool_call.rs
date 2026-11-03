@@ -563,9 +563,11 @@ fn check_no_call_body(output: &[u8], calls: &ToolCalls) {
         if let Some(at) = member {
             assert!(
                 prose(&after[..at], 0, &[]),
-                "a call body after rejected attempt {:?} is content: {:?}",
+                "a call body after rejected attempt {:?} is content: {:?}; dialect={:?}; reason={:?}; input={output:?}",
                 rejected.span,
-                String::from_utf8_lossy(after)
+                String::from_utf8_lossy(after),
+                rejected.dialect,
+                rejected.reason
             );
         }
     }
