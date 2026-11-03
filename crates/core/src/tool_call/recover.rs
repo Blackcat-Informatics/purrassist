@@ -3516,7 +3516,10 @@ impl<'s> RecoveryIntake<'s> {
                         add_final_view(&mut readings, &calls.0, &done, index, governor)?;
                     }
                 }
-                Outcome::Unresolved => return Ok(done),
+                Outcome::Unresolved => {
+                    drop(readings);
+                    return Ok(done);
+                }
             }
             let source = self
                 .capture
