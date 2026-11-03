@@ -21,7 +21,7 @@
     "helper_calls": 0
   },
   "usage": {
-    "work": 13342,
+    "work": 13220,
     "candidates": 0,
     "peak_scratch_bytes": 167279,
     "total_scratch_charged": 553362,

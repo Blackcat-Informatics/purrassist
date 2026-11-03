@@ -733,6 +733,14 @@ impl NormalizationOwner {
     }
 }
 
+/// Complete inputs of the last successful native event traversal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct AdvanceKey {
+    history: u32,
+    end: usize,
+    content: Option<(usize, usize)>,
+}
+
 /// One monotone traversal of native shared history plus EOF capture facts.
 /// Nothing here resolves a prefix, replays source or snapshots a governor.
 pub(super) struct EventCursor {
@@ -741,7 +749,7 @@ pub(super) struct EventCursor {
     /// normalized end. Reasoning embedding can change, but its text and the
     /// stored call readings inspected here do not. Include end so a pending
     /// step beyond the previous cutoff is reconsidered when it advances.
-    advance_key: Option<(u32, usize, Option<(usize, usize)>)>,
+    advance_key: Option<AdvanceKey>,
     /// Earlier content is fully published before this source watermark moves.
     content_end: usize,
     /// Preserve the first outstanding owner and its source origin. Rejection
@@ -780,7 +788,11 @@ impl EventCursor {
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
         let end = frontier.prefix_end;
-        let key = (recognizer.settled_history_id(), end, frontier.content);
+        let key = AdvanceKey {
+            history: recognizer.settled_history_id(),
+            end,
+            content: frontier.content,
+        };
         governor.charge(Resource::Work, 1)?;
         if self.advance_key == Some(key) {
             return Ok(());
