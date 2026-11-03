@@ -203,9 +203,9 @@ impl Engine<'_> {
         let valid = !*completed
             && salvage.is_none()
             && !extended
-            && state
-                .selected
-                .is_some_and(|selected| selected.end == *at && selected.reason == *reason)
+            && state.selected.is_some_and(|selected| {
+                selected.header.is_some() && selected.end == *at && selected.reason == *reason
+            })
             && state.native.is_none_or(|frame| frame.start == *start);
         if !valid {
             self.forget_failure_header(*attempt, governor)?;

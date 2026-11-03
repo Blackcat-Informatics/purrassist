@@ -97,7 +97,7 @@ impl Certificate {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SegmentProof {
+pub(super) struct SegmentProof {
     segment: usize,
     certificate: Certificate,
 }
@@ -109,10 +109,20 @@ impl ScratchCharge for SegmentProof {
     };
 }
 
-#[derive(Debug)]
-pub(super) struct PathProof {
-    rows: ScratchVec<SegmentProof>,
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct ProofRows<T: ScratchCharge> {
+    rows: ScratchVec<T>,
 }
+
+impl<T: ScratchCharge> ProofRows<T> {
+    pub(super) fn new(governor: &Governor) -> Self {
+        Self {
+            rows: ScratchVec::new(governor),
+        }
+    }
+}
+
+pub(super) type PathProof = ProofRows<SegmentProof>;
 
 impl ScratchCharge for PathProof {
     const CHARGE: usize = {
@@ -122,12 +132,6 @@ impl ScratchCharge for PathProof {
 }
 
 impl PathProof {
-    pub(super) fn new(governor: &Governor) -> Self {
-        Self {
-            rows: ScratchVec::new(governor),
-        }
-    }
-
     pub(super) fn get(
         &self,
         segment: usize,
@@ -412,7 +416,7 @@ struct Address {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Located {
+pub(super) struct Located {
     address: Address,
     certificate: Certificate,
 }
@@ -424,10 +428,7 @@ impl ScratchCharge for Located {
     };
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct FailureProofs {
-    rows: ScratchVec<Located>,
-}
+pub(super) type FailureProofs = ProofRows<Located>;
 
 pub(super) struct FailureChoice<'a> {
     proofs: &'a FailureProofs,
@@ -476,11 +477,6 @@ impl<'a> FailureChoice<'a> {
 }
 
 impl FailureProofs {
-    pub(super) fn new(governor: &Governor) -> Self {
-        Self {
-            rows: ScratchVec::new(governor),
-        }
-    }
     fn append(
         &mut self,
         piece: usize,
