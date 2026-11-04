@@ -325,10 +325,55 @@ impl Pending {
 
 #[path = "recognizer_sources.rs"]
 mod sources;
-use sources::PendingSources;
+use sources::{PendingSources, SourceId};
 
+// The arena's extra eight portable bytes per slot cover the queued handle.
+const _: () = assert!(core::mem::size_of::<(Pending, SourceId)>() as u64 <= QUEUED_REPORT + 8);
+
+// Preparation borrows its floors; the temporary projected lengths still exist.
 const _: () = assert!(
     core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        sources::SourceUpdate,
+        sources::PreparationCursor,
+        [usize; 2],
+        SourceId
+    )>() <= 640
+);
+
+// Apply owns the complete update and its separate replay cursor.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        sources::SourceUpdate,
+        sources::ReplayCursor,
+        SourceId
+    )>() <= 640
+);
+
+// Terminal validation retains its actual row cursor and projected-length array.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        sources::PreparationCursor,
+        [usize; 2],
+        SourceId
+    )>() <= 640
+);
+
+// Retirement has no update or cursor, but replacement and old owners coexist.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
         PendingSources,
         Option<(u32, Option<usize>)>,
         Option<FrontierMemo>,
@@ -1198,9 +1243,9 @@ pub struct Recognizer<'s> {
     digest: DigestBuilder,
     marker: u32,
     /// The queued reports, by offset, phase and arrival.
-    pending: BTreeMap<(usize, u8, u64), Pending>,
-    /// Report offsets and source origins have different orders. Keep their
-    /// counted source index and cached minimum separate from dispatch order.
+    pending: BTreeMap<(usize, u8, u64), (Pending, SourceId)>,
+    /// Declared after pending: queued handles must drop before arena coverage.
+    /// Source order and dispatch order share identities, with distinct indexes.
     pending_sources: PendingSources,
     ownership_memo: Option<(u32, Option<usize>)>,
     _ownership_metadata: ScratchLease,
@@ -1681,22 +1726,26 @@ impl<'s> Recognizer<'s> {
                 "candidate report has a different source origin",
             ));
         }
-        let update = self.pending_sources.prepare_add(
-            source,
-            candidate.is_some(),
-            self.engine.fed(),
-            governor,
-        )?;
         let arrival = self
             .arrivals
             .checked_add(1)
             .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        let update = self.pending_sources.prepare_add(
+            source,
+            arrival,
+            candidate.is_some(),
+            self.engine.fed(),
+            governor,
+        )?;
         governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
+        let handle = update.handle();
         update.apply(&mut self.pending_sources);
         self.queued.bytes += QUEUED_REPORT;
         self.arrivals = arrival;
-        self.pending
-            .insert((pending.at(), pending.phase(), self.arrivals), pending);
+        self.pending.insert(
+            (pending.at(), pending.phase(), self.arrivals),
+            (pending, handle),
+        );
         Ok(())
     }
 
@@ -1714,7 +1763,7 @@ impl<'s> Recognizer<'s> {
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
         let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
         // Stable order: offset, then phase, then arrival.
-        while let Some((&key, pending)) = self.pending.first_key_value() {
+        while let Some((&key, (pending, handle))) = self.pending.first_key_value() {
             if key.0 > limit {
                 break;
             }
@@ -1727,16 +1776,67 @@ impl<'s> Recognizer<'s> {
                     "candidate report has a different source origin",
                 ));
             }
-            let update =
-                self.pending_sources
-                    .prepare_remove(source, candidate.is_some(), governor)?;
-            let (_, pending) = self
+            let update = self.pending_sources.prepare_remove(
+                *handle,
+                source,
+                key.2,
+                candidate.is_some(),
+                governor,
+            )?;
+            let (_, (pending, _)) = self
                 .pending
                 .pop_first()
                 .expect("pending minimum was just read");
             update.apply(&mut self.pending_sources);
             ready.push((ready.len(), pending.at(), pending));
         }
+        self.apply_ready(ready, governor)
+    }
+
+    /// Consuming EOF has no later source-floor reader or report producer.
+    /// Retain all index owners until every queued handle has been stripped.
+    fn settle_final(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        self.pending_sources
+            .prepare_terminal(self.pending.len(), governor)?;
+        let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
+        while let Some((&key, (pending, handle))) = self.pending.first_key_value() {
+            let source = pending.source_start();
+            let candidate = pending.candidate_start();
+            if candidate.is_some_and(|start| start != source) {
+                return Err(invalid_input(
+                    "candidate report has a different source origin",
+                ));
+            }
+            self.pending_sources.terminal_entry(
+                *handle,
+                source,
+                key.2,
+                candidate.is_some(),
+                governor,
+            )?;
+            let (_, (pending, _)) = self
+                .pending
+                .pop_first()
+                .expect("pending minimum was just read");
+            // Only Pending enters ready; no handle survives its queue slot.
+            ready.push((ready.len(), pending.at(), pending));
+        }
+        self.apply_ready(ready, governor)?;
+        if !self.pending.is_empty() {
+            return Err(invalid_input(
+                "terminal report dispatch left queued source handles",
+            ));
+        }
+        self.pending_sources.retire(governor);
+        Ok(())
+    }
+
+    /// Preserve the native report grouping and queue-charge handoff.
+    fn apply_ready(
+        &mut self,
+        ready: Vec<(usize, usize, Pending)>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         if ready.is_empty() {
             return Ok(());
         }
@@ -2560,7 +2660,7 @@ impl<'s> Recognizer<'s> {
         self.context.finish(end, governor)?;
         self.engine.finish(&stop, governor)?;
         self.queue_events(governor)?;
-        self.settle(usize::MAX, governor)?;
+        self.settle_final(governor)?;
         if let Some(think) = self.turn.think.take()
             && think.promoted.is_none()
         {

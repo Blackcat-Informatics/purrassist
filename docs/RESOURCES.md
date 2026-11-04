@@ -995,64 +995,63 @@ semantic-prefix equivalence, cloning or decoding queries.
 
 The portable history-node reservation is 112 bytes. Traversals admit work before
 each visited step, and scanning live owners admits work for their records.
-Pending reports keep their dispatch order separately from one typed counted
-source index. Each source row stores report and candidate multiplicities;
-candidates are a checked subset of reports. Each occupancy row stores two
-`u64` lanes with the same subset invariant. Counts and bitmap rows each reserve
-16 portable bytes. A touched count page contains exactly 64 paired rows; empty
-40-byte inner owners represent absent pages. Both exact minima and active-origin
-counts are cached independently, while page addressing, root validation and the
-source-coordinate bitmap path are shared. A candidate report with a different
-source origin is an explicit invariant failure.
+Pending reports keep their dispatch order separately from two source-minimum
+heaps: all reports and their candidate subset. Both heaps store identities into
+one reusable slot arena; the sole `Pending` payload remains in the dispatch queue.
+Each row stores its immutable source origin and queue arrival plus both heap
+positions. Keys compare source first, then unique arrival, so duplicate origins
+and arbitrary source order retain exact minima without source-coordinate pages.
+A candidate report with a different source origin is an explicit invariant
+failure. Every candidate key read also checks its mandatory report endpoint.
 
-The index has eleven portable occupancy owners and a source-derived logical
-height: `max(1, ceil(bit_width(u64(source)) / 6))` for an admitted source, with zero
-height before the first update. The height is a high-water mark and never shrinks.
-Only active levels are traversed. Each paired path row advances only lanes still
-propagating a zero/nonzero change and stops when neither lane propagates.
-Multiplicity-only changes construct no bitmap-path array and perform no bitmap
-update traversal; the fixed leaf membership check remains. Compact prepared deltas retain the source, polarity and each lane's
-changed-prefix length; apply recomputes that already checked path rather than
-initializing maximum-height row carriers.
+Each arena slot reserves 40 portable bytes: its 32-byte row and the eight-byte
+opaque handle beside the queued payload. Each heap identity reserves eight bytes.
+Released slots form a free list and are reused before arena growth, bounding
+backing by the largest concurrent queue rather than input offsets or historical
+arrivals. A reused handle must still match its queued arrival, source and candidate
+membership before removal. The unchanged 640-byte metadata lease covers the actual
+three index owners, minima and free head, ownership and frontier memos, both compact
+sift plans inside their update carrier, preparation and replay cursors, and a
+temporary handle. Complete phase layout assertions include those real types and
+the temporary projected-length array; validation borrows its floor array.
+Retirement has a separate assertion covering both the old and replacement index
+owners together with the actual memos and lease.
 
-Height growth separately promotes the old root through child zero in each newly
-exposed ancestor. Promotions and the new source path can touch different words
-of the same level. Preparation overlays those promotions while validating the
-source path; apply publishes promotions before its path deltas. Removing a cached
-minimum starts at that lane's last changed row: zero propagation has already
-proved every earlier source prefix empty. A nonempty row supplies the successor
-branch and descent visits only levels below that pivot. Paired reads are shared
-only when both level and coordinate agree; an empty lane must have reached its
-zero logical root and does not descend. Every final minimum must have a live count.
-Root, source-bound, page, subset, occupancy and arithmetic failures remain explicit.
-Dividing source coordinates before adding one preserves inclusive EOF offsets at
-the native addressability limit.
+An update admits ten shared Work for source or removal identity validation, row
+and free-slot checks, checked planning, carrier handoff, row/free publication,
+projected lane/minimum consistency and exact floor-pair publication. Each insertion
+lane admits four Work for length/reservation planning, compact plan handoff,
+incoming identity placement and position publication. Each removal lane admits
+five Work for length planning, endpoint validation, plan handoff, tail removal and
+clearing its old position. A non-tail removal separately admits two Work for final
+replacement placement and its backlink. Each actual checked key/backlink read
+admits one Work, each comparison one, each intermediate identity/backlink move two,
+and each inspected candidate's joint report endpoint one. The last nonmoving test
+is included. Backing growth separately admits every live slot potentially relocated
+before reservation; unused capacity requires no zero initialization.
 
-The shared update admits 20 fixed record operations covering source addressing
-and height, root/active/minimum agreement, the old count page/pair, checked paired
-arithmetic, leaf membership, active/floor planning, compact carrier handoff and
-page/count/cache application. Cached-minimum count validation separately admits
-two Work per distinct additional source lookup. Each visited changed path row
-admits five Work for planning and eventual application, including both coordinate
-computations and the paired write. Each actual promoted row admits three Work.
-Minimum replacement admits one Work per affected lane for checked pivot setup,
-three per distinct paired row lookup/overlay, one per scanned lane with checked
-coordinate advance, and two per distinct final count lookup. Growth separately admits two level visits, initialized directory,
-count and bitmap slots, and live slots potentially relocated by capacity growth.
-These charges describe actual retained computation; no fixed maximum-height fee
-or separate candidate-index update remains.
+All growth, comparisons, checked endpoints, replacement minima and movement
+admissions precede dispatch mutation. Preparation retains only compact endpoints:
+an upward path follows parents, and a downward path follows the checked binary
+index of its final descendant. Apply replays those exact moves without allocation,
+comparison or admission and publishes both minima together. Failed preparation can
+retain reserved capacity but changes no live row, free head, heap length, identity
+or minimum. An unchanged cached floor remains exact by the private update invariant;
+its source row is not read again merely to prove that same occupancy.
 
-All backing reservations and initialization, new page ownership, promotions,
-path-prefix deltas and replacement minima are prepared before dispatch mutation.
-Failed preparation can retain enlarged zero backing but changes no logical
-height, live count, bit, active count or minimum. A prepared page remains private
-until queue admission succeeds. Apply has no fallible admission and publishes
-both lanes together. Scratch owners retain their capacity until recognizer drop.
-The existing held-marker production case crosses source pages and active heights;
-a focused typed-minimum case additionally covers mixed routing/candidate reports
-at one origin, different lane pivots sharing coordinate zero, and queue-admission
-refusal before page handoff. Runtime qualification of the resource optimizations
-remains pending.
+Consuming EOF queues all final engine reports before terminal dispatch. No later
+report producer or source-floor reader runs, so terminal dispatch validates each
+handle and preserves native report grouping without maintaining either heap.
+It admits six fixed Work for size/minimum consistency, terminal preparation and
+the eventual retirement of three backing owners, then four per report plus one
+for a candidate endpoint. Every record's admission and validation precede its pop.
+All index backing remains until the complete terminal dispatch succeeds: a popped
+handle is stripped before its payload enters native ready buffers. Only then does
+an empty queue permit index retirement before final turn construction. On refusal,
+the pending queue drops before the index, retaining handle coverage throughout.
+The existing mixed-origin minimum/refusal case uses actual report identities;
+held-marker, chunk and refusal cases retain their original limits. Runtime
+qualification of these resource optimizations remains pending.
 
 The engine caches its exact minimum live source origin. A lookup admits one
 work unit; a miss scans every attempt and deferred report under its original

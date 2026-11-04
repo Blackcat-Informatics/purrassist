@@ -4994,8 +4994,9 @@ impl<'s> Engine<'s> {
         else {
             return Ok(false);
         };
-        if record.id != first.attempt
-            || record.start != first.start
+        let (attempt, start) = (first.attempt, first.start);
+        if record.id != attempt
+            || record.start != start
             || !record.opened
             || record.completed
             || record.closed.is_some()
@@ -5021,7 +5022,6 @@ impl<'s> Engine<'s> {
         {
             return Ok(false);
         }
-        let (attempt, start) = (record.id, record.start);
         // No skipped outcome or newer opener can affect the suffix.
         governor.charge(Resource::Work, 1)?;
         if !self.resynced.is_empty() || self.newest_open > entry {
