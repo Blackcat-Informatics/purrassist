@@ -3405,7 +3405,7 @@ impl<'s> RecoveryIntake<'s> {
         let utf8 = self.certified_source_boundary(governor)?;
         let prefix = frontier.prefix_end.min(utf8);
         frontier.prefix_end =
-            self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix, None, governor)?;
+            self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix, governor)?;
         let normalized_prefix = (prefix, frontier.prefix_end);
         let mut normalized_content = None;
         frontier.content = match frontier.content {
@@ -3414,7 +3414,7 @@ impl<'s> RecoveryIntake<'s> {
                 let end = if raw == prefix {
                     frontier.prefix_end
                 } else {
-                    self.cached_source_boundary(raw, utf8, BoundaryKind::Content, None, governor)?
+                    self.cached_source_boundary(raw, utf8, BoundaryKind::Content, governor)?
                 };
                 normalized_content = Some((raw, end));
                 (start < end).then_some((start, end))
@@ -3467,13 +3467,13 @@ impl<'s> RecoveryIntake<'s> {
             .min()
             .unwrap_or(self.received)
             .min(utf8);
-        let known = if cutoff == prefix.0 {
-            Some(prefix)
+        let normalized = if cutoff == prefix.0 {
+            prefix.1
+        } else if let Some((_, normalized)) = content.filter(|(raw, _)| *raw == cutoff) {
+            normalized
         } else {
-            content
+            self.cached_source_boundary(cutoff, utf8, BoundaryKind::Ownership, governor)?
         };
-        let normalized =
-            self.cached_source_boundary(cutoff, utf8, BoundaryKind::Ownership, known, governor)?;
         let (held, candidates) =
             self.events
                 .ownership_counts(self.received, candidate, normalized, governor)?;
@@ -3495,7 +3495,6 @@ impl<'s> RecoveryIntake<'s> {
         end: usize,
         certified: usize,
         kind: BoundaryKind,
-        known: Option<(usize, usize)>,
         governor: &mut Governor,
     ) -> Result<usize, StopReason> {
         governor.charge(Resource::Work, 1)?;
@@ -3511,8 +3510,6 @@ impl<'s> RecoveryIntake<'s> {
         };
         let normalized = if end == certified {
             end
-        } else if let Some((_, normalized)) = known.filter(|(raw, _)| *raw == end) {
-            normalized
         } else if let Some((_, normalized)) = cached.filter(|(raw, _)| *raw == end) {
             normalized
         } else {

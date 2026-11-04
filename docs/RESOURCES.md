@@ -1181,8 +1181,11 @@ pending UTF-8 bytes end exactly there. The encoding cursor's publication cap is
 already a source boundary: either the current end, or the start of its viable
 incomplete scalar. A cutoff at that cap uses the certified coordinate. Earlier
 cutoffs can reuse a normalized prefix/content coordinate from the same snapshot
-only when their original raw keys agree, or an append-stable cached coordinate.
-Each actual cutoff request retains one lookup Work. Only a genuine miss executes
+only when their original raw keys agree. Ownership then uses that already
+validated coordinate directly, just as content already reuses a matching prefix;
+there is no unused ownership-cache lookup or store. Unmatched cutoffs consult
+an append-stable cached coordinate, and each actual helper request retains one
+lookup Work. Only a genuine miss executes
 the existing twelve-Work scalar-boundary helper, preserving arbitrary custom-byte
 backoff. A normalized result must not exceed its raw cutoff.
 
