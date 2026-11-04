@@ -29,3 +29,9 @@ cover conformance data under `crates/rdf/tests/`. Their notices are retained wit
 that source-only scope. A recipient notice's conditional reference to CC-BY
 applies to documentation carrying that header; it does not change every
 package's runtime license.
+
+The adjacent `.license` files supply local SPDX attribution for the preserved
+upstream Markdown notices. The attribution checker accepts this form only for
+registered vendor notice bytes whose SHA-256 matches, with both nonempty SPDX
+fields and a single component license identifier. Ordinary Markdown retains its
+inline-header requirement.

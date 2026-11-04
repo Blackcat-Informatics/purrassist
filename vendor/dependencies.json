@@ -1015,7 +1015,10 @@
         "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/3-W3C-test-suite-BSD.html",
         "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/4-LICENSE",
         "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/0-W3C-software-document-2015.html",
-        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md"
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/1-LICENSE.md.license",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/4-LICENSE.md.license",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md.license"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
@@ -1037,7 +1040,10 @@
         "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
         "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/4-LICENSE": "7fa36904d5d6d32848307af7b22d416b708aaa0b98f5c719b26adb5ed3594b2a",
         "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
-        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727"
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/1-LICENSE.md.license": "c5ec60a223692d47315c479fd0b1867b3f5d279eeebe0a8b7183c9ed61d16405",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/4-LICENSE.md.license": "eb5f1d7fa06b478e621a8fee32697c807891dd5274cc06b67b1a22869f99a841",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md.license": "68441b70b3182029aef9cae07d8d64d41c886986b6947b9b745fc17577cfb645"
       },
       "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf."
     },
@@ -1054,7 +1060,8 @@
         "vendor/licenses/purrdf-511f8af/purrdf-shapes/NOTICE.txt",
         "vendor/licenses/purrdf-511f8af/purrdf-shapes/upstream-inventory.json",
         "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/0-W3C-software-document-2015.html",
-        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md"
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md.license"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
@@ -1063,7 +1070,8 @@
         "vendor/licenses/purrdf-511f8af/purrdf-shapes/NOTICE.txt": "1b11959f266c3baa4b20bbe021f2c8f763cb098d374cb8b25cb5096ade0af5f2",
         "vendor/licenses/purrdf-511f8af/purrdf-shapes/upstream-inventory.json": "f93a1e2857a0c34e782936683296f3a7caa2a923965e3f5e674aef73829f4d60",
         "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
-        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9"
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md.license": "b18676d4050c2f417d9a4d548644a97d4bc3a36a0cd2bf5a46f7b23aea3d8252"
       },
       "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes."
     },
