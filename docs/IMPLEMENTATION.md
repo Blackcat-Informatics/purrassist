@@ -643,6 +643,22 @@ capacity and 192-byte control reservation, and refusal drops the complete trace.
 No output, provenance or original materialization grants are retired by this
 change. Runtime and fixed-budget qualification remain pending automatic CI.
 
+Opening election now keeps an exact count of unopened attempt records. An
+all-opened table cannot emit another opening, so it omits the repeated thread
+election walk; tables with an unopened record retain the complete original
+election. Creation, opening, retirement, abandonment and EOF clear update the
+count beside the corresponding record mutation, with checked work admission.
+The added counter and temporary controls are admitted before table allocation.
+
+XML lookahead reuses the complete declared-owner scan to decide whether a new
+parameter opener ends the current value, removing a duplicate scope walk.
+Aliases, enclosing scopes and unknown-tool behavior remain unchanged. Semantic
+resolution moves a sole owned occurrence into typing and admits unresolved
+root/name clones only where each clone is actually constructed. Object assembly
+keeps its independent payload reservations. These remove discarded copies and
+unused reservations without refunding accepted output or provenance storage.
+Current compiler, runtime and fixed-budget acceptance remain pending CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

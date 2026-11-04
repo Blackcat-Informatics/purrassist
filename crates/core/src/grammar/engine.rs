@@ -4771,7 +4771,17 @@ impl Event {
 
 type OwnershipFloors = (Option<usize>, Option<usize>);
 const _: () = assert!(core::mem::size_of::<OwnershipFloors>() <= 32);
-const _: () = assert!(core::mem::size_of::<(Option<OwnershipFloors>, bool, ScratchLease)>() <= 64);
+const _: () = assert!(core::mem::size_of::<(OwnershipFloors, usize)>() <= 40);
+const _: () = assert!(
+    core::mem::size_of::<(
+        Option<OwnershipFloors>,
+        bool,
+        ScratchLease,
+        usize,
+        usize,
+        Option<usize>,
+    )>() <= 96
+);
 
 fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
     if thread.ownership & 1 != 0 {
@@ -4790,6 +4800,8 @@ struct Table<'s> {
     /// A `RunProof` may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
     attempts: ScratchVec<Attempt>,
+    /// Exact count of attempt records whose opening has not been reported.
+    unopened: usize,
     trails: Vec<Trail>,
     /// Completions of a grouped program's live attempts (see
     /// `Program::grouped`), released when the attempt ends.
@@ -5364,15 +5376,34 @@ impl<'s> Engine<'s> {
         self.ownership_active
     }
 
+    /// Admit table ownership fields and count-update controls before allocation.
+    fn table_metadata(
+        dialect_count: usize,
+        governor: &mut Governor,
+    ) -> Result<(usize, ScratchLease), StopReason> {
+        governor.charge(Resource::Work, 4)?;
+        let table_count = dialect_count
+            .checked_mul(2)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let ownership_bytes = size(table_count)
+            .checked_mul(40)
+            .and_then(|bytes| bytes.checked_add(96))
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
+        governor.charge(Resource::Work, size(table_count))?;
+        Ok((table_count, ownership_metadata))
+    }
+
     pub(crate) fn new(
         dialects: &'s [DialectId],
         tools: Option<&'s ToolSet>,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         governor.check()?;
+        let (table_count, ownership_metadata) = Self::table_metadata(dialects.len(), governor)?;
         let mut grammars = ScratchVec::new(governor);
         grammars.reserve(dialects.len())?;
-        let mut tables = Vec::with_capacity(dialects.len() * 2);
+        let mut tables = Vec::with_capacity(table_count);
         let mut protocol_fences = false;
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
@@ -5403,6 +5434,7 @@ impl<'s> Engine<'s> {
                     program,
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
+                    unopened: 0,
                     trails: Vec::new(),
                     held: HeldSet::default(),
                     past: Vec::new(),
@@ -5413,11 +5445,6 @@ impl<'s> Engine<'s> {
                 });
             }
         }
-        let ownership_bytes = size(tables.len())
-            .checked_mul(32)
-            .and_then(|bytes| bytes.checked_add(64))
-            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
-        let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
         let byte_runs = byte_run::slots(tables.len(), governor)?;
         Ok(Self {
             tables,
@@ -5628,20 +5655,7 @@ impl<'s> Engine<'s> {
                     governor,
                 )?;
             }
-            let id = self.next_attempt;
-            self.next_attempt += 1;
-            self.note_attempt_start(table, at, governor)?;
-            self.tables[table].attempts.push(Attempt {
-                id,
-                start: at,
-                opened: false,
-                completed: false,
-                failure: None,
-                end: None,
-                failure_end: FailureEnd::Stop,
-                stuck: false,
-                closed: None,
-            })?;
+            let id = self.start_attempt(table, at, governor)?;
             let thread = Thread {
                 pc: program.start,
                 sub: Sub::Lit(0),
@@ -5706,6 +5720,36 @@ impl<'s> Engine<'s> {
             self.remember_byte_run(table, byte, at + 1, governor)?;
         }
         Ok(())
+    }
+
+    /// Publish the record and its unopened count as one admitted mutation.
+    fn start_attempt(
+        &mut self,
+        table: usize,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<u64, StopReason> {
+        let id = self.next_attempt;
+        self.next_attempt += 1;
+        self.note_attempt_start(table, at, governor)?;
+        governor.charge(Resource::Work, 3)?;
+        let unopened = self.tables[table]
+            .unopened
+            .checked_add(1)
+            .ok_or_else(|| invalid_input("unopened attempt count overflows"))?;
+        self.tables[table].attempts.push(Attempt {
+            id,
+            start: at,
+            opened: false,
+            completed: false,
+            failure: None,
+            end: None,
+            failure_end: FailureEnd::Stop,
+            stuck: false,
+            closed: None,
+        })?;
+        self.tables[table].unopened = unopened;
+        Ok(id)
     }
 
     /// Invalidate source/phase summaries before inserting a new lexical seed.
@@ -6342,6 +6386,10 @@ impl<'s> Engine<'s> {
         if !program.deferred() {
             return Ok(());
         }
+        governor.charge(Resource::Work, 1)?;
+        if self.tables[table].unopened == 0 {
+            return Ok(());
+        }
         for thread in threads {
             governor.charge(Resource::Work, K_THREAD)?;
             // An opened attempt never emits another opening report. In
@@ -6405,11 +6453,18 @@ impl<'s> Engine<'s> {
             self.grammars[self.tables[table].grammar].dialect == DialectId::MistralV3;
         let mut latest = None;
         for (attempt, position) in opened {
-            let attempts = self.tables[table].attempts.as_mut_slice();
+            let current = &mut self.tables[table];
+            let attempts = current.attempts.as_mut_slice();
             if let Some(record) = attempts.iter_mut().find(|record| record.id == attempt)
                 && !record.opened
             {
+                governor.charge(Resource::Work, 4)?;
+                let unopened = current
+                    .unopened
+                    .checked_sub(1)
+                    .ok_or_else(|| invalid_input("opening has no unopened attempt owner"))?;
                 record.opened = true;
+                current.unopened = unopened;
                 self.newest_open = self.newest_open.max(record.start);
                 latest = latest.max(Some(record.start));
                 governor.charge(Resource::Work, size(self.out.headers.len()))?;
@@ -7110,9 +7165,15 @@ impl<'s> Engine<'s> {
             }
             self.continuation_floor = ContinuationFloor::Invalid;
             self.ownership = None;
+            governor.charge(Resource::Work, 3)?;
+            let unopened = self.tables[table]
+                .unopened
+                .checked_sub(usize::from(!record.opened))
+                .ok_or_else(|| invalid_input("retirement lost its unopened attempt owner"))?;
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
+            self.tables[table].unopened = unopened;
             retired = true;
         }
         // Only an attempt that ended can release a held report.
@@ -8474,7 +8535,17 @@ impl<'s> Engine<'s> {
                     note_ownership(&mut table.thread_ownership, thread);
                 }
             }
+            governor.charge(Resource::Work, size(table.attempts.len()).saturating_add(4))?;
+            let removed_unopened = table
+                .attempts
+                .iter()
+                .any(|record| record.id == attempt && !record.opened);
+            let unopened = table
+                .unopened
+                .checked_sub(usize::from(removed_unopened))
+                .ok_or_else(|| invalid_input("abandonment lost its unopened attempt owner"))?;
             keep(&mut table.attempts, |record| record.id != attempt);
+            table.unopened = unopened;
             governor.charge(
                 Resource::Work,
                 size(table.failures.count(attempt)).saturating_add(1),
@@ -8545,7 +8616,9 @@ impl<'s> Engine<'s> {
             self.tables[table].thread_ownership = (None, None);
             self.continuation_floor = ContinuationFloor::Invalid;
             self.ownership = None;
+            governor.charge(Resource::Work, 1)?;
             self.tables[table].attempts.clear();
+            self.tables[table].unopened = 0;
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();
             let written = core::mem::take(&mut self.tables[table].written);

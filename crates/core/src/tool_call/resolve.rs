@@ -1576,21 +1576,6 @@ impl<'a> Resolver<'a> {
         let cost = raw.edits.iter().fold(0_u64, |total, edit| {
             total.saturating_add(rules::of_operator(edit.operator).cost)
         });
-        let policies = self.policies;
-        let unresolved = |blocker: UnresolvedReason, tool: Option<&CompiledTool>, ledger| {
-            let effective = tool.map(|tool| policies.effective(tool));
-            CallReading {
-                tool: tool.map(|tool| tool.name().to_owned()),
-                effects: effective.map(|(effects, _)| effects),
-                policy: effective.map(|(_, policy)| policy),
-                arguments: raw.arguments.root.clone(),
-                cost,
-                repairs: ledger,
-                validations: Vec::new(),
-                blocker: Some(blocker),
-            }
-        };
-        governor.charge(Resource::ScratchBytes, raw.arguments.root.estimated_bytes())?;
         let exact = raw
             .name
             .as_ref()
@@ -1611,7 +1596,14 @@ impl<'a> Resolver<'a> {
                 governor,
             )?;
             governor.charge(Resource::ScratchBytes, READING_BYTES)?;
-            return Ok(vec![unresolved(UnresolvedReason::Truncated, exact, ledger)]);
+            return Ok(vec![self.unresolved_reading(
+                raw,
+                UnresolvedReason::Truncated,
+                exact,
+                ledger,
+                cost,
+                governor,
+            )?]);
         }
         let incomplete = (raw.closure == Closure::Unterminated)
             .then(|| self.incomplete(raw))
@@ -1644,7 +1636,14 @@ impl<'a> Resolver<'a> {
             )?;
             let (tool, change) = match target {
                 Target::Blocked(reason) => {
-                    readings.push(unresolved(early.clone().unwrap_or(reason), None, ledger));
+                    readings.push(self.unresolved_reading(
+                        raw,
+                        early.clone().unwrap_or(reason),
+                        None,
+                        ledger,
+                        cost,
+                        governor,
+                    )?);
                     continue;
                 }
                 Target::Tool(tool, change) => (tool, change),
@@ -1655,9 +1654,14 @@ impl<'a> Resolver<'a> {
                 ledger.record(rule, evidence, String::new(), value, governor)?;
             }
             if let Some(reason) = early.clone() {
-                let mut reading = unresolved(reason, Some(tool), ledger);
-                reading.cost = cost;
-                readings.push(reading);
+                readings.push(self.unresolved_reading(
+                    raw,
+                    reason,
+                    Some(tool),
+                    ledger,
+                    cost,
+                    governor,
+                )?);
                 continue;
             }
             let produced = self.arguments(raw, tool, ledger, cost, governor)?;
@@ -1669,6 +1673,36 @@ impl<'a> Resolver<'a> {
             readings.extend(produced);
         }
         Ok(readings)
+    }
+
+    /// Admit each retained unresolved clone at its actual construction site.
+    fn unresolved_reading(
+        &self,
+        raw: &RawCall,
+        blocker: UnresolvedReason,
+        tool: Option<&CompiledTool>,
+        ledger: CallLedger,
+        cost: u64,
+        governor: &mut Governor,
+    ) -> Result<CallReading, StopReason> {
+        governor.charge(
+            Resource::ScratchBytes,
+            raw.arguments
+                .root
+                .estimated_bytes()
+                .saturating_add(size(tool.map_or(0, |tool| tool.name().len()))),
+        )?;
+        let effective = tool.map(|tool| self.policies.effective(tool));
+        Ok(CallReading {
+            tool: tool.map(|tool| tool.name().to_owned()),
+            effects: effective.map(|(effects, _)| effects),
+            policy: effective.map(|(_, policy)| policy),
+            arguments: raw.arguments.root.clone(),
+            cost,
+            repairs: ledger,
+            validations: Vec::new(),
+            blocker: Some(blocker),
+        })
     }
 
     /// Why a call completed by end-of-output closers is not otherwise
@@ -2413,18 +2447,16 @@ impl Resolver<'_> {
             return self.collect(scope, parameter, item, occurrences, &here, governor);
         }
         if occurrences.len() == 1 {
-            let occurrence = &occurrences[0];
+            // The length guard proves this iterator has exactly one owner.
+            let Occurrence { value, source, .. } = occurrences
+                .into_iter()
+                .next()
+                .expect("the occurrence count is one");
             let site = Site {
                 pointer: here.pointer,
-                source: occurrence.source.clone(),
+                source,
             };
-            return self.typed(
-                scope,
-                occurrence.value.clone(),
-                &parameter.value,
-                &site,
-                governor,
-            );
+            return self.typed(scope, value, &parameter.value, &site, governor);
         }
         // A repeated parameter that may not repeat: first and last readings.
         let rule = rules::resolution_rule("tool_call.parameter.repeated");
