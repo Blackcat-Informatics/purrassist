@@ -2,6 +2,15 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Each schema evaluation frame resolves its immutable compiled location once and
+shares that borrowed keyword view with same-location helpers. Keyword lookups,
+applicability, child evaluation, dynamic references, active-cycle checks, Depth
+and report ordering retain their existing governed paths. Child frames resolve
+their own views; no cross-frame cache is retained. Layout helpers retain their
+independent route walks. The view and recursive borrow controls keep a typed
+owner for their full frame lifetime. Runtime and resource qualification remain
+pending automatic CI.
+
 Schema typing carries the last whole-instance validation report with its exact
 accepted argument value. Quiet counterfactual probes change only site flags;
 they never replace that report. The resolver publishes its existing diagnostics

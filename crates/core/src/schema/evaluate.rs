@@ -13,10 +13,11 @@
 //! its separate contract.
 use super::layout::Dependency;
 use super::report::{Owned, Records};
+use super::vocabulary::Keywords;
 use super::{Schema, Violation};
 use super::{index, reference, report};
 use crate::contract::{
-    Evidence, Governor, Resource, ScratchString, ScratchVec, StopReason, Validation,
+    Evidence, Governor, Resource, ScratchLease, ScratchString, ScratchVec, StopReason, Validation,
     format_output_governed, format_scratch_governed,
 };
 use crate::json::{Member, Node, Value};
@@ -152,6 +153,38 @@ impl crate::ScratchCharge for Option<Evaluation> {
     };
 }
 
+/// One immutable compiled location, resolved once per evaluation frame. Child
+/// evaluations build their own view; keyword applicability stays governed.
+struct LocationView<'s> {
+    id: usize,
+    keywords: Keywords<'s>,
+    _metadata: ScratchLease,
+}
+
+const LOCATION_VIEW_CONTROL_BYTES: u64 = 192;
+const _: () = assert!(
+    core::mem::size_of::<(
+        LocationView<'static>,
+        Result<LocationView<'static>, StopReason>,
+        [&'static LocationView<'static>; 3],
+        usize,
+    )>() as u64
+        <= LOCATION_VIEW_CONTROL_BYTES
+);
+
+impl<'s> LocationView<'s> {
+    fn new(id: usize, keywords: Keywords<'s>, governor: &mut Governor) -> Result<Self, StopReason> {
+        // Admit the three control-field transfers before constructing the view.
+        reference::work(governor, 3)?;
+        let metadata = governor.lease_scratch(LOCATION_VIEW_CONTROL_BYTES)?;
+        Ok(Self {
+            id,
+            keywords,
+            _metadata: metadata,
+        })
+    }
+}
+
 struct Evaluator<'s, 'g> {
     schema: &'s Schema,
     governor: &'g mut Governor,
@@ -229,7 +262,7 @@ pub(super) fn run(
     })
 }
 
-impl Evaluator<'_, '_> {
+impl<'s> Evaluator<'s, '_> {
     /// Resolve the compiled child before entering its evaluation frame.
     fn eval_child(
         &mut self,
@@ -342,30 +375,31 @@ impl Evaluator<'_, '_> {
             }
             return Ok(result);
         }
-        self.references(id, instance, path, depth, &mut result)?;
-        self.basic(id, instance, path, &mut result)?;
-        self.combinators(id, instance, path, depth, &mut result)?;
+        let view = LocationView::new(id, body, self.governor)?;
+        self.references(&view, instance, path, depth, &mut result)?;
+        self.basic(&view, instance, path, &mut result)?;
+        self.combinators(&view, instance, path, depth, &mut result)?;
         match &instance.value {
             Value::Object(members) => {
-                self.object(id, instance, members, path, depth, &mut result)?;
+                self.object(&view, instance, members, path, depth, &mut result)?;
             }
-            Value::Array(items) => self.array(id, items, path, depth, &mut result)?,
+            Value::Array(items) => self.array(&view, items, path, depth, &mut result)?,
             _ => {}
         }
-        self.unevaluated(id, instance, path, depth, &mut result)?;
+        self.unevaluated(&view, instance, path, depth, &mut result)?;
         Ok(result)
     }
     fn references(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         instance: &Node,
         path: &str,
         depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         for keyword in ["$ref", "$dynamicRef"] {
             if let Some(reference) = body
                 .get_governed(keyword, self.governor)?
@@ -392,14 +426,13 @@ impl Evaluator<'_, '_> {
     }
     fn basic(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         instance: &Node,
         path: &str,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
-        let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         if let Some(expected) = body.get_governed("type", self.governor)? {
             let valid = match &expected.value {
                 Value::String(kind) => matches_type(instance, kind, self.governor)?,
@@ -456,18 +489,18 @@ impl Evaluator<'_, '_> {
                 )?;
             }
         }
-        self.scalar(id, instance, path, result)
+        self.scalar(view, instance, path, result)
     }
     fn scalar(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         instance: &Node,
         path: &str,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         match &instance.value {
             Value::Number(number) => {
                 for keyword in ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"] {
@@ -511,7 +544,7 @@ impl Evaluator<'_, '_> {
             }
             Value::String(text) => {
                 self.bounds(
-                    id,
+                    view,
                     path,
                     |governor| {
                         reference::work(governor, text.len())?;
@@ -602,16 +635,15 @@ impl Evaluator<'_, '_> {
     }
     fn bounds(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         path: &str,
         mut measure: impl FnMut(&mut Governor) -> Result<usize, StopReason>,
         minimum: &str,
         maximum: &str,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
-        let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         let mut measured = None;
         for (keyword, is_minimum) in [(minimum, true), (maximum, false)] {
             if let Some(Node {
@@ -643,15 +675,15 @@ impl Evaluator<'_, '_> {
     }
     fn combinators(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         instance: &Node,
         path: &str,
         depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         for keyword in ["allOf", "anyOf", "oneOf"] {
             if let Some(Node {
                 value: Value::Array(children),
@@ -748,7 +780,7 @@ impl Evaluator<'_, '_> {
     }
     fn object(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         instance: &Node,
         members: &[Member],
         path: &str,
@@ -756,10 +788,10 @@ impl Evaluator<'_, '_> {
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         self.bounds(
-            id,
+            view,
             path,
             |_| Ok(members.len()),
             "minProperties",
@@ -842,21 +874,21 @@ impl Evaluator<'_, '_> {
             }
         }
         for member in members {
-            self.member(id, member, path, depth, result)?;
+            self.member(view, member, path, depth, result)?;
         }
         Ok(())
     }
     fn member(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         member: &Member,
         path: &str,
         depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         let mut matched = false;
         let child_path = index::pointer(path, &member.key, self.governor)?;
         if body.get_governed("propertyNames", self.governor)?.is_some() {
@@ -937,17 +969,17 @@ impl Evaluator<'_, '_> {
     }
     fn array(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         items: &[Node],
         path: &str,
         depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
         let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         self.bounds(
-            id,
+            view,
             path,
             |_| Ok(items.len()),
             "minItems",
@@ -1006,7 +1038,7 @@ impl Evaluator<'_, '_> {
                 )?;
             }
             self.bounds(
-                id,
+                view,
                 path,
                 |_| Ok(matched.len()),
                 "minContains",
@@ -1019,15 +1051,14 @@ impl Evaluator<'_, '_> {
     }
     fn unevaluated(
         &mut self,
-        id: usize,
+        view: &LocationView<'s>,
         instance: &Node,
         path: &str,
         depth: u64,
         result: &mut Evaluation,
     ) -> Result<(), StopReason> {
-        let schema = self.schema;
-        reference::work(self.governor, schema.index.locations[id].route.len())?;
-        let body = schema.keywords(id);
+        let id = view.id;
+        let body = &view.keywords;
         match &instance.value {
             Value::Object(members)
                 if body
