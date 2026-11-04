@@ -1387,7 +1387,9 @@ impl DfaState {
                 }
             }
             2 => Utf8::Invalid,
-            _ => unreachable!("native DFA state has an unassigned UTF-8 tag"),
+            // Private constructors emit only tags zero, one and two. A
+            // literal panic keeps this invariant failure usable in const code.
+            _ => panic!("native DFA state has an unassigned UTF-8 tag"),
         }
     }
 
