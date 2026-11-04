@@ -230,6 +230,9 @@ pub const STRAY_CLOSER_GAP: usize = 32;
 /// `BudgetExceeded(ScratchBytes)`, never in uncharged growth. Reports are
 /// queued and processed per byte, so the charge is the same for every way
 /// the output is chunked.
+/// Source-index handles have their own storage admission: the indexed arena
+/// covers prepared recovery handles, while standalone recognition admits an
+/// extra eight portable bytes per queued untracked handle.
 ///
 /// [`DialectSet::lookbehind`]: crate::tool_call::DialectSet::lookbehind
 pub const QUEUED_REPORT: u64 = 128;

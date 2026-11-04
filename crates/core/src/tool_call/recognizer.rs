@@ -399,9 +399,9 @@ const _: () = {
     assert!(core::mem::size_of::<Interp>() <= Interp::CHARGE);
 };
 
-/// The scratch held by queued reports ([`QUEUED_REPORT`] each), released
-/// as they are processed; what is still held when the recognizer is dropped
-/// unprocessed is released then.
+/// The scratch held by queued payloads and any directly admitted handles,
+/// released as reports are processed. Dropping an unfinished recognizer
+/// releases the remaining queue reservation.
 #[derive(Debug)]
 struct Queued {
     meter: ScratchMeter,
@@ -2005,7 +2005,8 @@ pub struct Recognizer<'s> {
     /// The queued reports, by offset, phase and arrival.
     pending: BTreeMap<(usize, u8, u64), (Pending, SourceId)>,
     /// Declared after pending: queued handles must drop before arena coverage.
-    /// Source order and dispatch order share identities, with distinct indexes.
+    /// Prepared intake indexes source order separately from dispatch order.
+    /// Standalone queue slots retain an explicitly untracked handle instead.
     pending_sources: PendingSources,
     ownership_memo: Option<(u32, Option<usize>)>,
     _ownership_metadata: ScratchLease,
@@ -2529,10 +2530,19 @@ impl<'s> Recognizer<'s> {
         }))
     }
 
-    /// Queue one report, charging [`QUEUED_REPORT`] scratch bytes until it
-    /// is processed: reports wait at most the lookbehind, or behind a call
-    /// whose inserted wrapper closer is still being decided, and a queue too
-    /// long for the budget is `BudgetExceeded(ScratchBytes)`.
+    /// The source arena covers indexed handles; standalone slots admit the
+    /// same handle word directly, without building an unused source index.
+    const fn queued_report_bytes(&self) -> u64 {
+        if self.engine.tracks_ownership() {
+            QUEUED_REPORT
+        } else {
+            QUEUED_REPORT + 8
+        }
+    }
+
+    /// Queue one report with its payload and handle admitted until dispatch.
+    /// Reports wait at most the lookbehind, or behind an undecided inserted
+    /// wrapper closer; excessive storage refuses explicitly.
     fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
         let mut pending = Some(pending);
         let result = (|| {
@@ -2548,18 +2558,30 @@ impl<'s> Recognizer<'s> {
                 .arrivals
                 .checked_add(1)
                 .ok_or_else(|| governor.stop_resource(Resource::Work))?;
-            let update = self.pending_sources.prepare_add(
-                source,
-                arrival,
-                candidate.is_some() && self.engine.tracks_ownership(),
-                self.engine.fed(),
-                governor,
-            )?;
-            governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
-            let handle = update.handle();
+            let handle = if self.engine.tracks_ownership() {
+                let update = self.pending_sources.prepare_add(
+                    source,
+                    arrival,
+                    candidate.is_some(),
+                    self.engine.fed(),
+                    governor,
+                )?;
+                governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
+                let handle = update.handle();
+                update.apply(&mut self.pending_sources);
+                handle
+            } else {
+                governor.charge(Resource::Work, 1)?;
+                if source > self.engine.fed() || u64::try_from(source).is_err() || arrival == 0 {
+                    return Err(invalid_input(
+                        "queued source origin or arrival exceeds its admitted domain",
+                    ));
+                }
+                governor.charge(Resource::ScratchBytes, self.queued_report_bytes())?;
+                SourceId::untracked()
+            };
             let key = (report.at(), report.phase(), arrival);
-            update.apply(&mut self.pending_sources);
-            self.queued.bytes += QUEUED_REPORT;
+            self.queued.bytes += self.queued_report_bytes();
             self.arrivals = arrival;
             self.pending.insert(
                 key,
@@ -2607,18 +2629,33 @@ impl<'s> Recognizer<'s> {
                         "candidate report has a different source origin",
                     ));
                 }
-                let update = self.pending_sources.prepare_remove(
-                    *handle,
-                    source,
-                    key.2,
-                    candidate.is_some() && self.engine.tracks_ownership(),
-                    governor,
-                )?;
-                let (_, (pending, _)) = self
-                    .pending
-                    .pop_first()
-                    .expect("pending minimum was just read");
-                update.apply(&mut self.pending_sources);
+                let pending = if self.engine.tracks_ownership() {
+                    let update = self.pending_sources.prepare_remove(
+                        *handle,
+                        source,
+                        key.2,
+                        candidate.is_some(),
+                        governor,
+                    )?;
+                    let (_, (pending, _)) = self
+                        .pending
+                        .pop_first()
+                        .expect("pending minimum was just read");
+                    update.apply(&mut self.pending_sources);
+                    pending
+                } else {
+                    governor.charge(Resource::Work, 1)?;
+                    if !handle.is_untracked() {
+                        return Err(invalid_input(
+                            "standalone report owns an indexed source handle",
+                        ));
+                    }
+                    let (_, (pending, _)) = self
+                        .pending
+                        .pop_first()
+                        .expect("pending minimum was just read");
+                    pending
+                };
                 ready.push(pending);
             }
             Ok(())
@@ -2633,8 +2670,10 @@ impl<'s> Recognizer<'s> {
     /// Consuming EOF has no later source-floor reader or report producer.
     /// Retain all index owners until every queued handle has been stripped.
     fn settle_final(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
-        self.pending_sources
-            .prepare_terminal(self.pending.len(), governor)?;
+        if self.engine.tracks_ownership() {
+            self.pending_sources
+                .prepare_terminal(self.pending.len(), governor)?;
+        }
         let mut ready = Vec::new();
         let prepared = (|| {
             while let Some((&key, (pending, handle))) = self.pending.first_key_value() {
@@ -2645,13 +2684,22 @@ impl<'s> Recognizer<'s> {
                         "candidate report has a different source origin",
                     ));
                 }
-                self.pending_sources.terminal_entry(
-                    *handle,
-                    source,
-                    key.2,
-                    candidate.is_some() && self.engine.tracks_ownership(),
-                    governor,
-                )?;
+                if self.engine.tracks_ownership() {
+                    self.pending_sources.terminal_entry(
+                        *handle,
+                        source,
+                        key.2,
+                        candidate.is_some(),
+                        governor,
+                    )?;
+                } else {
+                    governor.charge(Resource::Work, 1)?;
+                    if !handle.is_untracked() {
+                        return Err(invalid_input(
+                            "standalone report owns an indexed source handle",
+                        ));
+                    }
+                }
                 let (_, (pending, _)) = self
                     .pending
                     .pop_first()
@@ -2672,7 +2720,9 @@ impl<'s> Recognizer<'s> {
                 "terminal report dispatch left queued source handles",
             ));
         }
-        self.pending_sources.retire(governor);
+        if self.engine.tracks_ownership() {
+            self.pending_sources.retire(governor);
+        }
         Ok(())
     }
 
@@ -2683,7 +2733,7 @@ impl<'s> Recognizer<'s> {
         ready: Vec<Pending>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
+        let released = size(ready.len()).saturating_mul(self.queued_report_bytes());
         let payloads = Pending::discard_all(ready.into_iter(), governor);
         let queue = governor.release_scratch(released);
         if queue.is_ok() {
@@ -2701,7 +2751,7 @@ impl<'s> Recognizer<'s> {
         if ready.is_empty() {
             return Ok(());
         }
-        let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
+        let released = size(ready.len()).saturating_mul(self.queued_report_bytes());
         if let Err(reason) = governor.release_scratch(released) {
             // The queue reservation remains owned by self.queued on refusal.
             let cleanup = Pending::discard_all(ready.into_iter(), governor);

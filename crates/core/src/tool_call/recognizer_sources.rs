@@ -20,6 +20,17 @@ const REMOVE_WORK: u64 = 5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SourceId(usize);
 
+impl SourceId {
+    /// Standalone dispatch has no source-index consumer or arena row.
+    pub(super) const fn untracked() -> Self {
+        Self(NONE)
+    }
+
+    pub(super) const fn is_untracked(self) -> bool {
+        self.0 == NONE
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Key {
     source: usize,

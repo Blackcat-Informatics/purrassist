@@ -8,6 +8,12 @@ and keeps its existing frontier, event and counter computations. Native byte
 processing, report dispatch, EOF publication and cancellation remain governed.
 Runtime and resource qualification remain pending automatic CI.
 
+Standalone report dispatch also omits the unused source-order index. Its queue
+retains explicit untracked handles and admits their storage directly; every
+dequeue validates the fixed tracking mode before mutation. Prepared intake keeps
+both indexes and all terminal owner checks. Payload admissions, dispatch order
+and refusal cleanup remain separate. Runtime qualification is pending CI.
+
 Turn-path discovery retains normalized Content ranges and immutable stored
 Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
 preserve branch order without copying each prefix. Exact governed equality keeps
