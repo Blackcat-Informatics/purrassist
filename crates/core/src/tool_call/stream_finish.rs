@@ -270,12 +270,9 @@ fn range_difference(left: &Range<usize>, right: &Range<usize>) -> Option<usize> 
 pub(super) fn selected_fact<'a>(
     origins: &Origins,
     native: &'a NativeTrace,
+    governor: &mut Governor,
 ) -> Result<&'a NativeFact, StopReason> {
-    let id = origins
-        .0
-        .first()
-        .ok_or_else(|| invalid_input("final call has no native origin"))?;
-    let row = native.call(*id)?;
+    let row = native.call(origins.selected(governor)?)?;
     let selected = row
         .readings
         .first()
@@ -347,23 +344,27 @@ pub(super) fn call_limit(
     native: &NativeTrace,
     governor: &mut Governor,
 ) -> Result<Option<usize>, StopReason> {
-    let base = selected_fact(origins, native)?;
+    let base = selected_fact(origins, native, governor)?;
     let mut limit = None;
-    for &id in &origins.0 {
-        governor.charge(Resource::Work, 4)?;
-        let row = native.call(id)?;
-        if row.readings.len()
-            != call
-                .alternatives
-                .len()
-                .checked_add(1)
-                .ok_or_else(|| invalid_input("semantic capture count overflows"))?
-            || row.competing == 0
+    for origin in &origins.0 {
+        governor.charge(Resource::Work, 5)?;
+        let row = native.call(origin.id)?;
+        if row.competing == 0
             || row.competing > row.readings.len()
+            || (origin.competing
+                && row.readings.len()
+                    != call
+                        .alternatives
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(|| invalid_input("semantic capture count overflows"))?)
         {
             return Err(invalid_input(
                 "final semantic readings and native origins disagree",
             ));
+        }
+        if !origin.competing {
+            continue;
         }
         let header = native.fact(row.header)?;
         limit = source_min(limit, base.header_difference(header, governor)?);
@@ -403,8 +404,8 @@ fn call_difference(
     if left.index != right.index || left.span.start != right.span.start {
         return Ok(Some(left.span.start.min(right.span.start)));
     }
-    let a = selected_fact(left_origins, native)?;
-    let b = selected_fact(right_origins, native)?;
+    let a = selected_fact(left_origins, native, governor)?;
+    let b = selected_fact(right_origins, native, governor)?;
     let mut limit = fact_difference(a, b, governor)?;
     limit = source_min(limit, range_difference(&left.span, &right.span));
     if !optional_text(left.tool.as_deref(), right.tool.as_deref(), governor)? {

@@ -96,6 +96,7 @@ use crate::grammar::engine::{
     CompletedParts, Engine, Event, FailureWitness, HeaderSpan, Opening, Part, PartEnvelope,
     Salvaged, SourceEnvelope, retained_context,
 };
+use crate::json::same_source_text;
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
@@ -1439,20 +1440,6 @@ fn same_embedded_invocation(
         cost = cost.saturating_add(edit.rule().cost);
     }
     Ok(cost == shadow.cost)
-}
-
-pub(super) fn same_source_text(
-    left: &str,
-    right: &str,
-    governor: &mut Governor,
-) -> Result<bool, StopReason> {
-    governor.charge(
-        Resource::Work,
-        size(left.len())
-            .saturating_add(size(right.len()))
-            .saturating_add(1),
-    )?;
-    Ok(left == right)
 }
 
 fn same_embedded_binding(

@@ -276,10 +276,10 @@ impl MatcherCursor<'_> {
 }
 
 /// Concrete output owners keep ordinary matching free of projection storage.
-trait MatcherOutputs: Sized {
+trait MatcherOutputs: Sized + From<ScratchVec<Self::Cell>> {
+    type Cell: ScratchCharge;
     const TABLES: u64;
 
-    fn new(governor: &Governor) -> Self;
     fn initialize(&mut self, count: usize) -> Result<(), StopReason>;
     fn prefix(&mut self, state: usize, label: Option<u32>, depth: u32);
     fn inherit(
@@ -292,11 +292,8 @@ trait MatcherOutputs: Sized {
 type LongestOutputs = ScratchVec<Option<(u32, u32)>>;
 
 impl MatcherOutputs for LongestOutputs {
+    type Cell = Option<(u32, u32)>;
     const TABLES: u64 = 1;
-
-    fn new(governor: &Governor) -> Self {
-        ScratchVec::new(governor)
-    }
 
     fn initialize(&mut self, count: usize) -> Result<(), StopReason> {
         self.extend(core::iter::repeat_n(None, count))
@@ -321,11 +318,8 @@ impl MatcherOutputs for LongestOutputs {
 type PriorityOutputs = ScratchVec<[Option<(u32, u32)>; 2]>;
 
 impl MatcherOutputs for PriorityOutputs {
+    type Cell = [Option<(u32, u32)>; 2];
     const TABLES: u64 = 2;
-
-    fn new(governor: &Governor) -> Self {
-        ScratchVec::new(governor)
-    }
 
     fn initialize(&mut self, count: usize) -> Result<(), StopReason> {
         self.extend(core::iter::repeat_n([None; 2], count))
@@ -373,7 +367,7 @@ impl<O: MatcherOutputs> MatcherBuild<O> {
             delta: ScratchVec::new(governor),
             depth: ScratchVec::new(governor),
             fail: ScratchVec::new(governor),
-            outputs: O::new(governor),
+            outputs: O::from(ScratchVec::<O::Cell>::new(governor)),
             queue: ScratchVec::new(governor),
             count: 0,
             cells: 0,
@@ -771,7 +765,8 @@ const _: () = {
             ScratchLease,
         )>() <= PRIORITY_MATCHER_CONTROL_BYTES
     );
-    // Allocation/prepare return carriers and nested zero iterators.
+    // Allocation/prepare return carriers, identity-conversion handoff and
+    // nested zero iterators retain their complete concrete owners.
     assert!(
         core::mem::size_of::<(
             Result<MatcherBuild<PriorityOutputs>, StopReason>,
@@ -782,6 +777,7 @@ const _: () = {
             &[PriorityLiteral<'_>],
             &[u8],
             &mut PriorityOutputs,
+            ScratchVec<[Option<(u32, u32)>; 2]>,
             core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
             core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
             core::iter::RepeatN<u32>,

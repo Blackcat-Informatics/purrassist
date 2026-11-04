@@ -517,6 +517,19 @@ peak scratch can increase. This removes repeated initialization work and does no
 establish that every built-in grammar fits its original budget. Compilation and
 resource qualification remain pending automatic CI.
 
+Native origin membership now retains whether a whole-option dominance proof
+suppressed that witness. Every raw identity and original span remains stored;
+ordinary equivalence can promote an identity back to genuine competition and
+never demotes one. Final event limits, revision agreement and ledger witnesses
+check all retained native IDs and intrinsic reading bounds while comparing only
+selected or genuinely competing origins against the kept semantic call. The
+first origin must remain the selected competitor. This preserves proven exterior
+frame dominance without rewriting source facts or relaxing genuine span and
+semantic agreement checks. Actual 16-byte slots, role controls and mutation work
+remain admitted. The existing singleton-array framing case now checks complete
+stream events, original arguments and exterior content across selected splits.
+Compilation, corpus totals and resource qualification remain pending automatic CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

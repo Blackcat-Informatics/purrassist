@@ -143,9 +143,7 @@ use super::StreamEvent;
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::failed_prefix::{FailureChoice, FailureProofs};
-use super::recognizer::{
-    ContinuationFrontier, edit_entries, escaped, same_source_text, same_source_tree,
-};
+use super::recognizer::{ContinuationFrontier, edit_entries, escaped, same_source_tree};
 use super::resolve::loss_kind;
 use super::resolve::resolve_traced;
 use super::stream::EventCursor;
@@ -171,7 +169,7 @@ use crate::grammar::cost::{
     RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
 };
 use crate::grammar::edit::LossKind;
-use crate::json::{Node, Value, pointer_segment};
+use crate::json::{Node, Value, pointer_segment, same_source_text};
 use crate::provenance::{Derivation, Forest, NodeId, ProvenanceNode, permute};
 use crate::wire::{
     self, WireValue, array, byte_range, exact_bytes, inferences, integer, null, object, string,
@@ -4043,7 +4041,7 @@ impl<'t> Fold<'t> {
             .iter_mut()
             .zip(projected.origins.iter())
         {
-            kept.origins.union(&other.origins, governor)?;
+            kept.origins.union(&other.origins, false, governor)?;
         }
         for (dialects, candidates) in self.calls.values_mut().zip(projected.calls.values()) {
             for candidate in candidates {
@@ -6827,7 +6825,7 @@ fn fold_options<'t>(
                 ));
             }
             for (kept, other) in fold.origins.as_mut_slice().iter_mut().zip(origins.iter()) {
-                kept.origins.union(&other.origins, governor)?;
+                kept.origins.union(&other.origins, true, governor)?;
             }
         }
         push_scratch(&mut folds, (kept, fold), governor)?;
@@ -7247,7 +7245,7 @@ fn merge(
                 return Err(invalid_input("merged call correlation counts disagree"));
             }
             for (kept, other) in reading.facts.iter_mut().zip(&other.facts) {
-                kept.origins.union(&other.origins, governor)?;
+                kept.origins.union(&other.origins, true, governor)?;
             }
             for (kept, other) in reading
                 .embedded_origins
@@ -7255,7 +7253,7 @@ fn merge(
                 .iter_mut()
                 .zip(other.embedded_origins.iter())
             {
-                kept.union(other, governor)?;
+                kept.union(other, true, governor)?;
             }
         }
         let calls: Vec<&[ToolCall]> = members.iter().map(|other| &other.value.calls[..]).collect();

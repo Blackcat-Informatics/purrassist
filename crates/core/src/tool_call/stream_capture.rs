@@ -4,8 +4,8 @@
 //! Compact native capture identities retained across semantic resolution.
 use super::{ArgLeaf, CallSegment, Closure, RawCall, ResolvedSegment, Spanned};
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason, invalid_input,
-    push_scratch, saturating_size as size,
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
+    invalid_input, push_scratch, saturating_size as size,
 };
 use crate::grammar::{CaptureKind, edit::EditOperator};
 use core::ops::Range;
@@ -290,8 +290,28 @@ impl NativeTrace {
     }
 }
 
+/// One retained raw source identity and its role after whole-option selection.
+#[derive(Clone, Copy)]
+pub(super) struct Origin {
+    pub(super) id: usize,
+    /// False only for a witness suppressed by complete source-frame dominance.
+    pub(super) competing: bool,
+}
+
+impl ScratchCharge for Origin {
+    const CHARGE: usize = 16;
+}
+const _: () = assert!(core::mem::size_of::<Origin>() <= Origin::CHARGE);
+
+// Added insertion carriers and role controls remain admitted through refusal.
+const ORIGIN_ROLE_METADATA_BYTES: u64 = 48;
+const _: () = assert!(
+    core::mem::size_of::<(ScratchLease, Origin, bool, bool, Option<&mut Origin>)>() as u64
+        <= ORIGIN_ROLE_METADATA_BYTES
+);
+
 /// Only correspondence proven by the existing fold/merge admits this union.
-pub(super) struct Origins(pub(super) ScratchVec<usize>);
+pub(super) struct Origins(pub(super) ScratchVec<Origin>);
 impl ScratchCharge for Origins {
     const CHARGE: usize = 40;
 }
@@ -299,26 +319,69 @@ const _: () = assert!(core::mem::size_of::<Origins>() <= Origins::CHARGE);
 
 impl Origins {
     pub(super) fn one(id: usize, governor: &mut Governor) -> Result<Self, StopReason> {
+        let _metadata = governor.lease_scratch(ORIGIN_ROLE_METADATA_BYTES)?;
         let mut values = ScratchVec::new(governor);
-        push_scratch(&mut values, id, governor)?;
+        push_scratch(
+            &mut values,
+            Origin {
+                id,
+                competing: true,
+            },
+            governor,
+        )?;
         Ok(Self(values))
     }
+
+    /// The first row is the selected provenance; never substitute a witness.
+    pub(super) fn selected(&self, governor: &mut Governor) -> Result<usize, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let first = self
+            .0
+            .first()
+            .ok_or_else(|| invalid_input("final call has no native origin"))?;
+        if !first.competing {
+            return Err(invalid_input(
+                "selected native origin is a dominated witness",
+            ));
+        }
+        Ok(first.id)
+    }
+
+    /// Ordinary unions preserve incoming roles. A dominance union marks only
+    /// incoming witnesses; an already genuine competitor is never demoted.
     pub(super) fn union(
         &mut self,
         other: &Self,
+        competing: bool,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        for &id in &other.0 {
-            governor.charge(Resource::Work, size(self.0.len()).saturating_add(1))?;
-            if !self.0.contains(&id) {
-                push_scratch(&mut self.0, id, governor)?;
+        let _metadata = governor.lease_scratch(ORIGIN_ROLE_METADATA_BYTES)?;
+        for origin in &other.0 {
+            governor.charge(Resource::Work, size(self.0.len()).saturating_add(4))?;
+            let active = competing && origin.competing;
+            if let Some(known) = self
+                .0
+                .as_mut_slice()
+                .iter_mut()
+                .find(|known| known.id == origin.id)
+            {
+                known.competing |= active;
+            } else {
+                push_scratch(
+                    &mut self.0,
+                    Origin {
+                        id: origin.id,
+                        competing: active,
+                    },
+                    governor,
+                )?;
             }
         }
         Ok(())
     }
     pub(super) fn copy(&self, governor: &mut Governor) -> Result<Self, StopReason> {
         let mut copied = Self(ScratchVec::new(governor));
-        copied.union(self, governor)?;
+        copied.union(self, true, governor)?;
         Ok(copied)
     }
 }

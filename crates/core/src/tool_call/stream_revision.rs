@@ -76,16 +76,19 @@ impl RevisionWitnesses {
                 .checked_add(1)
                 .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
             let mut competing = 0;
-            for &id in &origins.0 {
-                governor.charge(Resource::Work, 1)?;
-                let row = publication.native.call(id)?;
+            for origin in &origins.0 {
+                governor.charge(Resource::Work, 2)?;
+                let row = publication.native.call(origin.id)?;
                 if row.competing == 0
                     || row.competing > row.readings.len()
-                    || row.readings.len() != semantic_count
+                    || (origin.competing && row.readings.len() != semantic_count)
                 {
                     return Err(invalid_input(
                         "revision semantic readings and native origins disagree",
                     ));
+                }
+                if !origin.competing {
+                    continue;
                 }
                 competing = competing.max(row.competing);
             }

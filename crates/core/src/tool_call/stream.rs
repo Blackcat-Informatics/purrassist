@@ -888,13 +888,10 @@ impl EventCursor {
             )?
             .publish(sink)?;
         }
-        let first = origins
-            .0
-            .first()
-            .ok_or_else(|| invalid_input("final call has no capture owner"))?;
+        let first = origins.selected(governor)?;
         let header = publication
             .native
-            .fact(publication.native.call(*first)?.header)?;
+            .fact(publication.native.call(first)?.header)?;
         if live.is_none_or(|live| !live.named)
             && header.name_end() <= publication.limit
             && let Some(tool) = &call.tool
@@ -902,7 +899,7 @@ impl EventCursor {
             StreamEvent::name(index, tool, governor)?.publish(sink)?;
         }
         if live.is_none_or(|live| !live.arguments) {
-            let fact = selected_fact(origins, publication.native)?;
+            let fact = selected_fact(origins, publication.native, governor)?;
             for &(start, end) in &fact.arguments {
                 let end = end.min(publication.limit);
                 if start < end {
@@ -928,7 +925,7 @@ impl EventCursor {
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
-        let fact = selected_fact(origins, publication.native)?;
+        let fact = selected_fact(origins, publication.native, governor)?;
         let mut witnesses = None;
         for (position, edit) in fact.edits.iter().enumerate() {
             if edit.end > publication.limit {
@@ -990,9 +987,17 @@ impl FinalPublication<'_> {
                 .calls
                 .get(index)
                 .ok_or_else(|| invalid_input("revision has no final native correlation"))?;
-            for &id in &origins.0 {
-                governor.charge(Resource::Work, 1)?;
-                let row = self.native.call(id)?;
+            for origin in &origins.0 {
+                governor.charge(Resource::Work, 4)?;
+                let row = self.native.call(origin.id)?;
+                if row.competing == 0 || row.competing > row.readings.len() {
+                    return Err(invalid_input(
+                        "revision native competition exceeds its readings",
+                    ));
+                }
+                if !origin.competing {
+                    continue;
+                }
                 let competing = row.readings.get(..row.competing).ok_or_else(|| {
                     invalid_input("revision native competition exceeds its readings")
                 })?;
