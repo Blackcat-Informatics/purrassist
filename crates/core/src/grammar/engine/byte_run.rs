@@ -48,7 +48,7 @@ pub(super) fn slots(
 #[must_use]
 fn class_eligible(table: &Table<'_>) -> bool {
     table.program.argument_anchor
-        && (!table.program.grouped || !table.program.initial_classes.is_empty())
+        && (!table.program.grouped || !table.program.run_eligibility.is_empty())
         && table.kind == ProductionKind::Call
 }
 
@@ -56,9 +56,7 @@ fn class_eligible(table: &Table<'_>) -> bool {
 #[must_use]
 pub(super) fn eligible(table: &Table<'_>) -> bool {
     class_eligible(table)
-        || (table.kind == ProductionKind::Call
-            && !table.program.origin.is_projected()
-            && !table.program.grouped)
+        || (table.kind == ProductionKind::Call && table.program.run_eligibility.native_body())
 }
 
 /// Qualification borrows all payloads; only bounded control records coexist.
@@ -308,7 +306,7 @@ impl Engine<'_> {
         }
         if current.program.grouped {
             governor.charge(Resource::Work, 1)?;
-            if !current.program.initial_classes.contains(first.pc) {
+            if !current.program.run_eligibility.contains(first.pc) {
                 return Ok(());
             }
         }
@@ -342,9 +340,9 @@ impl Engine<'_> {
         let Some(first) = current.threads.first() else {
             return Ok(());
         };
-        if !matches!(first.sub, Sub::Body(..)) {
+        let Sub::Body(raw, _) = first.sub else {
             return Ok(());
-        }
+        };
         governor.charge(Resource::Work, 2)?;
         if !matches!(
             current.program.insts[first.pc as usize],
@@ -354,6 +352,10 @@ impl Engine<'_> {
                     ..
                 }
         ) {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, 3)?;
+        if raw != ROOT || first.past || first.pending != 0 {
             return Ok(());
         }
         governor.charge(Resource::Work, 5)?;
@@ -419,7 +421,7 @@ impl Engine<'_> {
                 || !current
                     .threads
                     .iter()
-                    .any(|thread| thread.attempt == owner.id && thread.start == owner.start)
+                    .any(|thread| (thread.attempt, thread.start) == (owner.id, owner.start))
                 || self.byte_run_queued(owner, governor)?
             {
                 return Ok(false);
@@ -470,7 +472,7 @@ impl Engine<'_> {
             if !current
                 .attempts
                 .iter()
-                .any(|owner| owner.id == thread.attempt && owner.start == thread.start)
+                .any(|owner| (owner.id, owner.start) == (thread.attempt, thread.start))
             {
                 return Err(invalid_input("byte run body has no matching native owner"));
             }
@@ -674,7 +676,7 @@ impl Engine<'_> {
             };
             if current.program.grouped {
                 governor.charge(Resource::Work, 1)?;
-                if !current.program.initial_classes.contains(thread.pc) {
+                if !current.program.run_eligibility.contains(thread.pc) {
                     return Ok(false);
                 }
             }

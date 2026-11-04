@@ -34,8 +34,8 @@ use crate::contract::{
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
 
-mod initial_classes;
-use initial_classes::InitialClasses;
+mod run_eligibility;
+use run_eligibility::RunEligibility;
 
 /// One instruction of a compiled production program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,8 +142,8 @@ pub(crate) struct Program {
     /// completion of the same attempt reads further at no more cost is
     /// dropped (the attempt reads every call it can).
     pub(crate) grouped: bool,
-    /// Initial Class locations unreachable after any `next`; empty otherwise.
-    pub(crate) initial_classes: InitialClasses,
+    /// Initial Class locations and immutable native body eligibility.
+    pub(crate) run_eligibility: RunEligibility,
     /// For a grouped program, the literal instructions after which one call
     /// ends (the production completes or the next call begins, without
     /// input): where an attempt that could not read a call resynchronizes
@@ -1705,10 +1705,11 @@ fn compile_program(
     let committed = committed(&insts, start, governor)?;
     work_for(insts.len(), 1, 1, governor)?;
     let grouped = insts.iter().any(|inst| matches!(inst, Inst::Next { .. }));
-    let initial_classes = InitialClasses::compile(
+    let run_eligibility = RunEligibility::compile(
         &insts,
         start,
         tables.derived && tables.argument_anchor && grouped,
+        !tables.derived && !grouped,
         governor,
     )?;
     // A class opener needs its native DFA start state, installed by closure.
@@ -1735,7 +1736,7 @@ fn compile_program(
         committed,
         start_closure,
         grouped,
-        initial_classes,
+        run_eligibility,
         call_closers,
         call_openers,
         insert_alternatives,

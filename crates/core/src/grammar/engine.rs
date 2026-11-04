@@ -2355,7 +2355,13 @@ impl<'s> Step<'_, 's> {
             return Ok(true);
         }
         for &relation in &self.grammar.joint_captures {
-            let boundaries = super::partition::boundaries(self.grammar, relation, bytes, governor)?;
+            // Most prose-like names have no declared prefix. A complete native
+            // partition is relevant only after that necessary condition holds.
+            const _: () = assert!(
+                core::mem::size_of::<Option<ScratchVec<usize>>>()
+                    <= core::mem::size_of::<ScratchVec<usize>>()
+            );
+            let mut boundaries = None;
             for tool in tools.tools() {
                 for candidate in
                     core::iter::once(tool.name()).chain(tool.aliases().iter().map(String::as_str))
@@ -2364,8 +2370,23 @@ impl<'s> Step<'_, 's> {
                         Resource::Work,
                         size(candidate.len().min(bytes.len())).saturating_add(65),
                     )?;
-                    if bytes.starts_with(candidate.as_bytes())
-                        && boundaries.binary_search(&candidate.len()).is_ok()
+                    if !bytes.starts_with(candidate.as_bytes()) {
+                        continue;
+                    }
+                    governor.charge(Resource::Work, 3)?;
+                    if boundaries.is_none() {
+                        boundaries = Some(super::partition::boundaries(
+                            self.grammar,
+                            relation,
+                            bytes,
+                            governor,
+                        )?);
+                    }
+                    if boundaries
+                        .as_ref()
+                        .expect("a matching prefix prepared its native partition")
+                        .binary_search(&candidate.len())
+                        .is_ok()
                     {
                         // This is admission evidence only. Expansion still
                         // retains every original source-valid partition.

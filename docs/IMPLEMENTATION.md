@@ -586,6 +586,22 @@ a named 192-byte reservation. Existing long-argument, delimiter, chunk, refusal,
 cost and fuzz cases remain the qualification scope; no new execution or fixed-budget
 success is claimed before automatic CI.
 
+Run eligibility now prepares native pure-body presence during the governed
+instruction scan. The boolean and existing initial-class mask share their actual
+64-byte descriptor owner; equality includes both facts. Programs without such
+bodies avoid runtime proof probes. Active incremental codecs still decline first,
+and known past/pending or non-root body states decline before full certification.
+The complete body guards remain required.
+
+Weak-name admission now prepares a relation's native name/ID partition only after
+a declared tool name or alias actually matches the captured byte prefix. A false
+prefix cannot use any split from that partition. A matching prefix still runs the
+complete native partition and original boundary search, including every word,
+UTF-8 and suffix constraint. The relation-local optional owner remembers an empty
+result as well as a nonempty one; existing prefix/search fees and new selection
+work are admitted. Complete alternative expansion remains unchanged. Compiler
+and runtime resource qualification remain pending automatic CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.
