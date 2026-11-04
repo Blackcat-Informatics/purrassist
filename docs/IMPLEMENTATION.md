@@ -684,6 +684,18 @@ cache is added. Intake's 112-byte control reservation includes the actual privat
 projection enum alongside its previous carriers. Runtime qualification remains
 pending automatic CI.
 
+Native codec boxes now own their declared storage from before allocation until
+the native state is destroyed. Context lookup and complete, deferred or truncated
+finish keep that owner alive through the full native call, including refusal.
+The box reservation releases on its original meter afterward; parser growth,
+argument trees, edits, source and output grants remain independent. Slot capacity
+uses one governed buffer with a 96-byte cell bound, including its box-lease header;
+empty slots retain their real capacity reservation. The added buffer header and
+lease have a 32-byte reservation, and construction/finalization controls have
+asserted 640-byte phase bounds. Arena reset and destruction physically free the
+ordinary value/edit/chain/lead/map buffers before releasing their aggregate grants.
+Current runtime and fixed-budget qualification remain pending automatic CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

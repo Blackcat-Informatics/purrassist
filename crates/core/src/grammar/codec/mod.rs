@@ -187,6 +187,14 @@ impl CodecKind {
         !matches!(self, Self::Raw)
     }
 
+    /// Storage held out of line by this kind's native state, beyond its slot.
+    pub(crate) const fn boxed_bytes(self) -> u64 {
+        match self {
+            Self::Json | Self::JsonArgs => super::cost::JSON_CODEC_STATE,
+            Self::Raw | Self::XmlParams | Self::KvPairs | Self::Pythonic => 0,
+        }
+    }
+
     pub(crate) fn begin(
         self,
         at: usize,
@@ -772,14 +780,6 @@ impl CodecState {
             Self::XmlParams(_) => CodecKind::XmlParams,
             Self::KvPairs(_) => CodecKind::KvPairs,
             Self::Pythonic(_) => CodecKind::Pythonic,
-        }
-    }
-
-    /// Scratch bytes held out of line, beyond the engine's per-slot charge.
-    pub(crate) const fn boxed_bytes(&self) -> u64 {
-        match self {
-            Self::Json(_) => super::cost::JSON_CODEC_STATE,
-            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) | Self::Pythonic(_) => 0,
         }
     }
 

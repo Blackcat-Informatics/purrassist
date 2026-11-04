@@ -3,13 +3,14 @@
 
 //! Reuse a certified ASCII byte step after ordinary native settlement.
 
+use super::codec_owner::OwnedCodec;
 use super::{Attempt, Engine, Event, FailureEnd, HistoryEvidence, Inst, Sub, Table, Thread};
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchLease, ScratchVec, StopReason, invalid_input,
 };
 use crate::grammar::automaton::ROOT;
-use crate::grammar::codec::{CodecKind, CodecState};
+use crate::grammar::codec::CodecKind;
 use crate::tool_call::ProductionKind;
 
 /// The table's current settled vector already proves this exact self-loop.
@@ -71,7 +72,7 @@ const _: () = assert!(
         usize,
         &'static Thread,
         &'static Attempt,
-        Option<&'static CodecState>,
+        Option<&'static OwnedCodec>,
         Result<bool, StopReason>,
     )>() <= BODY_METADATA_BYTES
 );

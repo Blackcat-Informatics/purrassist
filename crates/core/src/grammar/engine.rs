@@ -84,6 +84,7 @@ use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod byte_run;
+mod codec_owner;
 mod envelope;
 mod failure_header;
 pub(crate) use failure_header::{FailureWitness, HeaderSpan};
@@ -376,11 +377,12 @@ pub(crate) struct Arena {
     pub(crate) edits: Vec<MarkupEdit>,
     /// Live codec states, out of line so a configuration stays `Copy`
     /// whatever state a codec keeps; each body configuration owns its slot.
-    codecs: Vec<Option<CodecState>>,
+    codecs: ScratchVec<Option<codec_owner::OwnedCodec>>,
+    _codec_metadata: ScratchLease,
     /// Bodies ended beside another reading whose codec has not finished
     /// yet (see `Step::end_early`).
     pub(crate) deferred: ScratchVec<Deferred>,
-    /// The scratch charged for `values`, `edits` and `codecs`, released by
+    /// The scratch charged for values, edits and chain records, released by
     /// [`Self::reset`] or, for what is still held, when the arena drops.
     charged: u64,
     meter: ScratchMeter,
@@ -397,17 +399,27 @@ pub(crate) struct Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
+        drop(core::mem::take(&mut self.values));
+        drop(core::mem::take(&mut self.edits));
+        self.codecs.clear();
+        drop(core::mem::take(&mut self.chains));
+        drop(core::mem::take(&mut self.leads));
+        drop(core::mem::take(&mut self.memo));
         let _ = self.meter.release(self.charged);
     }
 }
 
-/// Scratch bytes charged per codec slot (a codec charges any further heap
-/// state it keeps itself).
-const CODEC_SLOT: u64 = 64;
-const _: () = assert!(core::mem::size_of::<Option<CodecState>>() as u64 <= CODEC_SLOT);
+/// Added governed slot header and its covering lease.
+const CODEC_METADATA_BYTES: u64 = 32;
+const _: () = assert!(
+    core::mem::size_of::<(ScratchVec<Option<codec_owner::OwnedCodec>>, ScratchLease)>() as u64
+        <= core::mem::size_of::<Vec<Option<CodecState>>>() as u64 + CODEC_METADATA_BYTES
+);
 
 impl Arena {
     fn new(governor: &Governor) -> Result<Self, StopReason> {
+        governor.scratch_meter().charge(CODEC_METADATA_BYTES)?;
+        let codec_metadata = governor.scratch_lease_for(CODEC_METADATA_BYTES);
         let mut nodes = ScratchVec::new(governor);
         nodes.push(HistNode {
             prev: ROOT,
@@ -418,7 +430,8 @@ impl Arena {
             nodes,
             values: Vec::new(),
             edits: Vec::new(),
-            codecs: Vec::new(),
+            codecs: ScratchVec::new(governor),
+            _codec_metadata: codec_metadata,
             deferred: ScratchVec::new(governor),
             charged: 0,
             meter: governor.scratch_meter(),
@@ -502,24 +515,50 @@ impl Arena {
         self.push(prev, HistKind::Value(index))
     }
 
-    /// A new codec slot holding `state`.
+    /// Admit and construct one native codec and its governed slot.
     fn begin_codec(
         &mut self,
-        state: CodecState,
+        kind: CodecKind,
+        at: usize,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        let bytes = CODEC_SLOT.saturating_add(state.boxed_bytes());
-        governor.charge(Resource::ScratchBytes, bytes)?;
-        self.charged = self.charged.saturating_add(bytes);
-        self.codecs.push(Some(state));
-        Ok(index_u32(self.codecs.len() - 1))
+        let _metadata = governor.lease_scratch(codec_owner::METADATA_BYTES)?;
+        governor.charge(Resource::Work, 4)?;
+        let boxed = governor.lease_scratch(kind.boxed_bytes())?;
+        let index = u32::try_from(self.codecs.len())
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        let state = kind.begin(at, governor)?;
+        crate::contract::push_scratch(
+            &mut self.codecs,
+            Some(codec_owner::OwnedCodec::new(state, boxed)),
+            governor,
+        )?;
+        Ok(index)
     }
 
     /// The codec state in `slot`, which its configuration finishes.
-    fn take_codec(&mut self, slot: u32) -> CodecState {
-        self.codecs[slot as usize]
-            .take()
-            .expect("a codec slot is finished once")
+    fn take_codec(
+        &mut self,
+        slot: u32,
+        governor: &mut Governor,
+    ) -> Result<codec_owner::TakenCodec, StopReason> {
+        let metadata = governor.lease_scratch(codec_owner::METADATA_BYTES)?;
+        governor.charge(Resource::Work, 12)?;
+        let entry = self
+            .codecs
+            .as_mut_slice()
+            .get_mut(slot as usize)
+            .ok_or_else(|| invalid_input("finished codec slot is out of range"))?;
+        let codec = entry
+            .as_ref()
+            .ok_or_else(|| invalid_input("finished codec slot has no live owner"))?;
+        if codec.boxed_bytes() != codec.kind().boxed_bytes() {
+            return Err(invalid_input(
+                "finished codec box has a different scratch owner",
+            ));
+        }
+        let codec = entry.take().expect("the live codec was just checked");
+        Ok(codec_owner::TakenCodec::new(codec, metadata))
     }
 
     fn reset(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
@@ -529,13 +568,13 @@ impl Arena {
             kind: HistKind::Root,
             evidence: HistoryEvidence(0),
         })?;
-        self.values.clear();
-        self.edits.clear();
+        drop(core::mem::take(&mut self.values));
+        drop(core::mem::take(&mut self.edits));
         self.codecs.clear();
         self.deferred.clear();
-        self.chains.clear();
-        self.leads.clear();
-        self.memo.clear();
+        drop(core::mem::take(&mut self.chains));
+        drop(core::mem::take(&mut self.leads));
+        drop(core::mem::take(&mut self.memo));
         governor.release_scratch(core::mem::take(&mut self.charged))
     }
 }
@@ -1819,7 +1858,7 @@ impl<'s> Step<'_, 's> {
             };
             return self.arena.codecs[slot as usize]
                 .as_ref()
-                .is_some_and(CodecState::in_string);
+                .is_some_and(codec_owner::OwnedCodec::in_string);
         }
         let declared = &self.grammar.delimiters[set as usize].declared;
         let Some(spelling) = declared.get(index as usize) else {
@@ -1990,10 +2029,7 @@ impl<'s> Step<'_, 's> {
             _ => None,
         };
         let codec = match kind {
-            Some(kind) => Some(
-                self.arena
-                    .begin_codec(kind.begin(thread.entry, governor)?, governor)?,
-            ),
+            Some(kind) => Some(self.arena.begin_codec(kind, thread.entry, governor)?),
             None => None,
         };
         if self.program.argument_anchor
@@ -2006,7 +2042,7 @@ impl<'s> Step<'_, 's> {
             }
             if !self.arena.codecs[slot as usize]
                 .as_ref()
-                .is_some_and(CodecState::argument_anchor)
+                .is_some_and(codec_owner::OwnedCodec::argument_anchor)
             {
                 return Self::fail(out, thread, end, Rejection::Malformed { at: end });
             }
@@ -2081,7 +2117,7 @@ impl<'s> Step<'_, 's> {
         range: Range<usize>,
         governor: &mut Governor,
     ) -> Result<Result<Option<usize>, CodecFault>, StopReason> {
-        let codec = self.arena.codecs[slot as usize]
+        let codec = self.arena.codecs.as_mut_slice()[slot as usize]
             .as_mut()
             .expect("a live body owns its codec slot");
         for at in range {
@@ -2126,7 +2162,7 @@ impl<'s> Step<'_, 's> {
             if self.program.argument_anchor
                 && !self.arena.codecs[slot as usize]
                     .as_ref()
-                    .is_some_and(CodecState::argument_anchor)
+                    .is_some_and(codec_owner::OwnedCodec::argument_anchor)
             {
                 return Self::fail(out, thread, end, Rejection::Malformed { at: end });
             }
@@ -2166,12 +2202,13 @@ impl<'s> Step<'_, 's> {
         how: CodecEnd,
         governor: &mut Governor,
     ) -> Result<Result<(u32, u64), Finished>, StopReason> {
-        let codec = self.arena.take_codec(slot);
+        let codec = self.arena.take_codec(slot, governor)?;
         let context = self.context(codec.kind(), hist, governor)?;
         let buffer = self.buffer;
         let bytes = &buffer[body.start - self.base..body.end - self.base];
         let body_end = body.end;
-        match codec.finish(bytes, body, how, context, governor)? {
+        let finished = codec.finish(bytes, body, how, context, governor)?;
+        match finished.result {
             // A JSON value no repair reads is not a call's arguments: the
             // attempt fails where its decoding stopped (see
             // `Step::end_body`), a rejected attempt rather than a call.
@@ -2291,7 +2328,7 @@ impl<'s> Step<'_, 's> {
                     // history fact. Nameless paths never inspect the codec.
                     observed = true;
                     let anchored = match active
-                        .and_then(|slot| self.arena.codecs[slot as usize].as_mut())
+                        .and_then(|slot| self.arena.codecs.as_mut_slice()[slot as usize].as_mut())
                     {
                         Some(codec) if observe_native => codec.observe_native_anchor(governor)?,
                         Some(codec) => codec.argument_anchor(),
@@ -2739,9 +2776,7 @@ impl<'s> Step<'_, 's> {
                     let Some(added) = self.settle_pending(thread.pending, governor)? else {
                         continue;
                     };
-                    let slot = self
-                        .arena
-                        .begin_codec(codec.begin(at, governor)?, governor)?;
+                    let slot = self.arena.begin_codec(codec, at, governor)?;
                     let next = Thread {
                         ownership: 2,
                         pc,
@@ -2961,7 +2996,7 @@ impl<'s> Step<'_, 's> {
         let whole = complete.or_else(|| {
             self.arena.codecs[slot as usize]
                 .as_ref()
-                .and_then(CodecState::complete_end)
+                .and_then(codec_owner::OwnedCodec::complete_end)
         });
         if let Some(end) = whole
             && super::repair::completes(self.program, next, governor)?
