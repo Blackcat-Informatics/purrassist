@@ -530,6 +530,18 @@ remain admitted. The existing singleton-array framing case now checks complete
 stream events, original arguments and exterior content across selected splits.
 Compilation, corpus totals and resource qualification remain pending automatic CI.
 
+Certified class cohorts now use the engine's shared absolute cursor at completed
+byte boundaries. Each successful byte fold visits every retained cohort once;
+cache hits keep the byte proof without comparing, incrementing or storing a
+separate cursor. A pre-byte opener or mismatch supplies its explicit old position
+before native processing. Clear-all consumption runs only at completed boundaries;
+an unexpected occupied proof at an ordinary split fails before mutation. Existing
+thread, history, owner, queue, DFA, ASCII and source-position certification remains
+required. Actual hit work removes the deleted comparison, addition and store;
+slot and cursor-handoff metadata stays admitted. Existing long-name, Unicode,
+chunk, refusal and budget cases cover these paths. Runtime savings and original
+fixed-budget success remain pending automatic CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

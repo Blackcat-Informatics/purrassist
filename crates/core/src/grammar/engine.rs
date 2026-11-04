@@ -5535,6 +5535,7 @@ impl<'s> Engine<'s> {
                     &mut self.class_run_count,
                     table,
                     &mut self.tables[table].threads,
+                    Some(at),
                     governor,
                 )?;
             }

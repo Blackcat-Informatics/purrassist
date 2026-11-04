@@ -10,16 +10,20 @@ use crate::tool_call::ProductionKind;
 
 /// The table's current settled vector already proves this exact self-loop.
 /// Every mutator consumes the proof before changing that vector or its owner.
-/// `next_at` is the cohort's logical pos/reach until that consumption.
+/// Every successful byte fold visits the cohort once. Its logical pos/reach
+/// is the engine's shared cursor at byte boundaries; a pre-byte consumer
+/// supplies that byte's explicit old cursor before changing the subject.
 #[derive(Clone, Copy)]
 pub(super) struct ClassRun {
     byte: u8,
-    next_at: usize,
 }
 
 impl ScratchCharge for Option<ClassRun> {
     const CHARGE: usize = {
         assert!(core::mem::size_of::<Self>() <= 32);
+        // Slot capacity remains admitted during its optional cursor handoff
+        // and consumption, including the transient proof/cursor carriers.
+        assert!(core::mem::size_of::<(Self, Option<usize>, ClassRun, usize)>() <= 32);
         32
     };
 }
@@ -50,6 +54,7 @@ pub(super) fn invalidate(
     occupied: &mut usize,
     table: usize,
     threads: &mut ScratchVec<Thread>,
+    cursor: Option<usize>,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     if *occupied == 0 {
@@ -65,7 +70,11 @@ pub(super) fn invalidate(
         .get_mut(table)
         .ok_or_else(|| invalid_input("class run table has no proof slot"))?;
     if slot.is_some() {
-        consume(slot, occupied, threads, governor)?;
+        governor.charge(Resource::Work, 1)?;
+        let cursor = cursor.ok_or_else(|| {
+            invalid_input("class run reached native processing without its pre-byte cursor")
+        })?;
+        consume(slot, occupied, threads, cursor, governor)?;
     }
     Ok(())
 }
@@ -82,10 +91,10 @@ fn store_work(threads: &[Thread], governor: &mut Governor) -> Result<u64, StopRe
 }
 
 /// One infallible store pass, reached only after complete Work admission.
-fn materialize(threads: &mut [Thread], retained: ClassRun) {
+fn materialize(threads: &mut [Thread], cursor: usize) {
     for thread in threads {
-        thread.pos = retained.next_at;
-        thread.reach = retained.next_at;
+        thread.pos = cursor;
+        thread.reach = cursor;
     }
 }
 
@@ -94,11 +103,14 @@ fn consume(
     slot: &mut Option<ClassRun>,
     occupied: &mut usize,
     threads: &mut ScratchVec<Thread>,
+    cursor: usize,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     // Subject/count validation and fee arithmetic precede all mutation.
     governor.charge(Resource::Work, 2)?;
-    let retained = slot.ok_or_else(|| invalid_input("class run consumption lost its proof"))?;
+    if slot.is_none() {
+        return Err(invalid_input("class run consumption lost its proof"));
+    }
     if *occupied == 0 {
         return Err(invalid_input("class run consumption has zero occupancy"));
     }
@@ -106,7 +118,7 @@ fn consume(
         .checked_add(2)
         .ok_or_else(|| governor.stop_resource(Resource::Work))?;
     governor.charge(Resource::Work, work)?;
-    materialize(threads.as_mut_slice(), retained);
+    materialize(threads.as_mut_slice(), cursor);
     *slot = None;
     *occupied -= 1;
     Ok(())
@@ -127,6 +139,7 @@ impl Engine<'_> {
             &mut self.class_run_count,
             table,
             &mut self.tables[table].threads,
+            None,
             governor,
         )
     }
@@ -181,8 +194,10 @@ impl Engine<'_> {
             .iter_mut()
             .zip(&mut self.tables)
         {
-            if let Some(retained) = *slot {
-                materialize(table.threads.as_mut_slice(), retained);
+            if slot.is_some() {
+                // Every table completed the last successful byte fold before
+                // this boundary operation can consume any retained cohort.
+                materialize(table.threads.as_mut_slice(), self.fed);
                 *slot = None;
             }
         }
@@ -211,24 +226,21 @@ impl Engine<'_> {
         let Some(retained) = slot else {
             return Ok(false);
         };
-        governor.charge(Resource::Work, 2)?;
-        if retained.byte != byte || retained.next_at != at {
+        governor.charge(Resource::Work, 1)?;
+        if retained.byte != byte {
             // step_table moves threads before split: restore them here.
             consume(
                 slot,
                 &mut self.class_run_count,
                 &mut self.tables[table].threads,
+                at,
                 governor,
             )?;
             return Ok(false);
         }
-        // The frozen cohort keeps every phase/history field. Its cursor alone
-        // advances; consumption restores physical positions before native use.
-        governor.charge(Resource::Work, 2)?;
-        let next = at
-            .checked_add(1)
-            .ok_or_else(|| invalid_input("class run position overflow"))?;
-        retained.next_at = next;
+        // The byte fold advances every surviving cohort exactly once. No
+        // per-table cursor write is needed: boundary consumption uses fed,
+        // while a pre-byte miss above supplies at before native processing.
         Ok(true)
     }
 
@@ -279,7 +291,7 @@ impl Engine<'_> {
             return Ok(());
         }
         governor.charge(Resource::Work, 2)?;
-        self.class_runs.as_mut_slice()[table] = Some(ClassRun { byte, next_at });
+        self.class_runs.as_mut_slice()[table] = Some(ClassRun { byte });
         self.class_run_count += 1;
         Ok(())
     }
