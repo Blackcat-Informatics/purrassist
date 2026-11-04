@@ -435,7 +435,7 @@ impl<O: MatcherOutputs> MatcherBuild<O> {
             cursor.byte = self.goto.nodes[0].children[cursor.edge].0;
             cursor.child = self.goto.nodes[0].children[cursor.edge].1;
             self.delta.as_mut_slice()[usize::from(cursor.byte)] = cursor.child;
-            self.queue.push(cursor.child)?;
+            push_scratch(&mut self.queue, cursor.child, governor)?;
             cursor.edge += 1;
         }
         Ok(())
@@ -452,28 +452,35 @@ impl<O: MatcherOutputs> MatcherBuild<O> {
             self.cursor += 1;
             cursor.fallback = self.fail[cursor.state] as usize;
             self.outputs.inherit(cursor, governor)?;
+
+            // Two row starts, two ends, two bounds, range and edge cursor.
+            governor.charge(Resource::Work, 8)?;
+            cursor.position = cursor.fallback * 256;
+            cursor.slot = cursor.state * 256;
+            let source = cursor.position..cursor.position + 256;
+            let destination_end = cursor.slot + 256;
+            if source.end > self.delta.len() || destination_end > self.delta.len() {
+                return Err(invalid_input("matcher transition row is out of range"));
+            }
+            cursor.edge = 0;
+            // Failure links point to smaller depths, whose rows BFS has
+            // finalized. Checked table dimensions bound both disjoint rows.
+            governor.charge(Resource::Work, 256)?;
+            self.delta.as_mut_slice().copy_within(source, cursor.slot);
+
             let children = &self.goto.nodes[cursor.state].children;
-            cursor.comparisons = u64::from(children.len().bit_width()) + 1;
-            cursor.byte = 0;
-            loop {
-                governor.charge(Resource::Work, cursor.comparisons + 3)?;
-                cursor.slot = cursor.state * 256 + usize::from(cursor.byte);
-                cursor.fallback_state =
-                    self.delta[cursor.fallback * 256 + usize::from(cursor.byte)];
-                match children.binary_search_by_key(&cursor.byte, |(key, _)| *key) {
-                    Ok(position) => {
-                        cursor.position = position;
-                        cursor.child = children[cursor.position].1;
-                        self.fail.as_mut_slice()[cursor.child as usize] = cursor.fallback_state;
-                        self.delta.as_mut_slice()[cursor.slot] = cursor.child;
-                        self.queue.push(cursor.child)?;
-                    }
-                    Err(_) => self.delta.as_mut_slice()[cursor.slot] = cursor.fallback_state,
-                }
-                if cursor.byte == u8::MAX {
-                    break;
-                }
-                cursor.byte += 1;
+            while cursor.edge < children.len() {
+                // Two edge fields, byte conversion, two slot additions,
+                // fallback lookup, two stores, advance and loop dispatch.
+                governor.charge(Resource::Work, 10)?;
+                cursor.byte = children[cursor.edge].0;
+                cursor.child = children[cursor.edge].1;
+                let byte = usize::from(cursor.byte);
+                cursor.fallback_state = self.delta[cursor.position + byte];
+                self.fail.as_mut_slice()[cursor.child as usize] = cursor.fallback_state;
+                self.delta.as_mut_slice()[cursor.slot + byte] = cursor.child;
+                push_scratch(&mut self.queue, cursor.child, governor)?;
+                cursor.edge += 1;
             }
         }
         Ok(())
@@ -719,6 +726,29 @@ impl PriorityMatcher {
                     Option<u32>,
                     Option<(u32, u32)>,
                     (Option<(u32, u32)>, Option<(u32, u32)>),
+                    &mut Governor,
+                    ScratchLease,
+                )>() <= CONTROL
+            );
+            // Root seeding, failure-row copy and sparse child publication.
+            assert!(
+                core::mem::size_of::<(
+                    MatcherBuild<PriorityOutputs>,
+                    MatcherCursor<'_>,
+                    &mut MatcherBuild<PriorityOutputs>,
+                    &mut MatcherCursor<'_>,
+                    Result<PriorityMatcher, StopReason>,
+                    &[PriorityLiteral<'_>],
+                    &[PriorityLiteral<'_>],
+                    &[u8],
+                    &TrieNode,
+                    &ScratchVec<(u8, u32)>,
+                    core::ops::Range<usize>,
+                    &mut [u32],
+                    &mut ScratchVec<u32>,
+                    Result<(), StopReason>,
+                    usize,
+                    usize,
                     &mut Governor,
                     ScratchLease,
                 )>() <= CONTROL

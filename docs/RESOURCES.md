@@ -2250,8 +2250,8 @@ and #47. Tool-result `OutputByteLimit` remains its separate contract.
 The existing dense byte `Matcher` owns transitions, depths and matches in
 fallible scratch vectors. Construction borrows admitted literals, reuses the
 fallible sparse trie as its sole goto/prefix authority, checks literal/state
-IDs and row sizes, and admits zero initialization, parent/child scans, binary
-searches, fallback processing and queue growth before work. Temporary trie,
+IDs and row sizes, and admits zero initialization, parent/child scans, trie
+searches, failure-row copying and queue growth before work. Temporary trie,
 failure links and breadth-first queue release on every exit. A final check
 precedes the complete matcher; its final buffers release with their grammar or
 prepared dialect set. Byte-prefix length is iterative and has no 128-byte
@@ -2270,7 +2270,8 @@ including duplicate bytes, replays its ranks into its exact trie terminal before
 breadth-first suffix propagation selects each view's minimum rank. Global trie
 labels cannot hide later duplicates or expose another program's private opener.
 Ordinary delimiter and marker callers retain their existing longest-match output
-owner, initialization, suffix policy and admissions through the same constructor.
+owner, initialization and suffix policy through the same constructor. Their
+construction Work follows the shared row-copy and sparse-child algorithm below.
 
 The retained wrapper scanner reserves 112 portable metadata bytes for its two
 table owners, two positive cutoffs, lease and return carrier; table buffers retain
@@ -2287,7 +2288,8 @@ cutoffs admits one Work. The shared constructor reserves 768 additional metadata
 bytes covering its sparse-trie and dense-builder phases: goto, transitions,
 depths, failure links, both output projections, queue, terminal replay, iterators,
 cursors, scalars, borrows and return carriers. Complete typed phase assertions
-cover these records, temporary trie nodes and nested initialization iterators.
+cover these records, temporary trie nodes, nested initialization iterators,
+row-copy ranges, mutable table slices and queue insertion borrows/results.
 Each metadata reservation admits one Work before preparation.
 
 Shared zero initialization admits 260 Work per trie state: 256 transitions,
@@ -2295,8 +2297,19 @@ depth, failure and two output slots. Terminal replay admits two Work per token
 for lookup and checked length, each edge's binary-search bound plus two Work for
 state/cursor progression, one Work per view-slot observation and three per present
 rank for terminal selection/publication. Breadth-first propagation adds three
-Work per view per nonroot state. Prefix scans, root seeding, dense transition
-lookups and growth retain their existing admissions. Construction-only depth,
+Work per view per nonroot state. Every matcher retains one Work per breadth-first
+state, then admits eight Work for its two row starts, two ends, two bounds,
+source range and sparse edge cursor. It copies the finalized failure row with
+256 admitted cell copies, then visits only actual child edges. Each edge admits
+ten Work for its two fields, byte conversion, two slot additions, fallback
+lookup, two stores, cursor advance and loop dispatch. Every queue append,
+including root seeding, separately admits one Work and actual relocation before
+growth. Sparse child order preserves the original breadth-first order. Proper
+suffix depth ensures the failure row is finalized first; checked table dimensions
+bound both complete rows. The root keeps its zero-filled and seeded transitions.
+Trie/prefix scans and root transition seeding retain their existing admissions.
+This replaces 256 binary searches per nonroot state for all matcher callers;
+ordinary construction Work changes with the computation. Construction-only depth,
 trie, failure and queue owners release before publication; every partial owner
 releases on refusal. Construction uses the original grammar compilation budgets,
 including built-in preparation. Sharing source tables establishes neither
