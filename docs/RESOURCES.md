@@ -182,6 +182,274 @@ their original semantics. JSON repair spellings are not added to call metadata.
 Refusals drop unpublished partial tables and completed metadata from earlier
 steps; a successful borrow does not allocate or readmit the prepared bytes.
 
+### Repeated runtime class queries
+
+Each grammar's operation-owned class runtime retains one successful
+transition/deadness query per class. The key includes the full native DFA state
+and input byte: term identity, matched and zero-width context flags, and the
+complete UTF-8 decoding position. Class sessions append derivative terms without
+remapping existing IDs, so later session growth cannot change a saved answer.
+Call and result tables share their grammar's existing class sessions and cache.
+
+A fixed twelve Work units admit each cache query. A miss runs the original DFA
+transition and deadness checks with their existing admission; only their joint
+success updates the cache. Errors and governor state are never cached. Accepting
+state checks, literal-boundary alternatives, capture boundaries and every
+permitted opener remain on the original production path.
+
+The fallible cache vector admits initialization Work and all reserved slots,
+including empty and spare slots, at a portable 64 bytes per slot. Its storage
+releases when the engine drops, including construction or processing refusal.
+The grammar runtime metadata uses its own fallible scratch vector, with portable
+96-byte rows covering the added owner handle and all reserved metadata slots.
+The existing table and DFA-slot vectors retain their earlier allocation paths;
+this change does not complete runtime allocation governance.
+The existing lazy class DFA constructor remains the only constructor. This
+removes repeated class operations; current budget, scale and portability checks
+remain unverified for this source change.
+
+A settled, unopened argument-anchored call can retain one exact ASCII class-run
+certificate per table. Admission requires one pristine attempt, only unique Class
+threads, no side owners or pending report for that attempt, and successful cached
+nondead self-loops for the same byte and complete native DFA states. Every thread
+has reached the current input position, has no pending character/body or past
+reading, and has consumed at least 32 bytes of its terminal. Literal name-follower
+boundaries decline admission. Immutable history evidence without a deferred Link
+must lack either a completed name or a value, proving that commit remains false.
+Before owner, queue or per-thread proof work, the last eight written bytes must
+repeat the same ASCII byte. Recent source is inspected backwards and stops at
+the first difference. A retired older suffix declines this optional proof; an
+inconsistent current input position, window or byte is an explicit engine error.
+
+A grouped projected program additionally proves that every reused Class PC is
+reachable from the start before any `next`, and unreachable after every `next`.
+Two complete control-flow walks prepare this mask: the first stops at `next`,
+and the second starts at all `next` targets and follows all continuations. Each
+PC is enqueued once per walk. Initial invocation references emit separate PCs
+from repeated invocation references; shared suffixes reachable after `next`
+remain excluded. An empty or nameless earlier invocation cannot bypass this
+restriction by crossing `next` without committing.
+
+Every Program retains a portable 64-byte mask descriptor admission, including
+empty, native and result programs. This covers the boolean-vector handle and
+its RAII lease, with a compile-time layout bound. Reserved boolean slots admit
+one byte each separately. The second flag vector, traversal stack and their
+aggregate lease admit a temporary 96-byte descriptor bound; their reserved
+elements admit storage separately. Descriptor initialization, flag preparation,
+seed scans, queue insertions, visited PCs, successor inspections and filtering
+admit Work before processing. JSON-key recompilation rebuilds the proof after
+the final instruction rewrites. Replaced programs, compilation refusal and
+grammar drop release these owners; sharing the compiled grammar copies no mask.
+Program equality compares mask facts independently of its accounting lease.
+
+All table certificate slots, including empty and spare slots, retain a portable
+32-byte admission until engine drop. Initialization, admission guards, owner-queue
+scans, complete state comparisons, invalidation, and slot writes admit Work before
+processing. Cache work follows the existing idle return and is limited to resident
+call tables with an immutable argument anchor, either ungrouped or carrying a
+nonempty initial-Class proof. Grouped admission checks the first PC after the
+length guard and checks every PC during the full thread proof. An occupancy count
+skips slot probes and reset sweeps when every certificate is empty. Reuse compares
+the exact byte and absolute input position, then admits only a checked cursor
+advance. The existing absolute cursor holds the cohort's logical `pos` and
+`reach`; their physical thread fields may lag while every other field stays
+unchanged. A hit performs no thread scan or position stores. The proved zero
+stall is unchanged, and the next ordinary VM step clears its own outgoing vectors.
+The retained proof replaces the ordinary advance, merge, commit and settle passes
+and their class-cache queries for that unchanged step. Input buffering, opener
+admission, line context, global markers and collection still run normally. Any new
+attempt, including directly appended opener threads, forces ordinary processing.
+
+Every proof consumption first materializes all subject `pos` and `reach` fields
+to that table's saved absolute cursor, then clears the proof. A mismatch does
+this before ordinary processing moves threads to its stack, and new attempt
+admission does it before either opener path changes its subject. VM borrowing,
+external stops, abandonment, end-of-input handling, length cuts and arena reset
+also materialize before native reads, copies or mutations. Global retirement
+uses two metadata passes and admits all materialization before any thread or
+proof changes. A refused admission leaves the cursors authoritative; native
+processing does not continue. Dropping a failed or unused engine needs no
+materialization because destruction never observes semantic thread positions.
+Absolute positions survive source-window relocation; saved
+self-loop facts remain valid when another table replaces a shared query-cache row.
+The proof keeps no thread snapshot, parsed value or source pointer. Resource
+refusal stays explicit. Runtime savings and applicability to particular workloads
+have not been measured for this source change.
+
+Harmless observations of vector emptiness, immutable phases, Attempt starts and
+the held-report floor do not materialize positions. The floor reads Fence ends,
+never a Class position. Chunk returns and digest updates do not flush cursors;
+the same bytes, native boundaries and final stop retain identical charges under
+every chunking. All twelve source Class PCs remain represented separately in the
+long Qwen payload; the optimization neither merges their alternatives nor
+changes native anchors. No new owner field, heap allocation or portable layout
+charge is introduced.
+
+For a hit over T settled threads, cache work is exactly five: one occupancy/slot
+metadata validation and probe, two key comparisons, checked next-position
+computation and cursor write. Consuming a populated proof costs `2 * T + 5`:
+one occupancy/slot metadata validation and probe, two subject/count and fee
+checks, two position stores per thread, and slot/count writes. A populated-key
+miss reuses that metadata validation and probe and adds the two key comparisons,
+for `2 * T + 7` before ordinary processing. An empty slot costs one probe only
+while another proof is occupied. Ordinary eligible processing
+also pays admission: one for the ASCII guard, five for the first-thread/position/
+length guard, five for recent-source position and suffix bounds, then one for
+each of the one to eight actual source-byte probes. Only a complete repeat
+qualifier reaches the 24 pristine-owner checks, two per global queue entry,
+40 per thread inspected and two for a successful slot/count write. A complete
+admission over T threads and Q queued entries costs `45 + 40 * T + 2 * Q`.
+Grouped admission adds one early mask lookup and one per inspected thread, for
+`46 + 41 * T + 2 * Q` on a complete successful proof; hits retain the same fee.
+After the length guard, alternating bytes stop after two source probes and
+paired-byte churn after two or three; their admission fees are 13 or 14 Work
+units before any residual empty-slot probes, plus the grouped early lookup.
+Runs of exactly eight copies can still pay one complete admission without a hit,
+followed by the populated miss and materialization fee when the byte changes.
+A repeat ending before eight copies cannot reach the
+expensive proof, but still pays the short-circuit qualifier's actual probes.
+An eligible normal VM borrow can add one empty-slot probe while another table
+owns a proof. For N slots, K occupied and C total subject threads, nonempty bulk
+invalidation first admits `N + 3 * K + 1` for shape/occupancy validation and the
+metadata census with checked store totals. It then admits `N + 2 * C + K + 1`
+before its mutation pass: slot probes, two position stores per subject thread,
+occupied slot clears and the count reset. Total Work is
+`2 * N + 4 * K + 2 + 2 * C`; empty occupancy performs no sweep. Initialization
+still admits every slot.
+Short or changing runs, refused admissions and unrelated live proofs can add
+Work without a later hit; these fees are part of any future workload comparison.
+The grouped extension predicts a benefit for long initial name/type runs but has
+not established measured savings or resource acceptance. Dense Qwen calls with
+one payload byte never reach the 32-byte guard: their newly eligible grouped
+tables can pay the six-Work ASCII and first-thread/length probe without a hit,
+plus any occupancy probes. Dense resource qualification remains independently
+required; this extension does not resolve that separate failure.
+
+### Failed native frame certificates
+
+Failed Mistral V3 and Hermes marker-projected calls can retain a private
+selected-failure header certificate. A producer tag identifies the actual
+unread-body failure route. The compiled terminal must be a JSON or JSON-arguments
+slot with an open Arguments capture exactly at its entry and a written object
+prefix. A governed history DAG walk checks both branches of every Pack. It
+supports completed name and optional ID captures, one completed leading Dropped
+capture, and the open argument body; edits, values, deferred Links, skipped calls
+and later-call boundaries decline proof. This is framing evidence, not a repaired
+argument value or an invocation inferred from rejected text.
+
+Only failures tied on the actual minimum failure-offset/reason key contribute
+header facts. Their proofs intersect; aggregate rejection end and consumed
+position remain separate. An unproved same-key contributor stays unproved across
+later updates. A different selected key follows the existing record overwrite;
+an already recorded first resynchronization failure preserves its original
+certificate. The existing physically consumed native opener supplies its frame.
+
+Opened attempts certify at the original pre-repair boundary. An unopened
+tracked attempt cannot certify a header: its selected failure and end remain
+borrowed from the current failure buffer until actual repair and resynchronization
+finish. One Work unit admits that deferral; six admit whole-table emptiness
+checks for live and completed configurations, trails, stalled failures, past
+readings and held completions. Only when all six are empty is negative
+persistence omitted. No remaining settlement producer can then revive that
+attempt. Every possible continuation retains its sticky negative selection
+through the same map/intersection path before later commit; an existing row
+still retires normally. No new heap owner or Attempt field is introduced.
+
+For one unsupported unopened failure, one attempt and an otherwise empty map,
+the former loop, certification, insertion and retirement fees totaled 188 Work.
+The proved terminal path now pays seven for deferral and owner checks. This
+can also avoid the map's first 800-byte reservation when no other state needs
+it; removing an existing row does not release reserved map capacity. These are
+source-derived local costs, not measured recovery savings, a universal scaling
+claim or a resource-pass result. Existing budgets and acceptance checks remain
+unchanged.
+
+One fallible attempt-ID map owns these facts through source/history retirement
+and queued Ended delivery. Event, Pending and Attempt layouts do not grow.
+Completion, abandonment, cut, consumption and fatal queue/processing cleanup
+retire the corresponding state. Final rejection changes, salvage and extended
+skipped ranges decline qualification. Refusal drops materialized completion or
+salvage buffers before releasing their existing reservations.
+
+Portable admissions are 192 bytes per attempt state, 160 per optional history
+summary, 256 per stored certificate or addressed certificate row, 64 per path
+owner and 80 per piece owner. Their vectors and maps retain all spare capacity
+until owner drop. Each sorted-map operation admits a conservative bound of
+`32 * length + 4 * (bit_width(length) + 1) + 64` Work units for searches,
+state copies and possible movement. Memoization prevents exponential packed-path
+expansion; sorted insertion still has a charged quadratic worst case in the
+number of reachable history nodes. History visits, joins, byte inspection,
+structural lookups, duplicate intersection, copying and permutation also admit
+Work. No history-sized global index or per-byte certificate-map scan is added.
+
+Immutable stored rejection addresses enter a sparse Builder companion. Both
+path deduplication and example-normalization deduplication intersect proofs from
+all collapsed origins. Suppression clears a rejected segment's proof; merging,
+choice collapse and ranking move the companion with their actual output.
+The final private RecognizedTurn owner uses piece/option/segment addresses.
+Recovery moves it out before dropping the recognized turn, validates those
+addresses through resolution, and retains it through option folding. These are
+identity joins; equal source spans alone never attach a certificate.
+
+Inside an existing equivalence group, a proved weak failed frame can become
+ineligible as representative when a native member proves the same failed object
+body and complete source partition, with precisely its exterior leading content
+preserved. The initial relation supports one rejection and otherwise content.
+Eligibility is determined against the complete group before existing ranking;
+every member still contributes its dialect evidence at its own opener. Original
+weak and native rejection spans remain intact. Unproved alternatives keep their
+existing ranking. Public raw-call and segment construction remains unchanged.
+The named stripped-framing regression covers the original Mistral prose fixture,
+retained weak rejection and chunk parity. This source has been formatted and
+inspected; compilation, execution, resource qualification and portability checks
+have not run locally.
+
+### Runtime segmentation costs
+
+Flat and chained completion producers carry each original reading's materialized
+cost into turn selection, including invalid UTF-8 capture edits and dropped-text
+losses. Flat grouping compares each part's cost before merging histories;
+differently weighted chained histories use that same flat producer. Comparisons
+admit Work without allocating a comparison key. Joint name/ID alternatives retain
+their additional costs without increasing the original reading's baseline.
+Rejected-part costs, undeclared-name weights and split-cost transfers retain
+their existing rules. This source change is formatted and source-inspected;
+compilation, corpus behavior and runtime admission remain unverified.
+
+Runtime settlement reuses its first merge and commit scan when no intervening
+configuration removal, repair or resynchronization can change their evidence,
+and no stalled failure needs examination. Every attempted repair invalidates
+that reuse, including one that only resolves a shared deferred-history link.
+Stalled repairs retain their existing merge path and invalidate commit reuse
+when attempted. Remaining completion, refusal and retirement processing stays
+on its existing path. Runtime savings and cost-budget acceptance are unverified.
+
+The marker projection also proves, on the original positioned grammar, whether
+every possible call ending is wholly erased. References, choices and nullable
+suffixes contribute to that proof; retained or mixed endings remain ineligible.
+Its memo owns fallible portable eight-byte slots and releases after compilation.
+The resulting private proof is inline; no new retained heap owner is introduced.
+Runtime source comparison may preserve one invocation with trailing prose loss
+beside that same invocation followed by completed calls inside the exact lost
+tail. It requires an identical history prefix, source captures, native argument
+metadata (including adoption state) and all other edits. The extraction's
+registered cost accounts for the entire difference; subsequent calls must be
+complete and cost nothing. Stored histories keep actual costs while dispatch
+uses their minimum. Governed visited frontiers follow packed history operands
+without multiplying independent choices. Existing distinct-segmentation and
+recovery-product candidate admissions still apply. Mixed endings, plain prose,
+rejected or reasoning suffixes and other repair differences retain ordinary
+least-cost pruning. This preservation path has not been compiled or executed.
+
+Source certificates for embedded framing use immutable stored-call and reading
+indices. Their keys strictly increase, so the private table appends each record
+after a three-unit Work admission for the last-key check. Each record reserves
+48 portable scratch bytes; insertion and actual buffer relocation use the
+existing governed scratch-vector operation. Embedded comparisons admit a
+logarithmic binary search over those keys. The separate late-reasoning origin
+map still supports removal and reinsertion. No resource budget is changed;
+runtime acceptance of this table remains pending.
+
 ## Schema bundle identity construction
 
 `Schema::compile_governed` and `with_resources_governed` stream their complete
@@ -994,7 +1262,7 @@ every value below to equal the code's.
 | `JSON_REPAIR` | 1 | One non-guessed JSON recovery edit in a value |
 | `JSON_GUESS` | 4 | One guessed JSON recovery edit in a value |
 | `STRAY_CLOSER_GAP` | 32 | Longest whitespace run before an absorbed stray closer |
-| `QUEUED_REPORT` | 96 | `ScratchBytes` per queued recognizer report |
+| `QUEUED_REPORT` | 128 | `ScratchBytes` per queued recognizer report |
 | `EXTRACT_PROSE` | 2 | Repair cost: prose dropped inside a call |
 | `EXTRACT_FENCE` | 1 | Repair cost: a fence marker dropped inside a call |
 | `UNDECLARED_NAME` | 4 | Selection weight of a call whose name denotes no declared tool |
@@ -1007,22 +1275,32 @@ every value below to equal the code's.
 | --- | ---: | ---: |
 | `anthropic-tool-use.v1` | 3391 | 3391 |
 | `bare-json.v1` | 378 | 378 |
+| `deepseek-v3-stripped.v1` | 522 | 522 |
+| `deepseek-v3.1-stripped.v1` | 306 | 306 |
 | `deepseek-v3.1.v1` | 2945 | 2945 |
 | `deepseek-v3.v1` | 4793 | 4793 |
 | `gemma3-tool-code.v1` | 97 | 97 |
 | `glm-4.5.v1` | 107 | 107 |
+| `harmony-stripped.v1` | 658 | 658 |
 | `harmony.v1` | 3890 | 3890 |
+| `hermes-stripped.v1` | 301 | 301 |
 | `hermes.v1` | 1137 | 1137 |
+| `kimi-k2-stripped.v1` | 217 | 217 |
 | `kimi-k2.v1` | 2436 | 2436 |
+| `llama3-json-stripped.v1` | 971 | 971 |
 | `llama3-json.v1` | 986 | 986 |
+| `mistral-v11-stripped.v1` | 67 | 67 |
 | `mistral-v11.v1` | 136 | 136 |
+| `mistral-v3-stripped.v1` | 2214 | 2214 |
 | `mistral-v3.v1` | 2228 | 2228 |
 | `openai-tool-calls.v1` | 6665 | 6665 |
 | `pythonic.v1` | 129 | 129 |
 | `qwen3-coder-xml.v1` | 971 | 971 |
 
-The default request allows all fifteen built-in dialects. Their combined bound is
-`(2 + 1 + 30289)·n + 8·E = 30292·n + 8·E`.
+The default request allows all twenty-three built-in dialects. Their combined bound is
+`(2 + 1 + 35545)·n + 8·E = 35548·n + 8·E`.
+The table is generated from compiled metadata by the `grammar-bounds` example;
+it does not report recovery timings or observed resource consumption.
 
 The `kv-pairs` codec scans argument fields forward with a bounded tag
 comparison at each byte. Typed JSON boundaries use the native JSON cursor,
@@ -1197,8 +1475,7 @@ and Anthropic) would still have run out of the preset's flat
 one_mib_dense_markup_fits_published_budget` (`make corpus`) now recovers each of these shapes at 1 MiB under plain
 `sized(Effort::Standard, output)` with the stop `Completed` and every unit
 recovered; `tool_call_cost::dense_markup_fits_published_budget` (`make
-check`) runs the same shapes at 64 KiB. The Gemma row uses the current
-fifteen-dialect request. The Pythonic row uses the fourteen-dialect request. The GLM row uses the thirteen-dialect request captured before Pythonic;
+check`) runs the same shapes at 64 KiB. The Gemma row uses the recorded request with fifteen dialects. The Pythonic row uses the fourteen-dialect request. The GLM row uses the thirteen-dialect request captured before Pythonic;
 the other recorded rows use the twelve-dialect request before GLM.
 
 | Dense shape (1 MiB) | Units | Work per byte | Peak scratch per byte | Evidence per byte |

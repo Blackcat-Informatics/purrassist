@@ -100,20 +100,43 @@ pub enum MarkupFamily {
     /// `glm-4.5.v1`: `<arg_key>`/`<arg_value>` pairs in a
     /// `<tool_call>`.
     Glm45,
-    /// `kimi-k2-stripped.v1` (not built in): a Kimi-K2 call with its
+    /// `kimi-k2-stripped.v1`: a Kimi-K2 call with its
     /// special tokens removed, `functions.NAME:IDX{...}`.
     KimiK2Stripped,
-    /// `harmony-stripped.v1` (not built in): a Harmony recipient
+    /// `harmony-stripped.v1`: a Harmony recipient
     /// `to=functions.NAME` with the message tokens removed.
     HarmonyStripped,
-    /// `deepseek-v3-stripped.v1` (not built in): `functionNAME` followed by
+    /// `deepseek-v3-stripped.v1`: `functionNAME` followed by
     /// a `` ```json `` block, a DeepSeek-V3 call with its tokens removed.
     DeepSeekV3Stripped,
-    /// `name-arguments-stripped.v1` (not built in): `NAME{...}` at the start
+    /// `name-arguments-stripped.v1` category: `NAME{...}` at the start
     /// of a line, a DeepSeek-V3.1 or Mistral v11 call with its special
     /// tokens removed.
     NameArgumentsStripped,
 }
+
+static FAMILY_ANTHROPICTOOLUSE: [DialectId; 1] = [DialectId::AnthropicToolUse];
+static FAMILY_BAREJSON: [DialectId; 1] = [DialectId::BareJson];
+static FAMILY_DEEPSEEKV31: [DialectId; 1] = [DialectId::DeepSeekV31];
+static FAMILY_DEEPSEEKV3: [DialectId; 1] = [DialectId::DeepSeekV3];
+static FAMILY_GLM45: [DialectId; 1] = [DialectId::Glm45];
+static FAMILY_HARMONY: [DialectId; 1] = [DialectId::Harmony];
+static FAMILY_HERMES: [DialectId; 1] = [DialectId::Hermes];
+static FAMILY_KIMIK2: [DialectId; 1] = [DialectId::KimiK2];
+static FAMILY_LLAMA3JSON: [DialectId; 1] = [DialectId::Llama3Json];
+static FAMILY_MISTRALV11: [DialectId; 1] = [DialectId::MistralV11];
+static FAMILY_MISTRALV3: [DialectId; 1] = [DialectId::MistralV3];
+static FAMILY_OPENAITOOLCALLS: [DialectId; 1] = [DialectId::OpenAiToolCalls];
+static FAMILY_QWEN3CODERXML: [DialectId; 1] = [DialectId::Qwen3CoderXml];
+static FAMILY_PYTHONIC: [DialectId; 1] = [DialectId::Pythonic];
+static FAMILY_GEMMA3TOOLCODE: [DialectId; 1] = [DialectId::Gemma3ToolCode];
+static FAMILY_KIMIK2STRIPPED: [DialectId; 1] = [DialectId::KimiK2Stripped];
+static FAMILY_HARMONYSTRIPPED: [DialectId; 1] = [DialectId::HarmonyStripped];
+static FAMILY_DEEPSEEKV3STRIPPED: [DialectId; 1] = [DialectId::DeepSeekV3Stripped];
+static FAMILY_NAMEARGUMENTSSTRIPPED: [DialectId; 2] = [
+    DialectId::DeepSeekV31Stripped,
+    DialectId::MistralV11Stripped,
+];
 
 impl MarkupFamily {
     /// The family id: the dialect id of a built-in family, otherwise the
@@ -145,8 +168,8 @@ impl MarkupFamily {
         }
     }
 
-    /// The built-in dialect of the family, or `None` for a family no
-    /// built-in dialect parses.
+    /// The unique built-in dialect of the family, or `None` when its shape
+    /// maps to several dialects. Use [`Self::dialects`] for the complete set.
     ///
     /// See [`MarkupFamily`] for an example.
     #[must_use]
@@ -167,26 +190,48 @@ impl MarkupFamily {
             Self::Qwen3CoderXml => DialectId::Qwen3CoderXml,
             Self::Pythonic => DialectId::Pythonic,
             Self::Gemma3ToolCode => DialectId::Gemma3ToolCode,
-            Self::KimiK2Stripped
-            | Self::HarmonyStripped
-            | Self::DeepSeekV3Stripped
-            | Self::NameArgumentsStripped => return None,
+            Self::KimiK2Stripped => DialectId::KimiK2Stripped,
+            Self::HarmonyStripped => DialectId::HarmonyStripped,
+            Self::DeepSeekV3Stripped => DialectId::DeepSeekV3Stripped,
+            Self::NameArgumentsStripped => return None,
         })
     }
 
-    /// Whether a built-in dialect parses this family (it was reported
-    /// because the request's allow-list leaves that dialect out).
+    /// Every built-in dialect whose grammar reads the detected shape.
     ///
-    /// See [`MarkupFamily`] for an example.
+    /// A bare name followed by arguments maps to both `DeepSeek` V3.1 and
+    /// Mistral v11 projections; the detector cannot identify one from that shape.
+    #[must_use]
+    pub const fn dialects(self) -> &'static [DialectId] {
+        match self {
+            Self::AnthropicToolUse => &FAMILY_ANTHROPICTOOLUSE,
+            Self::BareJson => &FAMILY_BAREJSON,
+            Self::DeepSeekV31 => &FAMILY_DEEPSEEKV31,
+            Self::DeepSeekV3 => &FAMILY_DEEPSEEKV3,
+            Self::Glm45 => &FAMILY_GLM45,
+            Self::Harmony => &FAMILY_HARMONY,
+            Self::Hermes => &FAMILY_HERMES,
+            Self::KimiK2 => &FAMILY_KIMIK2,
+            Self::Llama3Json => &FAMILY_LLAMA3JSON,
+            Self::MistralV11 => &FAMILY_MISTRALV11,
+            Self::MistralV3 => &FAMILY_MISTRALV3,
+            Self::OpenAiToolCalls => &FAMILY_OPENAITOOLCALLS,
+            Self::Qwen3CoderXml => &FAMILY_QWEN3CODERXML,
+            Self::Pythonic => &FAMILY_PYTHONIC,
+            Self::Gemma3ToolCode => &FAMILY_GEMMA3TOOLCODE,
+            Self::KimiK2Stripped => &FAMILY_KIMIK2STRIPPED,
+            Self::HarmonyStripped => &FAMILY_HARMONYSTRIPPED,
+            Self::DeepSeekV3Stripped => &FAMILY_DEEPSEEKV3STRIPPED,
+            Self::NameArgumentsStripped => &FAMILY_NAMEARGUMENTSSTRIPPED,
+        }
+    }
+
+    /// Whether a built-in grammar reads the family.
+    ///
+    /// See [`Self::dialects`] for shapes shared by more than one grammar.
     #[must_use]
     pub const fn built_in(self) -> bool {
-        !matches!(
-            self,
-            Self::KimiK2Stripped
-                | Self::HarmonyStripped
-                | Self::DeepSeekV3Stripped
-                | Self::NameArgumentsStripped
-        )
+        !self.dialects().is_empty()
     }
 
     /// A one-line explanation of the report: the family, and whether it is
@@ -319,9 +364,10 @@ impl Scan<'_> {
     /// the allow-list holds. Checked before a hit's end is searched, so a
     /// family that is not reported costs only its bounded check.
     fn reported(&self, family: MarkupFamily) -> bool {
-        family
-            .dialect()
-            .is_none_or(|dialect| !self.dialects.dialects().contains(&dialect))
+        !family
+            .dialects()
+            .iter()
+            .any(|dialect| self.dialects.dialects().contains(dialect))
     }
 
     const fn byte(&mut self, at: usize) -> Option<u8> {
@@ -784,7 +830,7 @@ impl Scan<'_> {
     /// followed by its arguments with the tokens removed, or a DeepSeek-V3
     /// `functionNAME` line followed by a `` ```json `` block.
     fn function(&mut self, at: usize) -> Option<(MarkupFamily, Range<usize>)> {
-        if self.lit(at, b"functions.") {
+        if self.reported(MarkupFamily::KimiK2Stripped) && self.lit(at, b"functions.") {
             let name = self.ident(at + b"functions.".len())?;
             let name = if self.byte(name) == Some(b':') {
                 name
@@ -805,7 +851,10 @@ impl Scan<'_> {
             }
             return Some((MarkupFamily::KimiK2Stripped, at..self.close(open)));
         }
-        if self.lit(at, b"function") && self.line_start(at) {
+        if self.reported(MarkupFamily::DeepSeekV3Stripped)
+            && self.lit(at, b"function")
+            && self.line_start(at)
+        {
             let name = self.ident(at + b"function".len())?;
             let fence = self.ws(name);
             if !self.bytes[name..fence].contains(&b'\n') || !self.lit(fence, b"```json") {
@@ -841,15 +890,22 @@ impl Scan<'_> {
     /// `NAME{"...` at the start of a line: a DeepSeek-V3.1 or Mistral v11
     /// call whose special tokens were removed.
     fn name_arguments(&mut self, at: usize) -> Option<(MarkupFamily, Range<usize>)> {
-        if !self.bytes[at].is_ascii_alphabetic() || !self.line_start(at) {
+        // Use the identifier's exact first-byte rule before looking backward:
+        // spaces cannot begin a name, even on a long indented or trailing line.
+        let first = self.byte(at)?;
+        if !(first.is_ascii_alphabetic() || first == b'_')
+            || !self.reported(MarkupFamily::NameArgumentsStripped)
+            || !self.line_start(at)
+        {
             return None;
         }
-        let open = self.ident(at)?;
-        if open - at < 2 || self.byte(open) != Some(b'{') {
+        let name_end = self.ident(at)?;
+        let open = self.ws(name_end);
+        if self.byte(open) != Some(b'{') {
             return None;
         }
         let key = self.ws(open + 1);
-        if self.byte(key) != Some(b'"') {
+        if !matches!(self.byte(key), Some(b'"' | b'}')) {
             return None;
         }
         Some((MarkupFamily::NameArgumentsStripped, at..self.close(open)))

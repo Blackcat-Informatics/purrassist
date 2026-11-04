@@ -181,6 +181,7 @@ pub fn generate(
     let mut printer = Printer::new(grammar, governor);
     let mut fill = Seeded {
         options,
+        retained_layouts: !grammar.joint_captures.is_empty(),
         rng: SplitMix64(options.seed),
         call: None,
         occurrences: Vec::new(),
@@ -390,6 +391,8 @@ const WORDS: [&str; 8] = [
 
 /// The seeded choices and generated values of a witness.
 struct Seeded<'g> {
+    /// A projected name/ID boundary must remain visible in well-formed witnesses.
+    retained_layouts: bool,
     options: WitnessOptions,
     rng: SplitMix64,
     call: Option<Plan<'g>>,
@@ -560,6 +563,10 @@ fn seeded_unsupported(reason: impl Into<String>) -> ScratchPrintError {
 }
 
 impl Fill for Seeded<'_> {
+    fn layouts(&self) -> bool {
+        self.retained_layouts
+    }
+
     fn name(&self) -> Option<&str> {
         self.call.as_ref().map(|plan| plan.name.as_str())
     }
@@ -637,6 +644,13 @@ impl Fill for Seeded<'_> {
             let count = occurrences.len();
             self.occurrences = occurrences;
             return Ok(Repetition::Parameters(count));
+        }
+        if self.retained_layouts
+            && let Expr::Reference(id) = inner
+            && printer.grammar.layout(*id).is_some()
+            && fits(min.max(1) as usize, min, max)
+        {
+            return Ok(Repetition::Times(min.max(1)));
         }
         let count = if holds.dropped || printer.bare_slot(inner, governor)? {
             // Text a call drops is never part of a well-formed call, and a

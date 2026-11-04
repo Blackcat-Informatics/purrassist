@@ -71,7 +71,8 @@ fn every_anchor_fixture_resolves() {
 
 /// Every anchor fixture of each of `dialects` is `Resolved`, top-level and
 /// per call, at `effort`: with that dialect alone, or with every built-in
-/// dialect allowed (the default request) when `all` is set.
+/// dialect allowed (the default request) when `all` is set. A marked Harmony
+/// projection anchor instead asserts its two explicit source interpretations.
 fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: bool) {
     for dialect in dialects {
         let dialect = dialect.clone();
@@ -115,7 +116,21 @@ fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: b
                 &ToolRecoveryRequest::new(effort),
                 dialects,
             );
-            assert_eq!(result.receipt.stopped, StopReason::Completed, "{file}");
+            if let Some(expectation) = string_member(&document, "expected_recovery") {
+                assert_eq!(expectation, "two-calls-or-trailing-extraction", "{file}");
+                assert_eq!(dialect, DialectId::HarmonyStripped, "{file}");
+                assert_eq!(
+                    path.file_name().and_then(std::ffi::OsStr::to_str),
+                    Some("multiple-calls.json")
+                );
+                assert_harmony_anchor_readings(&result, &markup, expected, effort, &file);
+                continue;
+            }
+            assert_eq!(
+                result.receipt.stopped,
+                StopReason::Completed,
+                "{file}: {result:#?}"
+            );
             for evidence in &result.receipt.evidence {
                 let rule = purrassist_core::tool_call::rules::rule(&evidence.rule).expect("rule");
                 assert!(
@@ -147,6 +162,150 @@ fn assert_anchor_fixtures_resolve(effort: Effort, dialects: &[DialectId], all: b
             assert_eq!(result.receipt.stopped, StopReason::Completed, "{file}");
         }
     }
+}
+
+/// Erased message endings preserve both the two-call reading and the first
+/// call whose trailing text includes the second apparent invocation.
+fn assert_harmony_anchor_readings(
+    result: &AssistResult<ToolCalls>,
+    markup: &str,
+    expected: &[Node],
+    effort: Effort,
+    context: &str,
+) {
+    assert_eq!(markup.len(), 94, "{context}");
+    assert_eq!(result.receipt.sources.len(), 1, "{context}");
+    assert_eq!(
+        result.receipt.sources[0].bytes,
+        markup.as_bytes(),
+        "{context}"
+    );
+    assert_eq!(
+        result.receipt.source,
+        Digest::of(markup.as_bytes()),
+        "{context}"
+    );
+    assert_eq!(
+        result.receipt.sources[0].digest, result.receipt.source,
+        "{context}"
+    );
+    if effort == Effort::Exact {
+        assert_eq!(result.receipt.budget.candidates, 1, "{context}");
+        assert_eq!(
+            result.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::Candidates),
+            "{context}"
+        );
+        assert!(matches!(result.outcome, Outcome::Unresolved), "{context}");
+        return;
+    }
+    assert_eq!(effort, Effort::Standard, "{context}");
+    assert_eq!(result.receipt.stopped, StopReason::Completed, "{context}");
+    let Outcome::Ambiguous(readings) = &result.outcome else {
+        panic!("{context}: {:?}", result.outcome);
+    };
+    assert_eq!(readings.len(), 2, "{context}");
+    let complete = readings
+        .iter()
+        .find(|reading| reading.calls.len() == 2)
+        .unwrap_or_else(|| panic!("{context}: full two-call reading missing"));
+    assert_harmony_complete_reading(complete, expected, context);
+    let extracted = readings
+        .iter()
+        .find(|reading| reading.calls.len() == 1)
+        .unwrap_or_else(|| panic!("{context}: trailing-extraction reading missing"));
+    assert_harmony_trailing_extraction(
+        extracted,
+        &complete.calls[0],
+        markup,
+        result.receipt.source,
+        context,
+    );
+}
+
+fn assert_harmony_complete_reading(complete: &ToolCalls, expected: &[Node], context: &str) {
+    assert_eq!(expected.len(), 2, "{context}");
+    assert!(complete.rejected.is_empty(), "{context}");
+    assert!(complete.embedded.is_empty(), "{context}");
+    assert!(complete.content.is_empty(), "{context}");
+    assert!(complete.reasoning.is_empty(), "{context}");
+    assert_eq!(complete.finish, Finish::Calls, "{context}");
+    assert_eq!(complete.usable().len(), 2, "{context}");
+    for (index, (call, wanted)) in complete.calls.iter().zip(expected).enumerate() {
+        assert_eq!(call.index, index, "{context}");
+        assert_eq!(
+            call.tool.as_deref(),
+            string_member(wanted, "name").as_deref(),
+            "{context}"
+        );
+        assert_eq!(
+            call.arguments.to_json(),
+            wanted.get("arguments").expect("arguments").to_json(),
+            "{context}"
+        );
+        assert_eq!(call.dialect, DialectId::HarmonyStripped, "{context}");
+        assert_eq!(
+            call.candidate_dialects,
+            [DialectId::HarmonyStripped],
+            "{context}"
+        );
+        assert_eq!(call.source_id, None, "{context}");
+        assert_eq!(call.outcome, CallOutcome::Resolved, "{context}");
+        assert!(call.repairs.evidence.is_empty(), "{context}");
+        assert!(call.repairs.losses.is_empty(), "{context}");
+        assert!(call.repairs.inferences.is_empty(), "{context}");
+    }
+    assert_eq!(complete.calls[0].span, 0..47, "{context}");
+    assert_eq!(complete.calls[1].span, 47..94, "{context}");
+    assert_eq!(complete.calls[0].arguments.span, Some(30..46), "{context}");
+    assert_eq!(complete.calls[1].arguments.span, Some(77..94), "{context}");
+}
+
+fn assert_harmony_trailing_extraction(
+    reading: &ToolCalls,
+    complete: &ToolCall,
+    markup: &str,
+    source: Digest,
+    context: &str,
+) {
+    assert_eq!(reading.calls.len(), 1, "{context}");
+    assert!(reading.rejected.is_empty(), "{context}");
+    assert!(reading.embedded.is_empty(), "{context}");
+    assert!(reading.content.is_empty(), "{context}");
+    assert!(reading.reasoning.is_empty(), "{context}");
+    assert_eq!(reading.finish, Finish::Unresolved, "{context}");
+    assert!(reading.usable().is_empty(), "{context}");
+    assert!(reading.usable_accepting_guesses().is_empty(), "{context}");
+    let call = &reading.calls[0];
+    assert_eq!(call.index, 0, "{context}");
+    assert_eq!(call.tool, complete.tool, "{context}");
+    assert_eq!(call.name, complete.name, "{context}");
+    assert_eq!(call.source_id, complete.source_id, "{context}");
+    assert_eq!(call.arguments, complete.arguments, "{context}");
+    assert_eq!(call.arguments.span, complete.arguments.span, "{context}");
+    assert_eq!(call.dialect, DialectId::HarmonyStripped, "{context}");
+    assert_eq!(
+        call.candidate_dialects,
+        [DialectId::HarmonyStripped],
+        "{context}"
+    );
+    assert_eq!(call.span, 0..94, "{context}");
+    assert_eq!(call.outcome, CallOutcome::BestGuess, "{context}");
+    assert_eq!(call.effects, Some(Effects::Mutating), "{context}");
+    assert_eq!(call.policy, Some(RepairPolicy::Structural), "{context}");
+    assert_eq!(call.repairs.evidence.len(), 1, "{context}");
+    assert_eq!(call.repairs.losses.len(), 1, "{context}");
+    assert!(call.repairs.inferences.is_empty(), "{context}");
+    let evidence = &call.repairs.evidence[0];
+    assert_eq!(evidence.rule, "tool_call.extract.prose", "{context}");
+    assert_eq!(evidence.destination, "/turn/0..94", "{context}");
+    let span = evidence.span.as_ref().expect("extraction source span");
+    assert_eq!(span.source, source, "{context}");
+    assert_eq!(span.bytes, 47..94, "{context}");
+    let loss = &call.repairs.losses[0];
+    assert_eq!(loss.kind, LossKind::Data, "{context}");
+    assert_eq!(loss.loss.evidence, *evidence, "{context}");
+    assert_eq!(loss.loss.original, markup[47..94], "{context}");
 }
 
 #[test]
@@ -906,13 +1065,13 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:af701c4390904e836465fd5ef4c5173071369bb0ae482fbc3babdab8f2af3672";
+    "sha256:9cc0433e5ed4a2c73394f08fd07a7769c8cb57ba7eef5d39dea60d7efdb78d58";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:5583cdddfcf92fcee0d019be54512f3247cd4c4d844071af38f4c03f3d83ac41";
+    "sha256:beb126149f4df5bd2a1de8606f60e298fbf694cdd616e8ed9c6ad1449c9d56f4";
 const PINNED_AMBIGUOUS_DIGEST: &str =
-    "sha256:1a4a41f4b969fe2ab429f15b5c231d7afbbc26827b2ca678a6981ff1a3130efe";
+    "sha256:2ea929f8b87008b738e58f9d5f78f8aaa6fcc14138c3e5bb20804ffd4df29e12";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
-    "sha256:70904369a6eb42ab4b5cecdd6a8e18666994f5a1a4721bf6997a687314f7817d";
+    "sha256:09c97f9742d54f53554e4c7d00968ff3d4097cc813dd1463fa1528e429f0e8d2";
 
 #[test]
 fn invalid_utf8_is_loss_and_bytes_retained() {
@@ -2793,14 +2952,24 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     let tools = compile([ToolDefinition::new("f")
         .effects(Effects::ReadOnly)
         .param("a", Param::string())]);
-    let call = "<tool_call>\n<function=f>\n<parameter=a>\nx\n</parameter>\n</function>";
+    // The blocker declares no reasoning: its wrapper-tail scan must not
+    // hand off at the first <think>. Hermes supplies those marker reports
+    // through the combined dialect set without opening another call.
+    let blocker = custom(
+        r#"grammar "held-reports.v1";
+        closer end = "</held>";
+        call = "<held>" name:/[a-z]+/ arguments:slot(json, "\x00") end;
+        result = "<r>" content:until("</r>") "</r>";
+        declaration = "<d>";"#,
+    );
+    let call = r#"<held>f{"a":"x"}"#;
     let thoughts = "<think>t</think>".repeat(BLOCKS);
     // The wrapper closer never comes: every reasoning marker after the
     // call waits for the end of output.
     let held = format!("{call}\nDone.{thoughts}");
     // The same turn with its closer: markers are processed as they come.
-    let closed = format!("{call}\n</tool_call>\nDone.{thoughts}");
-    let dialects = set(&[DialectId::Qwen3CoderXml]);
+    let closed = format!("{call}</held>\nDone.{thoughts}");
+    let dialects = set(&[blocker, DialectId::Hermes]);
     let recognize = |output: &str, chunk: usize, scratch: u64| {
         let mut governor = Governor::new(Budget {
             scratch_bytes: scratch,
@@ -2823,7 +2992,12 @@ fn held_reports_are_charged_and_exhaust_explicitly() {
     let ample = Effort::Standard.budget().scratch_bytes;
     let (held_turn, held_usage) = recognize(&held, held.len(), ample);
     let (closed_turn, closed_usage) = recognize(&closed, closed.len(), ample);
-    assert!(held_turn.is_ok() && closed_turn.is_ok());
+    assert!(
+        held_turn.is_ok() && closed_turn.is_ok(),
+        "held stop {:?}, usage {held_usage:?}; closed stop {:?}, usage {closed_usage:?}",
+        held_turn.as_ref().err(),
+        closed_turn.as_ref().err()
+    );
     // Two markers per block were queued at once.
     let queue = 2 * BLOCKS as u64 * cost::QUEUED_REPORT;
     assert!(

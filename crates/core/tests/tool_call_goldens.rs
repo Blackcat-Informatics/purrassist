@@ -34,10 +34,10 @@ use purrassist_core::grammar::edit::LossKind;
 use purrassist_core::json::{Member, Node, Value, parse};
 use purrassist_core::tool_call::rules::RULES;
 use purrassist_core::tool_call::{
-    AmbiguityPolicy, CallOutcome, DeclarationForm, DialectId, DialectSet, Effects, Finish,
+    AmbiguityPolicy, CallOutcome, Closure, DeclarationForm, DialectId, DialectSet, Effects, Finish,
     GenerationStop, IdPolicy, ObjectSpec, Param, ParameterSpec, PolicySelection, ReasoningPolicy,
-    RepairPolicy, StrictForced, ToolCall, ToolCalls, ToolChoice, ToolDefinition,
-    ToolRecoveryRequest, ToolSet, UnknownParameters, UnresolvedReason,
+    Recognizer, RepairPolicy, Segment, StrictForced, ToolCall, ToolCalls, ToolChoice,
+    ToolDefinition, ToolRecoveryRequest, ToolSet, UnknownParameters, UnresolvedReason,
 };
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason};
 use std::path::{Path, PathBuf};
@@ -3053,6 +3053,25 @@ fn trailing_text_inside_wrapper_rejected() {
 
 const BEFORE_TEXT: &str = "tool_call.markup.missing-wrapper-close.before-text";
 
+/// The shipped projection inserts array brackets around an unbracketed call
+/// object, including when its final brace needs recovery.
+fn mistral_inserted_bracket_tail(input: &str, policy: RepairPolicy) -> AssistResult<ToolCalls> {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("f")
+            .effects(Effects::ReadOnly)
+            .policy(policy)
+            .param("a", Param::string())],
+        Budget::default(),
+    )
+    .expect("wrapper-tail tool");
+    let dialects = DialectSet::new(
+        [DialectId::MistralV3Stripped],
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("shipped Mistral projection");
+    tools.recover(input.as_bytes(), &ToolRecoveryRequest::default(), &dialects)
+}
+
 #[test]
 fn missing_wrapper_close_then_prose_tolerant() {
     let (_, result) = golden("missing_wrapper_close_then_prose_tolerant");
@@ -3065,6 +3084,28 @@ fn missing_wrapper_close_then_prose_tolerant() {
     let calls = reading(&result);
     assert_eq!(calls.usable().len(), 0);
     assert_eq!(calls.usable_accepting_guesses().len(), 1);
+
+    let input = r#"{"name":"f","arguments":{"a":"x"} tail"#;
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Tolerant);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{result:?}");
+    let call = &calls.calls[0];
+    assert_eq!(call.outcome, CallOutcome::BestGuess);
+    let rules = rules_of(call);
+    assert_eq!(rules.iter().filter(|&&rule| rule == BEFORE_TEXT).count(), 1);
+    assert_eq!(
+        rules
+            .iter()
+            .filter(|&&rule| rule == "tool_call.markup.missing-token")
+            .count(),
+        2,
+        "both explicit bracket insertions survive the wrapper relabel"
+    );
+    assert!(!rules.contains(&"tool_call.markup.missing-wrapper-close"));
+    assert_eq!(
+        (calls.usable().len(), calls.usable_accepting_guesses().len()),
+        (0, 1)
+    );
 }
 
 #[test]
@@ -3087,6 +3128,24 @@ fn missing_wrapper_close_then_prose_structural() {
         (0, 0)
     );
     assert_eq!(calls.finish, Finish::Unresolved);
+
+    let input = r#"{"name":"f","arguments":{"a":"x"} tail"#;
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Structural);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{result:?}");
+    assert_eq!(
+        calls.calls[0].outcome,
+        CallOutcome::Unresolved {
+            reason: UnresolvedReason::RuleNotAdmitted {
+                rule: BEFORE_TEXT.into(),
+                policy: RepairPolicy::Structural,
+            },
+        }
+    );
+    assert_eq!(
+        (calls.usable().len(), calls.usable_accepting_guesses().len()),
+        (0, 0)
+    );
 }
 
 #[test]
@@ -3104,6 +3163,56 @@ fn missing_wrapper_close_then_prose_then_call() {
     let first = &reading(&result).calls[0];
     assert_eq!(first.outcome, CallOutcome::Resolved);
     assert!(rules_of(first).contains(&"tool_call.markup.missing-wrapper-close"));
+
+    let input =
+        "{\"name\":\"f\",\"arguments\":{\"a\":\"x\"}\n{\"name\":\"f\",\"arguments\":{\"a\":\"y\"}}";
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Tolerant);
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 2, "{result:?}");
+    assert!(
+        calls
+            .calls
+            .iter()
+            .all(|call| call.outcome == CallOutcome::Resolved)
+    );
+    assert!(rules_of(&calls.calls[0]).contains(&"tool_call.markup.missing-wrapper-close"));
+    assert!(
+        calls
+            .calls
+            .iter()
+            .all(|call| !rules_of(call).contains(&BEFORE_TEXT))
+    );
+
+    // A consumed authentic closer leaves the virtual array bracket after
+    // its complete source span, including intervening layout whitespace.
+    let input = "{\"name\":\"f\",\"arguments\":{\"a\":\"x\"} \t\r\n}";
+    let result = mistral_inserted_bracket_tail(input, RepairPolicy::Tolerant);
+    assert_eq!(result.receipt.sources[0].bytes.as_slice(), input.as_bytes());
+    let calls = reading(&result);
+    assert_eq!(calls.calls.len(), 1, "{result:?}");
+    let call = &calls.calls[0];
+    assert_eq!(call.outcome, CallOutcome::Resolved);
+    assert_eq!(call.span, 0..input.len());
+    assert_eq!(call.arguments.to_json(), r#"{"a":"x"}"#);
+    let rules = rules_of(call);
+    assert!(!rules.contains(&"tool_call.markup.missing-wrapper-close"));
+    assert!(!rules.contains(&BEFORE_TEXT));
+    assert!(!rules.contains(&"tool_call.markup.stray-closer"));
+    let brackets: Vec<_> = call
+        .repairs
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.rule == "tool_call.markup.missing-token")
+        .collect();
+    assert_eq!(brackets.len(), 2);
+    let closing = brackets
+        .iter()
+        .find(|evidence| evidence.explanation == "read the omitted token `]` as inserted here")
+        .expect("virtual closing array bracket");
+    assert_eq!(
+        closing.span.as_ref().expect("source position").bytes,
+        input.len()..input.len()
+    );
 }
 
 /// Llama 3 JSON: the object's final brace is its closer, so a missing one
@@ -4017,7 +4126,10 @@ fn anthropic_tool_use() {
     let (_, result) = golden("llama3_id_first_parameters");
     let call = the_call(&result);
     assert_eq!(call.outcome, CallOutcome::Resolved);
-    assert_eq!(call.candidate_dialects, [DialectId::Llama3Json]);
+    assert_eq!(
+        call.candidate_dialects,
+        [DialectId::Llama3JsonStripped, DialectId::Llama3Json]
+    );
     assert_eq!(call.source_id.as_deref(), Some("toolu_01"));
     let (_, result) = golden("llama3_leading_id_member");
     assert_eq!(the_call(&result).source_id.as_deref(), Some("call_7"));
@@ -4303,6 +4415,22 @@ fn bare_json_calls() {
         // Every byte is content.
         let covered: usize = calls.content.iter().map(ExactSizeIterator::len).sum();
         assert_eq!(covered, golden.input.len(), "{name}");
+        if name == "bare_json_extra_member_is_content" {
+            // A projected prefix must not hide the object's authentic final
+            // brace behind inserted array markup and become usable.
+            let default = golden.run_default().expect("default allow-list run");
+            let readings = match &default.outcome {
+                Outcome::Resolved(calls) | Outcome::BestGuess(calls) => vec![calls],
+                Outcome::Ambiguous(readings) => readings.iter().collect(),
+                Outcome::Unresolved => panic!("default wrapper-tail recovery refused: {default:?}"),
+            };
+            for calls in readings {
+                assert_eq!(
+                    (calls.usable().len(), calls.usable_accepting_guesses().len()),
+                    (0, 0)
+                );
+            }
+        }
     }
     // After <|python_tag|> the object is a call whatever its arguments.
     let (_, result) = golden("llama3_python_tag_declaration_shaped_call");
@@ -4315,8 +4443,7 @@ fn bare_json_calls() {
 }
 
 /// Call markup no allowed dialect reads is never silent content: each
-/// family not built in yet, and each built-in dialect left out of the
-/// allow-list, is one rejected attempt with
+/// built-in dialect left out of the allow-list is one rejected attempt with
 /// `Rejection::UnsupportedDialect` naming the family, whose bytes stay
 /// content, and the turn finishes `Unresolved`. Text that is not call
 /// markup (prose with parentheses, math, a Python code block) is never
@@ -4331,14 +4458,11 @@ fn unparsed_markup_is_reported() {
             MarkupFamily::Gemma3ToolCode,
         ),
         ("unparsed_glm45_not_allowed", MarkupFamily::Glm45),
-        ("unparsed_kimi_k2_stripped", MarkupFamily::KimiK2Stripped),
-        ("unparsed_harmony_stripped", MarkupFamily::HarmonyStripped),
+        ("stripped_kimi_k2", MarkupFamily::KimiK2Stripped),
+        ("stripped_harmony", MarkupFamily::HarmonyStripped),
+        ("stripped_deepseek_v3", MarkupFamily::DeepSeekV3Stripped),
         (
-            "unparsed_deepseek_v3_stripped",
-            MarkupFamily::DeepSeekV3Stripped,
-        ),
-        (
-            "unparsed_name_arguments_stripped",
+            "stripped_name_arguments",
             MarkupFamily::NameArgumentsStripped,
         ),
         ("unparsed_mistral_v3_not_allowed", MarkupFamily::MistralV3),
@@ -4350,7 +4474,26 @@ fn unparsed_markup_is_reported() {
         ("unparsed_hermes_not_allowed", MarkupFamily::Hermes),
         ("unparsed_kimi_not_allowed", MarkupFamily::KimiK2),
     ] {
-        let (_, result) = golden(name);
+        let (golden, result) = golden(name);
+        // These primary fixtures now record supported derived grammars.
+        // This assertion keeps their allow-list exclusion behavior explicit.
+        let excluded = matches!(
+            family,
+            MarkupFamily::KimiK2Stripped
+                | MarkupFamily::HarmonyStripped
+                | MarkupFamily::DeepSeekV3Stripped
+                | MarkupFamily::NameArgumentsStripped
+        );
+        let result = if excluded {
+            let allowed =
+                DialectSet::new([DialectId::Hermes], &mut Governor::new(Budget::default()))
+                    .expect("native-only allow-list");
+            golden
+                .tools
+                .recover(&golden.input, &golden.request, &allowed)
+        } else {
+            result
+        };
         let calls = reading(&result);
         assert!(calls.calls.is_empty(), "{name}");
         assert_eq!(calls.finish, Finish::Unresolved, "{name}");
@@ -4361,9 +4504,21 @@ fn unparsed_markup_is_reported() {
             .collect();
         assert_eq!(reported.len(), 1, "{name}: {:#?}", calls.rejected);
         let rejected = reported[0];
+        if excluded {
+            assert_eq!(rejected.span, 0..golden.input.len(), "{name}");
+            assert_eq!(rejected.raw, golden.input, "{name}");
+        }
         assert_eq!(rejected.dialect, family.dialect(), "{name}");
-        assert!(rejected.candidate_dialects.is_empty(), "{name}");
-        assert_eq!(family.built_in(), name.ends_with("_not_allowed"), "{name}");
+        let candidates: &[DialectId] = if family == MarkupFamily::NameArgumentsStripped {
+            &[
+                DialectId::DeepSeekV31Stripped,
+                DialectId::MistralV11Stripped,
+            ]
+        } else {
+            &[]
+        };
+        assert_eq!(rejected.candidate_dialects, candidates, "{name}");
+        assert!(family.built_in(), "{name}");
         // The bytes stay content.
         assert!(
             calls
@@ -4844,7 +4999,60 @@ fn reasoning_never_swallows_calls() {
         let (fixture, result) = golden(&name);
         let calls = reading(&result);
         assert!(calls.calls.is_empty(), "{name}");
-        assert_eq!(calls.embedded.len(), 1, "{name}");
+        if matches!(dialect, "bare_json" | "anthropic") {
+            let native = if dialect == "bare_json" {
+                DialectId::BareJson
+            } else {
+                DialectId::AnthropicToolUse
+            };
+            assert_eq!(calls.embedded.len(), 2, "{name}: preserve both frames");
+            assert!(calls.embedded.iter().any(|call| call.dialect == native));
+            assert!(calls.embedded.iter().any(|call| {
+                call.dialect == DialectId::HermesStripped
+                    && rules_of(call).contains(&"tool_call.extract.prose")
+            }));
+
+            // Source framing must not turn Repaired extraction into the
+            // Closed-only equality preference or lose the native object.
+            let mut governor = Governor::new(Budget::default());
+            let mut recognizer = Recognizer::new(
+                DialectSet::built_in(),
+                ReasoningPolicy::Separate { starts_open: true },
+                &mut governor,
+            )
+            .expect("fixture recognizer");
+            recognizer
+                .push(&fixture.input, &mut governor)
+                .expect("fixture input");
+            let turn = recognizer
+                .finish(GenerationStop::Stop, &mut governor)
+                .expect("closed reasoning");
+            let block = turn
+                .selected()
+                .into_iter()
+                .find_map(|segment| match segment {
+                    Segment::Reasoning(block) => Some(block),
+                    _ => None,
+                })
+                .expect("reasoning block");
+            let mut raw = block.embedded.iter().flat_map(|call| &call.readings);
+            let exact = raw
+                .clone()
+                .find(|reading| reading.dialect == native)
+                .expect("native object");
+            let projected = raw
+                .find(|reading| reading.dialect == DialectId::HermesStripped)
+                .expect("projected reading");
+            assert_eq!(exact.closure, Closure::Closed, "{name}");
+            assert_eq!(projected.closure, Closure::Repaired, "{name}");
+            assert_eq!(
+                &fixture.input[projected.span.start..exact.span.start],
+                b"hmm "
+            );
+            assert_eq!(&fixture.input[exact.span.end..projected.span.end], b" ");
+        } else {
+            assert_eq!(calls.embedded.len(), 1, "{name}");
+        }
         let end = fixture.input.len() - "Answer.".len();
         assert_eq!(calls.reasoning, only(0..end), "{name}: ends after </think>");
         assert_eq!(calls.content, only(end..fixture.input.len()), "{name}");

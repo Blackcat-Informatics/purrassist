@@ -123,7 +123,7 @@
     "helper_calls": 0
   },
   "usage": {
-    "work": 3310,
+    "work": 3206,
     "candidates": 3,
     "peak_scratch_bytes": 10222,
     "total_scratch_charged": 15937,
