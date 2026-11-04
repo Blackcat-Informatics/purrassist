@@ -3967,7 +3967,7 @@ impl<'s> Recognizer<'s> {
 type ExampleRegions = (Vec<Range<usize>>, Vec<Range<usize>>);
 
 /// The selection boundary that owns admission of distinct segmentations.
-pub(crate) enum PathAdmission {
+pub(super) enum PathAdmission {
     /// Native recognition publishes these paths directly.
     Native,
     /// Recovery folds equivalent resolved framing before its product gate.

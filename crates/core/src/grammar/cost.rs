@@ -37,7 +37,8 @@
 //!
 //! `Candidates` counts only readings that genuinely compete for selection:
 //! every distinct reading of a completed segment beyond its first, and every
-//! distinct segmentation of a contested span (charged by the recognizer).
+//! distinct segmentation of a contested span (admitted at native publication,
+//! or after semantic framing folds during recovery).
 //! A dialect attempt that dies on its own, and repairs the error search
 //! explores and discards, charge `Work` and `ScratchBytes` but no
 //! `Candidates`, so allowing more dialects never spends candidates on

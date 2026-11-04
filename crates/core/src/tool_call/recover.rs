@@ -3154,6 +3154,7 @@ struct IntakeSetup<'s> {
 
 /// Publication proof produced only by a successful captured and interpreted byte.
 /// Its boundary replaces the ordinary cutoff scalar in the publication phase.
+#[derive(Clone, Copy)]
 struct CompletedByte {
     utf8: usize,
 }

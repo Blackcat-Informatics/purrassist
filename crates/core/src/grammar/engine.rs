@@ -5547,6 +5547,13 @@ impl<'s> Engine<'s> {
             self.next_attempt += 1;
             self.continuation_floor = ContinuationFloor::Invalid;
             self.ownership = None;
+            if self.ownership_active {
+                // A new lexical seed invalidates the candidate-only induction.
+                // No ownership reader runs inside a table step; its first merge
+                // publishes exact floors before the completed byte is exposed.
+                governor.charge(Resource::Work, 1)?;
+                self.tables[table].thread_ownership.0 = Some(at);
+            }
             self.tables[table].attempts.push(Attempt {
                 id,
                 start: at,
@@ -5755,6 +5762,37 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if self.ownership_active {
+            if live.len() >= 3 {
+                governor.charge(Resource::Work, 1)?;
+                if let (None, Some(start)) = self.tables[table].thread_ownership
+                    && let [owner] = self.tables[table].attempts.as_slice()
+                    && owner.start == start
+                {
+                    // All previous survivors were candidate-only. Ordinary
+                    // transitions preserve that fact, and new lexical seeds
+                    // invalidate it above. Held failures may restore lexical
+                    // states later, so this proof applies only to this merge.
+                    const OWNER_BYTES: u64 = 48;
+                    const _: () = assert!(
+                        core::mem::size_of::<(u64, usize, ScratchLease, Option<usize>)>()
+                            <= OWNER_BYTES as usize
+                    );
+                    let _owner = governor.lease_scratch(OWNER_BYTES)?;
+                    governor.charge(Resource::Work, 2)?;
+                    let id = owner.id;
+                    if live[0].attempt != id || live[0].start != start {
+                        return Err(invalid_input(
+                            "candidate-only cohort differs from its sole attempt",
+                        ));
+                    }
+                    merge(live, &mut self.arena, governor)?;
+                    self.publish_thread_ownership(
+                        table,
+                        (None, (!live.is_empty()).then_some(start)),
+                    );
+                    return Ok(());
+                }
+            }
             let mut owned = (None, None);
             governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
             merge_noting(live, &mut self.arena, governor, |thread| {

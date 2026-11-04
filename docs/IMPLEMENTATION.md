@@ -561,6 +561,14 @@ membership implication; genuine opener completion checks remain unchanged. These
 changes remove computation without changing parser anchors or resource limits.
 Compilation, runtime savings and fixed-budget acceptance remain pending automatic CI.
 
+The first native merge can also reuse a candidate-only ownership proof for a
+single-attempt cohort. New lexical seeds invalidate that proof before insertion.
+For sufficiently large cohorts, ordinary merging still runs, then publishes the
+same sole candidate origin without another survivor census. The temporary owner
+descriptor and actual checks are admitted. Later repair merges retain their full
+censuses because held failures can restore lexical states. One-thread cohorts
+retain their existing admission path. Runtime benefit remains pending automatic CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.
