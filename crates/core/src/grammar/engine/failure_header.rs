@@ -293,6 +293,12 @@ impl Engine<'_> {
                 header = next;
                 seen = true;
             }
+            // Every remaining contributor intersects this same proof. Once
+            // absent, no read-only certification can restore it.
+            governor.charge(Resource::Work, 1)?;
+            if header.is_none() {
+                break;
+            }
         }
         self.retain_failure_header(record.id, first, end, header, governor)?;
         Ok(None)

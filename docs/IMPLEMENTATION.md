@@ -2,6 +2,12 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Selected failed-header certification stops once its complete intersection is
+absent. Later read-only contributors cannot restore that proof; selection,
+source extent, native frame ownership and prior-selection intersection retain
+their existing persistence path. The absorbing-result probe admits its work.
+Runtime and resource qualification remain pending automatic CI.
+
 A current-byte zero-frontier reuse certificate also preserves the preceding
 successful publication's normalized boundary, progress and event checkpoint.
 Intake omits those repeated no-op projections while still refreshing ownership
