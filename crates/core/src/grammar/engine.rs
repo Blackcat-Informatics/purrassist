@@ -743,16 +743,15 @@ impl<'s> Step<'_, 's> {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<(DfaState, bool), StopReason> {
-        // Row lookup, bucket selection, canonical state-word and byte
-        // equality, and result handoff replace the former field comparisons.
-        governor.charge(Resource::Work, 6)?;
+        // The exact byte addresses its own cell: no bucket mask or byte tag
+        // comparison remains. Row lookup, state equality and handoff stay paid.
+        governor.charge(Resource::Work, 4)?;
         let index = class_step_slot(byte);
         let steps = self.class_steps[class as usize]
             .as_ref()
             .ok_or_else(|| invalid_input("native class has no initialized transition cache"))?;
         if let Some(cached) = steps[index]
             && cached.state == state
-            && cached.byte == byte
         {
             return Ok((cached.stepped, cached.dead));
         }
@@ -765,7 +764,6 @@ impl<'s> Step<'_, 's> {
             .expect("the native class cache was validated before its DFA query");
         steps.as_mut_slice()[index] = Some(ClassStep {
             state,
-            byte,
             stepped,
             dead,
         });
@@ -5290,7 +5288,6 @@ enum Verdict {
 #[derive(Clone, Copy)]
 struct ClassStep {
     state: DfaState,
-    byte: u8,
     stepped: DfaState,
     dead: bool,
 }
@@ -5302,9 +5299,9 @@ impl ScratchCharge for Option<ClassStep> {
     };
 }
 
-/// Fixed direct-mapped rows retain full state and byte tags. A collision only
-/// replaces a successful entry; the next different query uses the native DFA.
-const CLASS_STEP_BUCKETS: usize = 16;
+/// Every byte has its own cell; full state tags still select native fallback
+/// when that byte is queried from a different derivative state.
+const CLASS_STEP_BUCKETS: usize = 256;
 type ClassSteps = Option<ScratchVec<Option<ClassStep>>>;
 
 impl ScratchCharge for ClassSteps {
@@ -5329,7 +5326,7 @@ const _: () = assert!(
 );
 
 fn class_step_slot(byte: u8) -> usize {
-    usize::from(byte) & (CLASS_STEP_BUCKETS - 1)
+    usize::from(byte)
 }
 
 struct GrammarRuntime<'s> {

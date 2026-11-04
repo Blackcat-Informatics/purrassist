@@ -722,11 +722,7 @@ impl Engine<'_> {
             let Some(cached) = steps[super::class_step_slot(byte)] else {
                 return Ok(false);
             };
-            if cached.byte != byte
-                || cached.dead
-                || cached.state != state
-                || cached.stepped != state
-            {
+            if cached.dead || cached.state != state || cached.stepped != state {
                 return Ok(false);
             }
             if !current.program.name_follower_index.is_empty() {

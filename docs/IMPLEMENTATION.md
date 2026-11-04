@@ -53,14 +53,15 @@ Contested spans admit their remaining paths individually before the existing
 whole-message product gate. Standalone native admission remains unchanged.
 Runtime, refusal-order and resource qualification remain pending automatic CI.
 
-Native class queries retain sixteen exact successful transition/deadness entries
-per initialized class, indexed by the low byte bits with full state and byte tags.
-Collisions use the original native query. DFA and governed row construction
-publish together; unused classes allocate no row, and rows survive arena resets
-for the lifetime of their native DFA. Byte proofs inspect the same selected
-entry and keep every existing self-loop guard. Query and initialization work,
-row capacity and construction controls remain admitted. Runtime and resource
-qualification remain pending automatic CI.
+Native class queries retain one exact transition/deadness cell for each of the
+256 input bytes per initialized class. The byte directly addresses its cell;
+full canonical state tags retain native fallback for other states. Bucket masking
+and byte-tag comparison are removed, while lookup and result handoff remain
+admitted. DFA and governed row construction publish together; unused classes
+allocate no row, and rows survive arena resets with their DFA. Byte proofs
+inspect the same cell and retain their remaining guards and admission. Cold
+initialization and full row capacity are paid before publication. Runtime and
+resource qualification, including short and tight-budget callers, remain pending CI.
 
 An unchanged native frontier pinned at source zero retains its complete prior
 projection and settled history after the ordinary engine-floor query succeeds.

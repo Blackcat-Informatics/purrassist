@@ -184,22 +184,26 @@ steps; a successful borrow does not allocate or readmit the prepared bytes.
 
 ### Repeated runtime class queries
 
-Each grammar's operation-owned class runtime retains one successful
-transition/deadness query per class. The key includes the full native DFA state
-and input byte: term identity, matched and zero-width context flags, and the
-complete UTF-8 decoding position. Class sessions append derivative terms without
-remapping existing IDs, so later session growth cannot change a saved answer.
-Call and result tables share their grammar's existing class sessions and cache.
+Each initialized class in a grammar's operation-owned runtime retains 256 cells,
+one for each input byte. The byte directly addresses its cell; the full native
+DFA state remains the tag: term identity, matched and zero-width context flags,
+and the complete UTF-8 decoding position. Class sessions append derivative terms
+without remapping IDs, so later growth cannot change a saved answer. Call and
+result tables share their grammar's existing class sessions and cache.
 
-A fixed twelve Work units admit each cache query. A miss runs the original DFA
-transition and deadness checks with their existing admission; only their joint
-success updates the cache. Errors and governor state are never cached. Accepting
-state checks, literal-boundary alternatives, capture boundaries and every
-permitted opener remain on the original production path.
+Four Work units admit each cache query after removing bucket masking and the
+redundant byte-tag comparison. A state miss runs the original DFA transition and
+deadness checks with their existing admission; only joint success updates the
+cell. Errors and governor state are never cached. Accepting state checks,
+literal-boundary alternatives, capture boundaries and every permitted opener
+remain on the original production path.
 
-The fallible cache vector admits initialization Work and all reserved slots,
-including empty and spare slots, at a portable 64 bytes per slot. Its storage
-releases when the engine drops, including construction or processing refusal.
+The fallible row admits initialization Work and every reserved cell, including
+empty and spare cells, at a portable 64 bytes per cell: 16,384 bytes per
+initialized class. Unused classes allocate no row. Row and DFA construction
+publish together only after both succeed. Storage releases when the engine drops,
+including construction or processing refusal. Larger cold admission is a runtime
+tradeoff; current short-input and tight-budget qualification remains pending CI.
 The grammar runtime metadata uses its own fallible scratch vector, with portable
 96-byte rows covering the added owner handle and all reserved metadata slots.
 The existing table and DFA-slot vectors retain their earlier allocation paths;
