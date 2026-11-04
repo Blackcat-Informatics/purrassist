@@ -4371,7 +4371,7 @@ enum HeldBody {
 struct Trail {
     /// The completed configuration; `pos` is the call's current end.
     thread: Thread,
-    /// The stray-closer trie node of the spelling being matched.
+    /// Stray-closer trie node before `scan`, wrapper-tail matcher state afterward.
     node: u32,
     /// The next byte to examine.
     at: usize,
@@ -6342,6 +6342,7 @@ impl<'s> Engine<'s> {
                 if self.ended_by_insertion(trail.thread.hist, governor)? {
                     trail.scan = Some(Scan { text: None });
                     trail.at = trail.thread.pos;
+                    trail.node = ROOT;
                 }
             }
             if trail.scan.is_some() {
@@ -6479,8 +6480,8 @@ impl<'s> Engine<'s> {
     /// Until then the completion is held, and with it its attempt (so the
     /// capture window keeps its bytes, charged as scratch) and every turn
     /// report after the call's end ([`Self::held_floor`]): the decision
-    /// never depends on how the output is chunked. Each byte read charges
-    /// `Work` per literal compared.
+    /// never depends on how the output is chunked. Each byte admits one
+    /// native wrapper-tail matcher step before reading or advancing it.
     fn scan_trail(
         &self,
         table: usize,
@@ -6490,41 +6491,21 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<Verdict, StopReason> {
         let grammar = self.grammars[self.tables[table].grammar].grammar;
-        let program = self.tables[table].program;
-        let openers: Vec<&[u8]> = program
-            .openers
-            .iter()
-            .filter_map(|&pc| match program.insts[pc as usize] {
-                Inst::Lit { lit, .. } => Some(grammar.literals[lit as usize].bytes.as_slice()),
-                _ => None,
-            })
-            .collect();
-        let closers: Vec<&[u8]> = grammar
-            .closers
-            .iter()
-            .flat_map(|class| {
-                class
-                    .spellings
-                    .iter()
-                    .map(crate::contract::ScratchVec::as_slice)
-            })
-            .collect();
-        // A reasoning block's opening marker: the block's bytes belong to
-        // the block, never to the wrapper (see `Recognizer::ended`).
-        let markers: Vec<&[u8]> = grammar
-            .reasoning
-            .iter()
-            .map(|(open, _)| open.as_slice())
-            .collect();
-        let compared = size(openers.len() + closers.len() + markers.len()).saturating_mul(K_THREAD);
+        let scanner = &grammar.trail_matchers[match self.tables[table].kind {
+            ProductionKind::Call => 0,
+            ProductionKind::Result => 1,
+        }];
         let Some(mut scan) = trail.scan else {
             return Ok(Verdict::Report);
         };
         while trail.at < until {
-            governor.charge(Resource::Work, compared)?;
+            governor.charge(Resource::Work, K_THREAD)?;
             let at = trail.at;
             let byte = self.buffer.as_slice()[at - self.base];
             trail.at += 1;
+            // Suffix bytes still belong to the scanned input even when the
+            // protocol-line state suppresses a token decision on this byte.
+            trail.node = scanner.matcher.step(trail.node, byte);
             if let Some((token_end, mut suffix)) = trail.fence {
                 match suffix.step(byte) {
                     LineDecision::More => {
@@ -6541,26 +6522,19 @@ impl<'s> Engine<'s> {
             if scan.text.is_none() && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
                 scan.text = Some(at);
             }
-            let read = &self.buffer.as_slice()[trail.thread.pos - self.base..trail.at - self.base];
-            if let Some(opener) = openers
-                .iter()
-                .chain(&markers)
-                .find(|opener| read.ends_with(opener))
-            {
-                // Another call, or a reasoning block, after the call: the
-                // inserted closer is the only reading when only whitespace
-                // came between, and text before it is a guess as before.
-                let start = trail.at - opener.len();
-                return Ok(scan.before(start, Verdict::Guess));
-            }
-            if let Some(closer) = closers.iter().find(|closer| read.ends_with(closer)) {
+            if let Some((index, length)) = scanner.matcher.found(trail.node) {
+                let start = trail.at - length as usize;
+                if index < scanner.positives {
+                    // Another call or a local reasoning opener takes native
+                    // priority over every closer ending on this same byte.
+                    return Ok(scan.before(start, Verdict::Guess));
+                }
                 if self.protocol_trail_spelling(table, trail.at) {
                     trail.fence = Some((trail.at, LineSuffix::Horizontal));
                     continue;
                 }
                 // A closer after only whitespace is the wrapper's own,
                 // beyond the stray-closer gap: the call as it was read.
-                let start = trail.at - closer.len();
                 return Ok(scan.before(start, Verdict::Reject));
             }
         }

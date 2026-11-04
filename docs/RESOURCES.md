@@ -2258,6 +2258,45 @@ prepared dialect set. Byte-prefix length is iterative and has no 128-byte
 recursion ceiling. Duplicate labels, earliest-ending matches and longest-match
 priority keep their original meaning.
 
+Inserted-wrapper lookahead uses two additional immutable matchers, one for each
+final call/result program. Its token order is the canonical program openers,
+local reasoning openers, then every declared closer spelling, preserving order
+within each group. This caller selects the first original token among all
+suffixes ending on a byte, including when that token is shorter than another
+match. Shared trie insertion retains the first duplicate label; a construction
+projection propagates the smallest label along failure links. Ordinary delimiter
+and marker callers keep their existing longest-match policy and admissions.
+
+Each retained wrapper matcher reserves 152 portable metadata bytes for its real
+matcher, opener cutoff and lease; table buffers retain their own reservations.
+Preparation separately reserves 256 bytes for the actual caller frame, borrowed
+token vector owner, input/return carriers and lease. Borrowed tokens reserve
+16 bytes each; their source lookup and push each admit one Work, with actual live
+relocation admitted on growth. Cutoff conversion admits one Work. The ordered
+constructor reserves 656 additional metadata bytes covering its real sparse-trie
+and dense-builder phases: goto, transitions, depths, failure links, matches, queue,
+iterators, cursors, scalars, borrows and return carriers. Complete typed phase
+assertions cover these records, including temporary trie nodes and initialization
+iterators. Both new caller metadata reservations and the private construction
+reservation admit one Work each. Existing constructor scans, initialization,
+lookups and growth remain admitted; priority projection adds three Work per
+breadth-first state before reading, selecting and publishing its suffix result.
+No complete table buffer is copied. A first finished matcher stays charged while
+the second builds, and every partial owner releases on refusal. Construction uses
+the original grammar compilation budgets, including built-in preparation.
+
+The runtime replaces per-call spelling-vector construction and per-byte literal
+suffix comparisons with one admitted native matcher step per consumed lookahead
+byte. The existing trail node stores the stray-closer state before wrapper
+lookahead and its matcher state afterward; the native rewind resets it to the
+root. Protocol suffix bytes still advance the matcher even when line validation
+suppresses a decision. Whitespace/text classification, token priority, stray
+absorption, fence verdicts, EOF handling, histories and source ownership keep their
+native paths. No new trail field or buffer is retained. Existing focused matcher
+coverage distinguishes first-token suffix priority from ordinary longest matching.
+Held-report, wrapper, stray-closer, protocol and chunk cases retain their original
+limits; runtime and preset qualification of this change remains pending.
+
 `DialectSet` and `Matcher` no longer deep-clone. The cached built-in set returns
 a static borrow; custom sets remain owned by the caller. `ToolRecoveryRequest`
 contains owned cloneable policy/budget settings, while `ToolSet::recover` and
