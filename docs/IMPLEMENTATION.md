@@ -2,6 +2,13 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+A current-byte zero-frontier reuse certificate also preserves the preceding
+successful publication's normalized boundary, progress and event checkpoint.
+Intake omits those repeated no-op projections while still refreshing ownership
+against the current UTF-8 cursor. First publication and turn mutations use the
+full path; publication refusal abandons interpretation. The selection control
+is admitted explicitly. Runtime and resource qualification remain pending CI.
+
 Ordinary native table steps publish byte-ready terminals directly to their
 immediately merged live cohort, omitting a stack round trip and its redundant
 dispatch. Active replay work retains LIFO order; the existing full key, rank and

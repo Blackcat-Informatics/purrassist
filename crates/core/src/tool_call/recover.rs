@@ -3176,7 +3176,7 @@ enum BoundaryKind {
     Content,
     Ownership,
 }
-const INTAKE_OWNERSHIP_BYTES: usize = 112;
+const INTAKE_OWNERSHIP_BYTES: usize = 128;
 // The classified boundary now survives recognition before its publication.
 const _: () = assert!(
     core::mem::size_of::<(
@@ -3184,7 +3184,8 @@ const _: () = assert!(
         [usize; 3],
         CompletedByte,
         ByteOwnership,
-        ScratchLease
+        ScratchLease,
+        bool,
     )>() <= INTAKE_OWNERSHIP_BYTES
 );
 
@@ -3380,13 +3381,22 @@ impl<'s> RecoveryIntake<'s> {
         progress: &mut impl FnMut(ContinuationFrontier),
         content: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
-        let mut frontier = self
+        let recognizer = &self
             .setup
             .as_ref()
             .expect("live interpretation owns a recognizer")
-            .recognizer
-            .continuation_frontier();
+            .recognizer;
         let utf8 = completed.utf8;
+        governor.charge(Resource::Work, 1)?;
+        if recognizer.reused_zero_frontier() {
+            // The preceding successful byte published this same frontier and
+            // actual settled history. Any publication refusal abandons setup.
+            // Source appends and UTF-8 carry cannot change coordinate zero,
+            // so boundary/progress/event-key recomputation would be a no-op.
+            // Counter ownership still observes this byte's complete state.
+            return self.refresh_ownership(utf8, (0, 0), None, governor);
+        }
+        let mut frontier = recognizer.continuation_frontier();
         let prefix = frontier.prefix_end.min(utf8);
         frontier.prefix_end =
             self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix, governor)?;

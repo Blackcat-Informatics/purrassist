@@ -2232,6 +2232,15 @@ impl<'s> Recognizer<'s> {
         self.frontier
     }
 
+    /// The current successful byte reused its complete zero-limit projection,
+    /// including the actual settled history. Only `update_frontier`'s zero reuse
+    /// leaves the marker floor deferred; first publication and every turn
+    /// mutation instead take the full projection path.
+    pub(super) fn reused_zero_frontier(&self) -> bool {
+        self.frontier_memo
+            .is_some_and(|memo| memo.lexical.is_none())
+    }
+
     /// Prepare candidate accounting before any report can enter the queue.
     /// Standalone recognition has no consumer for the candidate-only index.
     pub(super) fn prepare_ownership(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
