@@ -299,6 +299,7 @@ pub mod legacy;
 
 #[test]
 fn legacy_jsonld_schema_and_openapi_goldens_from_previous_pin_are_unchanged() {
+    use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
     use purrdf_shapes::json_schema::{SchemaCompileRequest, SchemaSurfaceMode, compile_schema};
     let shapes = purrdf_shapes::engine::parse_shapes(legacy::SHAPES, None).unwrap();
     let ontology =
@@ -314,7 +315,9 @@ fn legacy_jsonld_schema_and_openapi_goldens_from_previous_pin_are_unchanged() {
         ontology.as_ref(),
         SchemaSurfaceMode::ShapedOnly,
     );
-    let compiled = compile_schema(&request).expect("original public JSON-LD compiler");
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let compiled =
+        compile_schema(&request, &mut control).expect("original public JSON-LD compiler");
     assert_eq!(compiled.compiled.schema_json, legacy::SCHEMA);
     assert_eq!(compiled.compiled.openapi_json, legacy::OPENAPI);
 }
