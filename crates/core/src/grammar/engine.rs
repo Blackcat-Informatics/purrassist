@@ -4837,6 +4837,15 @@ impl<'s> Engine<'s> {
         merge(&mut live, &mut self.arena, governor)?;
         let mut completed = core::mem::replace(&mut self.out.completed, ScratchVec::new(governor));
         let mut failed = core::mem::replace(&mut self.out.failed, ScratchVec::new(governor));
+        let program = self.tables[table].program;
+        if eof.is_none()
+            && program.grouped
+            && !program.deferred()
+            && self.settle_resync(table, &live, &completed, &failed, governor)?
+        {
+            self.tables[table].threads = live;
+            return Ok(());
+        }
         self.stall(table, &mut failed, governor)?;
         // A literal that failed while a sibling configuration of its
         // attempt, begun at the same place or earlier, lived on (the
@@ -4921,7 +4930,22 @@ impl<'s> Engine<'s> {
         }
         self.hold_failures(table, &failed, &live, governor)?;
         self.merge_settled(table, at, eof, &mut live, &mut completed, governor)?;
-        self.unstick(table, &live, governor)?;
+        self.finish_settlement(table, at, eof, &mut live, &mut completed, governor)?;
+        self.tables[table].threads = live;
+        Ok(())
+    }
+
+    /// Finish native settlement after the repair and merge passes.
+    fn finish_settlement(
+        &mut self,
+        table: usize,
+        at: usize,
+        eof: Option<&GenerationStop>,
+        live: &mut ScratchVec<Thread>,
+        completed: &mut ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.unstick(table, live, governor)?;
         // A repair may carry an attempt past its commit, and a completion
         // always commits its attempt.
         if self.tables[table].program.deferred() {
@@ -4932,23 +4956,109 @@ impl<'s> Engine<'s> {
             )?;
             let opened = self.open(table, governor)?;
             let keep = self.last_written(table, opened, governor)?;
-            Self::stop_past(&mut live, opened, &keep, governor)?;
+            Self::stop_past(live, opened, &keep, governor)?;
             if opened.is_some() && self.ownership_active {
                 let mut owned = (None, None);
                 governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
-                for thread in &live {
+                for thread in live.as_slice() {
                     note_ownership(&mut owned, thread);
                 }
-                if self.tables[table].thread_ownership != owned {
-                    self.ownership = None;
-                }
-                self.tables[table].thread_ownership = owned;
+                self.publish_thread_ownership(table, owned);
             }
         }
-        self.complete(table, &mut completed, eof, governor)?;
-        self.retire(table, &live, at, eof, governor)?;
-        self.tables[table].threads = live;
-        Ok(())
+        self.complete(table, completed, eof, governor)?;
+        self.retire(table, live, at, eof, governor)
+    }
+
+    /// A merged resynchronization cohort with no remaining settlement effects.
+    fn settle_resync(
+        &mut self,
+        table: usize,
+        live: &ScratchVec<Thread>,
+        completed: &ScratchVec<Thread>,
+        failed: &ScratchVec<Failure>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        // Admit dynamic selection, even when an ordinary body rejects it.
+        governor.charge(Resource::Work, 1)?;
+        if !self.ownership_active || live.len() < 3 || !matches!(live[0].sub, Sub::Resync(..)) {
+            return Ok(false);
+        }
+        let first = live[0];
+        // Bounded attempt/boundary and current output/side-owner metadata.
+        governor.charge(Resource::Work, 1)?;
+        let entry = first.entry;
+        let rejected = Some(Rejection::Malformed { at: entry });
+        let source = &self.tables[table];
+        let ([record], [boundary]) = (source.attempts.as_slice(), source.boundaries.as_slice())
+        else {
+            return Ok(false);
+        };
+        if record.id != first.attempt
+            || record.start != first.start
+            || !record.opened
+            || record.completed
+            || record.closed.is_some()
+            || record.stuck
+            || record.failure_end != FailureEnd::Resynced
+            || record.failure != rejected
+            || record.end != Some(entry)
+            || boundary.attempt != record.id
+            || boundary.at != record.start
+            || boundary.failed != entry
+            || boundary.entry != entry
+            || Some(boundary.reason) != rejected
+            || !completed.is_empty()
+            || !failed.is_empty()
+            || !self.out.opened.is_empty()
+            || !source.trails.is_empty()
+            || !source.held.by_attempt.is_empty()
+            || source.held.floor.is_some()
+            || !source.past.is_empty()
+            || !source.written.is_empty()
+            || !source.stalled.is_empty()
+            || !source.failures.groups.is_empty()
+        {
+            return Ok(false);
+        }
+        let (attempt, start) = (record.id, record.start);
+        // No skipped outcome or newer opener can affect the suffix.
+        governor.charge(Resource::Work, 1)?;
+        if !self.resynced.is_empty() || self.newest_open > entry {
+            return Ok(false);
+        }
+        let fed = self.fed;
+        for thread in live {
+            governor.charge(Resource::Work, 1)?;
+            if thread.attempt != attempt
+                || thread.start != start
+                || thread.entry != entry
+                || !matches!(thread.sub, Sub::Resync(..))
+                || !thread.opened
+                || thread.ownership != 2
+                || thread.past
+                || thread.pending != 0
+                || thread.pos != fed
+                || thread.reach != thread.pos
+                || thread.stall != 0
+            {
+                return Ok(false);
+            }
+        }
+        // The first merge already sorted/deduplicated these actual winners.
+        // Empty repair/completion inputs cannot change them before the second
+        // merge, and every candidate has the same verified source origin.
+        governor.charge(Resource::Work, 1)?;
+        self.publish_thread_ownership(table, (None, Some(start)));
+        Ok(true)
+    }
+
+    /// Publish a table's exact phase minima, preserving global cache validity.
+    fn publish_thread_ownership(&mut self, table: usize, owned: OwnershipFloors) {
+        if self.tables[table].thread_ownership != owned {
+            self.ownership = None;
+            self.tables[table].thread_ownership = owned;
+        }
     }
 
     /// Merge `live`, then repair the stalled failures its merge shows are
@@ -4988,9 +5098,8 @@ impl<'s> Engine<'s> {
                 merge(live, &mut self.arena, governor)?;
             }
         }
-        if tracking && self.tables[table].thread_ownership != owned {
-            self.ownership = None;
-            self.tables[table].thread_ownership = owned;
+        if tracking {
+            self.publish_thread_ownership(table, owned);
         }
         Ok(())
     }

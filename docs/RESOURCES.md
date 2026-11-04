@@ -1175,6 +1175,40 @@ never query ownership perform no unused thread-minimum reductions; native phase
 propagation, merging, repair and interpretation still run. Pending candidate
 reports use the candidate lane of the shared typed source index above.
 
+Ordinary grouped programs without deferred commits can settle a resynchronizing
+cohort after the native byte interpreter and first merge have already run. The
+first qualification Work precedes every new dynamic ownership, winner count or
+mode lookup; inactive ownership, fewer than three winners or another mode returns
+to ordinary settlement. A second Work checks the sole opened, incomplete,
+unstuck resynchronized first-call attempt and matching malformed boundary, empty
+current failure/completion/opening outputs, and absent trail, held, past, written,
+stalled and held-failure owners. These are bounded row, length and flag checks,
+with no collection traversal. A third Work requires no recorded skipped outcome
+and no newer opener beyond the failed entry, avoiding global metadata scans.
+
+Each actual winner guard admits one Work and verifies its common attempt, source
+start and failed entry, resynchronization mode, candidate phase and current cursor
+flags. Only a complete successful qualification admits one final Work to publish
+fresh exact thread minima through the normal pair-change invalidation. The first
+merge already made these current winners unique; empty repair/completion inputs
+cannot change them before the second merge. Skipping that idempotent merge and
+per-winner phase reduction therefore retains every target PC, history, cost,
+rank and continuation. Native cursor, quote, escape and token processing have
+already executed. There are no new cursor stores, vector clears, buffers or
+retained cache fields. The usual thread-owner epilogue and local drops remain.
+EOF and every failed eligibility predicate use ordinary settlement; a governor
+refusal propagates without fallback.
+
+For `T` verified winners, successful suffix qualification/publication admits
+`4 + T` Work in place of the second merge and phase reductions' `3 * T`.
+Rejected qualification costs one, two or three fixed Work plus each winner
+actually inspected, before the unchanged native suffix executes. In particular,
+a valid grouped argument body pays the first rejection Work. This actual fallback
+cost remains part of the receipt; no workload or preset success follows from the
+successful-cohort arithmetic alone. Existing DeepSeek argument, resynchronization,
+D7 ownership/chunk and corpus cases retain their limits and expected behavior;
+automatic runtime qualification of this shortcut remains pending.
+
 After a completed byte fold, intake admits three Work to check that retained
 source length and recognizer consumption equal the current input length, and that
 pending UTF-8 bytes end exactly there. The encoding cursor's publication cap is
