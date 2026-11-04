@@ -5515,22 +5515,7 @@ impl<'s> Engine<'s> {
             if eof.is_none() {
                 self.resync(table, record, until, &mut live, governor)?;
             }
-            if let Some((first, end)) = pending_header {
-                governor.charge(Resource::Work, 6)?;
-                let current = &self.tables[table];
-                let terminal = live.is_empty()
-                    && completed.is_empty()
-                    && current.trails.is_empty()
-                    && current.stalled.is_empty()
-                    && current.past.is_empty()
-                    && current.held.by_attempt.is_empty();
-                // No later settlement producer can revive an owner when
-                // all six sources are empty. Any possible continuation
-                // keeps its sticky negative selection before commit.
-                if !terminal {
-                    self.retain_failure_header(record.id, first, end, None, governor)?;
-                }
-            }
+            self.finish_unopened_header(table, &live, &completed, pending_header, governor)?;
         }
         self.hold_failures(table, &failed, &live, governor)?;
         // Without intervening changes or stalled repairs, the first merge

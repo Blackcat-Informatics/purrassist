@@ -3,7 +3,7 @@
 
 //! Selected failed-body facts, completed before histories and source retire.
 
-use super::{Attempt, Engine, Failure, FailureOrigin, HistKind, Inst, Sub};
+use super::{Attempt, Engine, Failure, FailureOrigin, HistKind, Inst, Sub, Thread};
 use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchMap, ScratchVec, StopReason, invalid_input,
     push_scratch, saturating_size as size,
@@ -298,8 +298,36 @@ impl Engine<'_> {
         Ok(None)
     }
 
+    /// Complete a borrowed negative selection after actual repair and resynchronization.
+    pub(super) fn finish_unopened_header(
+        &mut self,
+        table: usize,
+        live: &[Thread],
+        completed: &[Thread],
+        pending: Option<(&Failure, usize)>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Some((first, end)) = pending else {
+            return Ok(());
+        };
+        governor.charge(Resource::Work, 6)?;
+        let current = &self.tables[table];
+        let terminal = live.is_empty()
+            && completed.is_empty()
+            && current.trails.is_empty()
+            && current.stalled.is_empty()
+            && current.past.is_empty()
+            && current.held.by_attempt.is_empty();
+        // No later settlement producer can revive an owner when all six
+        // sources are empty. The caller selected failures by this attempt ID.
+        if !terminal {
+            self.retain_failure_header(first.thread.attempt, first, end, None, governor)?;
+        }
+        Ok(())
+    }
+
     /// One persistence path for proved headers and surviving negative selections.
-    pub(super) fn retain_failure_header(
+    fn retain_failure_header(
         &mut self,
         attempt: u64,
         first: &Failure,
