@@ -713,7 +713,11 @@ impl Engine<'_> {
                 return Ok(false);
             }
             previous = Some(thread.key());
-            let Some(cached) = runtime.class_steps[class as usize] else {
+            governor.charge(Resource::Work, 1)?;
+            let steps = runtime.class_steps[class as usize]
+                .as_ref()
+                .ok_or_else(|| invalid_input("class byte proof has no native transition cache"))?;
+            let Some(cached) = steps[super::class_step_slot(byte)] else {
                 return Ok(false);
             };
             if cached.byte != byte

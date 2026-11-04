@@ -682,7 +682,7 @@ pub(crate) struct Step<'a, 's> {
     /// closer text; see `Step::repaired_delimiter`).
     pub(crate) kind: ProductionKind,
     pub(crate) dfas: &'a mut [Option<DerivativeDfa<'s>>],
-    class_steps: &'a mut [Option<ClassStep>],
+    class_steps: &'a mut [ClassSteps],
     pub(crate) arena: &'a mut Arena,
     pub(crate) buffer: &'a [u8],
     pub(crate) base: usize,
@@ -717,16 +717,22 @@ impl<'s> Step<'_, 's> {
     ) -> Result<&mut DerivativeDfa<'s>, StopReason> {
         let slot = &mut self.dfas[class as usize];
         if slot.is_none() {
-            *slot = Some(
-                self.grammar.classes[class as usize]
-                    .automaton
-                    .dfa(governor)?,
-            );
+            let _metadata = governor.lease_scratch(CLASS_STEP_CONSTRUCTION_BYTES)?;
+            governor.charge(Resource::Work, size(CLASS_STEP_BUCKETS).saturating_add(2))?;
+            let mut steps = ScratchVec::new(governor);
+            steps.reserve(CLASS_STEP_BUCKETS)?;
+            steps.extend(core::iter::repeat_n(None, CLASS_STEP_BUCKETS))?;
+            let dfa = self.grammar.classes[class as usize]
+                .automaton
+                .dfa(governor)?;
+            // Neither owner is visible until both constructions succeed.
+            self.class_steps[class as usize] = Some(steps);
+            *slot = Some(dfa);
         }
         Ok(slot.as_mut().expect("the class automaton was initialized"))
     }
 
-    /// Reuse one successful query over the class's stable operation-owned DFA.
+    /// Reuse successful queries over the class's stable operation-owned DFA.
     /// State identity includes UTF-8 position and every zero-width context flag.
     fn class_step(
         &mut self,
@@ -736,8 +742,12 @@ impl<'s> Step<'_, 's> {
         governor: &mut Governor,
     ) -> Result<(DfaState, bool), StopReason> {
         // Fixed row access, complete state/byte comparisons and result handoff.
-        governor.charge(Resource::Work, 12)?;
-        if let Some(cached) = self.class_steps[class as usize]
+        governor.charge(Resource::Work, 13)?;
+        let index = class_step_slot(byte);
+        let steps = self.class_steps[class as usize]
+            .as_ref()
+            .ok_or_else(|| invalid_input("native class has no initialized transition cache"))?;
+        if let Some(cached) = steps[index]
             && cached.state == state
             && cached.byte == byte
         {
@@ -746,7 +756,11 @@ impl<'s> Step<'_, 's> {
         let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;
         let dead = dfa.is_dead(stepped, governor)?;
-        self.class_steps[class as usize] = Some(ClassStep {
+        // The initialized row has fixed length; native DFA work cannot resize it.
+        let steps = self.class_steps[class as usize]
+            .as_mut()
+            .expect("the native class cache was validated before its DFA query");
+        steps.as_mut_slice()[index] = Some(ClassStep {
             state,
             byte,
             stepped,
@@ -5255,12 +5269,42 @@ impl ScratchCharge for Option<ClassStep> {
     };
 }
 
+/// Fixed direct-mapped rows retain full state and byte tags. A collision only
+/// replaces a successful entry; the next different query uses the native DFA.
+const CLASS_STEP_BUCKETS: usize = 16;
+type ClassSteps = Option<ScratchVec<Option<ClassStep>>>;
+
+impl ScratchCharge for ClassSteps {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 64);
+        64
+    };
+}
+
+const CLASS_STEP_CONSTRUCTION_BYTES: u64 = 1024;
+const _: () = assert!(
+    core::mem::size_of::<(
+        ClassSteps,
+        ScratchVec<Option<ClassStep>>,
+        DerivativeDfa<'static>,
+        Result<DerivativeDfa<'static>, StopReason>,
+        ScratchLease,
+        u32,
+        usize,
+    )>() as u64
+        <= CLASS_STEP_CONSTRUCTION_BYTES
+);
+
+fn class_step_slot(byte: u8) -> usize {
+    usize::from(byte) & (CLASS_STEP_BUCKETS - 1)
+}
+
 struct GrammarRuntime<'s> {
     grammar: &'s CompiledGrammar,
     dialect: DialectId,
     dfas: Vec<Option<DerivativeDfa<'s>>>,
     /// Every reserved cache slot, including empty/spare slots, stays admitted.
-    class_steps: ScratchVec<Option<ClassStep>>,
+    class_steps: ScratchVec<ClassSteps>,
 }
 
 impl ScratchCharge for GrammarRuntime<'_> {
@@ -5450,7 +5494,7 @@ impl<'s> Engine<'s> {
             let mut class_steps = ScratchVec::new(governor);
             governor.charge(Resource::Work, size(grammar.classes.len()))?;
             class_steps.reserve(grammar.classes.len())?;
-            class_steps.extend(core::iter::repeat_n(None, grammar.classes.len()))?;
+            class_steps.extend((0..grammar.classes.len()).map(|_| None))?;
             crate::contract::push_scratch(
                 &mut grammars,
                 GrammarRuntime {

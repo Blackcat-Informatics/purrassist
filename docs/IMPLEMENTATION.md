@@ -2,6 +2,15 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Native class queries retain sixteen exact successful transition/deadness entries
+per initialized class, indexed by the low byte bits with full state and byte tags.
+Collisions use the original native query. DFA and governed row construction
+publish together; unused classes allocate no row, and rows survive arena resets
+for the lifetime of their native DFA. Byte proofs inspect the same selected
+entry and keep every existing self-loop guard. Query and initialization work,
+row capacity and construction controls remain admitted. Runtime and resource
+qualification remain pending automatic CI.
+
 An unchanged native frontier pinned at source zero retains its complete prior
 projection and settled history after the ordinary engine-floor query succeeds.
 Nonnegative report and marker floors cannot move that limit. Marker ownership
