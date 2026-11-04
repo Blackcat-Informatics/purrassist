@@ -102,7 +102,7 @@ impl Trie {
         };
         let mut cursor = TrieCursor::new();
         build.nodes.push(TrieNode::new(governor))?;
-        while let Some((bytes, label)) = build.source.next() {
+        for (bytes, label) in build.source.by_ref() {
             governor.charge(Resource::Work, K_COMPILE)?;
             cursor.bytes = bytes;
             cursor.label = label;
@@ -750,6 +750,7 @@ const _: () = {
             TrieNode,
             Result<Trie, StopReason>,
             IndexedLiterals<'_, PriorityLiteral<'_>>,
+            &mut IndexedLiterals<'_, PriorityLiteral<'_>>,
             Option<(&[u8], u32)>,
             &[PriorityLiteral<'_>],
             &[PriorityLiteral<'_>],

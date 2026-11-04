@@ -6626,6 +6626,45 @@ impl<'s> Engine<'s> {
         {
             stuck.failure_end = FailureEnd::Resynced;
         }
+        let (hist, cost) = self.resync_history(&boundary, first, governor)?;
+        for pc in targets {
+            // resync_targets admits only call-closer literals and literal
+            // openers after Next; every target is therefore a literal.
+            let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+                unreachable!("resynchronization targets are literal locations");
+            };
+            let mut scan = JsonScan::unpack(state);
+            if grammar.literals[lit as usize].bytes.len() > 1 {
+                scan.depth = 0;
+            }
+            live.push(Thread {
+                pc,
+                sub: Sub::Resync(scan.pack(), 0),
+                attempt: record.id,
+                start: record.start,
+                entry: boundary.failed,
+                pos: until,
+                cost,
+                hist,
+                opened: true,
+                ownership: 2,
+                stall: 0,
+                reach: until,
+                past: false,
+                pending: 0,
+                header_end: usize::MAX,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Record the rejected boundary and the actual group-split provenance.
+    fn resync_history(
+        &mut self,
+        boundary: &Boundary,
+        first: bool,
+        governor: &mut Governor,
+    ) -> Result<(u32, u64), StopReason> {
         // The calls before the failing one were read whole: the last of them
         // records the split (`tool_call.markup.group-split`), as when the
         // attempt ends there. A failing first call has none before it: the
@@ -6656,35 +6695,7 @@ impl<'s> Engine<'s> {
             .cost
             .saturating_add(split)
             .saturating_add(super::cost::REJECT);
-        for pc in targets {
-            // resync_targets admits only call-closer literals and literal
-            // openers after Next; every target is therefore a literal.
-            let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
-                unreachable!("resynchronization targets are literal locations");
-            };
-            let mut scan = JsonScan::unpack(state);
-            if grammar.literals[lit as usize].bytes.len() > 1 {
-                scan.depth = 0;
-            }
-            live.push(Thread {
-                pc,
-                sub: Sub::Resync(scan.pack(), 0),
-                attempt: record.id,
-                start: record.start,
-                entry: boundary.failed,
-                pos: until,
-                cost,
-                hist,
-                opened: true,
-                ownership: 2,
-                stall: 0,
-                reach: until,
-                past: false,
-                pending: 0,
-                header_end: usize::MAX,
-            })?;
-        }
-        Ok(())
+        Ok((hist, cost))
     }
 
     /// The scanner state a resynchronization of the call at `boundary`
@@ -6806,7 +6817,8 @@ impl<'s> Engine<'s> {
                 return Ok(None);
             }
             Err(reason) => {
-                return Err::<(), _>(reason).and(governor.release_scratch(charged).map(|()| None));
+                let cleanup = governor.release_scratch(charged).map(|()| None);
+                return Err::<(), _>(reason).and(cleanup);
             }
         };
         let rule = EditOperator::GroupSplit.rule();
@@ -8095,7 +8107,10 @@ impl<'s> Engine<'s> {
             })?;
         let segmentations = match segmentations {
             Ok(value) => value,
-            Err(reason) => return Err::<(), _>(reason).and(governor.release_scratch(charged)),
+            Err(reason) => {
+                let cleanup = governor.release_scratch(charged);
+                return Err::<(), _>(reason).and(cleanup);
+            }
         };
         if segmentations.is_ok()
             && let Err(reason) = self.forget_failure_header(thread.attempt, governor)
@@ -8145,7 +8160,8 @@ impl<'s> Engine<'s> {
         if !self.whole.contains(&start) {
             if let Err(reason) = governor.charge(Resource::ScratchBytes, DEFERRED_BYTES) {
                 drop(segmentations);
-                return Err::<(), _>(reason).and(governor.release_scratch(charged));
+                let cleanup = governor.release_scratch(charged);
+                return Err::<(), _>(reason).and(cleanup);
             }
             self.whole.push(start);
         }
@@ -8156,7 +8172,8 @@ impl<'s> Engine<'s> {
             if let Err(reason) = governor.charge(Resource::Work, super::cost::K_EVENT) {
                 drop(parts);
                 drop(segmentations);
-                return Err::<(), _>(reason).and(governor.release_scratch(charged));
+                let cleanup = governor.release_scratch(charged);
+                return Err::<(), _>(reason).and(cleanup);
             }
             let parts = self.certify_completion(parts, charged, governor)?;
             let event = Event::Completed {

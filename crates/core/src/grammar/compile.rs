@@ -2090,6 +2090,10 @@ impl<'a> TrailBuild<'a> {
 const TRAIL_MATCHER_CONTROL_BYTES: usize = 448;
 const _: () = {
     assert!(
+        core::mem::size_of::<(&[Program; 2], &[Literal], &[CloserClass], &[(Bytes, Bytes)])>()
+            == core::mem::size_of::<TrailSources<'_>>()
+    );
+    assert!(
         core::mem::size_of::<(
             TrailSources<'_>,
             ScratchLease,
@@ -2187,9 +2191,18 @@ const _: () = {
 };
 
 fn trail_matcher(
-    source: TrailSources<'_>,
+    programs: &[Program; 2],
+    literals: &[Literal],
+    closers: &[CloserClass],
+    reasoning: &[(Bytes, Bytes)],
     governor: &mut Governor,
 ) -> Result<TrailMatcher, GrammarError> {
+    let source = TrailSources {
+        programs,
+        literals,
+        closers,
+        reasoning,
+    };
     governor.charge(Resource::Work, 1)?;
     let metadata = governor.lease_scratch(size(TRAIL_MATCHER_BYTES))?;
     governor.charge(Resource::Work, 1)?;
@@ -2804,15 +2817,7 @@ fn compile_policy(
     // An optional-id grammar reads model-added ids absent from its markup.
     let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id, governor)?;
     let call_markup = call_markup(&call_ends, governor)?;
-    let trail_matcher = trail_matcher(
-        TrailSources {
-            programs: &programs,
-            literals: &literals,
-            closers: &closers,
-            reasoning: &reasoning,
-        },
-        governor,
-    )?;
+    let trail_matcher = trail_matcher(&programs, &literals, &closers, &reasoning, governor)?;
     governor.check()?;
     Ok(CompiledGrammar {
         id: document.id.into_string(),
