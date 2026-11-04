@@ -698,14 +698,10 @@ impl Engine<'_> {
                 return Ok(false);
             }
             previous = Some(thread.key());
-            let Some(cached) = runtime.class_steps[class as usize] else {
+            let Some(cached) = runtime.class_steps[class as usize].as_ref() else {
                 return Ok(false);
             };
-            if cached.byte != byte
-                || cached.dead
-                || cached.state != state
-                || cached.stepped != state
-            {
+            if !cached.proves_loop(state, byte) {
                 return Ok(false);
             }
             if !current.program.name_follower_index.is_empty() {

@@ -1166,6 +1166,8 @@ recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment eve
             + K_ERR·(error configurations explored)
             + K_CODEC·(codec scan bytes, name lookups and tree nodes)
             + (JSON recovery units) + (class-automaton units) + (search key bytes)
+            + (admitted control, report-index and buffer-growth units)
+            + (frontier, ownership and streaming-publication units)
 resolution  = one unit per member, option, alternative and validation step,
               plus the recovered value, ids, checks and ledger entries
             + (unparsed-markup scan: one unit per content byte read)
@@ -1690,7 +1692,8 @@ work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux,   K_d = K_THREAD·
 
 Here `W_aux` includes the separately admitted class-automaton construction,
 segment events, captured history, codec and JSON-recovery work, search keys,
-and resolution listed in the exact decomposition above. The configuration
+resolution, control projections, report indexes, buffer growth and streaming
+publication listed in the exact decomposition above. The configuration
 term bounds finite-state framing, not arbitrary codec/schema computation or
 materialization of competing readings. `E` is the number of error configurations the repair search explores,
 capped by the effort's `Work` budget (explicit `BudgetExceeded` beyond it).
@@ -1836,9 +1839,9 @@ evidence_entries = preset.evidence_entries
 
 The per-byte constants and each preset's fixed allowances form a measured
 sizing recipe (see "Dense markup" below). The supplied shapes through
-1 MiB recover under plain
+1 MiB are checked against plain
 `sized(effort, output)`. The budget stays linear in `n`; the published
-worst-case bound `work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E` above is the
+bound `work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux` above is the
 analytical bound, and `RECOVER_WORK_PER_BYTE` is the measured sizing, not a
 replacement for it.
 
@@ -1999,16 +2002,18 @@ the other recorded rows use the twelve-dialect request before GLM.
 
 These are measured ratios, not per-input upper bounds. Fixed storage and
 capacity growth can change them at other input lengths. The supplied
-64 KiB and 1 MiB shapes complete under the sized budgets; larger or
+64 KiB and 1 MiB shapes must complete under the sized budgets; larger or
 schema-heavy inputs can still exhaust explicitly. For the dense Pythonic
 case, scratch is closer to its budget than Work or evidence storage.
 
-The fourteen-dialect default uses `RECOVER_WORK_PER_BYTE` = 224. In the
-current implementation, adding Pythonic to the prepared default set changes
+The recorded fourteen-dialect baseline uses `RECOVER_WORK_PER_BYTE` = 224.
+Adding Pythonic to that prepared baseline changed
 the existing 300-parameter nullable-integer Qwen schema-typing case from
 3,039,693 to 3,162,209 Work for 10,032 bytes. The Standard preset plus
 224 Work per byte admits 3,247,168 Work, preserving that case's complete
-result with 84,959 units remaining. This measured recipe neither bounds
+result with 84,959 units remaining in that measurement. Current execution is
+qualified by the cost checks rather than those historical counters. This
+measured recipe neither bounds
 arbitrary schema complexity nor claims a marginal bound of 16 Work per
 input byte. Explicit caller budgets and effort presets retain their values.
 

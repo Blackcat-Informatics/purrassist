@@ -13,6 +13,7 @@
 //!      + K_CAPTURE·(captured bytes materialized) + K_ERR·(error configurations explored)
 //!      + K_CODEC·(codec scan bytes and lookups) + (JSON recovery units)
 //!      + (class-automaton units) + (search key bytes)
+//!      + (admitted control, report-index and buffer-growth units)
 //! ```
 //!
 //! and every term is linear in `n` on the fast path:
@@ -25,6 +26,9 @@
 //! - a class terminal additionally charges its derivative automaton one unit
 //!   per byte plus one-time transition-cache admissions;
 //! - segment events and captured bytes are bounded by the input length;
+//! - control projections, report indexes and retained-buffer growth admit
+//!   their own work; recovery also admits source-boundary, ownership and
+//!   event-publication work through its shared byte fold;
 //! - an argument codec scans its body a constant number of times (JSON
 //!   recovery charges one unit per byte and per value), so codec work is
 //!   linear in the slot body.
@@ -258,14 +262,16 @@ pub const UNDECLARED_NAME: u64 = 4;
 /// configuration steps of every dialect that is live at that byte, captured
 /// bytes ([`K_CAPTURE`]), the argument codec's scan ([`K_CODEC`]) and the
 /// JSON recovery parser's units, and the per-byte resolution and
-/// digest work. On the fast path (string arguments with no repair) that is
-/// 10 to 17 units per byte for the built-in dialects' arguments, and 26 for
-/// `OpenAI` stringified arguments. Output that is dense markup costs more:
+/// digest work. Earlier baseline measurements for string arguments with no
+/// repair were 10 to 17 units per byte, and 26 for `OpenAI` stringified
+/// arguments. These historical measurements exclude later ownership,
+/// indexing and streaming-publication work. Dense markup costs more:
 /// many small calls or many repeated parameters use the measured bounds in
-/// `docs/RESOURCES.md`, "Dense markup". The fourteen-dialect default also
-/// admits the existing 300-parameter nullable-integer schema-typing case:
-/// 3,162,209 Work for 10,032 bytes, covered by the Standard preset plus
-/// 224 Work per byte. This is a measured sizing recipe, not a universal
+/// `docs/RESOURCES.md`, "Dense markup". The fourteen-dialect baseline measured
+/// 3,162,209 Work for the 10,032-byte, 300-parameter nullable-integer schema
+/// case. The original recipe remains the Standard preset plus 224 Work per
+/// byte; executable cost checks qualify current behavior against it. This
+/// is a measured sizing recipe, not a universal
 /// bound for arbitrary schemas or repair search.
 ///
 /// [`ToolRecoveryRequest::sized`]: crate::tool_call::ToolRecoveryRequest::sized
@@ -276,12 +282,13 @@ pub const RECOVER_WORK_PER_BYTE: u64 = 224;
 ///
 /// It covers the retained source, the recognizer's capture and codec
 /// buffers, the argument value tree, and the recovered call's copy of it:
-/// 8 to 12 bytes per byte on the fast path for the built-in dialects'
-/// arguments, and 45 for `OpenAI` stringified arguments, whose escaped
+/// recorded baseline peaks were 8 to 12 bytes per byte for the built-in
+/// dialects' arguments, and 45 for `OpenAI` stringified arguments, whose escaped
 /// string is also decoded, recorded as the decoding's replacement, and
-/// parsed again. Dense markup peaks higher: the supplied 1 MiB Pythonic
-/// case uses 380.2 scratch bytes per input byte. The preset's fixed 64 MiB
-/// plus this per-byte allowance covers that measured case; larger inputs
+/// parsed again. Dense markup peaks higher: a recorded 1 MiB Pythonic
+/// case used 380.2 scratch bytes per input byte. The preset's fixed 64 MiB
+/// plus this per-byte allowance covered that measurement; current cost
+/// checks qualify the supplied cases against the same recipe. Larger inputs
 /// remain subject to explicit exhaustion. See `docs/RESOURCES.md`,
 /// "Dense markup", for the measured scope and historical rows.
 ///

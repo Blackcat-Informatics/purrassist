@@ -687,7 +687,7 @@ impl<'s> Step<'_, 's> {
         Ok(slot.as_mut().expect("the class automaton was initialized"))
     }
 
-    /// Reuse one successful query over the class's stable operation-owned DFA.
+    /// Reuse successful queries over the class's stable operation-owned DFA.
     /// State identity includes UTF-8 position and every zero-width context flag.
     fn class_step(
         &mut self,
@@ -696,23 +696,44 @@ impl<'s> Step<'_, 's> {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<(DfaState, bool), StopReason> {
-        // Fixed row access, complete state/byte comparisons and result handoff.
+        // Row/kind access, complete state/byte comparisons or ASCII bit probe,
+        // and the optional result/handoff controls.
         governor.charge(Resource::Work, 12)?;
-        if let Some(cached) = self.class_steps[class as usize]
-            && cached.state == state
-            && cached.byte == byte
+        if let Some(result) = self.class_steps[class as usize]
+            .as_ref()
+            .and_then(|cached| cached.query(state, byte))
         {
-            return Ok((cached.stepped, cached.dead));
+            return Ok(result);
         }
         let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;
         let dead = dfa.is_dead(stepped, governor)?;
-        self.class_steps[class as usize] = Some(ClassStep {
-            state,
-            byte,
-            stepped,
-            dead,
-        });
+        // Eligibility/kind/state comparisons, mask selection, shift/OR/store
+        // and row publication are admitted only after native success.
+        governor.charge(Resource::Work, 16)?;
+        let slot = &mut self.class_steps[class as usize];
+        if byte.is_ascii() && stepped == state && !dead {
+            if let Some(ClassStep::AsciiLoop {
+                state: known,
+                bytes,
+            }) = slot
+                && *known == state
+            {
+                bytes[usize::from(byte >> 6)] |= 1 << (byte & 63);
+            } else {
+                let mut bytes = [0; 2];
+                bytes[usize::from(byte >> 6)] = 1 << (byte & 63);
+                *slot = Some(ClassStep::AsciiLoop { state, bytes });
+            }
+        } else if !matches!(slot, Some(ClassStep::AsciiLoop { .. })) {
+            // A transient start/dead query must not evict a learned loop.
+            *slot = Some(ClassStep::Exact {
+                state,
+                byte,
+                stepped,
+                dead,
+            });
+        }
         Ok((stepped, dead))
     }
 
@@ -2221,6 +2242,10 @@ impl<'s> Step<'_, 's> {
         let Some((name, _)) = self.name_range(hist, governor)? else {
             return Ok(markup);
         };
+        governor.charge(Resource::Work, 3)?;
+        if name.len() > tools.max_name_bytes() {
+            return Ok(markup);
+        }
         governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
         let shape = core::str::from_utf8(self.bytes(name))
             .ok()
@@ -2349,10 +2374,13 @@ impl<'s> Step<'_, 's> {
         if self.retained_name_prefix(hist, segment.unwrap_or(start)..name.start, governor)? {
             return Ok(true);
         }
-        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
+        governor.charge(Resource::Work, 3)?;
         let bytes = self.bytes(name);
-        if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
-            return Ok(true);
+        if bytes.len() <= tools.max_name_bytes() {
+            governor.charge(Resource::Work, size(bytes.len()).saturating_mul(K_CODEC))?;
+            if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
+                return Ok(true);
+            }
         }
         for &relation in &self.grammar.joint_captures {
             // Most prose-like names have no declared prefix. A complete native
@@ -5129,14 +5157,45 @@ enum Verdict {
     Reject,
 }
 
-/// One successful transition/deadness query within one class DFA session.
+/// Successful transition/deadness observations within one class DFA session.
 /// Its term IDs remain valid: the session only appends terms until drop.
 #[derive(Clone, Copy)]
-struct ClassStep {
-    state: DfaState,
-    byte: u8,
-    stepped: DfaState,
-    dead: bool,
+enum ClassStep {
+    Exact {
+        state: DfaState,
+        byte: u8,
+        stepped: DfaState,
+        dead: bool,
+    },
+    /// Each set bit was observed natively under this complete state.
+    AsciiLoop { state: DfaState, bytes: [u64; 2] },
+}
+
+impl ClassStep {
+    fn query(&self, state: DfaState, byte: u8) -> Option<(DfaState, bool)> {
+        match self {
+            Self::Exact {
+                state: known,
+                byte: observed,
+                stepped,
+                dead,
+            } if *known == state && *observed == byte => Some((*stepped, *dead)),
+            Self::AsciiLoop {
+                state: known,
+                bytes,
+            } if *known == state
+                && byte.is_ascii()
+                && bytes[usize::from(byte >> 6)] & (1 << (byte & 63)) != 0 =>
+            {
+                Some((state, false))
+            }
+            _ => None,
+        }
+    }
+
+    fn proves_loop(&self, state: DfaState, byte: u8) -> bool {
+        self.query(state, byte) == Some((state, false))
+    }
 }
 
 impl ScratchCharge for Option<ClassStep> {

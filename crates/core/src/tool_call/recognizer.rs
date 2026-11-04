@@ -208,10 +208,10 @@ impl ScratchCharge for TurnNode {
     };
 }
 
-const TURN_NODE_METADATA_BYTES: usize = 32;
+const TURN_NODE_METADATA_BYTES: usize = 48;
 const _: () = assert!(
-    core::mem::size_of::<(ScratchVec<TurnNode>, ScratchLease)>()
-        <= core::mem::size_of::<Vec<TurnNode>>() + TURN_NODE_METADATA_BYTES
+    core::mem::size_of::<(ScratchVec<TurnNode>, ScratchMap<u64, usize>, ScratchLease)>()
+        <= core::mem::size_of::<(Vec<TurnNode>, BTreeMap<u64, usize>)>() + TURN_NODE_METADATA_BYTES
 );
 
 /// A conservative native continuation boundary, not a resolved stream event.
@@ -607,7 +607,6 @@ struct Turn {
     // Native history never escapes into the owned RecognizedTurn. Its buffer
     // releases its actual reservation when this private turn is consumed.
     nodes: ScratchVec<TurnNode>,
-    _node_metadata: ScratchLease,
     store: Vec<Segment>,
     /// Source proof addressed only by immutable stored call and reading indices.
     envelopes: SourceEnvelopes,
@@ -620,7 +619,8 @@ struct Turn {
     /// where it began, and its interpretations.
     interps: BTreeMap<u64, (usize, ScratchVec<Interp>)>,
     /// Absolute raw OPEN barriers for interpreted derived headers only.
-    weak_headers: BTreeMap<u64, usize>,
+    weak_headers: ScratchMap<u64, usize>,
+    _node_metadata: ScratchLease,
     /// Earliest physically consumed native Mistral frame within each weak header.
     /// The weak attempt remains alive; every completion supplies its own proof.
     native_frames: ScratchMap<u64, (usize, usize)>,
@@ -644,6 +644,22 @@ struct Turn {
 }
 
 impl Turn {
+    /// Ordered removal admits search and physical suffix movement.
+    fn remove_weak_header(
+        &mut self,
+        owner: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.weak_headers.len())
+                .saturating_add(u64::from(self.weak_headers.len().bit_width()))
+                .saturating_add(3),
+        )?;
+        self.weak_headers.remove(&owner);
+        Ok(())
+    }
+
     /// Typed payloads after a successfully traversed native source checkpoint.
     fn payload_floor(
         &self,
@@ -2100,7 +2116,6 @@ impl<'s> Recognizer<'s> {
         crate::contract::push_scratch(&mut nodes, root, governor)?;
         let turn = Turn {
             nodes,
-            _node_metadata: node_metadata,
             store: Vec::new(),
             envelopes: SourceEnvelopes::new(governor),
             failure_proofs: ScratchMap::new(governor),
@@ -2120,7 +2135,8 @@ impl<'s> Recognizer<'s> {
                 embedded: Vec::new(),
             }),
             interps: BTreeMap::new(),
-            weak_headers: BTreeMap::new(),
+            weak_headers: ScratchMap::new(governor),
+            _node_metadata: node_metadata,
             native_frames: ScratchMap::new(governor),
             last_kill: None,
             blocks: BTreeMap::new(),
@@ -2875,8 +2891,14 @@ impl<'s> Recognizer<'s> {
                 self.suppress_weak_prefix(start, opening.native_frame_end, governor)?;
             }
             if let Some(barrier) = weak_header {
-                governor.charge(Resource::ScratchBytes, 64)?;
-                self.turn.weak_headers.insert(attempt, barrier);
+                governor.charge(
+                    Resource::Work,
+                    size(self.turn.weak_headers.len())
+                        .saturating_mul(2)
+                        .saturating_add(u64::from(self.turn.weak_headers.len().bit_width()))
+                        .saturating_add(4),
+                )?;
+                self.turn.weak_headers.insert(attempt, barrier)?;
             }
             self.turn.interps.insert(attempt, (start, interps));
         }
@@ -2904,7 +2926,7 @@ impl<'s> Recognizer<'s> {
         let mut replace_weak = None;
         governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
         let mut origins = ScratchVec::new(governor);
-        for (&owner, &barrier) in &self.turn.weak_headers {
+        for &(owner, barrier) in self.turn.weak_headers.iter() {
             let Some((prefix, inherited)) = self.turn.interps.get(&owner) else {
                 continue;
             };
@@ -2984,7 +3006,7 @@ impl<'s> Recognizer<'s> {
     ) -> Result<(), StopReason> {
         governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
         let mut suppressed = ScratchVec::new(governor);
-        for &owner in self.turn.weak_headers.keys() {
+        for &(owner, _) in self.turn.weak_headers.iter() {
             if self
                 .turn
                 .interps
@@ -2996,7 +3018,7 @@ impl<'s> Recognizer<'s> {
         }
         for &owner in &suppressed {
             self.forget_native_frame(owner, governor)?;
-            self.turn.weak_headers.remove(&owner);
+            self.turn.remove_weak_header(owner, governor)?;
             self.turn.interps.remove(&owner);
             self.engine.abandon(owner, governor)?;
         }
@@ -3012,7 +3034,7 @@ impl<'s> Recognizer<'s> {
     ) -> Result<(), StopReason> {
         let Some(end) = end else { return Ok(()) };
         governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
-        for (&owner, &barrier) in &self.turn.weak_headers {
+        for &(owner, barrier) in self.turn.weak_headers.iter() {
             let Some((prefix, _)) = self.turn.interps.get(&owner) else {
                 continue;
             };
@@ -3128,9 +3150,14 @@ impl<'s> Recognizer<'s> {
 
     /// Weak framing cannot reopen the committed span of a native attempt.
     fn has_exact_outer(&self, start: usize, governor: &mut Governor) -> Result<bool, StopReason> {
-        governor.charge(Resource::Work, size(self.turn.interps.len()))?;
+        governor.charge(
+            Resource::Work,
+            size(self.turn.interps.len()).saturating_mul(
+                u64::from(self.turn.weak_headers.len().bit_width()).saturating_add(1),
+            ),
+        )?;
         Ok(self.turn.interps.iter().any(|(owner, (prefix, _))| {
-            *prefix < start && !self.turn.weak_headers.contains_key(owner)
+            *prefix < start && self.turn.weak_headers.get(owner).is_none()
         }))
     }
 
@@ -3376,7 +3403,10 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let witnessed = match self.ended_witness(&ended, governor) {
+        let witnessed = match self.ended_witness(&ended, governor).and_then(|witnessed| {
+            self.turn.remove_weak_header(ended.attempt, governor)?;
+            Ok(witnessed)
+        }) {
             Ok(witnessed) => witnessed,
             Err(reason) => {
                 let charged = salvage.as_ref().map_or(0, |salvage| salvage.charged);
@@ -3385,7 +3415,6 @@ impl<'s> Recognizer<'s> {
                 return Err(reason);
             }
         };
-        self.turn.weak_headers.remove(&ended.attempt);
         let removed = self.turn.interps.remove(&ended.attempt);
         // An opening reasoning marker the attempt read over cuts it: the
         // marker's bytes belong to the block, which opens where the

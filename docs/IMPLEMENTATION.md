@@ -609,7 +609,7 @@ never escape into the owned recognized pieces, so consuming or dropping the
 recognizer destroys their buffer and releases its reservation before later semantic
 assembly. Output trees, native capture facts, provenance forests and source grants
 remain independently owned. The additional header and lease are admitted within
-a named 32-byte metadata reservation. Capacity peaks, insertion/relocation Work
+a named 48-byte metadata reservation shared with weak-header storage. Capacity peaks, insertion/relocation Work
 and scratch refusal points change; current resource acceptance remains pending CI.
 
 Recovery prepares ownership accounting on a pristine recognizer before publishing
@@ -621,6 +621,27 @@ real report origins and dispatch order. Late preparation fails explicitly; no
 existing report is silently omitted. Batch and streaming recovery retain identical
 preparation and all candidate accounting. Cold setup work changes, and resource
 acceptance remains pending automatic CI.
+
+Tool-set assembly prepares the maximum exact name/alias byte length under an
+owned 24-byte metadata reservation. Codec context declines an impossible exact
+lookup before scanning the captured bytes; weak-name admission still checks
+every original joint name/ID prefix partition. This imposes no spelling cap.
+
+Each class DFA keeps either its last exact query or an observed ASCII self-loop
+set keyed by the complete DFA state. Only successful native step/deadness queries
+can add bits; transient start and delimiter queries retain the learned loop.
+Every hit remains an exact observation, including UTF-8 and zero-width context.
+The existing 64-byte slot bounds the representation; lookup and publication work
+remain admitted. Class byte-run certification checks the same observation.
+
+Weak-header barriers now use an ordered governed map. Search, shifting and
+relocation are admitted before mutation; capacity remains owned until turn drop.
+Native event correlation copies raw zero and each distinct raw index referenced
+by semantic reading order, preserving repeated references to the same identity.
+Unreferenced raw facts are never constructed. The temporary index owns its
+capacity and 192-byte control reservation, and refusal drops the complete trace.
+No output, provenance or original materialization grants are retired by this
+change. Runtime and fixed-budget qualification remain pending automatic CI.
 
 ## Shared contracts
 

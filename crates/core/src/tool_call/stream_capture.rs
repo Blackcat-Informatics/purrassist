@@ -4,8 +4,8 @@
 //! Compact native capture identities retained across semantic resolution.
 use super::{ArgLeaf, CallSegment, Closure, RawCall, ResolvedSegment, Spanned};
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
-    invalid_input, push_scratch, saturating_size as size,
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchMap, ScratchString, ScratchVec,
+    StopReason, invalid_input, push_scratch, saturating_size as size,
 };
 use crate::grammar::{CaptureKind, edit::EditOperator};
 use core::ops::Range;
@@ -177,6 +177,23 @@ pub(super) struct NativeTrace {
     facts: ScratchVec<NativeFact>,
 }
 
+const TRACE_MAP_METADATA_BYTES: u64 = 192;
+const _: () = assert!(
+    core::mem::size_of::<(
+        ScratchMap<usize, usize>,
+        ScratchVec<usize>,
+        ScratchLease,
+        Option<usize>,
+        usize,
+        usize,
+        usize,
+        core::slice::Iter<'static, usize>,
+        &'static RawCall,
+        &'static RawCall,
+    )>() as u64
+        <= TRACE_MAP_METADATA_BYTES
+);
+
 impl NativeTrace {
     pub(super) fn new(governor: &Governor) -> Self {
         Self {
@@ -202,19 +219,43 @@ impl NativeTrace {
                 "native call correlation order is inconsistent",
             ));
         }
+        let _mapping_metadata = governor.lease_scratch(TRACE_MAP_METADATA_BYTES)?;
+        let mut identities = ScratchMap::new(governor);
         let header = self.facts.len();
-        for raw in &call.readings {
-            let fact = NativeFact::copy(raw, governor)?;
-            push_scratch(&mut self.facts, fact, governor)?;
-        }
+        let raw_header = call
+            .readings
+            .first()
+            .ok_or_else(|| invalid_input("native call has no header reading"))?;
+        let fact = NativeFact::copy(raw_header, governor)?;
+        push_scratch(&mut self.facts, fact, governor)?;
+        governor.charge(Resource::Work, 4)?;
+        identities.insert(0, header)?;
         let mut readings = ScratchVec::new(governor);
         for &raw in order {
-            if raw >= call.readings.len() {
-                return Err(invalid_input("semantic reading has no native origin"));
-            }
-            let origin = header
-                .checked_add(raw)
-                .ok_or_else(|| invalid_input("native capture identity overflows"))?;
+            governor.charge(
+                Resource::Work,
+                u64::from(identities.len().bit_width()).saturating_add(3),
+            )?;
+            let origin = if let Some(&origin) = identities.get(&raw) {
+                origin
+            } else {
+                let reading = call
+                    .readings
+                    .get(raw)
+                    .ok_or_else(|| invalid_input("semantic reading has no native origin"))?;
+                let origin = self.facts.len();
+                let fact = NativeFact::copy(reading, governor)?;
+                push_scratch(&mut self.facts, fact, governor)?;
+                governor.charge(
+                    Resource::Work,
+                    size(identities.len())
+                        .saturating_mul(2)
+                        .saturating_add(u64::from(identities.len().bit_width()))
+                        .saturating_add(4),
+                )?;
+                identities.insert(raw, origin)?;
+                origin
+            };
             push_scratch(&mut readings, origin, governor)?;
         }
         push_scratch(
