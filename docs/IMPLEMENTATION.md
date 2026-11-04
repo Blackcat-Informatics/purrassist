@@ -586,7 +586,7 @@ a named 192-byte reservation. Existing long-argument, delimiter, chunk, refusal,
 cost and fuzz cases remain the qualification scope; no new execution or fixed-budget
 success is claimed before automatic CI.
 
-Run eligibility now prepares native pure-body presence during the governed
+Run eligibility now prepares supported native body presence during the governed
 instruction scan. The boolean and existing initial-class mask share their actual
 64-byte descriptor owner; equality includes both facts. Programs without such
 bodies avoid runtime proof probes. Active incremental codecs still decline first,
@@ -627,13 +627,6 @@ owned 24-byte metadata reservation. Codec context declines an impossible exact
 lookup before scanning the captured bytes; weak-name admission still checks
 every original joint name/ID prefix partition. This imposes no spelling cap.
 
-Each class DFA keeps either its last exact query or an observed ASCII self-loop
-set keyed by the complete DFA state. Only successful native step/deadness queries
-can add bits; transient start and delimiter queries retain the learned loop.
-Every hit remains an exact observation, including UTF-8 and zero-width context.
-The existing 64-byte slot bounds the representation; lookup and publication work
-remain admitted. Class byte-run certification checks the same observation.
-
 Weak-header barriers now use an ordered governed map. Search, shifting and
 relocation are admitted before mutation; capacity remains owned until turn drop.
 Native event correlation copies raw zero and each distinct raw index referenced
@@ -658,6 +651,30 @@ root/name clones only where each clone is actually constructed. Object assembly
 keeps its independent payload reservations. These remove discarded copies and
 unused reservations without refunding accepted output or provenance storage.
 Current compiler, runtime and fixed-budget acceptance remain pending CI.
+
+Native JSON bodies can reuse scheduling after a complete plain double-quoted
+string-phase proof. Every repeated byte still enters the ordinary JSON codec
+and parser, retaining source positions, UTF-8 state, lead checks, string growth
+and per-byte Work. Qualification requires aligned cursors, no escape or fault,
+distinct codec slots, a homogeneous cohort and every original body/owner guard.
+Hits feed slots in native thread order at the explicit current offset; unexpected
+completion or a missing owner fails explicitly without replay. Non-string phases
+decline before owner scans. First-slot classification is reused only across
+read-only qualification. Frozen and JSON-feed proofs have distinct tags within
+the existing 32-byte slot bound; qualification controls retain their 192-byte
+reservation. The active JSON feed iterator, slot/result carriers and lease have
+a separate 128-byte transient reservation. Pythonic codecs continue ordinary
+scheduling.
+
+Each table also maintains the exact minimum source start of retained past
+completions. Appending updates it, and existing partition/retain passes rebuild
+it on removal. Byte ownership reads that minimum without revisiting the retained
+cohort after each invalidation. Every completion, history and ordering remains;
+vector and minimum updates have no intervening fallible operation. Table metadata
+admits 56 bytes for ownership floors, unopened count and past minimum, plus the
+112-byte shared controls. Removed parked-thread reservations release before later
+Work admission can refuse. Runtime savings and fixed-budget success remain pending
+automatic CI.
 
 ## Shared contracts
 

@@ -9,7 +9,7 @@ use crate::contract::{
     Governor, Resource, ScratchCharge, ScratchLease, ScratchVec, StopReason, invalid_input,
 };
 use crate::grammar::automaton::ROOT;
-use crate::grammar::codec::{CodecKind, CodecState};
+use crate::grammar::codec::{CodecKind, CodecState, CodecStep};
 use crate::tool_call::ProductionKind;
 
 /// The table's current settled vector already proves this exact self-loop.
@@ -20,7 +20,28 @@ use crate::tool_call::ProductionKind;
 #[derive(Clone, Copy)]
 pub(super) struct RunProof {
     byte: u8,
+    kind: RunKind,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Frozen,
+    FeedJson,
+}
+
+const JSON_FEED_METADATA_BYTES: usize = 128;
+const _: () = assert!(
+    core::mem::size_of::<(
+        ScratchLease,
+        Option<RunProof>,
+        core::slice::Iter<'static, Thread>,
+        Option<&'static mut CodecState>,
+        u32,
+        usize,
+        usize,
+        Result<CodecStep, StopReason>,
+    )>() <= JSON_FEED_METADATA_BYTES
+);
 
 impl ScratchCharge for Option<RunProof> {
     const CHARGE: usize = {
@@ -68,11 +89,13 @@ const _: () = assert!(
         Option<u32>,
         u32,
         Option<CodecKind>,
+        Option<RunKind>,
+        usize,
         usize,
         &'static Thread,
         &'static Attempt,
         Option<&'static CodecState>,
-        Result<bool, StopReason>,
+        Result<Option<RunKind>, StopReason>,
     )>() <= BODY_METADATA_BYTES
 );
 
@@ -266,10 +289,47 @@ impl Engine<'_> {
             )?;
             return Ok(false);
         }
+        governor.charge(Resource::Work, 1)?;
+        if retained.kind == RunKind::FeedJson {
+            self.feed_json_run(table, byte, at, governor)?;
+        }
         // The byte fold advances every surviving cohort exactly once. No
         // per-table cursor write is needed: boundary consumption uses fed,
         // while a pre-byte miss above supplies at before native processing.
         Ok(true)
+    }
+
+    /// Native scheduling visits this same sorted thread order. Qualification
+    /// proves distinct slots and a string phase that cannot complete here.
+    fn feed_json_run(
+        &mut self,
+        table: usize,
+        byte: u8,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let _metadata = governor.lease_scratch(size(JSON_FEED_METADATA_BYTES))?;
+        for thread in &self.tables[table].threads {
+            governor.charge(Resource::Work, 5)?;
+            let Sub::Body(_, Some(slot)) = thread.sub else {
+                return Err(invalid_input("JSON byte run lost its native codec slot"));
+            };
+            let codec = self
+                .arena
+                .codecs
+                .get_mut(slot as usize)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| invalid_input("JSON byte run lost its native codec owner"))?;
+            if !matches!(codec, CodecState::Json(_)) {
+                return Err(invalid_input("JSON byte run changed its native codec kind"));
+            }
+            if !matches!(codec.feed(byte, at, governor)?, CodecStep::Consumed) {
+                return Err(invalid_input(
+                    "JSON byte run left its certified string phase",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Certify the actual settled cohort through its native classifiers.
@@ -322,13 +382,15 @@ impl Engine<'_> {
             return Ok(());
         }
         governor.charge(Resource::Work, 2)?;
-        self.byte_runs.as_mut_slice()[table] = Some(RunProof { byte });
+        self.byte_runs.as_mut_slice()[table] = Some(RunProof {
+            byte,
+            kind: RunKind::Frozen,
+        });
         self.byte_run_count += 1;
         Ok(())
     }
 
-    /// A non-incremental codec observes its retained source only at body end.
-    /// Every owner and thread stays native; this skips only a proved identity.
+    /// Pure bodies freeze; JSON strings retain their ordinary per-byte feeds.
     fn remember_body_run(
         &mut self,
         table: usize,
@@ -340,23 +402,38 @@ impl Engine<'_> {
         let Some(first) = current.threads.first() else {
             return Ok(());
         };
-        let Sub::Body(raw, _) = first.sub else {
+        let Sub::Body(raw, slot) = first.sub else {
             return Ok(());
         };
         governor.charge(Resource::Work, 2)?;
-        if !matches!(
-            current.program.insts[first.pc as usize],
-            Inst::Until { .. }
-                | Inst::Slot {
-                    codec: CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs,
-                    ..
-                }
-        ) {
-            return Ok(());
-        }
+        let expected = match current.program.insts[first.pc as usize] {
+            Inst::Until { .. } => None,
+            Inst::Slot {
+                codec: CodecKind::Pythonic,
+                ..
+            } => return Ok(()),
+            Inst::Slot { codec, .. } => Some(codec),
+            _ => return Ok(()),
+        };
         governor.charge(Resource::Work, 3)?;
         if raw != ROOT || first.past || first.pending != 0 {
             return Ok(());
+        }
+        if matches!(expected, Some(CodecKind::Json | CodecKind::JsonArgs)) {
+            // Decline non-string phases before suffix or owner qualification.
+            governor.charge(Resource::Work, 10)?;
+            let actual = slot
+                .and_then(|slot| self.arena.codecs.get(slot as usize))
+                .and_then(Option::as_ref)
+                .ok_or_else(|| invalid_input("JSON run probe lost its codec owner"))?;
+            if Some(actual.kind()) != expected {
+                return Err(invalid_input(
+                    "JSON run probe changed its native codec kind",
+                ));
+            }
+            if !actual.in_string() {
+                return Ok(());
+            }
         }
         governor.charge(Resource::Work, 5)?;
         if first.pos != next_at
@@ -369,13 +446,17 @@ impl Engine<'_> {
             return Ok(());
         }
         let _metadata = governor.lease_scratch(size(BODY_METADATA_BYTES))?;
-        if !self.body_run_owners(table, governor)?
-            || !self.body_run_threads(table, byte, next_at, governor)?
-        {
+        let Some(kind) = self.body_run_codec(slot, expected, byte, next_at, governor)? else {
+            return Ok(());
+        };
+        if !self.body_run_owners(table, governor)? {
+            return Ok(());
+        }
+        if !self.body_run_threads(table, byte, next_at, kind, governor)? {
             return Ok(());
         }
         governor.charge(Resource::Work, 2)?;
-        self.byte_runs.as_mut_slice()[table] = Some(RunProof { byte });
+        self.byte_runs.as_mut_slice()[table] = Some(RunProof { byte, kind });
         self.byte_run_count += 1;
         Ok(())
     }
@@ -430,18 +511,19 @@ impl Engine<'_> {
         Ok(true)
     }
 
-    /// The actual native step changes only the subject's logical cursor.
+    /// Scheduling is an identity; JSON accumulation remains an ordinary feed.
     fn body_run_threads(
         &self,
         table: usize,
         byte: u8,
         next_at: usize,
+        first_kind: RunKind,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
         let current = &self.tables[table];
         let grammar = self.grammars[current.grammar].grammar;
         let mut previous = None;
-        for thread in &current.threads {
+        for (index, thread) in current.threads.iter().enumerate() {
             governor.charge(Resource::Work, 32)?;
             let Sub::Body(raw, slot) = thread.sub else {
                 return Ok(false);
@@ -481,8 +563,26 @@ impl Engine<'_> {
                 Inst::Slot { set, codec, .. } => (set, Some(codec)),
                 _ => return Err(invalid_input("byte run body has no body instruction")),
             };
-            if !self.body_run_codec(slot, expected)? {
+            governor.charge(Resource::Work, 3)?;
+            let current_kind = if index == 0 {
+                first_kind
+            } else {
+                let Some(kind) = self.body_run_codec(slot, expected, byte, next_at, governor)?
+                else {
+                    return Ok(false);
+                };
+                kind
+            };
+            if first_kind != current_kind {
                 return Ok(false);
+            }
+            if current_kind == RunKind::FeedJson {
+                governor.charge(Resource::Work, size(index).saturating_mul(2))?;
+                if current.threads[..index].iter().any(|prior| {
+                    matches!(prior.sub, Sub::Body(_, previous_slot) if previous_slot == slot)
+                }) {
+                    return Ok(false);
+                }
             }
             let delimiters = &grammar.delimiters[set as usize];
             governor.charge(
@@ -502,14 +602,19 @@ impl Engine<'_> {
         Ok(true)
     }
 
-    /// Refuse incremental codecs; an absent or mismatched slot is an invariant.
+    /// Classify only native phases supported by the retained scheduling proof.
     fn body_run_codec(
         &self,
         slot: Option<u32>,
         expected: Option<CodecKind>,
-    ) -> Result<bool, StopReason> {
+        byte: u8,
+        next_at: usize,
+        governor: &mut Governor,
+    ) -> Result<Option<RunKind>, StopReason> {
+        // Slot presence, index access, optional owner and exact kind check.
+        governor.charge(Resource::Work, 5)?;
         match (slot, expected) {
-            (None, None) => Ok(true),
+            (None, None) => Ok(Some(RunKind::Frozen)),
             (Some(slot), Some(expected)) => {
                 let actual = self
                     .arena
@@ -522,10 +627,18 @@ impl Engine<'_> {
                         "byte run body codec differs from its instruction",
                     ));
                 }
-                Ok(matches!(
-                    expected,
-                    CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs
-                ))
+                match expected {
+                    CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs => {
+                        Ok(Some(RunKind::Frozen))
+                    }
+                    CodecKind::Json | CodecKind::JsonArgs => {
+                        governor.charge(Resource::Work, 20)?;
+                        Ok(actual
+                            .plain_ascii_text_at(byte, next_at)
+                            .then_some(RunKind::FeedJson))
+                    }
+                    CodecKind::Pythonic => Ok(None),
+                }
             }
             _ => Err(invalid_input(
                 "byte run body codec presence differs from its instruction",
@@ -698,10 +811,14 @@ impl Engine<'_> {
                 return Ok(false);
             }
             previous = Some(thread.key());
-            let Some(cached) = runtime.class_steps[class as usize].as_ref() else {
+            let Some(cached) = runtime.class_steps[class as usize] else {
                 return Ok(false);
             };
-            if !cached.proves_loop(state, byte) {
+            if cached.byte != byte
+                || cached.dead
+                || cached.state != state
+                || cached.stepped != state
+            {
                 return Ok(false);
             }
             if !current.program.name_follower_index.is_empty() {

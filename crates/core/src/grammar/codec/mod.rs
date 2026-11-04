@@ -748,6 +748,11 @@ pub(crate) enum CodecState {
 }
 
 impl CodecState {
+    /// Native JSON string-phase evidence; this never replaces the byte feed.
+    pub(crate) fn plain_ascii_text_at(&self, byte: u8, next_at: usize) -> bool {
+        matches!(self, Self::Json(codec) if codec.plain_ascii_text_at(byte, next_at))
+    }
+
     /// Real retained JSON evidence for a marker-suppressed call attempt.
     pub(crate) const fn argument_anchor(&self) -> bool {
         matches!(self, Self::Json(codec) if codec.argument_anchor())

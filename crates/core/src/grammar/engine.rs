@@ -687,7 +687,7 @@ impl<'s> Step<'_, 's> {
         Ok(slot.as_mut().expect("the class automaton was initialized"))
     }
 
-    /// Reuse successful queries over the class's stable operation-owned DFA.
+    /// Reuse one successful query over the class's stable operation-owned DFA.
     /// State identity includes UTF-8 position and every zero-width context flag.
     fn class_step(
         &mut self,
@@ -696,44 +696,23 @@ impl<'s> Step<'_, 's> {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<(DfaState, bool), StopReason> {
-        // Row/kind access, complete state/byte comparisons or ASCII bit probe,
-        // and the optional result/handoff controls.
+        // Fixed row access, complete state/byte comparisons and result handoff.
         governor.charge(Resource::Work, 12)?;
-        if let Some(result) = self.class_steps[class as usize]
-            .as_ref()
-            .and_then(|cached| cached.query(state, byte))
+        if let Some(cached) = self.class_steps[class as usize]
+            && cached.state == state
+            && cached.byte == byte
         {
-            return Ok(result);
+            return Ok((cached.stepped, cached.dead));
         }
         let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;
         let dead = dfa.is_dead(stepped, governor)?;
-        // Eligibility/kind/state comparisons, mask selection, shift/OR/store
-        // and row publication are admitted only after native success.
-        governor.charge(Resource::Work, 16)?;
-        let slot = &mut self.class_steps[class as usize];
-        if byte.is_ascii() && stepped == state && !dead {
-            if let Some(ClassStep::AsciiLoop {
-                state: known,
-                bytes,
-            }) = slot
-                && *known == state
-            {
-                bytes[usize::from(byte >> 6)] |= 1 << (byte & 63);
-            } else {
-                let mut bytes = [0; 2];
-                bytes[usize::from(byte >> 6)] = 1 << (byte & 63);
-                *slot = Some(ClassStep::AsciiLoop { state, bytes });
-            }
-        } else if !matches!(slot, Some(ClassStep::AsciiLoop { .. })) {
-            // A transient start/dead query must not evict a learned loop.
-            *slot = Some(ClassStep::Exact {
-                state,
-                byte,
-                stepped,
-                dead,
-            });
-        }
+        self.class_steps[class as usize] = Some(ClassStep {
+            state,
+            byte,
+            stepped,
+            dead,
+        });
         Ok((stepped, dead))
     }
 
@@ -4771,7 +4750,7 @@ impl Event {
 
 type OwnershipFloors = (Option<usize>, Option<usize>);
 const _: () = assert!(core::mem::size_of::<OwnershipFloors>() <= 32);
-const _: () = assert!(core::mem::size_of::<(OwnershipFloors, usize)>() <= 40);
+const _: () = assert!(core::mem::size_of::<(OwnershipFloors, usize, Option<usize>)>() <= 56);
 const _: () = assert!(
     core::mem::size_of::<(
         Option<OwnershipFloors>,
@@ -4780,7 +4759,8 @@ const _: () = assert!(
         usize,
         usize,
         Option<usize>,
-    )>() <= 96
+        Option<usize>,
+    )>() <= 112
 );
 
 fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
@@ -4811,6 +4791,8 @@ struct Table<'s> {
     /// first: when the attempt ends, the newest whose value is read is
     /// reported (see `Engine::release_past`).
     past: Vec<Thread>,
+    /// Minimum source start of every retained past completion, or None if empty.
+    past_floor: Option<usize>,
     /// The completions as written reported for live attempts: attempt, end
     /// and cost. A held completion beside another reading of the same span
     /// that already costs more (its value not read yet: reading it only
@@ -4830,6 +4812,57 @@ struct Table<'s> {
     /// For a grouped program, the last call boundary of each attempt that
     /// got stuck after one (see [`Salvaged`]).
     boundaries: ScratchVec<Boundary>,
+}
+
+impl Table<'_> {
+    /// Partition retained completions and publish the surviving minimum together.
+    fn partition_past(
+        &mut self,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<Vec<Thread>, StopReason> {
+        // Admit the partition and surviving minimum before taking ownership.
+        governor.charge(Resource::Work, size(self.past.len()).saturating_mul(4))?;
+        let mut floor = None;
+        let (mine, rest): (Vec<Thread>, Vec<Thread>) = core::mem::take(&mut self.past)
+            .into_iter()
+            .partition(|thread| {
+                if thread.attempt == attempt {
+                    true
+                } else {
+                    floor = Some(floor.map_or(thread.start, |old: usize| old.min(thread.start)));
+                    false
+                }
+            });
+        self.past = rest;
+        self.past_floor = floor;
+        governor.release_scratch(
+            size(mine.len()).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+        )?;
+        Ok(mine)
+    }
+
+    /// Retain source order and prepare the surviving minimum in the same pass.
+    fn abandon_past(&mut self, attempt: u64, governor: &mut Governor) -> Result<(), StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.past.len()).saturating_mul(3).saturating_add(1),
+        )?;
+        let before = self.past.len();
+        let mut floor = None;
+        self.past.retain(|thread| {
+            if thread.attempt == attempt {
+                false
+            } else {
+                floor = Some(floor.map_or(thread.start, |old: usize| old.min(thread.start)));
+                true
+            }
+        });
+        self.past_floor = floor;
+        governor.release_scratch(
+            size(before - self.past.len()).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+        )
+    }
 }
 
 /// The scratch one held failure is charged: the failure itself
@@ -5169,45 +5202,14 @@ enum Verdict {
     Reject,
 }
 
-/// Successful transition/deadness observations within one class DFA session.
+/// One successful transition/deadness query within one class DFA session.
 /// Its term IDs remain valid: the session only appends terms until drop.
 #[derive(Clone, Copy)]
-enum ClassStep {
-    Exact {
-        state: DfaState,
-        byte: u8,
-        stepped: DfaState,
-        dead: bool,
-    },
-    /// Each set bit was observed natively under this complete state.
-    AsciiLoop { state: DfaState, bytes: [u64; 2] },
-}
-
-impl ClassStep {
-    fn query(&self, state: DfaState, byte: u8) -> Option<(DfaState, bool)> {
-        match self {
-            Self::Exact {
-                state: known,
-                byte: observed,
-                stepped,
-                dead,
-            } if *known == state && *observed == byte => Some((*stepped, *dead)),
-            Self::AsciiLoop {
-                state: known,
-                bytes,
-            } if *known == state
-                && byte.is_ascii()
-                && bytes[usize::from(byte >> 6)] & (1 << (byte & 63)) != 0 =>
-            {
-                Some((state, false))
-            }
-            _ => None,
-        }
-    }
-
-    fn proves_loop(&self, state: DfaState, byte: u8) -> bool {
-        self.query(state, byte) == Some((state, false))
-    }
+struct ClassStep {
+    state: DfaState,
+    byte: u8,
+    stepped: DfaState,
+    dead: bool,
 }
 
 impl ScratchCharge for Option<ClassStep> {
@@ -5346,9 +5348,9 @@ impl<'s> Engine<'s> {
                 governor.charge(Resource::Work, 1)?;
                 include(&mut candidate, trail.thread.start);
             }
-            for thread in &table.past {
+            if let Some(start) = table.past_floor {
                 governor.charge(Resource::Work, 1)?;
-                include(&mut candidate, thread.start);
+                include(&mut candidate, start);
             }
             for &attempt in table.held.by_attempt.keys() {
                 governor.charge(Resource::Work, size(table.attempts.len()).saturating_add(1))?;
@@ -5386,8 +5388,8 @@ impl<'s> Engine<'s> {
             .checked_mul(2)
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let ownership_bytes = size(table_count)
-            .checked_mul(40)
-            .and_then(|bytes| bytes.checked_add(96))
+            .checked_mul(56)
+            .and_then(|bytes| bytes.checked_add(112))
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
         governor.charge(Resource::Work, size(table_count))?;
@@ -5438,6 +5440,7 @@ impl<'s> Engine<'s> {
                     trails: Vec::new(),
                     held: HeldSet::default(),
                     past: Vec::new(),
+                    past_floor: None,
                     written: Vec::new(),
                     stalled: ScratchVec::new(governor),
                     failures: HeldFailures::new(governor),
@@ -8010,12 +8013,20 @@ impl<'s> Engine<'s> {
             // A reading beside another (its value holds closer text): held
             // until its attempt ends, when only the newest is reported (the
             // call ends at the last closer that completes it).
+            governor.charge(Resource::Work, 4)?;
             governor.charge(
                 Resource::ScratchBytes,
                 size(<Thread as ScratchCharge>::CHARGE),
             )?;
             self.ownership = None;
-            self.tables[table].past.push(thread);
+            let current = &mut self.tables[table];
+            let floor = Some(
+                current
+                    .past_floor
+                    .map_or(thread.start, |old| old.min(thread.start)),
+            );
+            current.past.push(thread);
+            current.past_floor = floor;
             return Ok(());
         }
         self.report(table, thread, dangling, governor)
@@ -8045,25 +8056,15 @@ impl<'s> Engine<'s> {
             return Ok(());
         }
         self.ownership = None;
-        let (mine, rest): (Vec<Thread>, Vec<Thread>) =
-            core::mem::take(&mut self.tables[table].past)
-                .into_iter()
-                .partition(|thread| thread.attempt == attempt);
+        let mut mine = self.tables[table].partition_past(attempt, governor)?;
         // The partition reads every held completion; each of
         // the attempt's is compared with its completions as written.
         governor.charge(
             Resource::Work,
-            size(mine.len() + rest.len()).saturating_add(
-                size(mine.len()).saturating_mul(size(self.tables[table].written.len()).max(1)),
-            ),
-        )?;
-        self.tables[table].past = rest;
-        governor.release_scratch(
-            size(mine.len()).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+            size(mine.len()).saturating_mul(size(self.tables[table].written.len()).max(1)),
         )?;
         // The latest end first; within one end, the least cost before the
         // value is read first (reading a value only adds cost).
-        let mut mine = mine;
         mine.sort_by_key(|thread| (Reverse(thread.pos), thread.cost));
         let mut index = 0;
         while index < mine.len() {
@@ -8563,15 +8564,7 @@ impl<'s> Engine<'s> {
                 }
             }
             governor.release_scratch(freed)?;
-            let dropped = table
-                .past
-                .iter()
-                .filter(|thread| thread.attempt == attempt)
-                .count();
-            table.past.retain(|thread| thread.attempt != attempt);
-            governor.release_scratch(
-                size(dropped).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
-            )?;
+            table.abandon_past(attempt, governor)?;
             let written = table.written.len();
             table.written.retain(|&(owner, _, _)| owner != attempt);
             governor.release_scratch(

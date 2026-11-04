@@ -50,7 +50,11 @@ impl RunEligibility {
                     inst,
                     Inst::Until { .. }
                         | Inst::Slot {
-                            codec: CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs,
+                            codec: CodecKind::Raw
+                                | CodecKind::XmlParams
+                                | CodecKind::KvPairs
+                                | CodecKind::Json
+                                | CodecKind::JsonArgs,
                             ..
                         }
                 )
@@ -94,7 +98,7 @@ impl RunEligibility {
         self.mask.is_empty()
     }
 
-    /// A native non-grouped program contains a non-incremental body.
+    /// A native non-grouped program contains a body with byte-run support.
     pub(crate) const fn native_body(&self) -> bool {
         self.native_body
     }

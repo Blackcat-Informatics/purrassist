@@ -152,6 +152,16 @@ pub(super) enum Decoded {
 }
 
 impl JsonCodec {
+    /// The engine may omit identity scheduling while retaining ordinary feeds.
+    pub(super) fn plain_ascii_text_at(&self, byte: u8, next_at: usize) -> bool {
+        !self.stalled
+            && self.fault.is_none()
+            && self.held_len == 0
+            && self.utf8.at_boundary()
+            && matches!(self.lead, Lead::Any | Lead::Checked)
+            && self.parser.plain_ascii_text_at(byte, next_at)
+    }
+
     /// The `json-args` codec ([`CodecKind::JsonArgs`]): like
     /// [`Codec::begin`], but the value must be an object, or a string that
     /// is empty or whose text begins with `{` after spaces (stringified
