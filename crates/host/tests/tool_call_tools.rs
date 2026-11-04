@@ -1113,7 +1113,7 @@ fn every_builtin_dialect_selector_is_admitted_over_mcp() {
 }
 
 /// The MCP tool recovers Gemma through default and explicit allow-lists, and
-/// reports unsupported or omitted dialects without losing their markup.
+/// reports omitted dialects without losing their markup.
 #[test]
 fn gemma_and_unparsed_markup_over_mcp() {
     let (tools, root) = tools("gemma-unparsed");
@@ -1139,7 +1139,10 @@ fn gemma_and_unparsed_markup_over_mcp() {
     }
     let output = r#"functions.list_dir:0{"path":"src"}"#;
     let node = tools
-        .call("recover_tool_calls", &arguments(output, ""))
+        .call(
+            "recover_tool_calls",
+            &arguments(output, r#","dialects":["hermes.v1"]"#),
+        )
         .unwrap();
     assert_eq!(
         node.pointer("/value/finish").and_then(Node::as_str),

@@ -20,7 +20,7 @@ use crate::contract::{
 use crate::digest::Digest;
 use crate::grammar::automaton::Matcher;
 use crate::grammar::cost::K_COMPILE;
-use crate::grammar::{CompiledGrammar, Grammar};
+use crate::grammar::{CallAnchor, CompiledGrammar, GrammarRecipe, Suppression};
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
@@ -71,7 +71,7 @@ use std::sync::{Arc, OnceLock};
 /// assert_eq!(dialect.clone(), dialect);
 /// // A custom grammar compiled from a built-in source is that dialect.
 /// let source = DialectId::Hermes.source().unwrap();
-/// let same = Grammar::compile_governed(source, &mut Governor::new(Budget::default())).unwrap();
+/// let same = source.compile_governed(&mut Governor::new(Budget::default())).unwrap();
 /// assert_eq!(DialectId::custom(same), DialectId::Hermes);
 /// ```
 #[derive(Clone)]
@@ -113,6 +113,22 @@ pub enum DialectId {
     BareJson,
     /// `pythonic.v1`: Python literal keyword calls inside a list.
     Pythonic,
+    /// `deepseek-v3-stripped.v1`: governed call-framing projection of the parent dialect.
+    DeepSeekV3Stripped,
+    /// `deepseek-v3.1-stripped.v1`: governed call-framing projection of the parent dialect.
+    DeepSeekV31Stripped,
+    /// `harmony-stripped.v1`: governed call-framing projection of the parent dialect.
+    HarmonyStripped,
+    /// `hermes-stripped.v1`: governed call-framing projection of the parent dialect.
+    HermesStripped,
+    /// `kimi-k2-stripped.v1`: governed call-framing projection of the parent dialect.
+    KimiK2Stripped,
+    /// `llama3-json-stripped.v1`: governed call-framing projection of the parent dialect.
+    Llama3JsonStripped,
+    /// `mistral-v11-stripped.v1`: governed call-framing projection of the parent dialect.
+    MistralV11Stripped,
+    /// `mistral-v3-stripped.v1`: governed call-framing projection of the parent dialect.
+    MistralV3Stripped,
     /// A caller-compiled grammar.
     Custom(Arc<CompiledGrammar>),
 }
@@ -120,7 +136,7 @@ pub enum DialectId {
 /// The embedded source and lazily compiled grammar of one built-in dialect.
 struct BuiltIn {
     id: &'static str,
-    source: &'static str,
+    recipe: GrammarRecipe<'static>,
     compiled: OnceLock<CompiledGrammar>,
 }
 
@@ -128,14 +144,35 @@ impl BuiltIn {
     const fn new(id: &'static str, source: &'static str) -> Self {
         Self {
             id,
-            source,
+            recipe: GrammarRecipe::Literal(source),
+            compiled: OnceLock::new(),
+        }
+    }
+
+    const fn derived(
+        id: &'static str,
+        parent: &Self,
+        markers: &'static [&'static str],
+        suppression: Suppression,
+        anchor: CallAnchor,
+    ) -> Self {
+        Self {
+            id,
+            recipe: GrammarRecipe::derived(
+                id,
+                parent.recipe.base_text(),
+                markers,
+                suppression,
+                anchor,
+            ),
             compiled: OnceLock::new(),
         }
     }
 
     fn grammar(&self) -> &CompiledGrammar {
         self.compiled.get_or_init(|| {
-            Grammar::compile_governed(self.source, &mut Governor::new(Budget::default()))
+            self.recipe
+                .compile_governed(&mut Governor::new(Budget::default()))
                 .expect("every built-in dialect grammar compiles under the default budget")
         })
     }
@@ -189,6 +226,96 @@ static OPENAI_TOOL_CALLS: BuiltIn = BuiltIn::new(
 static PYTHONIC: BuiltIn =
     BuiltIn::new("pythonic.v1", include_str!("dialects/pythonic.v1.grammar"));
 
+static DEEPSEEK_V3_STRIPPED: BuiltIn = BuiltIn::derived(
+    "deepseek-v3-stripped.v1",
+    &DEEPSEEK_V3,
+    &[
+        "<｜tool▁calls▁begin｜>",
+        "<｜tool▁call▁begin｜>",
+        "<｜tool▁sep｜>",
+        "<｜tool▁call▁end｜>",
+        "<｜tool▁calls▁end｜>",
+    ],
+    Suppression::ProtocolMarkers,
+    CallAnchor::LineStartArguments,
+);
+
+static DEEPSEEK_V31_STRIPPED: BuiltIn = BuiltIn::derived(
+    "deepseek-v3.1-stripped.v1",
+    &DEEPSEEK_V31,
+    &[
+        "<｜tool▁calls▁begin｜>",
+        "<｜tool▁call▁begin｜>",
+        "<｜tool▁sep｜>",
+        "<｜tool▁call▁end｜>",
+        "<｜tool▁calls▁end｜>",
+    ],
+    Suppression::ProtocolMarkers,
+    CallAnchor::LineStartArguments,
+);
+
+static HARMONY_STRIPPED: BuiltIn = BuiltIn::derived(
+    "harmony-stripped.v1",
+    &HARMONY,
+    &[
+        "<|start|>",
+        "<|channel|>",
+        "<|constrain|>",
+        "<|message|>",
+        "<|call|>",
+        "<|end|>",
+        "<|return|>",
+    ],
+    Suppression::SpecialTokens,
+    CallAnchor::Retained,
+);
+
+static HERMES_STRIPPED: BuiltIn = BuiltIn::derived(
+    "hermes-stripped.v1",
+    &HERMES,
+    &["<tool_call>", "</tool_call>", "</tool_calls>"],
+    Suppression::ProtocolMarkers,
+    CallAnchor::LineStartArguments,
+);
+
+static KIMI_K2_STRIPPED: BuiltIn = BuiltIn::derived(
+    "kimi-k2-stripped.v1",
+    &KIMI_K2,
+    &[
+        "<|tool_calls_section_begin|>",
+        "<|tool_call_begin|>",
+        "<|tool_call_argument_begin|>",
+        "<|tool_call_end|>",
+        "<|tool_calls_section_end|>",
+    ],
+    Suppression::ProtocolMarkers,
+    CallAnchor::LineStartArguments,
+);
+
+static LLAMA3_JSON_STRIPPED: BuiltIn = BuiltIn::derived(
+    "llama3-json-stripped.v1",
+    &LLAMA3_JSON,
+    &["<|python_tag|>", "<|eom_id|>", "<|eot_id|>"],
+    Suppression::SpecialTokens,
+    CallAnchor::Retained,
+);
+
+static MISTRAL_V11_STRIPPED: BuiltIn = BuiltIn::derived(
+    "mistral-v11-stripped.v1",
+    &MISTRAL_V11,
+    &["[TOOL_CALLS]", "[ARGS]", "[CALL_ID]"],
+    Suppression::SpecialTokens,
+    CallAnchor::LineStartArguments,
+);
+
+static MISTRAL_V3_STRIPPED: BuiltIn = BuiltIn::derived(
+    "mistral-v3-stripped.v1",
+    &MISTRAL_V3,
+    &["[TOOL_CALLS]"],
+    Suppression::SpecialTokens,
+    CallAnchor::LineStartArguments,
+);
+
 impl DialectId {
     /// Every built-in dialect, ordered by id.
     ///
@@ -200,15 +327,23 @@ impl DialectId {
     ///     [
     ///         "anthropic-tool-use.v1",
     ///         "bare-json.v1",
+    ///         "deepseek-v3-stripped.v1",
+    ///         "deepseek-v3.1-stripped.v1",
     ///         "deepseek-v3.1.v1",
     ///         "deepseek-v3.v1",
     ///         "gemma3-tool-code.v1",
     ///         "glm-4.5.v1",
+    ///         "harmony-stripped.v1",
     ///         "harmony.v1",
+    ///         "hermes-stripped.v1",
     ///         "hermes.v1",
+    ///         "kimi-k2-stripped.v1",
     ///         "kimi-k2.v1",
+    ///         "llama3-json-stripped.v1",
     ///         "llama3-json.v1",
+    ///         "mistral-v11-stripped.v1",
     ///         "mistral-v11.v1",
+    ///         "mistral-v3-stripped.v1",
     ///         "mistral-v3.v1",
     ///         "openai-tool-calls.v1",
     ///         "pythonic.v1",
@@ -216,18 +351,26 @@ impl DialectId {
     ///     ]
     /// );
     /// ```
-    pub const BUILT_IN: [Self; 15] = [
+    pub const BUILT_IN: [Self; 23] = [
         Self::AnthropicToolUse,
         Self::BareJson,
+        Self::DeepSeekV3Stripped,
+        Self::DeepSeekV31Stripped,
         Self::DeepSeekV31,
         Self::DeepSeekV3,
         Self::Gemma3ToolCode,
         Self::Glm45,
+        Self::HarmonyStripped,
         Self::Harmony,
+        Self::HermesStripped,
         Self::Hermes,
+        Self::KimiK2Stripped,
         Self::KimiK2,
+        Self::Llama3JsonStripped,
         Self::Llama3Json,
+        Self::MistralV11Stripped,
         Self::MistralV11,
+        Self::MistralV3Stripped,
         Self::MistralV3,
         Self::OpenAiToolCalls,
         Self::Pythonic,
@@ -259,6 +402,14 @@ impl DialectId {
             Self::MistralV3 => Some(&MISTRAL_V3),
             Self::OpenAiToolCalls => Some(&OPENAI_TOOL_CALLS),
             Self::BareJson => Some(&BARE_JSON),
+            Self::DeepSeekV3Stripped => Some(&DEEPSEEK_V3_STRIPPED),
+            Self::DeepSeekV31Stripped => Some(&DEEPSEEK_V31_STRIPPED),
+            Self::HarmonyStripped => Some(&HARMONY_STRIPPED),
+            Self::HermesStripped => Some(&HERMES_STRIPPED),
+            Self::KimiK2Stripped => Some(&KIMI_K2_STRIPPED),
+            Self::Llama3JsonStripped => Some(&LLAMA3_JSON_STRIPPED),
+            Self::MistralV11Stripped => Some(&MISTRAL_V11_STRIPPED),
+            Self::MistralV3Stripped => Some(&MISTRAL_V3_STRIPPED),
             Self::Custom(_) => None,
         }
     }
@@ -307,19 +458,26 @@ impl DialectId {
             Self::MistralV3 => MISTRAL_V3.id,
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.id,
             Self::BareJson => BARE_JSON.id,
+            Self::DeepSeekV3Stripped => DEEPSEEK_V3_STRIPPED.id,
+            Self::DeepSeekV31Stripped => DEEPSEEK_V31_STRIPPED.id,
+            Self::HarmonyStripped => HARMONY_STRIPPED.id,
+            Self::HermesStripped => HERMES_STRIPPED.id,
+            Self::KimiK2Stripped => KIMI_K2_STRIPPED.id,
+            Self::Llama3JsonStripped => LLAMA3_JSON_STRIPPED.id,
+            Self::MistralV11Stripped => MISTRAL_V11_STRIPPED.id,
+            Self::MistralV3Stripped => MISTRAL_V3_STRIPPED.id,
             Self::Custom(grammar) => grammar.id(),
         }
     }
 
-    /// The embedded grammar source of a built-in dialect; `None` for a
-    /// custom grammar. Compiling it with [`Grammar::compile_governed`]
-    /// yields a grammar equal to [`DialectId::grammar`], charged to the
-    /// caller's governor.
+    /// The embedded source recipe of a built-in dialect; `None` for a
+    /// custom grammar. Compiling the recipe yields the same grammar and
+    /// identity as [`DialectId::grammar`], charged to the caller's governor.
     ///
     /// See [`DialectId`] for an example.
     #[must_use]
-    pub fn source(&self) -> Option<&'static str> {
-        self.built_in().map(|built| built.source)
+    pub fn source(&self) -> Option<GrammarRecipe<'static>> {
+        self.built_in().map(|built| built.recipe)
     }
 
     /// The dialect's grammar; a built-in grammar is compiled on first use.
@@ -352,6 +510,14 @@ impl DialectId {
             Self::MistralV3 => MISTRAL_V3.grammar(),
             Self::OpenAiToolCalls => OPENAI_TOOL_CALLS.grammar(),
             Self::BareJson => BARE_JSON.grammar(),
+            Self::DeepSeekV3Stripped => DEEPSEEK_V3_STRIPPED.grammar(),
+            Self::DeepSeekV31Stripped => DEEPSEEK_V31_STRIPPED.grammar(),
+            Self::HarmonyStripped => HARMONY_STRIPPED.grammar(),
+            Self::HermesStripped => HERMES_STRIPPED.grammar(),
+            Self::KimiK2Stripped => KIMI_K2_STRIPPED.grammar(),
+            Self::Llama3JsonStripped => LLAMA3_JSON_STRIPPED.grammar(),
+            Self::MistralV11Stripped => MISTRAL_V11_STRIPPED.grammar(),
+            Self::MistralV3Stripped => MISTRAL_V3_STRIPPED.grammar(),
             Self::Custom(grammar) => grammar,
         }
     }
@@ -629,10 +795,9 @@ impl DialectSet {
     /// ```
     /// use purrassist_core::tool_call::DialectSet;
     /// let output = b"<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>";
-    /// // Qwen3-Coder XML, Hermes and GLM open with `<tool_call>`; a Llama 3
-    /// // JSON, an Anthropic `tool_use` and a bare JSON attempt may open at
-    /// // each of the two `{`.
-    /// assert_eq!(DialectSet::built_in().call_openers(output), 9);
+    /// // The complete allow-list includes native literal openers and the
+    /// // projected line-start name and JSON envelope entries.
+    /// assert_eq!(DialectSet::built_in().call_openers(output), 15);
     /// assert_eq!(DialectSet::built_in().call_openers(b"no calls here"), 0);
     /// ```
     #[must_use]

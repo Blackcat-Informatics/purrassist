@@ -593,8 +593,8 @@ is reported as certain.
   and the `fuzz-tool-call` invariant that no call, embedded call or
   rejected attempt holds bytes of a reasoning range's opener or closer.
 - **Call markup is never silent content.** Call markup that no dialect of
-  the allow-list reads (a family not built in yet: the stripped renderings of built-in dialects no grammar reads; or a built-in
-  dialect the allow-list leaves out, `[TOOL_CALLS]` under a Hermes-only
+  the allow-list reads (including a marker-suppressed built-in dialect the
+  allow-list leaves out, or `[TOOL_CALLS]` under a Hermes-only
   request) is reported as a `RejectedCall` with
   `Rejection::UnsupportedDialect { family }` (wire `reason.code`
   `unsupported_dialect`, with `family`, `built_in`, and a `detail` saying
@@ -1433,9 +1433,12 @@ Wire and MCP:
   occurrences (`/xs/0`, `/xs/1`, ...), where each occurrence used to restart
   at 0, and `decode-typed` evidence cites each item's own span. Alias
   spellings of one parameter share one sequence.
-- Ambiguous readings are ordered among equal costs by the digest of their
-  wire JSON, which now includes `reasoning_blocks`; the order can differ from
-  the previous release.
+- Ambiguous readings retain ascending search cost and the wire-JSON digest
+  tie order, including `reasoning_blocks`. Within an equal-cost collision of
+  the same nonempty ordered invocations (names, tools, source and assigned IDs,
+  and arguments), exact framing precedes projected framing. Native-only
+  alternatives retain their order; differing framing spans and ledgers remain
+  separate alternatives. A higher-cost reading never wins through this tie rule.
 - A new rule id, `tool_call.markup.unmodeled-scope-boundary` (46 operators
   in all; see [RULES.md](RULES.md)).
 - Receipt `budget` and `usage` numbers differ for the same input (see

@@ -424,7 +424,10 @@ fn per_call_competition_scales_with_calls() {
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     let Outcome::BestGuess(calls) = &result.outcome else {
-        panic!("{:?}", result.receipt.stopped)
+        panic!(
+            "{:?}; usage={:?}",
+            result.receipt.stopped, result.receipt.usage
+        )
     };
     assert_eq!(calls.calls.len(), 64);
     assert!(
@@ -494,10 +497,9 @@ fn crafted_reading_explosion_exhausts_explicitly() {
 fn sized_budget_follows_the_published_formula() {
     let output = busy_turn(3);
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    // Per call: `<tool_call>` (GLM, Qwen3-Coder XML and Hermes) and
-    // `<function=` (a bare Qwen3-Coder XML element); per stray line:
-    // `<tool_call>` three times.
-    assert_eq!(openers, 21);
+    // Literal and derived opener alternatives are counted separately by
+    // the same registry that constructs the sized request.
+    assert_eq!(openers, 27);
     for effort in [
         Effort::Exact,
         Effort::Quick,

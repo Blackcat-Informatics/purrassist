@@ -24,7 +24,10 @@
 //!    completed ends as a call (or result), or as a rejected segment
 //!    costing [`cost::REJECT`](crate::grammar::cost::REJECT). Equal-cost
 //!    segmentations of the same span are packed and reported as a local
-//!    [`Choice`]; independent choices are never multiplied out. A choice is
+//!    [`Choice`]; independent choices are never multiplied out. An alternative
+//!    is also retained at its actual higher cost when an erased final marker
+//!    leaves a source-proven trailing extraction over later completed calls.
+//!    Unrelated repairs retain ordinary least-cost selection. A choice is
 //!    recognition-level: dialects sharing an opener each reject their own
 //!    attempt at it, so the recognized turn keeps one segmentation per
 //!    dialect. Recovery ([`ToolSet::recover`](super::ToolSet::recover))
@@ -73,25 +76,35 @@
 //! inside an argument value never affects other calls.
 use super::context::{ContextTracker, RECORD_BYTES};
 use super::dialect::{DialectId, DialectSet};
+use super::failed_prefix::{BuildProofs, Certificate, FailureProofs, PathProof, PieceProof};
 use super::ir::{
     ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
-    RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment,
+    RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment, Spanned,
 };
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchMeter, ScratchVec,
-    SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchLease,
+    ScratchMap, ScratchMeter, ScratchVec, SourceSpan, StopReason,
 };
 use crate::digest::{Digest, DigestBuilder};
+use crate::grammar::CaptureKind;
 use crate::grammar::cost::{K_CAPTURE, K_EVENT, K_LEX, QUEUED_REPORT, REASONING_UNCLOSED, REJECT};
 use crate::grammar::edit::{EditOperator, MarkupEdit};
-use crate::grammar::engine::{Engine, Event, Part, Salvaged};
+use crate::grammar::engine::{
+    CompletedParts, Engine, Event, FailureWitness, HeaderSpan, Opening, Part, PartEnvelope,
+    Salvaged, SourceEnvelope, retained_context,
+};
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod envelopes;
+mod failures;
+mod trailing;
+use envelopes::SourceEnvelopes;
 
 /// Why the model stopped generating: the recognizer's end-of-output input.
 ///
@@ -165,7 +178,8 @@ enum TurnKind {
     Content(usize),
     /// A stored segment and its cost.
     Stored(u32, u64),
-    /// Two equal-cost segmentations: `prev` or this operand.
+    /// Two admitted segmentations: `prev` or this operand. Stored nodes
+    /// retain each branch's actual cost; dispatch uses their minimum.
     Pack(u32),
 }
 
@@ -192,9 +206,9 @@ struct Think {
     /// `0` for a block the turn starts in (no opener).
     text_start: usize,
     pair: Option<u32>,
-    /// The opener start and promoted base, once the block was closed at its
-    /// first opener.
-    promoted: Option<(usize, Base)>,
+    /// The first promotion's origin, boundary and base. A native opener
+    /// nested in that weak header can retain its own reasoning boundary.
+    promoted: Option<Promotion>,
     embedded: Vec<u32>,
 }
 
@@ -207,8 +221,115 @@ struct Base {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Interp {
     Top(Base),
+    NativePromoted(Base),
+    WeakPromoted(u64, Base),
     Embedded(usize),
 }
+
+impl ScratchCharge for Interp {
+    const CHARGE: usize = 32;
+}
+
+/// One owner-specific source of a pre-header interpretation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeaderOrigin {
+    owner: u64,
+    prefix: usize,
+    interp: Interp,
+}
+
+impl ScratchCharge for HeaderOrigin {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 64);
+        64
+    };
+}
+
+impl Interp {
+    const fn base(self) -> Option<Base> {
+        match self {
+            Self::Top(base) | Self::NativePromoted(base) | Self::WeakPromoted(_, base) => {
+                Some(base)
+            }
+            Self::Embedded(_) => None,
+        }
+    }
+
+    /// Preserve a top interpretation's promotion origin when extending content.
+    fn rebase(self, base: Base) -> Self {
+        match self {
+            Self::Top(_) => Self::Top(base),
+            Self::NativePromoted(_) => Self::NativePromoted(base),
+            Self::WeakPromoted(owner, _) => Self::WeakPromoted(owner, base),
+            Self::Embedded(_) => unreachable!("embedded interpretations have no top base"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Promotion {
+    Native(usize, Base),
+    Weak(u64, usize, Base),
+}
+
+impl Promotion {
+    const fn start(self) -> usize {
+        match self {
+            Self::Native(start, _) | Self::Weak(_, start, _) => start,
+        }
+    }
+
+    const fn base(self) -> Base {
+        match self {
+            Self::Native(_, base) | Self::Weak(_, _, base) => base,
+        }
+    }
+
+    const fn interpretation(self) -> Interp {
+        match self {
+            Self::Native(_, base) => Interp::NativePromoted(base),
+            Self::Weak(owner, _, base) => Interp::WeakPromoted(owner, base),
+        }
+    }
+}
+
+/// A same-start cache keeps the origin of the interpretation it reuses.
+#[derive(Clone, Copy, Debug)]
+enum LastKill {
+    Top(usize, Base),
+    NativePromoted(usize, Base),
+    WeakPromoted(usize, u64, Base),
+}
+
+impl LastKill {
+    fn new(start: usize, top: Interp) -> Self {
+        match top {
+            Interp::Top(base) => Self::Top(start, base),
+            Interp::NativePromoted(base) => Self::NativePromoted(start, base),
+            Interp::WeakPromoted(owner, base) => Self::WeakPromoted(start, owner, base),
+            Interp::Embedded(_) => unreachable!("embedded interpretations cannot end content"),
+        }
+    }
+
+    const fn at(self, start: usize) -> Option<Interp> {
+        let (at, top) = match self {
+            Self::Top(at, base) => (at, Interp::Top(base)),
+            Self::NativePromoted(at, base) => (at, Interp::NativePromoted(base)),
+            Self::WeakPromoted(at, owner, base) => (at, Interp::WeakPromoted(owner, base)),
+        };
+        if at == start { Some(top) } else { None }
+    }
+}
+
+// Owner identity adds one inline word to each promotion/same-start cache.
+// Interpretation buffers own their actual portable 32-byte element charge;
+// Header-origin capacity slots retain their separate 64-byte admission.
+const _: () = {
+    assert!(core::mem::size_of::<Think>() <= 104);
+    assert!(core::mem::size_of::<Option<Promotion>>() <= 40);
+    assert!(core::mem::size_of::<Option<LastKill>>() <= 40);
+    assert!(core::mem::size_of::<Interp>() <= Interp::CHARGE);
+};
 
 /// The scratch held by queued reports ([`QUEUED_REPORT`] each), released
 /// as they are processed; what is still held when the recognizer is dropped
@@ -228,7 +349,7 @@ impl Drop for Queued {
 // The portable per-report charge never undercounts a report's own size.
 const _: () = assert!(core::mem::size_of::<Pending>() as u64 <= QUEUED_REPORT);
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum Pending {
     Engine(Event),
     Marker {
@@ -245,6 +366,26 @@ impl Pending {
             Self::Engine(event) => event.at(),
             Self::Marker { end, .. } => *end,
         }
+    }
+
+    /// Drop unprocessed owned payloads before refunding their admissions.
+    fn discard_all(
+        entries: impl Iterator<Item = Self>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let mut bytes = 0_u64;
+        for entry in entries {
+            bytes = bytes.saturating_add(match &entry {
+                Self::Engine(Event::Completed { charged, .. }) => *charged,
+                Self::Engine(Event::Ended {
+                    salvage: Some(salvage),
+                    ..
+                }) => salvage.charged,
+                _ => 0,
+            });
+            drop(entry);
+        }
+        governor.release_scratch(bytes)
     }
 
     /// Order within one offset: openers before revivals.
@@ -277,13 +418,24 @@ struct Frame {
 struct Turn {
     nodes: Vec<TurnNode>,
     store: Vec<Segment>,
+    /// Source proof addressed only by immutable stored call and reading indices.
+    envelopes: SourceEnvelopes,
+    failure_proofs: ScratchMap<u32, Certificate>,
+    /// Aligned embedded origins retained for reasoning's late completions.
+    embedded_origins: ScratchMap<u32, ScratchVec<u32>>,
     top: Option<Top>,
     think: Option<Think>,
     /// Each attempt with an interpretation, until its end is reported:
     /// where it began, and its interpretations.
-    interps: BTreeMap<u64, (usize, Vec<Interp>)>,
-    /// The base of the last opener start that ended a content run.
-    last_kill: Option<(usize, Base)>,
+    interps: BTreeMap<u64, (usize, ScratchVec<Interp>)>,
+    /// Absolute raw OPEN barriers for interpreted derived headers only.
+    weak_headers: BTreeMap<u64, usize>,
+    /// Earliest physically consumed native Mistral frame within each weak header.
+    /// The weak attempt remains alive; every completion supplies its own proof.
+    native_frames: ScratchMap<u64, (usize, usize)>,
+    /// The last opener start and its source interpretation, including any
+    /// reasoning-promotion origin, when it ended a content run.
+    last_kill: Option<LastKill>,
     /// Every stored reasoning segment: its end and store index, by its
     /// block's start. A call an attempt began inside the block may complete
     /// after the segment is stored (an attempt holding several calls ends
@@ -317,6 +469,26 @@ impl Turn {
         governor.charge(Resource::ScratchBytes, segment_bytes(&segment))?;
         self.store.push(segment);
         Ok(u32::try_from(self.store.len() - 1).unwrap_or(u32::MAX))
+    }
+
+    /// Transfer a completion's structurally addressed source proof. A cut
+    /// segment uses ordinary storage and cannot inherit the original proof.
+    fn store_certified(
+        &mut self,
+        segment: Segment,
+        part: usize,
+        certificates: &[PartEnvelope],
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let index = self.store(segment, governor)?;
+        for certificate in certificates {
+            governor.charge(Resource::Work, 1)?;
+            if certificate.part == part {
+                self.envelopes
+                    .push(index, certificate.reading, certificate.source, governor)?;
+            }
+        }
+        Ok(index)
     }
 
     /// The scratch charged for the stored segments no segmentation ending
@@ -375,36 +547,70 @@ impl Turn {
         Ok((base.cost.saturating_add(cost), hist))
     }
 
-    /// Least-cost merge of `candidates` into the content state at `at`;
-    /// equal costs pack.
+    /// Least-cost dispatch, preserving equal costs and source-proven trailing
+    /// extraction alternatives whose final marker the recipe erased.
     fn revive(
         &mut self,
-        mut candidates: Vec<(u64, u32)>,
+        candidates: &[(u64, u32)],
         at: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some(best) = candidates.iter().map(|(cost, _)| *cost).min() else {
+        let Some(candidate_cost) = candidates.iter().map(|(cost, _)| *cost).min() else {
             return Ok(());
         };
-        if let Some(top) = self.top {
-            if top.cost < best {
+        let best = self
+            .top
+            .map_or(candidate_cost, |top| top.cost.min(candidate_cost));
+        if let Some(top) = self.top
+            && top.cost < candidate_cost
+        {
+            let mut possible = false;
+            for &(_, hist) in candidates {
+                if trailing::possible(self, hist, at, governor)? {
+                    possible = true;
+                    break;
+                }
+            }
+            if !possible {
                 return Ok(());
             }
-            if top.cost == best {
-                let closed = self.close(top, at, governor)?;
-                candidates.push((best, closed));
+        }
+        let mut hists = ScratchVec::new(governor);
+        for &(cost, hist) in candidates {
+            if cost == best {
+                crate::contract::push_scratch(&mut hists, hist, governor)?;
             }
         }
-        let mut hists: Vec<u32> = candidates
-            .into_iter()
-            .filter(|(cost, _)| *cost == best)
-            .map(|(_, hist)| hist)
-            .collect();
-        hists.sort_unstable();
-        hists.dedup();
+        if let Some(top) = self.top
+            && top.cost == best
+        {
+            let closed = self.close(top, at, governor)?;
+            crate::contract::push_scratch(&mut hists, closed, governor)?;
+        }
+        let minimums = hists.len();
+        for &(cost, hist) in candidates {
+            if cost > best {
+                trailing::preserve(self, hist, at, minimums, &mut hists, governor)?;
+            }
+        }
+        if let Some(top) = self.top
+            && top.cost > best
+        {
+            trailing::preserve(self, top.hist, at, minimums, &mut hists, governor)?;
+        }
+        governor.charge(
+            Resource::Work,
+            size(hists.len()).saturating_mul(u64::from(hists.len().bit_width() + 1)),
+        )?;
+        hists.as_mut_slice().sort_unstable();
         let mut hist = hists[0];
-        for &other in &hists[1..] {
+        let mut previous = hist;
+        for &other in &hists.as_slice()[1..] {
+            if other == previous {
+                continue;
+            }
             hist = self.push(hist, at, TurnKind::Pack(other), governor)?;
+            previous = other;
         }
         self.top = Some(Top {
             cost: best,
@@ -434,6 +640,7 @@ impl Turn {
             think.start,
         );
         let mut embedded = Vec::new();
+        let mut origins = ScratchVec::new(governor);
         for &index in &think.embedded {
             let (Segment::Call(segment) | Segment::Result(segment)) = &self.store[index as usize]
             else {
@@ -442,42 +649,23 @@ impl Turn {
             if segment.span.end > end {
                 continue;
             }
-            let Some(mut segment) = cut_at_marker(segment, marker) else {
+            let origin = if marker.is_some_and(|marker| segment.span.end > marker) {
+                u32::MAX
+            } else {
+                index
+            };
+            let Some(segment) = cut_at_marker(segment, marker) else {
                 continue;
             };
-            for reading in &mut segment.readings {
-                reading.edits.push(MarkupEdit {
-                    operator: EditOperator::ReasoningEmbeddedCall,
-                    span: segment.span.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                });
-            }
-            embedded.push(segment);
+            insert_embedded(
+                &mut embedded,
+                &mut origins,
+                segment,
+                origin,
+                &self.envelopes,
+                governor,
+            )?;
         }
-        // A call another embedded call contains (the bare function element
-        // inside a wrapped Qwen3-Coder XML call, say) is part of that call,
-        // as it would be outside reasoning.
-        governor.charge(
-            Resource::Work,
-            size(embedded.len()).saturating_mul(size(embedded.len())),
-        )?;
-        let spans: Vec<Range<usize>> = embedded
-            .iter()
-            .map(|segment| segment.span.clone())
-            .collect();
-        embedded.retain(|segment| {
-            !spans.iter().any(|outer| {
-                *outer != segment.span
-                    && outer.start <= segment.span.start
-                    && segment.span.end <= outer.end
-            })
-        });
-        // One call per span, in span order: two attempts that read the same
-        // call (a call of an attempt reading several, and the attempt its
-        // own opener began) offer it once, the first one completed.
-        embedded.sort_by_key(|segment| (segment.span.start, segment.span.end));
-        embedded.dedup_by(|later, first| later.span == first.span);
         let index = self.store(
             Segment::Reasoning(ReasoningSegment {
                 span: think.start..end,
@@ -488,6 +676,15 @@ impl Turn {
             }),
             governor,
         )?;
+        if !origins.is_empty() {
+            governor.charge(
+                Resource::Work,
+                size(self.embedded_origins.len())
+                    .saturating_mul(2)
+                    .saturating_add(1),
+            )?;
+            self.embedded_origins.insert(index, origins)?;
+        }
         self.blocks
             .entry(think.start)
             .or_default()
@@ -522,43 +719,43 @@ impl Turn {
         let whole = call.clone();
         for (marker, index) in blocks {
             governor.charge(Resource::Work, 1)?;
+            let origin = if marker.is_some_and(|marker| whole.span.end > marker) {
+                u32::MAX
+            } else {
+                part
+            };
             let Some(call) = cut_at_marker(&whole, marker) else {
                 continue;
             };
-            let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
-                continue;
-            };
-            governor.charge(Resource::Work, size(reasoning.embedded.len()))?;
-            // A call another embedded call contains is part of that call,
-            // and a call already offered (another attempt read it) is not
-            // offered again.
-            if reasoning
-                .embedded
-                .iter()
-                .any(|outer| outer.span.start <= call.span.start && call.span.end <= outer.span.end)
-            {
-                continue;
-            }
             let before = segment_bytes(&self.store[index as usize]);
             let Segment::Reasoning(reasoning) = &mut self.store[index as usize] else {
                 continue;
             };
-            reasoning.embedded.retain(|inner| {
-                !(call.span.start <= inner.span.start && inner.span.end <= call.span.end)
-            });
-            let mut segment = call.clone();
-            for reading in &mut segment.readings {
-                reading.edits.push(MarkupEdit {
-                    operator: EditOperator::ReasoningEmbeddedCall,
-                    span: segment.span.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                });
-            }
-            let at = reasoning.embedded.partition_point(|other| {
-                (other.span.start, other.span.end) < (segment.span.start, segment.span.end)
-            });
-            reasoning.embedded.insert(at, segment);
+            governor.charge(
+                Resource::Work,
+                size(self.embedded_origins.len())
+                    .saturating_mul(2)
+                    .saturating_add(1),
+            )?;
+            let mut origins = self
+                .embedded_origins
+                .remove(&index)
+                .unwrap_or_else(|| ScratchVec::new(governor));
+            insert_embedded(
+                &mut reasoning.embedded,
+                &mut origins,
+                call,
+                origin,
+                &self.envelopes,
+                governor,
+            )?;
+            governor.charge(
+                Resource::Work,
+                size(self.embedded_origins.len())
+                    .saturating_mul(2)
+                    .saturating_add(1),
+            )?;
+            self.embedded_origins.insert(index, origins)?;
             let after = segment_bytes(&self.store[index as usize]);
             governor.charge(Resource::ScratchBytes, after.saturating_sub(before))?;
         }
@@ -566,14 +763,479 @@ impl Turn {
     }
 }
 
-/// `segment` cut at a reasoning block's closing marker at `marker`
-/// (`tool_call.reasoning.marker-cut`): unchanged when it ends before the
-/// marker (or no marker closed the block), `None` when it begins inside it.
-/// A cut reading keeps what it read before the marker: a name, id or
-/// capture reaching into the marker is dropped, and arguments read from the
-/// marker's bytes are not arguments (the reading's arguments are then
-/// unresolved at the marker), so a call whose arguments came from the
-/// marker is never usable.
+/// Pairwise selection after source framing, before geometric containment.
+enum EmbeddedRelation {
+    Geometry,
+    Both,
+    Left,
+    Right,
+}
+
+/// Plan every removal before changing the list: a refusal or an enclosing
+/// candidate must not leave a partially normalized reasoning block.
+fn insert_embedded(
+    embedded: &mut Vec<CallSegment>,
+    origins: &mut ScratchVec<u32>,
+    mut incoming: CallSegment,
+    origin: u32,
+    envelopes: &SourceEnvelopes,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    if origins.len() != embedded.len() {
+        return Err(StopReason::InvalidInput(
+            "embedded call origins lost structural alignment".into(),
+        ));
+    }
+    let mut remove = ScratchVec::new(governor);
+    for (index, existing) in embedded.iter().enumerate() {
+        governor.charge(Resource::Work, 1)?;
+        match embedded_relation(
+            existing,
+            &incoming,
+            (origins[index], origin),
+            envelopes,
+            governor,
+        )? {
+            EmbeddedRelation::Left => return Ok(()),
+            EmbeddedRelation::Right => remove.push(index)?,
+            EmbeddedRelation::Both => {}
+            EmbeddedRelation::Geometry => {
+                if existing.span.start <= incoming.span.start
+                    && incoming.span.end <= existing.span.end
+                {
+                    return Ok(());
+                }
+                if incoming.span.start <= existing.span.start
+                    && existing.span.end <= incoming.span.end
+                {
+                    remove.push(index)?;
+                }
+            }
+        }
+    }
+    for reading in &mut incoming.readings {
+        reading.edits.push(MarkupEdit {
+            operator: EditOperator::ReasoningEmbeddedCall,
+            span: incoming.span.clone(),
+            original: Vec::new(),
+            replacement: Vec::new(),
+        });
+    }
+    // Retention, ordered search and insertion relocation each visit or move
+    // at most the original length; admit the complete mutation before it starts.
+    governor.charge(
+        Resource::Work,
+        size(embedded.len()).saturating_mul(3).saturating_add(1),
+    )?;
+    // Admit the aligned owner's growth and every metadata relocation before
+    // either collection changes. No fallible step separates their mutations.
+    governor.charge(
+        Resource::Work,
+        size(origins.len()).saturating_mul(3).saturating_add(1),
+    )?;
+    origins.reserve(1)?;
+    let mut index = 0;
+    let mut kept = 0;
+    let mut removals = remove.as_slice().iter().peekable();
+    embedded.retain(|_| {
+        let keep = removals.peek().copied().copied() != Some(index);
+        if keep {
+            let source = origins[index];
+            origins.as_mut_slice()[kept] = source;
+            kept += 1;
+        } else {
+            let _ = removals.next();
+        }
+        index += 1;
+        keep
+    });
+    while origins.len() > kept {
+        origins.pop();
+    }
+    let at = embedded.partition_point(|other| {
+        (other.span.start, other.span.end) < (incoming.span.start, incoming.span.end)
+    });
+    origins.push(origin)?;
+    origins.as_mut_slice()[at..].rotate_right(1);
+    embedded.insert(at, incoming);
+    Ok(())
+}
+
+fn embedded_relation(
+    left: &CallSegment,
+    right: &CallSegment,
+    origins: (u32, u32),
+    envelopes: &SourceEnvelopes,
+    governor: &mut Governor,
+) -> Result<EmbeddedRelation, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.readings.len()).saturating_add(size(right.readings.len())),
+    )?;
+    let native = |segment: &CallSegment| {
+        !segment.readings.is_empty()
+            && segment.readings.iter().all(|reading| {
+                matches!(
+                    reading.dialect,
+                    DialectId::BareJson | DialectId::AnthropicToolUse
+                ) && reading.span == segment.span
+            })
+    };
+    let shadow = |segment: &CallSegment| {
+        !segment.readings.is_empty()
+            && segment.readings.iter().all(|reading| {
+                reading.dialect == DialectId::HermesStripped && reading.span == segment.span
+            })
+    };
+    let (native, shadow, origin, preference) = if native(left) && shadow(right) {
+        (left, right, origins.1, EmbeddedRelation::Left)
+    } else if native(right) && shadow(left) {
+        (right, left, origins.0, EmbeddedRelation::Right)
+    } else {
+        return Ok(EmbeddedRelation::Geometry);
+    };
+    // A native object inside the arguments of a genuinely enclosing call is
+    // data. Protect alternatives only after proving the same lexical envelope.
+    for (index, reading) in shadow.readings.iter().enumerate() {
+        let source = envelopes.get(origin, index, governor)?;
+        if !same_embedded_envelope(reading, &native.span, source, governor)? {
+            return Ok(EmbeddedRelation::Geometry);
+        }
+    }
+    let ([exact], [derived]) = (native.readings.as_slice(), shadow.readings.as_slice()) else {
+        return Ok(EmbeddedRelation::Both);
+    };
+    if same_embedded_invocation(exact, derived, governor)? {
+        Ok(preference)
+    } else {
+        Ok(EmbeddedRelation::Both)
+    }
+}
+
+/// Exterior extraction must describe the same dropped source on both sides
+/// of its ledger; no retained capture may be trimmed from the native frame.
+fn same_embedded_envelope(
+    shadow: &RawCall,
+    frame: &Range<usize>,
+    source: Option<&SourceEnvelope>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    let retained = retained_context(shadow, governor)?;
+    governor.charge(Resource::Work, 4)?;
+    if shadow.span.start > frame.start
+        || shadow.span.end < frame.end
+        || (retained != *frame && !source.is_some_and(|source| source.matches(&retained, frame)))
+    {
+        return Ok(false);
+    }
+    let exterior = |span: &Range<usize>| {
+        shadow.span.start <= span.start
+            && span.end <= shadow.span.end
+            && (span.end <= frame.start || frame.end <= span.start)
+    };
+    for capture in &shadow.captures {
+        governor.charge(Resource::Work, 1)?;
+        if capture.kind == CaptureKind::Dropped {
+            if !exterior(&capture.span) {
+                return Ok(false);
+            }
+            governor.charge(Resource::Work, size(shadow.edits.len()))?;
+            if !shadow.edits.iter().any(|edit| {
+                matches!(
+                    edit.operator,
+                    EditOperator::ExtractProse | EditOperator::ExtractFence
+                ) && edit.span == capture.span
+            }) {
+                return Ok(false);
+            }
+        } else if capture.span.start < frame.start || capture.span.end > frame.end {
+            return Ok(false);
+        }
+    }
+    for edit in &shadow.edits {
+        governor.charge(Resource::Work, 1)?;
+        if matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        ) {
+            governor.charge(Resource::Work, size(shadow.captures.len()))?;
+            if !exterior(&edit.span)
+                || !edit.replacement.is_empty()
+                || edit.span.len() != edit.original.len()
+                || !shadow.captures.iter().any(|capture| {
+                    capture.kind == CaptureKind::Dropped && capture.span == edit.span
+                })
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn embedded_annotation(edit: &MarkupEdit, span: &Range<usize>) -> bool {
+    edit.operator == EditOperator::ReasoningEmbeddedCall
+        && edit.span == *span
+        && edit.original.is_empty()
+        && edit.replacement.is_empty()
+}
+
+fn same_embedded_invocation(
+    exact: &RawCall,
+    shadow: &RawCall,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, size(exact.edits.len()))?;
+    if exact.cost != 0
+        || !exact.bare
+        || exact.name.is_none()
+        || exact.closure != Closure::Closed
+        || shadow.closure != Closure::Closed
+        || exact
+            .edits
+            .iter()
+            .any(|edit| !embedded_annotation(edit, &exact.span))
+        || exact.kind != ProductionKind::Call
+        || exact.kind != shadow.kind
+        || exact.order != shadow.order
+        || !same_embedded_binding(exact.name.as_ref(), shadow.name.as_ref(), governor)?
+        || !same_embedded_binding(exact.id.as_ref(), shadow.id.as_ref(), governor)?
+    {
+        return Ok(false);
+    }
+    let native_grammar = exact.dialect.grammar();
+    let projected_grammar = shadow.dialect.grammar();
+    if (exact.id.is_none()
+        && native_grammar.call_carries_ids() != projected_grammar.call_carries_ids())
+        || native_grammar.examples_content() != projected_grammar.examples_content()
+        || native_grammar.protocol_fences() != projected_grammar.protocol_fences()
+    {
+        return Ok(false);
+    }
+    // Projected JSON applies declaration-shaped counter-evidence as BareJson
+    // does. Anthropic does not, so conservatively retain that alternative.
+    if exact.dialect == DialectId::AnthropicToolUse {
+        let root = &exact.arguments.root;
+        if let crate::json::Value::Object(members) = &root.value {
+            for member in members {
+                governor.charge(
+                    Resource::Work,
+                    size(member.key.len()).saturating_add(1).saturating_mul(2),
+                )?;
+            }
+            governor.charge(Resource::Work, 16)?;
+            if matches!(root.get("type").map(|node| &node.value), Some(crate::json::Value::String(kind)) if kind == "object")
+                && matches!(
+                    root.get("properties").map(|node| &node.value),
+                    Some(crate::json::Value::Object(_))
+                )
+            {
+                return Ok(false);
+            }
+        }
+    }
+    governor.charge(
+        Resource::Work,
+        size(exact.captures.len()).saturating_add(size(shadow.captures.len())),
+    )?;
+    if !exact.captures.iter().eq(shadow
+        .captures
+        .iter()
+        .filter(|capture| capture.kind != CaptureKind::Dropped))
+        || !same_embedded_arguments(&exact.arguments, &shadow.arguments, governor)?
+    {
+        return Ok(false);
+    }
+    let mut cost = 0_u64;
+    for edit in &shadow.edits {
+        governor.charge(Resource::Work, edit.estimated_bytes())?;
+        if embedded_annotation(edit, &shadow.span) {
+            continue;
+        }
+        if !matches!(
+            edit.operator,
+            EditOperator::ExtractProse | EditOperator::ExtractFence
+        ) {
+            // Only the declared Anthropic input-header alias is source-proven.
+            if exact.dialect != DialectId::AnthropicToolUse
+                || edit.operator != EditOperator::TerminalConfusable
+                || edit.original != b"\"input\""
+                || edit.replacement != b"\"arguments\""
+                || edit.span.len() != edit.original.len()
+                || edit.span.start < exact.span.start
+                || edit.span.end > exact.span.end
+            {
+                return Ok(false);
+            }
+            governor.charge(Resource::Work, size(shadow.captures.len()))?;
+            if shadow.captures.iter().any(|capture| {
+                capture.kind != CaptureKind::Dropped
+                    && capture.span.start < edit.span.end
+                    && edit.span.start < capture.span.end
+            }) {
+                return Ok(false);
+            }
+        }
+        cost = cost.saturating_add(edit.rule().cost);
+    }
+    Ok(cost == shadow.cost)
+}
+
+pub(super) fn same_source_text(
+    left: &str,
+    right: &str,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.len())
+            .saturating_add(size(right.len()))
+            .saturating_add(1),
+    )?;
+    Ok(left == right)
+}
+
+fn same_embedded_binding(
+    left: Option<&Spanned<String>>,
+    right: Option<&Spanned<String>>,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    match (left, right) {
+        (None, None) => Ok(true),
+        (Some(left), Some(right)) => {
+            Ok(left.span == right.span && same_source_text(&left.value, &right.value, governor)?)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn same_embedded_arguments(
+    left: &ArgTree,
+    right: &ArgTree,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    if !left.unresolved.is_empty()
+        || !right.unresolved.is_empty()
+        || !left.collected.is_empty()
+        || !right.collected.is_empty()
+        || left.arguments_were_stringified != right.arguments_were_stringified
+        || left.leaves.len() != right.leaves.len()
+    {
+        return Ok(false);
+    }
+    match (&left.tool, &right.tool) {
+        (None, None) => {}
+        (Some(left), Some(right)) if same_source_text(left, right, governor)? => {}
+        _ => return Ok(false),
+    }
+    for (left, right) in left.leaves.iter().zip(&right.leaves) {
+        governor.charge(Resource::Work, 1)?;
+        if left.raw != right.raw
+            || left.origin != right.origin
+            || !same_source_text(&left.pointer, &right.pointer, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    same_source_tree(&left.root, &right.root, governor)
+}
+
+struct SourceNode<'a> {
+    left: &'a crate::json::Node,
+    right: &'a crate::json::Node,
+    depth: u64,
+}
+
+impl ScratchCharge for SourceNode<'_> {
+    const CHARGE: usize = 24;
+}
+const _: () = assert!(core::mem::size_of::<SourceNode<'_>>() <= SourceNode::CHARGE);
+
+/// Source identity is stricter than semantic JSON equality: preserve every
+/// occurrence, source range and exact number spelling without numeric work.
+pub(super) fn same_source_tree(
+    left: &crate::json::Node,
+    right: &crate::json::Node,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    use crate::json::Value;
+    let mut stack = ScratchVec::new(governor);
+    crate::contract::push_scratch(
+        &mut stack,
+        SourceNode {
+            left,
+            right,
+            depth: 0,
+        },
+        governor,
+    )?;
+    while let Some(SourceNode { left, right, depth }) = stack.pop() {
+        governor.charge(Resource::Work, 1)?;
+        governor.charge(Resource::Depth, depth)?;
+        if left.span != right.span {
+            return Ok(false);
+        }
+        match (&left.value, &right.value) {
+            (Value::Null, Value::Null) => {}
+            (Value::Bool(a), Value::Bool(b)) if a == b => {}
+            (Value::String(a), Value::String(b)) => {
+                if !same_source_text(a, b, governor)? {
+                    return Ok(false);
+                }
+            }
+            (Value::Number(a), Value::Number(b)) => {
+                if !same_source_text(a.as_str(), b.as_str(), governor)? {
+                    return Ok(false);
+                }
+            }
+            (Value::Array(a), Value::Array(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (left, right) in a.iter().zip(b).rev() {
+                    governor.charge(Resource::Work, 1)?;
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        SourceNode {
+                            left,
+                            right,
+                            depth: depth.saturating_add(1),
+                        },
+                        governor,
+                    )?;
+                }
+            }
+            (Value::Object(a), Value::Object(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (left, right) in a.iter().zip(b).rev() {
+                    governor.charge(Resource::Work, 1)?;
+                    if left.key_span != right.key_span
+                        || !same_source_text(&left.key, &right.key, governor)?
+                    {
+                        return Ok(false);
+                    }
+                    governor.charge(Resource::Depth, depth.saturating_add(1))?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        SourceNode {
+                            left: &left.value,
+                            right: &right.value,
+                            depth: depth.saturating_add(1),
+                        },
+                        governor,
+                    )?;
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    governor.check()?;
+    Ok(true)
+}
+
 /// The turn-level segment of one part of a completed attempt of `dialect`.
 fn part_segment(kind: ProductionKind, dialect: &DialectId, part: Part) -> Segment {
     match part {
@@ -601,6 +1263,14 @@ struct Ended {
     outread: bool,
 }
 
+/// `segment` cut at a reasoning block's closing marker at `marker`
+/// (`tool_call.reasoning.marker-cut`): unchanged when it ends before the
+/// marker (or no marker closed the block), `None` when it begins inside it.
+/// A cut reading keeps what it read before the marker: a name, id or
+/// capture reaching into the marker is dropped, and arguments read from the
+/// marker's bytes are not arguments (the reading's arguments are then
+/// unresolved at the marker), so a call whose arguments came from the
+/// marker is never usable.
 fn cut_at_marker(segment: &CallSegment, marker: Option<usize>) -> Option<CallSegment> {
     let Some(marker) = marker.filter(|marker| segment.span.end > *marker) else {
         return Some(segment.clone());
@@ -700,54 +1370,63 @@ fn same_example_reading(
         return Ok(false);
     }
     for (left, right) in left.iter().zip(right) {
-        governor.charge(Resource::Work, 96)?;
-        let same = match (left, right) {
-            (Segment::Call(left), Segment::Call(right))
-            | (Segment::Result(left), Segment::Result(right)) => {
-                same_example_call(left, right, governor)?
-            }
-            (Segment::Reasoning(left), Segment::Reasoning(right)) => {
-                admit_example_edits(&left.edits, governor)?;
-                admit_example_edits(&right.edits, governor)?;
-                if left.span != right.span
-                    || left.text != right.text
-                    || left.closure != right.closure
-                    || left.edits != right.edits
-                    || left.embedded.len() != right.embedded.len()
-                {
-                    return Ok(false);
-                }
-                for (left, right) in left.embedded.iter().zip(&right.embedded) {
-                    if !same_example_call(left, right, governor)? {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            (
-                Segment::Rejected {
-                    dialect: left_dialect,
-                    ..
-                },
-                Segment::Rejected {
-                    dialect: right_dialect,
-                    ..
-                },
-            ) => {
-                governor.charge(
-                    Resource::Work,
-                    size(left_dialect.name().len().min(right_dialect.name().len())),
-                )?;
-                left == right
-            }
-            (Segment::Content(left), Segment::Content(right)) => left == right,
-            _ => false,
-        };
-        if !same {
+        if !same_recognized_segment(left, right, governor)? {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// Exact segment equality shared by example normalization and borrowed paths.
+/// Derived argument/derivation caches stay outside equality, as in `Segment::eq`.
+fn same_recognized_segment(
+    left: &Segment,
+    right: &Segment,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, 96)?;
+    Ok(match (left, right) {
+        (Segment::Call(left), Segment::Call(right))
+        | (Segment::Result(left), Segment::Result(right)) => {
+            same_example_call(left, right, governor)?
+        }
+        (Segment::Reasoning(left), Segment::Reasoning(right)) => {
+            admit_example_edits(&left.edits, governor)?;
+            admit_example_edits(&right.edits, governor)?;
+            if left.span != right.span
+                || left.text != right.text
+                || left.closure != right.closure
+                || left.edits != right.edits
+                || left.embedded.len() != right.embedded.len()
+            {
+                return Ok(false);
+            }
+            for (left, right) in left.embedded.iter().zip(&right.embedded) {
+                if !same_example_call(left, right, governor)? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
+        (
+            Segment::Rejected {
+                dialect: left_dialect,
+                ..
+            },
+            Segment::Rejected {
+                dialect: right_dialect,
+                ..
+            },
+        ) => {
+            governor.charge(
+                Resource::Work,
+                size(left_dialect.name().len().min(right_dialect.name().len())),
+            )?;
+            left == right
+        }
+        (Segment::Content(left), Segment::Content(right)) => left == right,
+        _ => false,
+    })
 }
 
 fn same_example_call(
@@ -953,6 +1632,11 @@ impl fmt::Debug for Recognizer<'_> {
             .field("dialects", &self.set.dialects())
             .field("policy", &self.policy)
             .field("fed", &self.engine.fed())
+            .field("content_state", &self.turn.top)
+            .field("live_interpretations", &self.turn.interps)
+            .field("native_history", &self.turn.nodes)
+            .field("stored_segments", &self.turn.store)
+            .field("pending_reports", &self.pending)
             .finish_non_exhaustive()
     }
 }
@@ -1035,6 +1719,9 @@ impl<'s> Recognizer<'s> {
         let turn = Turn {
             nodes: vec![root],
             store: Vec::new(),
+            envelopes: SourceEnvelopes::new(governor),
+            failure_proofs: ScratchMap::new(governor),
+            embedded_origins: ScratchMap::new(governor),
             top: (!starts_open).then_some(Top {
                 cost: 0,
                 hist: 0,
@@ -1050,6 +1737,8 @@ impl<'s> Recognizer<'s> {
                 embedded: Vec::new(),
             }),
             interps: BTreeMap::new(),
+            weak_headers: BTreeMap::new(),
+            native_frames: ScratchMap::new(governor),
             last_kill: None,
             blocks: BTreeMap::new(),
             blocked: Vec::new(),
@@ -1115,6 +1804,7 @@ impl<'s> Recognizer<'s> {
                 Ok(())
             }
             Err(reason) => {
+                self.engine.discard_failure_headers(governor);
                 self.failed = Some(reason.clone());
                 Err(reason)
             }
@@ -1191,14 +1881,13 @@ impl<'s> Recognizer<'s> {
     /// Process every pending report at an offset up to `limit`, releasing
     /// each one's queue charge.
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        let mut ready: Vec<(usize, usize, Pending)> = Vec::new();
+        let mut ready = Vec::new();
         // Stable order: offset, then phase, then arrival.
         while let Some(entry) = self.pending.first_entry() {
             if entry.key().0 > limit {
                 break;
             }
-            let pending = entry.remove();
-            ready.push((ready.len(), pending.at(), pending));
+            ready.push(entry.remove());
         }
         if ready.is_empty() {
             return Ok(());
@@ -1206,19 +1895,17 @@ impl<'s> Recognizer<'s> {
         let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
         governor.release_scratch(released)?;
         self.queued.bytes -= released;
-        let mut start = 0;
-        while start < ready.len() {
-            let at = ready[start].1;
-            let end = ready[start..]
-                .iter()
-                .position(|(_, other, _)| *other != at)
-                .map_or(ready.len(), |offset| start + offset);
-            let group: Vec<Pending> = ready[start..end]
-                .iter()
-                .map(|(_, _, pending)| pending.clone())
-                .collect();
-            self.position(at, group, governor)?;
-            start = end;
+        let mut ready = ready.into_iter().peekable();
+        while let Some(pending) = ready.next() {
+            let at = pending.at();
+            let mut group = vec![pending];
+            while ready.peek().is_some_and(|pending| pending.at() == at) {
+                group.push(ready.next().expect("peeked report"));
+            }
+            if let Err(reason) = self.position(at, group, governor) {
+                let _ = Pending::discard_all(ready, governor);
+                return Err(reason);
+            }
         }
         Ok(())
     }
@@ -1232,85 +1919,108 @@ impl<'s> Recognizer<'s> {
         group: Vec<Pending>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
-        let mut frame = Frame {
-            top: self.turn.top,
-            kill: false,
-            candidates: Vec::new(),
-            think: None,
-            closed: false,
-        };
-        for pending in group {
-            match pending {
-                Pending::Engine(Event::Opened { attempt, start, .. }) => {
-                    self.opened(&mut frame, attempt, start, governor)?;
-                }
-                Pending::Marker {
-                    start,
-                    end,
-                    pair,
-                    open: true,
-                } => self.think_opened(&mut frame, start, end, pair, governor)?,
-                Pending::Engine(Event::Completed {
+        let mut group = group.into_iter();
+        let result = (|| {
+            governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
+            let mut frame = Frame {
+                top: self.turn.top,
+                kill: false,
+                candidates: Vec::new(),
+                think: None,
+                closed: false,
+            };
+            for pending in group.by_ref() {
+                self.report(&mut frame, at, pending, governor)?;
+            }
+            if frame.kill {
+                self.turn.top = None;
+            }
+            if frame.closed {
+                self.turn.think = None;
+            }
+            if let Some(think) = frame.think
+                && self
+                    .turn
+                    .think
+                    .as_ref()
+                    .is_none_or(|existing| think.cost < existing.cost)
+            {
+                self.turn.think = Some(think);
+            }
+            self.turn.revive(&frame.candidates, at, governor)
+        })();
+        let cleanup = Pending::discard_all(group, governor);
+        result.and(cleanup)
+    }
+
+    /// Consume one report, moving each owned payload to its handler.
+    fn report(
+        &mut self,
+        frame: &mut Frame,
+        at: usize,
+        pending: Pending,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        match pending {
+            Pending::Engine(Event::Opened {
+                attempt,
+                start,
+                opening,
+                ..
+            }) => {
+                self.opened(frame, attempt, start..at, opening, governor)?;
+            }
+            Pending::Marker {
+                start,
+                end,
+                pair,
+                open: true,
+            } => self.think_opened(frame, start, end, pair, governor)?,
+            Pending::Engine(Event::Completed {
+                table,
+                attempt,
+                parts,
+                charged,
+                ..
+            }) => {
+                let kind = self.engine.kind(table);
+                let dialect = self.engine.dialect(table).clone();
+                let CompletedParts { parts, envelopes } = parts;
+                let parts = parts
+                    .into_iter()
+                    .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
+                    .collect();
+                self.completed(frame, attempt, parts, &envelopes, charged, governor)?;
+            }
+            Pending::Engine(Event::Ended {
+                table,
+                attempt,
+                start,
+                completed,
+                reason,
+                salvage,
+                outread,
+                ..
+            }) => {
+                let ended = Ended {
                     table,
                     attempt,
-                    parts,
-                    charged,
-                    ..
-                }) => {
-                    let kind = self.engine.kind(table);
-                    let dialect = self.engine.dialect(table).clone();
-                    let parts = parts
-                        .into_iter()
-                        .map(|(part, cost)| (part_segment(kind, &dialect, part), cost))
-                        .collect();
-                    self.completed(&mut frame, attempt, parts, charged, governor)?;
-                }
-                Pending::Engine(Event::Ended {
-                    table,
-                    attempt,
                     start,
+                    at,
                     completed,
                     reason,
-                    salvage,
                     outread,
-                    ..
-                }) => {
-                    let ended = Ended {
-                        table,
-                        attempt,
-                        start,
-                        at,
-                        completed,
-                        reason,
-                        outread,
-                    };
-                    self.ended(&mut frame, ended, salvage, governor)?;
-                }
-                Pending::Marker {
-                    start,
-                    pair,
-                    open: false,
-                    ..
-                } => self.think_closed(&mut frame, at, start, pair, governor)?,
+                };
+                self.ended(frame, ended, salvage, governor)?;
             }
+            Pending::Marker {
+                start,
+                pair,
+                open: false,
+                ..
+            } => self.think_closed(frame, at, start, pair, governor)?,
         }
-        if frame.kill {
-            self.turn.top = None;
-        }
-        if frame.closed {
-            self.turn.think = None;
-        }
-        if let Some(think) = frame.think
-            && self
-                .turn
-                .think
-                .as_ref()
-                .is_none_or(|existing| think.cost < existing.cost)
-        {
-            self.turn.think = Some(think);
-        }
-        self.turn.revive(frame.candidates, at, governor)
+        Ok(())
     }
 
     /// An attempt's opener completed: give it a base on every state that
@@ -1319,35 +2029,60 @@ impl<'s> Recognizer<'s> {
         &mut self,
         frame: &mut Frame,
         attempt: u64,
-        start: usize,
+        prefix: Range<usize>,
+        opening: Opening,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let mut interps = Vec::new();
-        match (frame.top, self.turn.last_kill) {
+        let start = prefix.start;
+        let weak_header = opening.weak_header;
+        let mut interps = ScratchVec::new(governor);
+        let last = self
+            .turn
+            .last_kill
+            .and_then(|last| last.at(start))
+            .filter(|top| opening.projected || !matches!(top, Interp::WeakPromoted(..)));
+        match (frame.top, last) {
             (Some(top), last) if top.boundary <= start => {
-                let base = match last {
-                    Some((kill_start, base)) if kill_start == start => base,
-                    _ => {
-                        let base = Base {
-                            cost: top.cost,
-                            hist: self.turn.close(top, start, governor)?,
-                        };
-                        self.turn.last_kill = Some((start, base));
-                        base
-                    }
+                let inherited = if let Some(inherited) = last {
+                    inherited
+                } else {
+                    let base = Base {
+                        cost: top.cost,
+                        hist: self.turn.close(top, start, governor)?,
+                    };
+                    let inherited = Interp::Top(base);
+                    self.turn.last_kill = Some(LastKill::new(start, inherited));
+                    inherited
                 };
-                interps.push(Interp::Top(base));
+                crate::contract::push_scratch(&mut interps, inherited, governor)?;
                 frame.kill = true;
             }
-            (_, Some((kill_start, base))) if kill_start == start => interps.push(Interp::Top(base)),
+            (_, Some(inherited)) => {
+                crate::contract::push_scratch(&mut interps, inherited, governor)?;
+            }
             _ => {}
         }
+        let replace_weak = if interps.is_empty()
+            && weak_header.is_none()
+            && !self.has_exact_outer(start, governor)?
+        {
+            self.inherit_header(frame, start, opening.projected, &mut interps, governor)?
+        } else {
+            None
+        };
         if let Some(think) = self.turn.think.clone()
             && think.start <= start
         {
-            interps.push(Interp::Embedded(think.start));
-            if let Some(base) = self.promote(&think, start, governor)? {
-                interps.push(Interp::Top(base));
+            crate::contract::push_scratch(&mut interps, Interp::Embedded(think.start), governor)?;
+            if let Some(promoted) = self.promote(
+                &think,
+                attempt,
+                start,
+                opening.projected,
+                replace_weak,
+                governor,
+            )? {
+                crate::contract::push_scratch(&mut interps, promoted, governor)?;
             }
         }
         if interps.is_empty() {
@@ -1357,21 +2092,298 @@ impl<'s> Recognizer<'s> {
             // reading it.
             self.engine.abandon(attempt, governor)?;
         } else {
+            if weak_header.is_none() && prefix.len() > 1 {
+                self.suppress_weak_prefix(start, opening.native_frame_end, governor)?;
+            }
+            if let Some(barrier) = weak_header {
+                governor.charge(Resource::ScratchBytes, 64)?;
+                self.turn.weak_headers.insert(attempt, barrier);
+            }
             self.turn.interps.insert(attempt, (start, interps));
         }
         Ok(())
     }
 
-    /// The base of a call that closes the unclosed reasoning block `think`
-    /// at its first opener (`start`), by the guess-flagged rule.
+    /// Inherit pre-header origins without reclassifying a weak reasoning
+    /// promotion as ordinary content on a nested native path.
+    fn inherit_header(
+        &mut self,
+        frame: &mut Frame,
+        start: usize,
+        projected: bool,
+        interps: &mut ScratchVec<Interp>,
+        governor: &mut Governor,
+    ) -> Result<Option<u64>, StopReason> {
+        let weak_promotion = self
+            .turn
+            .think
+            .as_ref()
+            .and_then(|think| match think.promoted {
+                Some(Promotion::Weak(owner, start, base)) => Some((owner, start, base)),
+                _ => None,
+            });
+        let mut replace_weak = None;
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        let mut origins = ScratchVec::new(governor);
+        for (&owner, &barrier) in &self.turn.weak_headers {
+            let Some((prefix, inherited)) = self.turn.interps.get(&owner) else {
+                continue;
+            };
+            if *prefix < start && start < barrier {
+                for &interp in inherited {
+                    governor.charge(Resource::Work, 1)?;
+                    let origin = HeaderOrigin {
+                        owner,
+                        prefix: *prefix,
+                        interp,
+                    };
+                    governor.charge(Resource::Work, size(origins.len()))?;
+                    if !origins.contains(&origin) {
+                        crate::contract::push_scratch(&mut origins, origin, governor)?;
+                    }
+                }
+            }
+        }
+        for HeaderOrigin {
+            owner,
+            prefix,
+            interp,
+        } in origins.iter().copied()
+        {
+            match interp {
+                Interp::WeakPromoted(origin, base) if !projected => {
+                    // A sibling profile's later barrier cannot authorize replacing
+                    // the first weak promotion, even when its prefix/base agree.
+                    if owner == origin && weak_promotion == Some((owner, prefix, base)) {
+                        replace_weak = Some(owner);
+                    }
+                }
+                top @ (Interp::Top(base)
+                | Interp::NativePromoted(base)
+                | Interp::WeakPromoted(_, base)) => {
+                    let hist = self.turn.close(
+                        Top {
+                            cost: base.cost,
+                            hist: base.hist,
+                            boundary: prefix,
+                        },
+                        start,
+                        governor,
+                    )?;
+                    let base = Base {
+                        cost: base.cost,
+                        hist,
+                    };
+                    let inherited = top.rebase(base);
+                    governor.charge(Resource::Work, size(interps.len()))?;
+                    if !interps.contains(&inherited) {
+                        crate::contract::push_scratch(interps, inherited, governor)?;
+                    }
+                    self.turn.last_kill = Some(LastKill::new(start, inherited));
+                    frame.kill = true;
+                }
+                Interp::Embedded(block) => {
+                    governor.charge(Resource::Work, size(interps.len()))?;
+                    if !interps.contains(&Interp::Embedded(block)) {
+                        crate::contract::push_scratch(interps, Interp::Embedded(block), governor)?;
+                    }
+                }
+            }
+        }
+        Ok(replace_weak)
+    }
+
+    /// A written native opener owns its prefix. A projected preamble at
+    /// that same prefix must not turn the framing into lossy prose and
+    /// revive a path that omits earlier calls from the native group.
+    /// Interior native frames are remembered for per-completion proof only.
+    fn suppress_weak_prefix(
+        &mut self,
+        start: usize,
+        native_frame_end: Option<usize>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        let mut suppressed = ScratchVec::new(governor);
+        for &owner in self.turn.weak_headers.keys() {
+            if self
+                .turn
+                .interps
+                .get(&owner)
+                .is_some_and(|(prefix, _)| *prefix == start)
+            {
+                suppressed.push(owner)?;
+            }
+        }
+        for &owner in &suppressed {
+            self.forget_native_frame(owner, governor)?;
+            self.turn.weak_headers.remove(&owner);
+            self.turn.interps.remove(&owner);
+            self.engine.abandon(owner, governor)?;
+        }
+        self.remember_native_frame(start, native_frame_end, governor)
+    }
+
+    /// Remember source framing without stopping any weak configuration.
+    fn remember_native_frame(
+        &mut self,
+        start: usize,
+        end: Option<usize>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let Some(end) = end else { return Ok(()) };
+        governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
+        for (&owner, &barrier) in &self.turn.weak_headers {
+            let Some((prefix, _)) = self.turn.interps.get(&owner) else {
+                continue;
+            };
+            if *prefix < start && start < barrier {
+                governor.charge(
+                    Resource::Work,
+                    size(self.turn.native_frames.len())
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                )?;
+                if self
+                    .turn
+                    .native_frames
+                    .get(&owner)
+                    .is_none_or(|&(prior, _)| start < prior)
+                {
+                    self.turn.native_frames.insert(owner, (start, end))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The frame survives native completion and ends with its weak owner.
+    fn forget_native_frame(
+        &mut self,
+        owner: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.turn.native_frames.len()).saturating_mul(2),
+        )?;
+        self.turn.native_frames.remove(&owner);
+        Ok(())
+    }
+
+    /// Each materialized reading must discard the full native marker in its
+    /// leading prose capture, before every name, ID and argument capture.
+    fn discards_native_frame(
+        &self,
+        attempt: u64,
+        parts: &[(Segment, u64)],
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        if self.turn.native_frames.is_empty() {
+            return Ok(false);
+        }
+        governor.charge(Resource::Work, size(self.turn.native_frames.len()))?;
+        let Some(&(start, end)) = self.turn.native_frames.get(&attempt) else {
+            return Ok(false);
+        };
+        let Some((prefix, _)) = self.turn.interps.get(&attempt) else {
+            return Ok(false);
+        };
+        let [(Segment::Call(call), _)] = parts else {
+            return Ok(false);
+        };
+        if call.span.start != *prefix || call.readings.is_empty() || !call.derivations.is_empty() {
+            return Ok(false);
+        }
+        for reading in &call.readings {
+            governor.charge(Resource::Work, 1)?;
+            if reading.dialect != DialectId::HermesStripped
+                || reading.kind != ProductionKind::Call
+                || reading.span != call.span
+            {
+                return Ok(false);
+            }
+            governor.charge(
+                Resource::Work,
+                size(reading.captures.len())
+                    .saturating_mul(2)
+                    .saturating_add(size(reading.edits.len())),
+            )?;
+            let (mut name, mut arguments, mut first) = (false, false, usize::MAX);
+            for capture in &reading.captures {
+                if matches!(
+                    capture.kind,
+                    CaptureKind::Name | CaptureKind::Id | CaptureKind::Arguments
+                ) {
+                    if capture.span.start < end {
+                        return Ok(false);
+                    }
+                    first = first.min(capture.span.start);
+                    name |= capture.kind == CaptureKind::Name;
+                    arguments |= capture.kind == CaptureKind::Arguments;
+                }
+            }
+            let Some(dropped) = reading.captures.iter().find(|capture| {
+                capture.kind == CaptureKind::Dropped
+                    && capture.span.start == *prefix
+                    && capture.span.start <= start
+                    && end <= capture.span.end
+                    && capture.span.end <= first
+            }) else {
+                return Ok(false);
+            };
+            if !name
+                || !arguments
+                || !reading.edits.iter().any(|edit| {
+                    edit.operator == EditOperator::ExtractProse
+                        && edit.span == dropped.span
+                        && edit.replacement.is_empty()
+                        && edit.original.len() == dropped.span.len()
+                })
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Weak framing cannot reopen the committed span of a native attempt.
+    fn has_exact_outer(&self, start: usize, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, size(self.turn.interps.len()))?;
+        Ok(self.turn.interps.iter().any(|(owner, (prefix, _))| {
+            *prefix < start && !self.turn.weak_headers.contains_key(owner)
+        }))
+    }
+
+    /// Promote the first opener within one origin. A native opener inside
+    /// the cached weak promotion's own header may retain its source boundary.
+    /// Existing weak interpretations keep their original bases and provenance.
     fn promote(
         &mut self,
         think: &Think,
+        owner: u64,
         start: usize,
+        projected: bool,
+        replace_weak: Option<u64>,
         governor: &mut Governor,
-    ) -> Result<Option<Base>, StopReason> {
-        if let Some((promoted_start, base)) = think.promoted {
-            return Ok((promoted_start == start).then_some(base));
+    ) -> Result<Option<Interp>, StopReason> {
+        if let Some(cached) = think.promoted {
+            if cached.start() == start {
+                let promotion = if projected {
+                    cached
+                } else {
+                    Promotion::Native(start, cached.base())
+                };
+                if let Some(think) = self.turn.think.as_mut() {
+                    think.promoted = Some(promotion);
+                }
+                return Ok(Some(promotion.interpretation()));
+            }
+            if projected
+                || !matches!(cached, Promotion::Weak(origin, _, _) if replace_weak == Some(origin))
+            {
+                return Ok(None);
+            }
         }
         // A call opener inside the block's own opening marker leaves no
         // text to close: the block does not close there.
@@ -1404,10 +2416,15 @@ impl<'s> Recognizer<'s> {
             .turn
             .append(prior, segment, REASONING_UNCLOSED, start, governor)?;
         let base = Base { cost, hist };
+        let promotion = if projected {
+            Promotion::Weak(owner, start, base)
+        } else {
+            Promotion::Native(start, base)
+        };
         if let Some(think) = self.turn.think.as_mut() {
-            think.promoted = Some((start, base));
+            think.promoted = Some(promotion);
         }
-        Ok(Some(base))
+        Ok(Some(promotion.interpretation()))
     }
 
     /// A reasoning opener completed at `start`.
@@ -1439,23 +2456,55 @@ impl<'s> Recognizer<'s> {
         Ok(())
     }
 
+    /// A fallible owned copy of the attempt's live interpretations.
+    fn copy_interps(
+        &self,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<Option<ScratchVec<Interp>>, StopReason> {
+        let Some((_, live)) = self.turn.interps.get(&attempt) else {
+            return Ok(None);
+        };
+        governor.charge(Resource::Work, size(live.len()))?;
+        let mut copied = ScratchVec::new(governor);
+        copied.reserve(live.len())?;
+        copied.extend(live.iter().copied())?;
+        Ok(Some(copied))
+    }
+
     /// The segments of `attempt` ended: one call (or result), or each
     /// call of an attempt whose production separates calls with `next`,
     /// in order, each with its cost.
+    #[allow(clippy::too_many_arguments)]
     fn completed(
         &mut self,
         frame: &mut Frame,
         attempt: u64,
         parts: Vec<(Segment, u64)>,
+        envelopes: &[PartEnvelope],
         charged: u64,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let Some((_, interps)) = self.turn.interps.get(&attempt).cloned() else {
-            // An attempt with no interpretation (it began inside another
-            // attempt's committed span): its parts are dropped unread.
-            drop(parts);
-            return governor.release_scratch(charged);
+        let interps = match self.copy_interps(attempt, governor) {
+            Ok(Some(interps)) => interps,
+            Ok(None) => {
+                drop(parts);
+                return governor.release_scratch(charged);
+            }
+            Err(reason) => {
+                drop(parts);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
         };
+        match self.discards_native_frame(attempt, &parts, governor) {
+            Ok(false) => {}
+            disposition => {
+                drop(parts);
+                let cleanup = governor.release_scratch(charged);
+                return disposition.and(cleanup);
+            }
+        }
         // An opening reasoning marker a call read over as markup, not as
         // the data of a string value, cuts it (see `marker_cut`).
         let cut = self.marker_cut(&parts, governor)?;
@@ -1474,11 +2523,18 @@ impl<'s> Recognizer<'s> {
                 cut_part = Some((self.turn.store(trimmed, governor)?, cost, marker));
             }
             let end = segment.span().end;
-            stored.push((self.turn.store(segment, governor)?, cost, end));
+            stored.push((
+                self.turn
+                    .store_certified(segment, index, envelopes, governor)?,
+                cost,
+                end,
+            ));
         }
-        for interp in interps {
+        for &interp in &interps {
             match interp {
-                Interp::Top(base) => {
+                Interp::Top(base)
+                | Interp::NativePromoted(base)
+                | Interp::WeakPromoted(_, base) => {
                     let mut chain = base;
                     let (kept, open) = match (cut, cut_part) {
                         (Some((part, marker, pair)), Some(trimmed)) => {
@@ -1541,6 +2597,16 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        let witnessed = match self.ended_witness(&ended, governor) {
+            Ok(witnessed) => witnessed,
+            Err(reason) => {
+                let charged = salvage.as_ref().map_or(0, |salvage| salvage.charged);
+                drop(salvage);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
+        };
+        self.turn.weak_headers.remove(&ended.attempt);
         let removed = self.turn.interps.remove(&ended.attempt);
         // An opening reasoning marker the attempt read over cuts it: the
         // marker's bytes belong to the block, which opens where the
@@ -1570,7 +2636,9 @@ impl<'s> Recognizer<'s> {
         self.prune_blocked(governor)?;
         let Some((_, interps)) = removed else {
             if let Some(salvage) = salvage {
-                governor.release_scratch(salvage.charged)?;
+                let charged = salvage.charged;
+                drop(salvage);
+                governor.release_scratch(charged)?;
             }
             return Ok(());
         };
@@ -1613,23 +2681,79 @@ impl<'s> Recognizer<'s> {
                 governor,
             );
         }
-        let segment = Segment::Rejected {
-            span: ended.start..ended.at,
-            dialect,
-            reason: ended.reason,
-        };
-        let index = self.turn.store(segment, governor)?;
+        let index = self.store_failed_segment(&ended, dialect, witnessed, governor)?;
         if outread {
             return Ok(());
         }
-        for interp in interps {
-            if let Interp::Top(base) = interp {
+        for &interp in &interps {
+            if let Some(base) = interp.base() {
                 frame
                     .candidates
                     .push(self.turn.append(base, index, REJECT, ended.at, governor)?);
             }
         }
         Ok(())
+    }
+
+    /// Consume the attempt's complete source proof before retiring its metadata.
+    fn ended_witness(
+        &mut self,
+        ended: &Ended,
+        governor: &mut Governor,
+    ) -> Result<Option<(FailureWitness, Option<HeaderSpan>)>, StopReason> {
+        let witness = self.engine.take_failure_header(ended.attempt, governor)?;
+        let frame = if witness.is_some() {
+            governor.charge(
+                Resource::Work,
+                u64::from(self.turn.native_frames.len().bit_width() + 1).saturating_add(24),
+            )?;
+            self.turn
+                .native_frames
+                .get(&ended.attempt)
+                .map(|&(start, end)| HeaderSpan { start, end })
+        } else {
+            None
+        };
+        self.forget_native_frame(ended.attempt, governor)?;
+        Ok(witness.map(|witness| (witness, frame)))
+    }
+
+    fn store_failed_segment(
+        &mut self,
+        ended: &Ended,
+        dialect: DialectId,
+        witnessed: Option<(FailureWitness, Option<HeaderSpan>)>,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let certificate = match witnessed {
+            Some((witness, native)) if !ended.outread && witness.reason == ended.reason => {
+                Certificate::new(
+                    witness,
+                    &(ended.start..ended.at),
+                    &dialect,
+                    native,
+                    governor,
+                )?
+            }
+            _ => None,
+        };
+        let segment = Segment::Rejected {
+            span: ended.start..ended.at,
+            dialect,
+            reason: ended.reason,
+        };
+        let index = self.turn.store(segment, governor)?;
+        if let Some(certificate) = certificate {
+            governor.charge(
+                Resource::Work,
+                size(self.turn.failure_proofs.len())
+                    .saturating_mul(24)
+                    .saturating_add(u64::from(self.turn.failure_proofs.len().bit_width() + 1))
+                    .saturating_add(32),
+            )?;
+            self.turn.failure_proofs.insert(index, certificate)?;
+        }
+        Ok(index)
     }
 
     /// The first part of a completed attempt that read over an opening
@@ -1743,7 +2867,7 @@ impl<'s> Recognizer<'s> {
         };
         let index = self.turn.store(segment, governor)?;
         for &interp in interps {
-            if let Interp::Top(base) = interp {
+            if let Some(base) = interp.base() {
                 let (cost, mut hist) = self.turn.append(base, index, REJECT, end, governor)?;
                 if end < marker {
                     hist = self
@@ -1865,16 +2989,24 @@ impl<'s> Recognizer<'s> {
         } else {
             None
         };
-        for parts in salvage.segmentations {
+        let (segmentations, _owner) = salvage.segmentations.into_owned_parts();
+        for CompletedParts { parts, envelopes } in segmentations {
             let mut stored = Vec::with_capacity(parts.len());
-            for (part, cost) in parts {
+            for (index, (part, cost)) in parts.into_iter().enumerate() {
                 let segment = part_segment(kind, dialect, part);
                 let end = segment.span().end;
-                stored.push((self.turn.store(segment, governor)?, cost, end));
+                stored.push((
+                    self.turn
+                        .store_certified(segment, index, &envelopes, governor)?,
+                    cost,
+                    end,
+                ));
             }
             for interp in interps {
                 match *interp {
-                    Interp::Top(base) => {
+                    Interp::Top(base)
+                    | Interp::NativePromoted(base)
+                    | Interp::WeakPromoted(_, base) => {
                         let mut chain = base;
                         for &(index, cost, end) in &stored {
                             let (cost, hist) =
@@ -1982,7 +3114,7 @@ impl<'s> Recognizer<'s> {
             hist: think.hist,
         };
         let candidate = self.turn.append(prior, segment, 0, end, governor)?;
-        self.turn.revive(vec![candidate], end, governor)
+        self.turn.revive(&[candidate], end, governor)
     }
 
     /// End the turn and return its packed segmentation.
@@ -2025,7 +3157,7 @@ impl<'s> Recognizer<'s> {
                 // An output that ends where its open block starts (an empty
                 // output under `starts_open`) holds no reasoning to classify.
                 let empty = (think.cost, think.hist);
-                self.turn.revive(vec![empty], end, governor)?;
+                self.turn.revive(&[empty], end, governor)?;
             } else {
                 self.unterminated(&think, end, governor)?;
             }
@@ -2046,7 +3178,7 @@ impl<'s> Recognizer<'s> {
             output,
             example_regions: None,
         };
-        let pieces = builder.pieces(last, governor)?;
+        let (pieces, failure_proofs) = builder.pieces(last, governor)?;
         let Builder {
             forest,
             example_regions,
@@ -2085,12 +3217,187 @@ impl<'s> Recognizer<'s> {
             forest,
             cost: top.cost,
             attempted,
+            failure_proofs,
         })
     }
 }
 
 /// The fenced and inline regions shared by normalization and attempt reporting.
 type ExampleRegions = (Vec<Range<usize>>, Vec<Range<usize>>);
+
+struct BuiltReading {
+    segments: Vec<Segment>,
+    cost: u64,
+    proofs: PathProof,
+}
+
+/// A normalized path item; stored payloads remain owned by the immutable turn.
+enum PlannedSegment<'t> {
+    Content(Range<usize>),
+    Stored(&'t Segment),
+}
+
+impl ScratchCharge for PlannedSegment<'_> {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 32);
+        32
+    };
+}
+
+impl PlannedSegment<'_> {
+    fn same(&self, other: &Self, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 4)?;
+        match (self, other) {
+            (Self::Content(left), Self::Content(right)) => Ok(left == right),
+            (Self::Stored(left), Self::Stored(right)) => {
+                if core::ptr::eq(*left, *right) {
+                    Ok(true)
+                } else {
+                    same_recognized_segment(left, right, governor)
+                }
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn materialize(self) -> Segment {
+        match self {
+            Self::Content(span) => Segment::Content(span),
+            Self::Stored(segment) => segment.clone(),
+        }
+    }
+}
+
+/// Discovery owns metadata and proofs, never a speculative raw-segment copy.
+struct PlannedReading<'t> {
+    segments: ScratchVec<PlannedSegment<'t>>,
+    cost: u64,
+    proofs: PathProof,
+}
+
+impl ScratchCharge for PlannedReading<'_> {
+    const CHARGE: usize = {
+        const BYTES: usize =
+            <ScratchVec<PlannedSegment<'static>>>::CHARGE + <u64>::CHARGE + PathProof::CHARGE;
+        assert!(core::mem::size_of::<Self>() <= BYTES);
+        BYTES
+    };
+}
+
+impl<'t> PlannedReading<'t> {
+    fn push(
+        &mut self,
+        segment: PlannedSegment<'t>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 4)?;
+        if let (Some(PlannedSegment::Content(last)), PlannedSegment::Content(next)) =
+            (self.segments.as_mut_slice().last_mut(), &segment)
+            && last.end == next.start
+        {
+            last.end = next.end;
+            return Ok(());
+        }
+        crate::contract::push_scratch(&mut self.segments, segment, governor)
+    }
+
+    fn same(&self, other: &Self, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if self.segments.len() != other.segments.len() {
+            return Ok(false);
+        }
+        for (left, right) in self.segments.iter().zip(other.segments.iter()) {
+            if !left.same(right, governor)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Only admitted, distinct plans enter the existing owned public IR path.
+    fn materialize(self, governor: &mut Governor) -> Result<BuiltReading, StopReason> {
+        governor.charge(Resource::Work, size(self.segments.len()))?;
+        let mut segments = Vec::with_capacity(self.segments.len());
+        let (planned, _planned_owner) = self.segments.into_owned_parts();
+        for segment in planned {
+            segments.push(segment.materialize());
+        }
+        governor.check()?;
+        Ok(BuiltReading {
+            segments,
+            cost: self.cost,
+            proofs: self.proofs,
+        })
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<(u32, usize)>() <= <(u32, usize)>::CHARGE);
+
+/// Covers aggregate handles outside their vectors' separately charged slots.
+/// One owner spans discovery and serial materialization, including an incoming
+/// plan, transferred iterators and the transient owned reading record.
+const PATH_METADATA_BYTES: u64 = 512;
+
+/// The plan table drops its physical storage before the metadata reservation.
+struct PathReadings<'t> {
+    readings: ScratchVec<PlannedReading<'t>>,
+    metadata: ScratchLease,
+}
+
+impl<'t> PathReadings<'t> {
+    fn new(governor: &mut Governor) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(PATH_METADATA_BYTES)?;
+        Ok(Self {
+            readings: ScratchVec::new(governor),
+            metadata,
+        })
+    }
+
+    const fn len(&self) -> usize {
+        self.readings.len()
+    }
+
+    fn pop(&mut self) -> Option<PlannedReading<'t>> {
+        self.readings.pop()
+    }
+
+    /// Keep both reservations until the consuming iterator's buffers drop.
+    fn into_owned_parts(self) -> (Vec<PlannedReading<'t>>, ScratchLease) {
+        let (readings, storage) = self.readings.into_owned_parts();
+        let mut metadata = self.metadata;
+        metadata.absorb(storage);
+        (readings, metadata)
+    }
+}
+
+const _: () = {
+    // The returned table handle, two DFS handles and an incoming plan coexist.
+    assert!(
+        core::mem::size_of::<(
+            PathReadings<'static>,
+            ScratchVec<u32>,
+            ScratchVec<(u32, usize)>,
+            PlannedReading<'static>,
+        )>() as u64
+            <= PATH_METADATA_BYTES
+    );
+    // Include all transfer/materialization handles conservatively, even where
+    // moving between representations means they need not coexist physically.
+    assert!(
+        core::mem::size_of::<(
+            PathReadings<'static>,
+            Vec<PlannedReading<'static>>,
+            ScratchLease,
+            std::vec::IntoIter<PlannedReading<'static>>,
+            PlannedReading<'static>,
+            Vec<Segment>,
+            std::vec::IntoIter<PlannedSegment<'static>>,
+            ScratchLease,
+            BuiltReading,
+        )>() as u64
+            <= PATH_METADATA_BYTES
+    );
+};
 
 /// Builds the factorized pieces and their derivations.
 struct Builder<'t> {
@@ -2104,7 +3411,7 @@ struct Builder<'t> {
     example_regions: Option<ExampleRegions>,
 }
 
-impl Builder<'_> {
+impl<'t> Builder<'t> {
     fn predecessors(&self, node: u32) -> [Option<u32>; 2] {
         let TurnNode { prev, kind, .. } = self.turn.nodes[node as usize];
         match kind {
@@ -2125,57 +3432,151 @@ impl Builder<'_> {
         Ok(frontier.pop_first().expect("paths meet at the root"))
     }
 
-    fn segment(&self, node: u32) -> (Segment, u64) {
+    fn segment(
+        &self,
+        node: u32,
+        governor: &mut Governor,
+    ) -> Result<(Segment, u64, Option<Certificate>), StopReason> {
         let TurnNode { end, kind, .. } = self.turn.nodes[node as usize];
-        match kind {
-            TurnKind::Content(start) => (Segment::Content(start..end), 0),
-            TurnKind::Stored(index, cost) => (self.turn.store[index as usize].clone(), cost),
+        Ok(match kind {
+            TurnKind::Content(start) => (Segment::Content(start..end), 0, None),
+            TurnKind::Stored(index, cost) => {
+                let proof = self.stored_proof(index, governor)?;
+                (self.turn.store[index as usize].clone(), cost, proof)
+            }
             TurnKind::Root | TurnKind::Pack(_) => unreachable!("not a segment"),
-        }
+        })
     }
 
-    /// Every distinct segmentation from `stop` to `node`.
+    fn stored_proof(
+        &self,
+        index: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<Certificate>, StopReason> {
+        if self.turn.failure_proofs.is_empty() {
+            return Ok(None);
+        }
+        governor.charge(
+            Resource::Work,
+            u64::from(self.turn.failure_proofs.len().bit_width() + 1).saturating_add(24),
+        )?;
+        Ok(self.turn.failure_proofs.get(&index).copied())
+    }
+
+    fn path_reading(
+        &self,
+        path: &[u32],
+        governor: &mut Governor,
+    ) -> Result<PlannedReading<'t>, StopReason> {
+        let mut reading = PlannedReading {
+            segments: ScratchVec::new(governor),
+            cost: 0,
+            proofs: PathProof::new(governor),
+        };
+        let turn = self.turn;
+        for &step in path.iter().rev() {
+            governor.charge(Resource::Work, 1)?;
+            let TurnNode { end, kind, .. } = turn.nodes[step as usize];
+            let (segment, cost, proof) = match kind {
+                TurnKind::Content(start) => (PlannedSegment::Content(start..end), 0, None),
+                TurnKind::Stored(index, cost) => {
+                    let segment = &turn.store[index as usize];
+                    let planned = match segment {
+                        Segment::Content(span) => PlannedSegment::Content(span.clone()),
+                        _ => PlannedSegment::Stored(segment),
+                    };
+                    (planned, cost, self.stored_proof(index, governor)?)
+                }
+                TurnKind::Root | TurnKind::Pack(_) => unreachable!("not a segment"),
+            };
+            reading.cost = reading.cost.saturating_add(cost);
+            let index = reading.segments.len();
+            reading.push(segment, governor)?;
+            reading.proofs.push(index, proof, governor)?;
+        }
+        Ok(reading)
+    }
+
+    /// Admit every distinct segmentation without cloning its stored payloads.
     fn paths(
         &self,
         node: u32,
         stop: u32,
         governor: &mut Governor,
-    ) -> Result<Vec<(Vec<Segment>, u64)>, StopReason> {
-        let mut readings: Vec<(Vec<Segment>, u64)> = Vec::new();
-        let mut stack = vec![(node, Vec::<u32>::new())];
-        while let Some((current, mut path)) = stack.pop() {
+    ) -> Result<PathReadings<'t>, StopReason> {
+        let mut readings = PathReadings::new(governor)?;
+        let mut path = ScratchVec::new(governor);
+        let mut stack = ScratchVec::new(governor);
+        crate::contract::push_scratch(&mut stack, (node, 0_usize), governor)?;
+        while let Some((current, depth)) = stack.pop() {
             governor.charge(Resource::Work, K_CAPTURE)?;
+            if depth > path.len() {
+                return Err(StopReason::InvalidInput(
+                    crate::contract::format_output_governed(
+                        format_args!(
+                            "recognizer path checkpoint {depth} exceeds retained prefix {}",
+                            path.len()
+                        ),
+                        governor,
+                    )?,
+                ));
+            }
+            governor.charge(Resource::Work, size(path.len() - depth))?;
+            while path.len() > depth {
+                let _ = path.pop();
+            }
             if current == stop {
-                let mut segments = Vec::with_capacity(path.len());
-                let mut cost = 0_u64;
-                for &step in path.iter().rev() {
-                    let (segment, segment_cost) = self.segment(step);
-                    cost = cost.saturating_add(segment_cost);
-                    push_merged(&mut segments, segment);
+                let reading = self.path_reading(&path, governor)?;
+                let mut duplicate = None;
+                for (index, known) in readings.readings.iter().enumerate() {
+                    governor.charge(Resource::Work, 1)?;
+                    if known.same(&reading, governor)? {
+                        duplicate = Some(index);
+                        break;
+                    }
                 }
-                if !readings.iter().any(|(known, _)| *known == segments) {
+                if let Some(index) = duplicate {
+                    readings.readings.as_mut_slice()[index]
+                        .proofs
+                        .intersect(&reading.proofs, governor)?;
+                } else {
                     governor.charge(Resource::Candidates, 1)?;
-                    readings.push((segments, cost));
+                    crate::contract::push_scratch(&mut readings.readings, reading, governor)?;
                 }
                 continue;
             }
             match self.turn.nodes[current as usize].kind {
                 TurnKind::Pack(other) => {
-                    stack.push((other, path.clone()));
-                    stack.push((self.turn.nodes[current as usize].prev, path));
+                    crate::contract::push_scratch(&mut stack, (other, depth), governor)?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        (self.turn.nodes[current as usize].prev, depth),
+                        governor,
+                    )?;
                 }
                 TurnKind::Content(_) | TurnKind::Stored(..) => {
-                    path.push(current);
-                    stack.push((self.turn.nodes[current as usize].prev, path));
+                    crate::contract::push_scratch(&mut path, current, governor)?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        (self.turn.nodes[current as usize].prev, path.len()),
+                        governor,
+                    )?;
                 }
                 TurnKind::Root => {}
             }
         }
+        governor.check()?;
         Ok(readings)
     }
 
-    fn pieces(&mut self, last: u32, governor: &mut Governor) -> Result<Vec<Piece>, StopReason> {
+    fn pieces(
+        &mut self,
+        last: u32,
+        governor: &mut Governor,
+    ) -> Result<(Vec<Piece>, FailureProofs), StopReason> {
+        let active = !self.turn.failure_proofs.is_empty();
         let mut reversed: Vec<Piece> = Vec::new();
+        let mut reverse_proofs = BuildProofs::new(active, governor);
         let mut node = last;
         while node != 0 {
             match self.turn.nodes[node as usize].kind {
@@ -2183,45 +3584,69 @@ impl Builder<'_> {
                     let stop = self.dominator(node, governor)?;
                     let mut readings = self.paths(node, stop, governor)?;
                     if readings.len() == 1 {
-                        let (segments, _) = readings.pop().expect("one reading");
-                        reversed.extend(segments.into_iter().rev().map(Piece::Segment));
+                        let reading = readings.pop().expect("one reading").materialize(governor)?;
+                        for (index, segment) in reading.segments.into_iter().enumerate().rev() {
+                            reverse_proofs
+                                .shared(reading.proofs.get(index, governor)?, governor)?;
+                            reversed.push(Piece::Segment(segment));
+                        }
                     } else {
-                        let span =
-                            self.turn.nodes[stop as usize].end..self.turn.nodes[node as usize].end;
+                        let (readings, _readings_owner) = readings.into_owned_parts();
+                        let mut derivations = Vec::with_capacity(readings.len());
+                        let mut options = Vec::with_capacity(readings.len());
+                        let mut proofs = ScratchVec::new(governor);
+                        for reading in readings {
+                            let reading = reading.materialize(governor)?;
+                            derivations.push(Derivation::new(Digest::of(b""), reading.cost));
+                            options.push(reading.segments);
+                            if active {
+                                crate::contract::push_scratch(
+                                    &mut proofs,
+                                    reading.proofs,
+                                    governor,
+                                )?;
+                            }
+                        }
+                        reverse_proofs.push(PieceProof::Choice(proofs), governor)?;
                         reversed.push(Piece::Choice(Choice {
-                            span,
-                            derivations: readings
-                                .iter()
-                                .map(|(_, cost)| Derivation::new(Digest::of(b""), *cost))
-                                .collect(),
-                            readings: readings.into_iter().map(|(segments, _)| segments).collect(),
+                            span: self.turn.nodes[stop as usize].end
+                                ..self.turn.nodes[node as usize].end,
+                            derivations,
+                            readings: options,
                         }));
                     }
                     node = stop;
                 }
                 TurnKind::Content(_) | TurnKind::Stored(..) => {
-                    reversed.push(Piece::Segment(self.segment(node).0));
+                    let (segment, _, proof) = self.segment(node, governor)?;
+                    reverse_proofs.shared(proof, governor)?;
+                    reversed.push(Piece::Segment(segment));
                     node = self.turn.nodes[node as usize].prev;
                 }
                 TurnKind::Root => break,
             }
         }
-        let mut pieces: Vec<Piece> = Vec::with_capacity(reversed.len());
+        let mut pieces = Vec::with_capacity(reversed.len());
+        let mut proofs = BuildProofs::new(active, governor);
         for piece in reversed.into_iter().rev() {
-            match (pieces.last_mut(), piece) {
-                (
-                    Some(Piece::Segment(Segment::Content(last))),
-                    Piece::Segment(Segment::Content(next)),
-                ) if last.end == next.start => {
-                    last.end = next.end;
-                }
-                (_, piece) => pieces.push(piece),
+            let proof = reverse_proofs.pop(governor)?;
+            if let (
+                Some(Piece::Segment(Segment::Content(last))),
+                Piece::Segment(Segment::Content(next)),
+            ) = (pieces.last_mut(), &piece)
+                && last.end == next.start
+            {
+                last.end = next.end;
+            } else {
+                pieces.push(piece);
+                proofs.push(proof, governor)?;
             }
         }
-        self.suppress_examples(&mut pieces, governor)?;
+        self.suppress_examples(&mut pieces, &mut proofs, governor)?;
         self.mark_examples(&mut pieces, governor)?;
-        self.annotate(&mut pieces, governor)?;
-        Ok(pieces)
+        self.annotate(&mut pieces, &mut proofs, governor)?;
+        let proofs = proofs.finish(&pieces, governor)?;
+        Ok((pieces, proofs))
     }
 
     /// Normalize every segmentation of an examples-as-content grammar before
@@ -2229,6 +3654,7 @@ impl Builder<'_> {
     fn suppress_examples(
         &mut self,
         pieces: &mut Vec<Piece>,
+        proofs: &mut BuildProofs,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mut spans = Vec::new();
@@ -2255,74 +3681,7 @@ impl Builder<'_> {
         let inline =
             self.context
                 .strict_inline(&spans, &fenced, regions.protocol.as_slice(), governor)?;
-        governor.charge(
-            Resource::ScratchBytes,
-            size(pieces.len()).saturating_mul(EXAMPLE_RECORD_BYTES),
-        )?;
-        let mut normalized = Vec::new();
-        for piece in core::mem::take(pieces) {
-            match piece {
-                Piece::Segment(mut segment) => {
-                    self.suppress_segment(&mut segment, &fenced, &inline, governor)?;
-                    normalized.push(Piece::Segment(segment));
-                }
-                Piece::Choice(mut choice) => {
-                    let segment_count: usize = choice.readings.iter().map(Vec::len).sum();
-                    governor.charge(
-                        Resource::ScratchBytes,
-                        size(segment_count)
-                            .saturating_mul(EXAMPLE_RECORD_BYTES.saturating_mul(2))
-                            .saturating_add(size(choice.readings.len()).saturating_mul(64)),
-                    )?;
-                    let mut readings: Vec<Vec<Segment>> = Vec::new();
-                    let mut derivations = Vec::new();
-                    for (reading, derivation) in choice.readings.into_iter().zip(choice.derivations)
-                    {
-                        let mut segments = Vec::new();
-                        for mut segment in reading {
-                            self.suppress_segment(&mut segment, &fenced, &inline, governor)?;
-                            push_merged(&mut segments, segment);
-                        }
-                        let mut duplicate = false;
-                        for previous in &readings {
-                            if same_example_reading(&segments, previous, governor)? {
-                                duplicate = true;
-                                break;
-                            }
-                        }
-                        if !duplicate {
-                            readings.push(segments);
-                            derivations.push(derivation);
-                        }
-                    }
-                    if readings.len() == 1 {
-                        normalized.extend(
-                            readings
-                                .pop()
-                                .expect("one reading")
-                                .into_iter()
-                                .map(Piece::Segment),
-                        );
-                    } else {
-                        choice.readings = readings;
-                        choice.derivations = derivations;
-                        normalized.push(Piece::Choice(choice));
-                    }
-                }
-            }
-        }
-        for piece in normalized {
-            if let (
-                Some(Piece::Segment(Segment::Content(before))),
-                Piece::Segment(Segment::Content(after)),
-            ) = (pieces.last_mut(), &piece)
-                && before.end == after.start
-            {
-                before.end = after.end;
-            } else {
-                pieces.push(piece);
-            }
-        }
+        self.normalize_examples(pieces, proofs, &fenced, &inline, governor)?;
         self.example_regions = Some((fenced, inline));
         governor.check()
     }
@@ -2350,32 +3709,38 @@ impl Builder<'_> {
             reasoning.embedded = embedded;
             return Ok(());
         }
-        let span = segment.span();
-        if !self
-            .context
-            .strict_example(&span, fenced, inline, governor)?
-        {
-            return Ok(());
-        }
         match segment {
             Segment::Call(call) | Segment::Result(call) => {
                 let mut index = 0;
-                call.readings.retain(|reading| {
-                    let keep = !reading.dialect.grammar().examples_content();
-                    if !keep && index < call.derivations.len() {
-                        call.derivations.remove(index);
-                    }
-                    if keep {
+                while index < call.readings.len() {
+                    let reading = &call.readings[index];
+                    let suppress = if reading.dialect.grammar().examples_content() {
+                        let span = retained_context(reading, governor)?;
+                        self.context
+                            .strict_example(&span, fenced, inline, governor)?
+                    } else {
+                        false
+                    };
+                    if suppress {
+                        call.readings.remove(index);
+                        if index < call.derivations.len() {
+                            call.derivations.remove(index);
+                        }
+                    } else {
                         index += 1;
                     }
-                    keep
-                });
+                }
                 if call.readings.is_empty() {
-                    *segment = Segment::Content(span);
+                    *segment = Segment::Content(call.span.clone());
                 }
             }
-            Segment::Rejected { dialect, .. } if dialect.grammar().examples_content() => {
-                *segment = Segment::Content(span);
+            Segment::Rejected { dialect, span, .. }
+                if dialect.grammar().examples_content()
+                    && self
+                        .context
+                        .strict_example(span, fenced, inline, governor)? =>
+            {
+                *segment = Segment::Content(span.clone());
             }
             Segment::Content(_) | Segment::Reasoning(_) | Segment::Rejected { .. } => {}
         }
@@ -2401,7 +3766,9 @@ impl Builder<'_> {
         let mut excluded = Vec::new();
         for (index, segment) in reading.iter().enumerate() {
             match segment {
-                Segment::Call(call) | Segment::Result(call) => excluded.push(call.span.clone()),
+                Segment::Call(call) | Segment::Result(call) => {
+                    excluded.push(retained_context(&call.readings[0], governor)?);
+                }
                 // A rejected attempt's bytes are call markup, not prose: a
                 // fence inside it opens no fenced block. With the whole
                 // output, its markup extends as recovery reads it.
@@ -2453,15 +3820,15 @@ impl Builder<'_> {
             }
         }
         let excluded = merged;
-        let mut calls: Vec<&mut CallSegment> = Vec::new();
+        let mut calls: Vec<&mut RawCall> = Vec::new();
         for piece in pieces.iter_mut() {
             match piece {
-                Piece::Segment(Segment::Call(call)) => calls.push(call),
+                Piece::Segment(Segment::Call(call)) => calls.extend(&mut call.readings),
                 Piece::Choice(choice) => {
                     for reading in &mut choice.readings {
                         for segment in reading {
                             if let Segment::Call(call) = segment {
-                                calls.push(call);
+                                calls.extend(&mut call.readings);
                             }
                         }
                     }
@@ -2469,7 +3836,10 @@ impl Builder<'_> {
                 Piece::Segment(_) => {}
             }
         }
-        let spans: Vec<Range<usize>> = calls.iter().map(|call| call.span.clone()).collect();
+        let mut spans = Vec::with_capacity(calls.len());
+        for call in &calls {
+            spans.push(retained_context(call, governor)?);
+        }
         let contexts = self
             .context
             .examples(&spans, &excluded, self.len, governor)?;
@@ -2477,21 +3847,7 @@ impl Builder<'_> {
             let Some(region) = context else {
                 continue;
             };
-            for reading in &mut call.readings {
-                let edit = MarkupEdit {
-                    operator: EditOperator::ContextFencedExample,
-                    span: region.clone(),
-                    original: Vec::new(),
-                    replacement: Vec::new(),
-                };
-                governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
-                let at = reading
-                    .edits
-                    .iter()
-                    .position(|other| other.span.start > region.start)
-                    .unwrap_or(reading.edits.len());
-                reading.edits.insert(at, edit);
-            }
+            mark_example(call, region, governor)?;
         }
         Ok(())
     }
@@ -2501,11 +3857,12 @@ impl Builder<'_> {
     fn annotate(
         &mut self,
         pieces: &mut [Piece],
+        proofs: &mut BuildProofs,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let mut order = 0;
         let mut inherited: Vec<NodeId> = Vec::new();
-        for piece in pieces {
+        for (piece_index, piece) in pieces.iter_mut().enumerate() {
             match piece {
                 Piece::Segment(segment) => {
                     self.segment_derivations(segment, &mut order, &mut inherited, governor)?;
@@ -2538,6 +3895,7 @@ impl Builder<'_> {
                         outcomes.push((local_order, local_inherited));
                     }
                     let ranked = Forest::rank(&derivations);
+                    proofs.reorder(piece_index, &ranked, governor)?;
                     choice.readings = permute(&choice.readings, &ranked);
                     choice.derivations = permute(&derivations, &ranked);
                     let (selected_order, selected_inherited) = outcomes.swap_remove(ranked[0]);
@@ -2725,10 +4083,15 @@ fn example_call(
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     governor.charge(Resource::Work, size(call.readings.len()))?;
-    governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
-    spans.push(call.span.clone());
     let mut own_fence = false;
+    let mut previous = None;
     for reading in &call.readings {
+        let span = retained_context(reading, governor)?;
+        if previous.as_ref() != Some(&span) {
+            governor.charge(Resource::ScratchBytes, RECORD_BYTES)?;
+            spans.push(span.clone());
+            previous = Some(span);
+        }
         let grammar = reading.dialect.grammar();
         *applicable |= grammar.examples_content();
         own_fence |= grammar.protocol_fences();
@@ -2736,6 +4099,28 @@ fn example_call(
     if own_fence {
         protocol.push(call.span.start)?;
     }
+    Ok(())
+}
+
+/// Insert the same source-ordered contextual guess into one raw reading.
+fn mark_example(
+    call: &mut RawCall,
+    region: Range<usize>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let edit = MarkupEdit {
+        operator: EditOperator::ContextFencedExample,
+        span: region.clone(),
+        original: Vec::new(),
+        replacement: Vec::new(),
+    };
+    governor.charge(Resource::ScratchBytes, edit.estimated_bytes())?;
+    let at = call
+        .edits
+        .iter()
+        .position(|other| other.span.start > region.start)
+        .unwrap_or(call.edits.len());
+    call.edits.insert(at, edit);
     Ok(())
 }
 
@@ -2766,6 +4151,13 @@ pub(super) fn escaped(bytes: &[u8]) -> String {
 /// parameter element, or a call cut at a reasoning marker.
 fn explain_recovery(edit: &MarkupEdit, original: &str, replacement: &str) -> String {
     match edit.operator {
+        EditOperator::JsonBody => {
+            "read a whole JSON object in the function body as the arguments".into()
+        }
+        EditOperator::StrippedNameIdBoundary => format!(
+            "partitioned the retained joint name and ID at byte {} after the selected profile suppressed their separator; every admitted boundary remains a competing guess",
+            edit.span.start
+        ),
         EditOperator::ExtractProse => {
             format!("dropped prose `{original}` inside the call's markup")
         }
@@ -2863,9 +4255,6 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::NestedParameter => format!(
             "read nested parameter elements after `{original}` as the members of an object parameter, or of one object item of an array parameter"
         ),
-        EditOperator::JsonBody => {
-            "read a whole JSON object in the function body as the arguments".into()
-        }
         EditOperator::ArrayItem => {
             format!(
                 "read array parameter value `{original}` as one item of the array (an object item when written as nested parameter elements)"
@@ -2880,7 +4269,9 @@ fn explain(edit: &MarkupEdit) -> String {
         EditOperator::StringifiedArguments => {
             format!("decoded stringified arguments `{original}` as JSON `{replacement}`")
         }
-        EditOperator::ExtractProse
+        EditOperator::JsonBody
+        | EditOperator::StrippedNameIdBoundary
+        | EditOperator::ExtractProse
         | EditOperator::ExtractFence
         | EditOperator::GroupSplit
         | EditOperator::CloserMisspelled
@@ -3022,6 +4413,7 @@ pub struct RecognizedTurn {
     forest: Forest,
     cost: u64,
     attempted: Vec<(usize, DialectId)>,
+    failure_proofs: FailureProofs,
 }
 
 /// Scratch bytes charged per recorded rejected attempt.
@@ -3039,6 +4431,7 @@ impl PartialEq for RecognizedTurn {
             && self.pieces == other.pieces
             && self.cost == other.cost
             && self.attempted == other.attempted
+            && self.failure_proofs == other.failure_proofs
             && self.forest.nodes() == other.forest.nodes()
     }
 }
@@ -3046,6 +4439,10 @@ impl PartialEq for RecognizedTurn {
 impl Eq for RecognizedTurn {}
 
 impl RecognizedTurn {
+    pub(super) fn take_failure_proofs(&mut self, governor: &Governor) -> FailureProofs {
+        core::mem::replace(&mut self.failure_proofs, FailureProofs::new(governor))
+    }
+
     /// The SHA-256 digest of the recognized output.
     ///
     /// See [`RecognizedTurn::selected`] for an example.
@@ -3340,6 +4737,88 @@ mod tests {
     use super::*;
     use crate::Budget;
     use crate::json::{Member, Node, Value};
+
+    /// Erased endings preserve a completed invocation versus trailing loss;
+    /// a retained ending or plain prose still follows ordinary least cost.
+    #[test]
+    fn trailing_extraction_needs_erased_endings_and_a_completed_later_call() {
+        use crate::Outcome;
+        use crate::grammar::{CallAnchor, GrammarRecipe, Suppression};
+        use crate::tool_call::{Param, ToolDefinition, ToolRecoveryRequest};
+        const SOURCE: &str = r#"
+            grammar "tail-source.v1";
+            closer end = "<end>";
+            name = /[a-z]+/;
+            ws = /[ \t\r\n]+/;
+            trailing = /[^<\s][^<]*/;
+            call = "<call>" name:name arguments:slot(json, "<end>")
+                   (ws? dropped:trailing)? ws? (ENDING);
+            result = "<result>";
+            declaration = "<declaration>";
+        "#;
+        let tools = ToolSet::compile(
+            ["f", "g"].map(|name| ToolDefinition::new(name).param("x", Param::number())),
+            Budget::default(),
+        )
+        .expect("tools");
+        let input = b"f{\"x\":1}\ng{\"x\":2}";
+        for (ending, preserve) in [("end", true), ("end | \"!\"", false)] {
+            let source = SOURCE.replace("ENDING", ending);
+            let grammar = GrammarRecipe::derived(
+                "tail-projected.v1",
+                &source,
+                &["<call>", "<end>"],
+                Suppression::ProtocolMarkers,
+                CallAnchor::LineStartArguments,
+            )
+            .compile_governed(&mut Governor::new(Budget::default()))
+            .expect("projection");
+            let set = DialectSet::new(
+                [DialectId::custom(grammar)],
+                &mut Governor::new(Budget::default()),
+            )
+            .expect("set");
+            let result = tools.recover(input, &ToolRecoveryRequest::default(), &set);
+            assert_eq!(result.receipt.sources[0].bytes, input);
+            if preserve {
+                let Outcome::Ambiguous(readings) = &result.outcome else {
+                    panic!("both source readings: {result:?}");
+                };
+                assert_eq!(readings[0].calls.len(), 2);
+                assert!(readings.iter().zip(&result.receipt.alternatives).any(
+                    |(reading, receipt)| {
+                        reading.calls.len() == 1
+                            && receipt.cost > result.receipt.alternatives[0].cost
+                            && reading.calls[0].repairs.losses.iter().any(|loss| {
+                                loss.loss.evidence.rule == "tool_call.extract.prose"
+                                    && loss.loss.original == "g{\"x\":2}"
+                            })
+                    }
+                ));
+                let prose = tools.recover(
+                    b"f{\"x\":1}\nnot a call",
+                    &ToolRecoveryRequest::default(),
+                    &set,
+                );
+                let Outcome::Resolved(calls) = &prose.outcome else {
+                    panic!("prose follows ordinary least cost: {prose:?}");
+                };
+                assert_eq!(calls.calls.len(), 1);
+                assert_eq!(calls.calls[0].repairs.losses, []);
+            } else {
+                let Outcome::Resolved(calls) = &result.outcome else {
+                    panic!("mixed endings follow ordinary least cost: {result:?}");
+                };
+                assert_eq!(calls.calls.len(), 2);
+                assert!(
+                    calls
+                        .calls
+                        .iter()
+                        .all(|call| call.repairs.losses.is_empty())
+                );
+            }
+        }
+    }
 
     fn string_at(start: usize, end: usize) -> Node {
         Node {

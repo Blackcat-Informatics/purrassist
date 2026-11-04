@@ -23,16 +23,19 @@ fn dialects() -> DialectSet {
     .expect("dialect")
 }
 fn recover(input: &str) -> ToolCalls {
-    match tools()
-        .recover(
-            input.as_bytes(),
-            &ToolRecoveryRequest::default(),
-            &dialects(),
-        )
-        .outcome
-    {
+    let result = tools().recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        &dialects(),
+    );
+    match result.outcome {
         Outcome::Resolved(calls) | Outcome::BestGuess(calls) => calls,
-        other => panic!("{input:?}: {other:?}"),
+        other => panic!(
+            "{} input bytes: {other:?}; stop: {:?}; usage: {:?}",
+            input.len(),
+            result.receipt.stopped,
+            result.receipt.usage
+        ),
     }
 }
 

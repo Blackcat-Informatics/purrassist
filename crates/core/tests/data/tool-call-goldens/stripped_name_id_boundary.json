@@ -1,0 +1,47 @@
+{
+  "description": "The retained ab12 header has an explicit ab/12 name and ID interpretation. With only tool ab declared, the selected boundary remains a best guess under both pinned and default dialect selection.",
+  "tools": [
+    {
+      "name": "ab",
+      "effects": "read_only",
+      "policy": "tolerant"
+    }
+  ],
+  "dialects": [
+    "mistral-v11-stripped.v1"
+  ],
+  "stop": "stop",
+  "input": "ab12{}",
+  "outcome": "best_guess",
+  "stopped": "completed",
+  "finish": "calls",
+  "openai_finish_reason": "tool_calls",
+  "verdict": "run",
+  "usable_calls": {
+    "strict": 0,
+    "accepting_guesses": 1
+  },
+  "calls": [
+    {
+      "tool": "ab",
+      "arguments": {},
+      "candidate_dialects": [
+        "mistral-v11-stripped.v1"
+      ],
+      "outcome": "best_guess",
+      "rules": [
+        "tool_call.markup.stripped-name-id-boundary",
+        "tool_call.id.dedup"
+      ]
+    }
+  ],
+  "rejected": [],
+  "embedded": [],
+  "content": [],
+  "reasoning_text": [],
+  "failed_validations": [],
+  "ledger_rules": [
+    "tool_call.markup.stripped-name-id-boundary",
+    "tool_call.id.dedup"
+  ]
+}

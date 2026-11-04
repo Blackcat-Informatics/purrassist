@@ -144,7 +144,7 @@ test's assertions fails the build by design.
 | Path matching | 1594 | 1279 | 0 | 315 | 80.2% | 0.0% | 0.234% | 2% |
 | Phonetic ambiguity | 1408 | 1089 | 0 | 319 | 77.3% | 0.0% | 0.275% | 5% |
 | JSON recovery | 714 | 630 | 0 | 84 | 88.2% | 0.0% | 0.474% | 2% |
-| Tool-call recovery | 18218 | 12651 | 0 | 5567 | 69.4% | 0.0% | 0.024% | 1% |
+| Tool-call recovery | 18266 | 12680 | 0 | 5586 | 69.4% | 0.0% | 0.024% | 1% |
 
 "Coverage" is the fraction of cases an automatic decision was reached for at
 all (correct + incorrect, over the total); "risk" is the observed error rate
@@ -211,7 +211,7 @@ The `gemma3-tool-code.v1` native corpus witnesses cover canonical and missing-fe
 calls, positional/expression refusal, ordinary code examples and tool results.
 The 16 new dialect/all-selector witnesses produce six correct recoveries and ten required abstentions, with zero incorrect corrections.
 
-`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,218 model
+`crates/core/tests/data/evaluation/tool-calls.jsonl` holds 18,266 model
 turns, each with its `id`, `category` (the rule expected to repair it),
 `dialect` (the request's dialect allow-list), `policy`, `stop`, `input` and
 `truth`. The `tool-call-corpus` example generates it deterministically: it
@@ -353,6 +353,13 @@ positional and expression refusal, prose, and fenced examples. Ten recover
 the expected call and eight abstain. Existing case inputs, truths, policies
 and stop reasons are preserved; their default allow-list gains Pythonic.
 
+The eight marker-stripped recipes add 48 adapter witnesses: canonical calls,
+trailing commas and ordinary prose under an explicit recipe or the full default
+allow-list. They contribute 29 correct recoveries and 19 abstentions, including
+all 16 new truth-`Unresolved` cases. Existing input bytes, truths, policies and
+stop reasons are unchanged; 9,755 existing default requests gain the recipes.
+Existing native printed-dialect totals remain unchanged.
+
 Each case runs `ToolSet::recover` at `Effort::Standard` with the case's
 allow-list, policy and stop. The answer is the turn's
 `usable_accepting_guesses()` calls: `Resolved` calls, and `BestGuess` calls on
@@ -364,12 +371,14 @@ any answer to a truth-`Unresolved` case. The test pins the totals above,
 asserts zero incorrect answers overall, per rule and per dialect, at least 20
 cases per rule, and abstention recall of 100%:
 
-Abstention recall: 5435 of 5435 truth-`Unresolved` cases abstained (100.0%).
+Abstention recall: 5451 of 5451 truth-`Unresolved` cases abstained (100.0%).
 
-The 132 other abstentions are coverage gaps, not errors: read-only calls whose
+Of the 135 other abstentions, 132 remain coverage gaps: read-only calls whose
 required arguments were nested one level down (`DropWithLoss` drops the
 unknown wrapper before `json.key.relocate` can apply, so the call is missing a
-required argument). Calls followed by a dangling `<tool_call>` opener under
+required argument). Three added marker-stripped witnesses abstain on surviving
+source/provenance alternatives under the default allow-list, although the
+alternatives recover the same tool and arguments. Calls followed by a dangling `<tool_call>` opener under
 the all-dialect allow-list are recovered: GLM, Qwen3-Coder XML and Hermes
 attempt the dangling opener, and the readings that differ only in which
 dialect's attempt was rejected recover the same calls and are one reading
@@ -382,7 +391,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 
 | Rule | Cases | Correct | Incorrect | Abstained | Truth `Unresolved` |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `canonical` | 1703 | 1685 | 0 | 18 | 18 |
+| `canonical` | 1735 | 1700 | 0 | 35 | 34 |
 | `json.enum.match` | 168 | 84 | 0 | 84 | 84 |
 | `json.key.match` | 420 | 180 | 0 | 240 | 240 |
 | `json.key.relocate` | 352 | 0 | 0 | 352 | 220 |
@@ -396,7 +405,7 @@ unassignable (`UnknownParameter`), so the call abstains.
 | `json.syntax.missing-comma` | 351 | 351 | 0 | 0 | 0 |
 | `json.syntax.missing-value` | 187 | 0 | 0 | 187 | 187 |
 | `json.syntax.string` | 481 | 481 | 0 | 0 | 0 |
-| `json.syntax.trailing-comma` | 439 | 439 | 0 | 0 | 0 |
+| `json.syntax.trailing-comma` | 455 | 453 | 0 | 2 | 0 |
 | `json.syntax.unterminated-string` | 24 | 11 | 0 | 13 | 13 |
 | `json.type.decode-string` | 77 | 0 | 0 | 77 | 77 |
 | `json.type.stringify-scalar` | 176 | 0 | 0 | 176 | 176 |
@@ -451,7 +460,7 @@ and by dialect allow-list:
 
 | Dialect | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
-| `adapter` | 71 | 48 | 0 | 23 |
+| `adapter` | 119 | 77 | 0 | 42 |
 | `anthropic` | 1446 | 991 | 0 | 455 |
 | `bare` | 1266 | 811 | 0 | 455 |
 | `deepseek3` | 1894 | 1423 | 0 | 471 |
@@ -467,10 +476,12 @@ and by dialect allow-list:
 | `openai` | 1060 | 654 | 0 | 406 |
 | `qwen` | 1741 | 1249 | 0 | 492 |
 
+The following allow-list results include the eight marker-stripped recipes.
+
 | Allow-list | Cases | Correct | Incorrect | Abstained |
 | --- | ---: | ---: | ---: | ---: |
 | `anthropic-tool-use.v1` | 666 | 459 | 0 | 207 |
-| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1` | 9755 | 6719 | 0 | 3036 |
+| `anthropic-tool-use.v1,bare-json.v1,deepseek-v3-stripped.v1,deepseek-v3.1-stripped.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony-stripped.v1,harmony.v1,hermes-stripped.v1,hermes.v1,kimi-k2-stripped.v1,kimi-k2.v1,llama3-json-stripped.v1,llama3-json.v1,mistral-v11-stripped.v1,mistral-v11.v1,mistral-v3-stripped.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1` | 9779 | 6732 | 0 | 3047 |
 | `bare-json.v1` | 576 | 369 | 0 | 207 |
 | `deepseek-v3.1.v1` | 764 | 557 | 0 | 207 |
 | `deepseek-v3.1.v1,deepseek-v3.v1` | 36 | 36 | 0 | 0 |
@@ -487,6 +498,14 @@ and by dialect allow-list:
 | `openai-tool-calls.v1` | 460 | 294 | 0 | 166 |
 | `pythonic.v1` | 9 | 5 | 0 | 4 |
 | `qwen3-coder-xml.v1` | 850 | 616 | 0 | 234 |
+| `deepseek-v3-stripped.v1` | 3 | 2 | 0 | 1 |
+| `deepseek-v3.1-stripped.v1` | 3 | 2 | 0 | 1 |
+| `harmony-stripped.v1` | 3 | 2 | 0 | 1 |
+| `hermes-stripped.v1` | 3 | 2 | 0 | 1 |
+| `kimi-k2-stripped.v1` | 3 | 2 | 0 | 1 |
+| `llama3-json-stripped.v1` | 3 | 2 | 0 | 1 |
+| `mistral-v11-stripped.v1` | 3 | 2 | 0 | 1 |
+| `mistral-v3-stripped.v1` | 3 | 2 | 0 | 1 |
 
 Rules no case exercises: `json.syntax.literal-escape` (no witness value
 contains a backslash to unescape). `tool_call.markup.terminal-confusable` is

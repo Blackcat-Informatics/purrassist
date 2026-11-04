@@ -48,9 +48,9 @@ This adds no graph authorization, confinement or proof-bound release claim.
 
 The `recover_tool_calls` tool (MCP `tools/call`, CLI `purrassist call` and
 `purrassist recover-tool-calls`) recovers the tool calls of one model turn
-against caller declarations, over fifteen built-in dialects: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
+against caller declarations, over twenty-three built-in dialects: `qwen3-coder-xml.v1`, `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`,
 `mistral-v3.v1`, `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`,
-`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, and `pythonic.v1`.
+`kimi-k2.v1`, `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`.
 Its result is the recovery's wire form: per-call outcomes, itemized repairs,
 rejected and unparsed attempts, the turn's finish, an optional re-emission, and
 a receipt. It never executes a call.

@@ -238,6 +238,35 @@ pub struct CollectedMember {
 }
 
 impl ArgTree {
+    /// Compare the native adoption cache as well as its public source facts.
+    pub(super) fn same_adoption_state(
+        &self,
+        other: &Self,
+        governor: &mut crate::contract::Governor,
+    ) -> Result<bool, crate::contract::StopReason> {
+        use crate::contract::Resource;
+        governor.charge(Resource::Work, 1)?;
+        if self.held.0.len() != other.held.0.len() {
+            return Ok(false);
+        }
+        for ((left, a), (right, b)) in self.held.0.iter().zip(&other.held.0) {
+            governor.charge(
+                Resource::Work,
+                saturating_size(left.len())
+                    .saturating_add(saturating_size(right.len()))
+                    .saturating_add(7),
+            )?;
+            if left != right
+                || a.items != b.items
+                || a.first_array != b.first_array
+                || a.marker != b.marker
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// An empty object with no source: the arguments of a call whose
     /// markup carries no argument data.
     ///
