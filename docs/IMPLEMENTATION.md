@@ -2,6 +2,14 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+An unchanged native frontier pinned at source zero retains its complete prior
+projection and settled history after the ordinary engine-floor query succeeds.
+Nonnegative report and marker floors cannot move that limit. Marker ownership
+is explicitly deferred and computed by the byte-accounting consumer when needed;
+native parsing, report-driven invalidation and UTF-8 publication remain complete.
+The expanded optional marker floor is covered by the actual metadata assertions.
+Runtime and resource qualification remain pending automatic CI.
+
 Standalone recognition omits the per-byte structural frontier projection that
 only recovery intake consumes. Intake prepares ownership before accepting input
 and keeps its existing frontier, event and counter computations. Native byte

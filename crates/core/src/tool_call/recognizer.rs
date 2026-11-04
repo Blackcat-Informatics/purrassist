@@ -240,7 +240,9 @@ struct FrontierMemo {
     report_floor: Option<usize>,
     barrier: Option<usize>,
     limit: usize,
-    lexical: usize,
+    /// None only while source zero pins the projection independently of markers.
+    /// Ownership computes the current marker floor if it actually needs it.
+    lexical: Option<usize>,
 }
 
 /// One next node of the structurally shared native history. Source content has
@@ -499,7 +501,39 @@ const _: () = assert!(core::mem::size_of::<(Pending, SourceId)>() as u64 <= QUEU
 
 // The source indexes, caches and their complete preparation/dispatch handles.
 // Queued and ready element storage retain their separate per-report charge.
-const SOURCE_METADATA_BYTES: u64 = 896;
+const SOURCE_METADATA_BYTES: u64 = 904;
+
+// Projection selection retains the previous memo and its matched copy while
+// the recognizer's slot is empty. Include ordinary floor/limit controls too.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        Option<FrontierMemo>,
+        FrontierMemo,
+        ScratchLease,
+        [Option<usize>; 5],
+        [usize; 3],
+        Result<(), StopReason>,
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Ownership may receive a deferred marker floor and its computed scalar.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        [Option<usize>; 5],
+        usize,
+        u32,
+        Result<ByteOwnership, StopReason>,
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
 
 // Queue preparation also owns the incoming report and the engine event cursor;
 // no queue slot has been admitted or published for that report yet.
@@ -2242,6 +2276,10 @@ impl<'s> Recognizer<'s> {
                 .as_ref()
                 .ok_or_else(|| invalid_input("ownership has no completed marker projection"))?
                 .lexical;
+            let marker = match marker {
+                Some(marker) => marker,
+                None => self.current_marker_floor(governor)?,
+            };
             if marker > self.fed() {
                 return Err(invalid_input("marker projection exceeds consumed source"));
             }
@@ -2383,6 +2421,20 @@ impl<'s> Recognizer<'s> {
         Ok(())
     }
 
+    /// The current marker floor, shared by eager and deferred projections.
+    fn current_marker_floor(&self, governor: &mut Governor) -> Result<usize, StopReason> {
+        let held = if matches!(self.policy, ReasoningPolicy::Separate { .. })
+            && self.set.marker_matcher.is_some()
+        {
+            self.set.marker_prefix_len(self.marker, governor)?
+        } else {
+            0
+        };
+        self.fed()
+            .checked_sub(held)
+            .ok_or_else(|| invalid_input("reasoning marker prefix exceeds consumed source"))
+    }
+
     /// Refresh the structural projection after each byte, reusing a successful
     /// result only while its owner floors, turn state and effective cutoff agree.
     /// A packed disagreement is not resolved here.
@@ -2391,27 +2443,32 @@ impl<'s> Recognizer<'s> {
         // succeeded; refusal must never leave an older projection reusable.
         let previous = self.frontier_memo.take();
         let engine_floor = self.engine.continuation_floor(governor)?;
-        let report_floor = self.pending_sources.floor();
+        // Select the projection before consulting sources it may not need.
         governor.charge(Resource::Work, 1)?;
-        let held = if matches!(self.policy, ReasoningPolicy::Separate { .. })
-            && self.set.marker_matcher.is_some()
+        if engine_floor == Some(0)
+            && let Some(mut memo) = previous
+            && memo.engine_floor == Some(0)
+            && memo.barrier == Some(0)
+            && memo.limit == 0
         {
-            self.set.marker_prefix_len(self.marker, governor)?
-        } else {
-            0
-        };
-        let lexical = self
-            .engine
-            .fed()
-            .checked_sub(held)
-            .ok_or_else(|| invalid_input("reasoning marker prefix exceeds consumed source"))?;
+            // Report processing invalidates the memo before changing Turn.
+            // Every other source floor is nonnegative, so the complete prior
+            // zero-limit projection and history stay exact. Marker ownership
+            // is independent: defer its current value instead of caching a
+            // stale floor or assuming the settled history must be the root.
+            memo.lexical = None;
+            self.frontier_memo = Some(memo);
+            return Ok(());
+        }
+        let report_floor = self.pending_sources.floor();
+        let lexical = self.current_marker_floor(governor)?;
         governor.charge(Resource::Work, 1)?;
         if let Some(mut memo) = previous
             && memo.engine_floor == engine_floor
             && memo.report_floor == report_floor
             && memo.limit == memo.barrier.map_or(lexical, |floor| lexical.min(floor))
         {
-            memo.lexical = lexical;
+            memo.lexical = Some(lexical);
             self.frontier_memo = Some(memo);
             return Ok(());
         }
@@ -2476,7 +2533,7 @@ impl<'s> Recognizer<'s> {
             report_floor,
             barrier,
             limit,
-            lexical,
+            lexical: Some(lexical),
         });
         Ok(())
     }
