@@ -8,8 +8,8 @@
 use purrassist_core::grammar::cost;
 use purrassist_core::json::Node;
 use purrassist_core::tool_call::{
-    CallOutcome, DialectId, DialectSet, Effects, ObjectSpec, Param, ToolCalls, ToolDefinition,
-    ToolRecoveryRequest, ToolSet,
+    CallOutcome, DialectId, DialectSet, Effects, ObjectSpec, Param, Policies, Recognizer,
+    ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet, resolve_forest,
 };
 use purrassist_core::{AssistResult, Budget, Effort, Governor, Outcome, StopReason};
 
@@ -609,6 +609,9 @@ fn dense_fits_published_budget(label: &str, bytes: usize) {
         usage.evidence_entries,
         result.receipt.stopped
     );
+    if label == "qwen-calls" && result.receipt.stopped != StopReason::Completed {
+        diagnose_native_budget(&tools, &input, &request);
+    }
     assert_eq!(result.receipt.stopped, StopReason::Completed, "{label}");
     let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
         panic!("{label}: {:?}", result.outcome)
@@ -640,6 +643,55 @@ fn dense_fits_published_budget(label: &str, bytes: usize) {
             assert_eq!(items.len(), units, "{label}");
         }
     }
+}
+
+/// Failure-only comparison through the ordinary public native path. This
+/// excludes intake ownership tracking, full-source EOF context and traced
+/// capture collection; its phases are not additive recovery measurements.
+fn diagnose_native_budget(tools: &ToolSet, input: &str, request: &ToolRecoveryRequest) {
+    let mut governor = Governor::new(request.budget);
+    let policies = Policies {
+        selection: request.policy,
+        effects: request.effects.clone(),
+        exact: request.effort == Effort::Exact,
+    };
+    eprintln!(
+        "native budget diagnostic: bytes={} stop={:?} reasoning={:?} policies={policies:?}; no intake ownership tracking, full-source EOF context or native trace",
+        input.len(),
+        request.stop,
+        request.reasoning,
+    );
+    let result = (|| {
+        let mut recognizer = Recognizer::with_tools(
+            DialectSet::built_in(),
+            tools,
+            request.reasoning,
+            &mut governor,
+        )?;
+        eprintln!("native setup: {:?}", governor.usage());
+        let pushed = recognizer.push(input.as_bytes(), &mut governor);
+        eprintln!("native push: {pushed:?}; {:?}", governor.usage());
+        pushed?;
+        let finished = recognizer.finish(request.stop.clone(), &mut governor);
+        eprintln!(
+            "native finish: {:?}; {:?}",
+            finished.as_ref().map(|_| ()),
+            governor.usage()
+        );
+        let turn = finished?;
+        let resolved = resolve_forest(tools, &turn, &policies, &mut governor);
+        eprintln!(
+            "native resolve: {:?}; {:?}",
+            resolved.as_ref().map(|_| ()),
+            governor.usage()
+        );
+        resolved?;
+        Ok::<(), StopReason>(())
+    })();
+    eprintln!(
+        "native diagnostic result: {result:?}; {:?}",
+        governor.usage()
+    );
 }
 
 /// [`dense_fits_published_budget`] for every dense shape, each on its own
