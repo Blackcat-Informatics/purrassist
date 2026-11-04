@@ -2174,12 +2174,35 @@ impl<'s> Recognizer<'s> {
         self.frontier
     }
 
+    /// Prepare candidate accounting before any report can enter the queue.
+    /// Standalone recognition has no consumer for the candidate-only index.
+    pub(super) fn prepare_ownership(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if self.failed.is_some()
+            || self.engine.tracks_ownership()
+            || self.engine.fed() != 0
+            || self.arrivals != 0
+            || !self.pending.is_empty()
+            || self.pending_sources.floor().is_some()
+            || self.pending_sources.candidate_floor().is_some()
+        {
+            return Err(invalid_input(
+                "candidate accounting must be prepared on a pristine recognizer",
+            ));
+        }
+        let _ = self.engine.ownership_floors(governor)?;
+        Ok(())
+    }
+
     /// Project actual retained ownership after the byte's complete report fold.
     pub(super) fn ownership_floors(
         &mut self,
         visited: u32,
         governor: &mut Governor,
     ) -> Result<(Option<usize>, Option<usize>), StopReason> {
+        if !self.engine.tracks_ownership() {
+            return Err(invalid_input("candidate accounting was not prepared"));
+        }
         let (mut lexical, mut candidate) = self.engine.ownership_floors(governor)?;
         if matches!(self.policy, ReasoningPolicy::Separate { .. })
             && self.set.marker_matcher.is_some()
@@ -2491,7 +2514,7 @@ impl<'s> Recognizer<'s> {
             let update = self.pending_sources.prepare_add(
                 source,
                 arrival,
-                candidate.is_some(),
+                candidate.is_some() && self.engine.tracks_ownership(),
                 self.engine.fed(),
                 governor,
             )?;
@@ -2551,7 +2574,7 @@ impl<'s> Recognizer<'s> {
                     *handle,
                     source,
                     key.2,
-                    candidate.is_some(),
+                    candidate.is_some() && self.engine.tracks_ownership(),
                     governor,
                 )?;
                 let (_, (pending, _)) = self
@@ -2589,7 +2612,7 @@ impl<'s> Recognizer<'s> {
                     *handle,
                     source,
                     key.2,
-                    candidate.is_some(),
+                    candidate.is_some() && self.engine.tracks_ownership(),
                     governor,
                 )?;
                 let (_, (pending, _)) = self

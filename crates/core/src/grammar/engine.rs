@@ -5300,6 +5300,11 @@ impl<'s> Engine<'s> {
         Ok((lexical, candidate))
     }
 
+    /// Whether the interpretation's ownership projection has been prepared.
+    pub(crate) const fn tracks_ownership(&self) -> bool {
+        self.ownership_active
+    }
+
     pub(crate) fn new(
         dialects: &'s [DialectId],
         tools: Option<&'s ToolSet>,

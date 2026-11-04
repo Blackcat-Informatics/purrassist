@@ -612,6 +612,16 @@ remain independently owned. The additional header and lease are admitted within
 a named 32-byte metadata reservation. Capacity peaks, insertion/relocation Work
 and scratch refusal points change; current resource acceptance remains pending CI.
 
+Recovery prepares ownership accounting on a pristine recognizer before publishing
+its intake state. The existing monotone engine tracking state also selects the
+pending candidate subset index. Standalone native recognition has no consumer for
+that subset and maintains only the mandatory report-source index. Insertion,
+removal and terminal validation use the same lifetime selection while preserving
+real report origins and dispatch order. Late preparation fails explicitly; no
+existing report is silently omitted. Batch and streaming recovery retain identical
+preparation and all candidate accounting. Cold setup work changes, and resource
+acceptance remains pending automatic CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

@@ -3261,8 +3261,11 @@ impl<'s> RecoveryIntake<'s> {
             let forced = recovery.preconditions(governor)?;
             intake.ownership_metadata = governor.lease_scratch(size(INTAKE_OWNERSHIP_BYTES))?;
             intake.events.prepare_ownership(governor)?;
+            let mut recognizer =
+                Recognizer::with_tools(dialects, tools, request.reasoning, governor)?;
+            recognizer.prepare_ownership(governor)?;
             intake.setup = Some(IntakeSetup {
-                recognizer: Recognizer::with_tools(dialects, tools, request.reasoning, governor)?,
+                recognizer,
                 policies: recovery.policies,
                 forced,
             });
