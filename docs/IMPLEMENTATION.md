@@ -508,6 +508,15 @@ before refunding their admissions. Legacy multi-segmentation ownership remains
 unchanged. Combined-head compilation and behavioral qualification remain pending
 automatic CI.
 
+JSON envelope key classification reuses one governed visitation-tag table per
+program. Each literal PC names its own traversal, preserving full successor and
+colon checks through cycles and converging paths without repeatedly initializing
+a program-sized boolean table. Class-only programs allocate no tag table. Actual
+8-byte tag slots, generation controls, comparisons and stores remain admitted;
+peak scratch can increase. This removes repeated initialization work and does not
+establish that every built-in grammar fits its original budget. Compilation and
+resource qualification remain pending automatic CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

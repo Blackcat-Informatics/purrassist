@@ -1406,31 +1406,48 @@ const _: () = {
     assert!(core::mem::size_of::<KeyUse>() <= KeyUse::CHARGE);
     assert!(core::mem::size_of::<KeyCopy>() <= KeyCopy::CHARGE);
 };
+// Added visitation-generation controls; existing vector headers keep their
+// prior representation and each tag slot has the actual u64 element charge.
+const KEY_VISIT_METADATA_BYTES: u64 = 32;
+const _: () =
+    assert!(core::mem::size_of::<(ScratchLease, u64, u32)>() as u64 <= KEY_VISIT_METADATA_BYTES);
+
 fn key_uses(
     programs: &[Program],
     literals: &[Literal],
     governor: &mut Governor,
 ) -> Result<ScratchVec<ScratchVec<KeyUse>>, GrammarError> {
+    let _visitation_metadata = governor.lease_scratch(KEY_VISIT_METADATA_BYTES)?;
     let mut per_program = ScratchVec::new(governor);
     for program in programs {
         let mut uses = ScratchVec::new(governor);
+        let mut seen = ScratchVec::new(governor);
         for (pc, inst) in program.insts.iter().enumerate() {
             governor.charge(Resource::Work, 1)?;
             let Inst::Lit { lit, next } = *inst else {
                 continue;
             };
+            let literal_pc = symbol_index(pc, governor)?;
+            governor.charge(Resource::Work, 1)?;
+            let generation = u64::from(literal_pc);
             let mut colon = true;
             let mut any = false;
-            work_for(program.insts.len(), 1, 1, governor)?;
-            let mut seen = ScratchVec::new(governor);
-            seen.extend(core::iter::repeat_n(false, program.insts.len()))?;
+            if seen.is_empty() {
+                // Every instruction PC fits u32, so this sentinel can never
+                // name a walk. Class-only programs allocate no visitation table.
+                work_for(program.insts.len(), 1, 1, governor)?;
+                seen.extend(core::iter::repeat_n(u64::MAX, program.insts.len()))?;
+            }
             let mut stack = ScratchVec::new(governor);
             stack.push(next)?;
             while let Some(pc) = stack.pop() {
-                governor.charge(Resource::Work, 1)?;
-                if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
+                // Read/compare the tag, then admit a store only for a new PC.
+                governor.charge(Resource::Work, 2)?;
+                if seen[pc as usize] == generation {
                     continue;
                 }
+                governor.charge(Resource::Work, 1)?;
+                seen.as_mut_slice()[pc as usize] = generation;
                 match program.insts[pc as usize] {
                     Inst::Split(first, second) => stack.extend([first, second])?,
                     Inst::Open { next, .. }
@@ -1447,11 +1464,12 @@ fn key_uses(
                 }
             }
             uses.push(KeyUse {
-                pc: symbol_index(pc, governor)?,
+                pc: literal_pc,
                 lit,
                 key: any && colon,
             })?;
         }
+        drop(seen);
         per_program.push(uses)?;
     }
     Ok(per_program)
