@@ -288,16 +288,48 @@ class MarkdownAttribution(unittest.TestCase):
 
     def test_headed_markdown_passes(self):
         self.write('docs/A.md', self.HEADER + '# A\n')
-        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/A.md']), [])
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/A.md'], {}), [])
 
     def test_unheaded_markdown_fails_naming_the_file(self):
         self.write('docs/B.md', '# B\n')
-        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/B.md']),
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, ['docs/B.md'], {}),
                          ['docs/B.md: missing attribution'])
 
     def test_one_missing_tag_fails(self):
         self.write('C.md', '<!-- SPDX-License-Identifier: MIT -->\n# C\n')
-        self.assertEqual(len(AUDIT.check_markdown_attribution(self.root, ['C.md'])), 1)
+        self.assertEqual(len(AUDIT.check_markdown_attribution(self.root, ['C.md'], {})), 1)
+
+    def test_registered_notice_requires_matching_bytes_and_spdx_sidecar(self):
+        name = 'vendor/licenses/upstream/LICENSE.md'
+        original = 'Original upstream notice.\n'
+        self.write(name, original)
+        digest = hashlib.sha256((self.root / name).read_bytes()).hexdigest()
+        entry = {'notices': [name], 'notice_sha256': {name: digest}}
+        inventory = {'cargo_details': [entry, entry]}
+        notices = AUDIT.registered_notice_hashes(inventory)
+        sidecar = 'SPDX-FileCopyrightText: Upstream contributors\nSPDX-License-Identifier: MIT\n'
+        failure = [f'{name}: missing attribution']
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name], notices), failure)
+        self.write(f'{name}.license', sidecar)
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name], notices), [])
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name], {}), failure)
+        self.write(name, original + 'Changed.\n')
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name], notices), failure)
+        self.write(name, original)
+        for malformed in ['SPDX-License-Identifier: MIT\n',
+                          sidecar.replace('Upstream contributors', ' '),
+                          sidecar.replace('MIT', '???')]:
+            self.write(f'{name}.license', malformed)
+            self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name], notices), failure)
+        self.write('docs/ordinary.md', original)
+        self.write('docs/ordinary.md.license', sidecar)
+        self.assertEqual(
+            AUDIT.check_markdown_attribution(self.root, ['docs/ordinary.md'],
+                                            {'docs/ordinary.md': digest}),
+            ['docs/ordinary.md: missing attribution'])
+        inventory['cargo_details'].append({'notices': [name], 'notice_sha256': {name: '0' * 64}})
+        with self.assertRaisesRegex(ValueError, 'conflicting registered notice SHA-256'):
+            AUDIT.registered_notice_hashes(inventory)
 
     def test_tracked_markdown_is_the_git_index_minus_test_data(self):
         subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
@@ -311,7 +343,9 @@ class MarkdownAttribution(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         names = AUDIT.tracked_markdown(root)
         self.assertIn('README.md', names)
-        self.assertEqual(AUDIT.check_markdown_attribution(root, names), [])
+        inventory = json.loads((root / 'vendor/dependencies.json').read_text(encoding='utf-8'))
+        self.assertEqual(AUDIT.check_markdown_attribution(
+            root, names, AUDIT.registered_notice_hashes(inventory)), [])
 
 
 # Real binary content: the PNG signature followed by a NUL-bearing IHDR chunk header.

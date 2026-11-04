@@ -2,6 +2,10 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Scratch vectors and strings destroy their owned payloads and backing buffers
+before releasing the buffers' reservations. A payload destructor therefore sees
+its enclosing storage still admitted.
+
 Turn-path discovery retains normalized Content ranges and immutable stored
 Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
 preserve branch order without copying each prefix. Exact governed equality keeps

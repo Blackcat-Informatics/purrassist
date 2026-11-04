@@ -270,10 +270,55 @@ def tracked_markdown(root):
                   if name and not name.startswith(MARKDOWN_ATTRIBUTION_EXEMPT))
 
 
-def check_markdown_attribution(root, names):
-    """Report each named Markdown file that lacks the SPDX header."""
-    return [f'{name}: missing attribution' for name in names
-            if not has_attribution((root / name).read_text(encoding='utf-8'))]
+def registered_notice_hashes(inventory):
+    """Collect the exact registered vendor notice identities, rejecting conflicts."""
+    notices = {}
+    for entry in inventory['cargo_details']:
+        for name in entry['notices']:
+            if not name.startswith('vendor/licenses/'):
+                continue
+            digest = entry['notice_sha256'].get(name)
+            if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+                raise ValueError(f'{name}: missing or invalid registered notice SHA-256')
+            if name in notices and notices[name] != digest:
+                raise ValueError(f'{name}: conflicting registered notice SHA-256')
+            notices[name] = digest
+    return notices
+
+
+def has_notice_sidecar_attribution(text):
+    """A preserved component notice needs two nonempty fields and one SPDX identifier."""
+    fields = {}
+    required = {'SPDX-FileCopyrightText', 'SPDX-License-Identifier'}
+    for line in text.splitlines()[:5]:
+        key, separator, value = line.partition(':')
+        if key not in required:
+            continue
+        if not separator or key in fields or not value.strip():
+            return False
+        fields[key] = value.strip()
+    if set(fields) != required:
+        return False
+    license_id = fields['SPDX-License-Identifier']
+    return license_id not in {'AND', 'OR', 'WITH', 'LicenseRef-'} and bool(
+        re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.+-]*', license_id))
+
+
+def check_markdown_attribution(root, names, notices):
+    """Require inline SPDX, or a sidecar for an exact registered upstream notice."""
+    errors = []
+    for name in names:
+        payload = (root / name).read_bytes()
+        if has_attribution(payload.decode('utf-8')):
+            continue
+        sidecar = root / f'{name}.license'
+        if (name.startswith('vendor/licenses/')
+                and hashlib.sha256(payload).hexdigest() == notices.get(name)
+                and sidecar.is_file()
+                and has_notice_sidecar_attribution(sidecar.read_text(encoding='utf-8'))):
+            continue
+        errors.append(f'{name}: missing attribution')
+    return errors
 
 
 # Binary artifacts cannot carry a comment header, so each one is attributed by a
@@ -359,6 +404,7 @@ def check_marker_copies(root, names=MARKER_COPY_NAMES, copies=MARKER_COPY_FILES,
 
 def main():
     errors = []
+    inventory = json.loads((ROOT / 'vendor/dependencies.json').read_text(encoding='utf-8'))
     core = tomllib.loads((ROOT / 'crates/core/Cargo.toml').read_text(encoding='utf-8'))
     if core.get('dependencies'):
         errors.append('purrassist-core must have zero external or workspace runtime dependencies')
@@ -374,7 +420,8 @@ def main():
                 continue
             if not has_attribution(path.read_text(encoding='utf-8')):
                 errors.append(f'{path.relative_to(ROOT)}: missing attribution')
-    errors.extend(check_markdown_attribution(ROOT, tracked_markdown(ROOT)))
+    errors.extend(check_markdown_attribution(
+        ROOT, tracked_markdown(ROOT), registered_notice_hashes(inventory)))
     errors.extend(check_binary_attribution(ROOT, tracked_binaries(ROOT)))
 
     for directory in ['crates/core/src/schema/metaschemas', 'crates/core/tests/data/json-schema', 'crates/core/tests/data/markdown', 'crates/core/tests/data/test262']:
@@ -417,7 +464,6 @@ def main():
     errors.extend(check_core_dev_dependencies(core))
     errors.extend(check_dependency_baseline(
         metadata, json.loads((ROOT / BASELINE).read_text(encoding='utf-8'))['third_party_packages']))
-    inventory = json.loads((ROOT / 'vendor/dependencies.json').read_text(encoding='utf-8'))
     actual = {f"{package['name']}@{package['version']}" for package in metadata['packages'] if package['source'] is not None}
     if actual != set(inventory['cargo_packages']):
         errors.append(f'dependency inventory differs: added={sorted(actual-set(inventory["cargo_packages"]))}, removed={sorted(set(inventory["cargo_packages"])-actual)}')

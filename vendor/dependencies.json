@@ -22,7 +22,6 @@
     "digest@0.11.3",
     "either@1.19.0",
     "equivalent@1.0.2",
-    "fastrand@2.5.0",
     "find-msvc-tools@0.1.14",
     "getrandom@0.4.3",
     "ghash@0.6.0",
@@ -55,6 +54,7 @@
     "purrdf-sparql-results@3.0.1",
     "purrdf-stack@3.0.1",
     "purrdf-xsd@3.0.1",
+    "purrdf-zstd@3.0.1",
     "quote@1.0.47",
     "r-efi@6.0.0",
     "rayon-core@1.13.0",
@@ -70,7 +70,6 @@
     "sha2@0.11.1",
     "shlex@2.0.1",
     "streaming-iterator@0.1.9",
-    "structured-zstd@0.0.49",
     "syn@3.0.6",
     "tree-sitter-javascript@0.25.0",
     "tree-sitter-language@0.1.8",
@@ -199,7 +198,7 @@
         "vendor/licenses/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
         "vendor/licenses/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aead."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aead."
     },
     {
       "name": "aes",
@@ -215,7 +214,7 @@
         "vendor/licenses/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/aes-0.9.3/LICENSE-MIT": "25f77efa393854f7c15eaf6a2589a2071db2d7337642742763adb12bdecf0445"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aes."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aes."
     },
     {
       "name": "aes-gcm",
@@ -231,7 +230,7 @@
         "vendor/licenses/aes-gcm-0.11.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/aes-gcm-0.11.1/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm."
     },
     {
       "name": "aho-corasick",
@@ -263,7 +262,7 @@
         "vendor/licenses/block-buffer-0.12.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/block-buffer-0.12.1/LICENSE-MIT": "98181e7249d0c01737645ec982499ce99a0f07eb8f7d625b8840d799d10dbc01"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> block-buffer."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> block-buffer."
     },
     {
       "name": "bumpalo",
@@ -279,7 +278,7 @@
         "vendor/licenses/bumpalo-3.20.3/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/bumpalo-3.20.3/LICENSE-MIT": "65f94e99ddaf4f5d1782a6dae23f35d4293a9a01444a13135a6887017d353cee"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro -> wasm-bindgen-macro-support -> bumpalo."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro -> wasm-bindgen-macro-support -> bumpalo."
     },
     {
       "name": "cc",
@@ -294,7 +293,8 @@
       "notice_sha256": {
         "vendor/licenses/cc-1.5.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/cc-1.5.1/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> cc."
     },
     {
       "name": "cfg-if",
@@ -310,7 +310,7 @@
         "vendor/licenses/cfg-if-1.0.5/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/cfg-if-1.0.5/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> cfg-if."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> cfg-if."
     },
     {
       "name": "cipher",
@@ -326,7 +326,7 @@
         "vendor/licenses/cipher-0.5.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/cipher-0.5.2/LICENSE-MIT": "950d712c518a02fcb7cff96950aee304a1cc5283361712c980ea21e8d6d669a5"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> cipher."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> cipher."
     },
     {
       "name": "cmov",
@@ -342,7 +342,7 @@
         "vendor/licenses/cmov-0.5.4/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
         "vendor/licenses/cmov-0.5.4/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ctutils -> cmov."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ctutils -> cmov."
     },
     {
       "name": "const-oid",
@@ -358,7 +358,7 @@
         "vendor/licenses/const-oid-0.10.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/const-oid-0.10.2/LICENSE-MIT": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> const-oid."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> const-oid."
     },
     {
       "name": "cpubits",
@@ -374,7 +374,7 @@
         "vendor/licenses/cpubits-0.1.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/cpubits-0.1.1/LICENSE-MIT": "003736bc98408b53511b9cc8ff5d1af3bf0a8f17d53841cc39d8ab1b96a195b0"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aes -> cpubits."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aes -> cpubits."
     },
     {
       "name": "cpufeatures",
@@ -390,7 +390,7 @@
         "vendor/licenses/cpufeatures-0.3.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/cpufeatures-0.3.1/LICENSE-MIT": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> cpufeatures."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> cpufeatures."
     },
     {
       "name": "crossbeam-deque",
@@ -406,7 +406,7 @@
         "vendor/licenses/crossbeam-deque-0.8.8/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/crossbeam-deque-0.8.8/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core -> crossbeam-deque."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core -> crossbeam-deque."
     },
     {
       "name": "crossbeam-epoch",
@@ -422,7 +422,7 @@
         "vendor/licenses/crossbeam-epoch-0.9.21/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/crossbeam-epoch-0.9.21/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core -> crossbeam-deque -> crossbeam-epoch."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core -> crossbeam-deque -> crossbeam-epoch."
     },
     {
       "name": "crossbeam-utils",
@@ -438,7 +438,7 @@
         "vendor/licenses/crossbeam-utils-0.8.23/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/crossbeam-utils-0.8.23/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core -> crossbeam-utils."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core -> crossbeam-utils."
     },
     {
       "name": "crypto-common",
@@ -454,7 +454,7 @@
         "vendor/licenses/crypto-common-0.2.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/crypto-common-0.2.2/LICENSE-MIT": "d2e7ec5355c96eeade56b09187ceb48a6a30299da3ce7531a66d3d11405ab963"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> crypto-common."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> crypto-common."
     },
     {
       "name": "ctr",
@@ -470,7 +470,7 @@
         "vendor/licenses/ctr-0.10.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/ctr-0.10.1/LICENSE-MIT": "63af4bea227c94d021e99427f6ca3a4b8efddadcca93ab6130f708cf6138cf68"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ctr."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ctr."
     },
     {
       "name": "ctutils",
@@ -486,7 +486,7 @@
         "vendor/licenses/ctutils-0.4.6/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
         "vendor/licenses/ctutils-0.4.6/LICENSE-MIT": "91585c36e4fb9ab4ca0d3dfac5d66d3c0c62cc51f640a0e1196542daf2267eae"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ctutils."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ctutils."
     },
     {
       "name": "digest",
@@ -502,7 +502,7 @@
         "vendor/licenses/digest-0.11.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/digest-0.11.3/LICENSE-MIT": "af59cea35d7f5e2777a713b8d155d65efa2c339eb43f3c14e868c6ac8506edad"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest."
     },
     {
       "name": "either",
@@ -518,7 +518,7 @@
         "vendor/licenses/either-1.19.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/either-1.19.0/LICENSE-MIT": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> either."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> either."
     },
     {
       "name": "equivalent",
@@ -533,23 +533,8 @@
       "notice_sha256": {
         "vendor/licenses/equivalent-1.0.2/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/equivalent-1.0.2/LICENSE-MIT": "7365cc8878a1d7ce155a58c4ca09c3d7a6be413efa5334a80ea842912b669349"
-      }
-    },
-    {
-      "name": "fastrand",
-      "version": "2.5.0",
-      "license": "Apache-2.0 OR MIT",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "repository": "https://github.com/smol-rs/fastrand",
-      "notices": [
-        "vendor/licenses/fastrand-2.5.0/LICENSE-APACHE",
-        "vendor/licenses/fastrand-2.5.0/LICENSE-MIT"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/fastrand-2.5.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-        "vendor/licenses/fastrand-2.5.0/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> fastrand."
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> indexmap -> equivalent."
     },
     {
       "name": "find-msvc-tools",
@@ -564,7 +549,8 @@
       "notice_sha256": {
         "vendor/licenses/find-msvc-tools-0.1.14/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/find-msvc-tools-0.1.14/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> cc -> find-msvc-tools."
     },
     {
       "name": "getrandom",
@@ -580,7 +566,7 @@
         "vendor/licenses/getrandom-0.4.3/LICENSE-APACHE": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf",
         "vendor/licenses/getrandom-0.4.3/LICENSE-MIT": "523a42c25d245dde9c015f882cec7f4555aad883382a6cf19b4b7d9b2cd5419b"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> getrandom."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> getrandom."
     },
     {
       "name": "ghash",
@@ -596,7 +582,7 @@
         "vendor/licenses/ghash-0.6.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/ghash-0.6.0/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ghash."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ghash."
     },
     {
       "name": "hashbrown",
@@ -611,7 +597,8 @@
       "notice_sha256": {
         "vendor/licenses/hashbrown-0.17.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/hashbrown-0.17.1/LICENSE-MIT": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> indexmap -> hashbrown."
     },
     {
       "name": "hybrid-array",
@@ -627,7 +614,7 @@
         "vendor/licenses/hybrid-array-0.4.15/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/hybrid-array-0.4.15/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> block-buffer -> hybrid-array."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> block-buffer -> hybrid-array."
     },
     {
       "name": "indexmap",
@@ -642,7 +629,8 @@
       "notice_sha256": {
         "vendor/licenses/indexmap-2.14.2/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/indexmap-2.14.2/LICENSE-MIT": "ecc269ef87fd38a1d98e30bfac9ba964a9dbd9315c3770fed98d4d7cb5882055"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> indexmap."
     },
     {
       "name": "inout",
@@ -658,7 +646,7 @@
         "vendor/licenses/inout-0.2.5/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/inout-0.2.5/LICENSE-MIT": "a07fcacc3c60de4dc0fab10ac9d6aaba7379974e28451c99da7f7df09c25b28c"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aead -> inout."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> aead -> inout."
     },
     {
       "name": "itoa",
@@ -673,7 +661,8 @@
       "notice_sha256": {
         "vendor/licenses/itoa-1.0.18/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/itoa-1.0.18/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> itoa."
     },
     {
       "name": "libc",
@@ -689,7 +678,7 @@
         "vendor/licenses/libc-0.2.191/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/libc-0.2.191/LICENSE-MIT": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-stack -> libc."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-stack -> libc."
     },
     {
       "name": "memchr",
@@ -704,7 +693,8 @@
       "notice_sha256": {
         "vendor/licenses/memchr-2.8.3/COPYING": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
         "vendor/licenses/memchr-2.8.3/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
-      }
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> regex -> memchr."
     },
     {
       "name": "once_cell",
@@ -720,7 +710,7 @@
         "vendor/licenses/once_cell-1.21.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/once_cell-1.21.4/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> once_cell."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> once_cell."
     },
     {
       "name": "polyval",
@@ -736,7 +726,7 @@
         "vendor/licenses/polyval-0.7.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/polyval-0.7.3/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ghash -> polyval."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ghash -> polyval."
     },
     {
       "name": "proc-macro2",
@@ -752,197 +742,228 @@
         "vendor/licenses/proc-macro2-1.0.107/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/proc-macro2-1.0.107/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
       },
-      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core.",
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro -> quote -> proc-macro2."
     },
     {
       "name": "purrdf-cdt",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-cdt."
-    },
-    {
-      "name": "purrdf-core",
-      "version": "3.0.1",
-      "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
         "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
-        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt"
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
         "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-cdt."
+    },
+    {
+      "name": "purrdf-core",
+      "version": "3.0.1",
+      "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0 AND (MIT OR Apache-2.0)",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-core/NOTICE.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-core/upstream-inventory.json",
+        "vendor/licenses/hashbrown-0.17.1/LICENSE-MIT",
+        "vendor/licenses/hashbrown-0.17.1/LICENSE-APACHE",
+        "vendor/licenses/purrdf-511f8af/purrdf-core/third-party/hashbrown-native-table/2-NOTICE"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+        "vendor/licenses/purrdf-511f8af/purrdf-core/NOTICE.txt": "134f6cf6e9408eca6587c3786c1e4225fff9435728112ade47a3d81f181020b3",
+        "vendor/licenses/purrdf-511f8af/purrdf-core/upstream-inventory.json": "af839e9717a257e41f97e61c3e5ebc2ce3930ef7e106f09a7152fba5beb2586f",
+        "vendor/licenses/hashbrown-0.17.1/LICENSE-MIT": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+        "vendor/licenses/hashbrown-0.17.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "vendor/licenses/purrdf-511f8af/purrdf-core/third-party/hashbrown-native-table/2-NOTICE": "1523147a6efc4f8c0a660994a10465c2918c3b2c2dd243b3403f6b860b136a4d"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core."
     },
     {
       "name": "purrdf-datalog",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-datalog."
-    },
-    {
-      "name": "purrdf-deflate",
-      "version": "3.0.1",
-      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-deflate."
-    },
-    {
-      "name": "purrdf-ed25519",
-      "version": "3.0.1",
-      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-ed25519."
-    },
-    {
-      "name": "purrdf-events",
-      "version": "3.0.1",
-      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-events."
-    },
-    {
-      "name": "purrdf-geo-kernel",
-      "version": "3.0.1",
-      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> purrdf-geo-kernel."
-    },
-    {
-      "name": "purrdf-gts",
-      "version": "3.0.1",
-      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts."
-    },
-    {
-      "name": "purrdf-hash",
-      "version": "3.0.1",
-      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
-      "repository": "https://github.com/Blackcat-Informatics/purrdf",
-      "notices": [
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-hash."
-    },
-    {
-      "name": "purrdf-iri",
-      "version": "3.0.1",
-      "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
         "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
-        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt"
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
         "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-iri."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-datalog."
+    },
+    {
+      "name": "purrdf-deflate",
+      "version": "3.0.1",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-deflate."
+    },
+    {
+      "name": "purrdf-ed25519",
+      "version": "3.0.1",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-ed25519."
+    },
+    {
+      "name": "purrdf-events",
+      "version": "3.0.1",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-events."
+    },
+    {
+      "name": "purrdf-geo-kernel",
+      "version": "3.0.1",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> purrdf-geo-kernel."
+    },
+    {
+      "name": "purrdf-gts",
+      "version": "3.0.1",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts."
+    },
+    {
+      "name": "purrdf-hash",
+      "version": "3.0.1",
+      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-hash."
+    },
+    {
+      "name": "purrdf-iri",
+      "version": "3.0.1",
+      "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-iri/NOTICE.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-iri/upstream-inventory.json"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+        "vendor/licenses/purrdf-511f8af/purrdf-iri/NOTICE.txt": "ec2747c083a69048c6a9aa64d498cc0285bb18f9c04790a2e10cf46a18555203",
+        "vendor/licenses/purrdf-511f8af/purrdf-iri/upstream-inventory.json": "765b1d38f02112446e4e7202647adf93bb21fcfd8c56cb0032118a288db442c5"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-iri."
     },
     {
       "name": "purrdf-lex",
       "version": "3.0.1",
       "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0 AND BSD-3-Clause",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
@@ -951,7 +972,9 @@
         "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt",
         "vendor/licenses/purrdf-2ed9845/unsafe-libyaml-0.2.11-MIT.txt",
         "vendor/licenses/purrdf-2ed9845/libyaml-COPYRIGHT-MIT.txt",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-WHATWG"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-WHATWG",
+        "vendor/licenses/purrdf-511f8af/purrdf-lex/NOTICE.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-lex/upstream-inventory.json"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
@@ -960,153 +983,241 @@
         "vendor/licenses/purrdf-2ed9845/Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
         "vendor/licenses/purrdf-2ed9845/unsafe-libyaml-0.2.11-MIT.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
         "vendor/licenses/purrdf-2ed9845/libyaml-COPYRIGHT-MIT.txt": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864",
+        "vendor/licenses/purrdf-511f8af/purrdf-lex/NOTICE.txt": "883b0447fc6b06449e875b04819ae776f3b8b046b782ddc6729b384c0376b85d",
+        "vendor/licenses/purrdf-511f8af/purrdf-lex/upstream-inventory.json": "4ea821d345a06f79bc4d16b1bc82e15dde155b487124122c543e0e3faf8dd430"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-lex."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-lex."
     },
     {
       "name": "purrdf-rdf",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/NOTICE.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/upstream-inventory.json",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/0-W3C-document-license.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/1-LICENSE.md",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/0-W3C-software-document-2015.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/1-W3C-test-suites-policy.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/2-W3C-test-suite-license.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/3-W3C-test-suite-BSD.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/4-LICENSE.md",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/obographs/0-BSD-3-Clause.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/0-W3C-software-document-2015.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/1-W3C-test-suites-policy.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/2-W3C-test-suite-license.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/3-W3C-test-suite-BSD.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/4-LICENSE",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/0-W3C-software-document-2015.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/1-LICENSE.md.license",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/4-LICENSE.md.license",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md.license"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/NOTICE.txt": "422d7f531b4e279eaf9426a68dcf65d584cae28f135ad48d94ba43b6e5c7b604",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/upstream-inventory.json": "52da621c2a7923e3155ffeb621eba0a4e09acb46c6dcfc4a126692cdfccc1b4e",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/0-W3C-document-license.html": "1ce63a482b3fe34cf19bab6846d179f7b5a5e0fdf1e995c43031962591713d55",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/4-LICENSE.md": "a13d29acf165699ae8c57ef9eac2f489560d2753dd84a684c735a4c7c7a15d64",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/obographs/0-BSD-3-Clause.txt": "f24d1328dbfffe7bf66aa877957db75e60629358357d8c366ccab616fef487ab",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdf-w3c/4-LICENSE": "7fa36904d5d6d32848307af7b22d416b708aaa0b98f5c719b26adb5ed3594b2a",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/csvw/1-LICENSE.md.license": "c5ec60a223692d47315c479fd0b1867b3f5d279eeebe0a8b7183c9ed61d16405",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/jsonld-w3c/4-LICENSE.md.license": "eb5f1d7fa06b478e621a8fee32697c807891dd5274cc06b67b1a22869f99a841",
+        "vendor/licenses/purrdf-511f8af/purrdf-rdf/third-party/rdfc/1-LICENSE.md.license": "68441b70b3182029aef9cae07d8d64d41c886986b6947b9b745fc17577cfb645"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf."
     },
     {
       "name": "purrdf-shapes",
       "version": "3.0.1",
-      "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND W3C-20150513",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/NOTICE.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/upstream-inventory.json",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/0-W3C-software-document-2015.html",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md.license"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/NOTICE.txt": "1b11959f266c3baa4b20bbe021f2c8f763cb098d374cb8b25cb5096ade0af5f2",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/upstream-inventory.json": "f93a1e2857a0c34e782936683296f3a7caa2a923965e3f5e674aef73829f4d60",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
+        "vendor/licenses/purrdf-511f8af/purrdf-shapes/third-party/shacl/1-LICENSE.md.license": "b18676d4050c2f417d9a4d548644a97d4bc3a36a0cd2bf5a46f7b23aea3d8252"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes."
     },
     {
       "name": "purrdf-slice",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-slice."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-slice."
     },
     {
       "name": "purrdf-sparql-algebra",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-algebra."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-algebra."
     },
     {
       "name": "purrdf-sparql-eval",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval."
     },
     {
       "name": "purrdf-sparql-results",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> purrdf-sparql-results."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> purrdf-sparql-results."
     },
     {
       "name": "purrdf-stack",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-stack."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-stack."
     },
     {
       "name": "purrdf-xsd",
       "version": "3.0.1",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfbe2240e1fc6f178badd049420753ef358",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
       "repository": "https://github.com/Blackcat-Informatics/purrdf",
       "notices": [
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt"
       ],
       "notice_sha256": {
         "vendor/licenses/purrdf-2ed9845/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/purrdf-2ed9845/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
+        "vendor/licenses/purrdf-2ed9845/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+        "vendor/licenses/purrdf-511f8af/NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-xsd."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-xsd."
+    },
+    {
+      "name": "purrdf-zstd",
+      "version": "3.0.1",
+      "license": "Apache-2.0",
+      "source": "git+https://github.com/Blackcat-Informatics/purrdf.git?rev=511f8af4efafe7e9e1c4e673c28afb1f5b4f9572#511f8af4efafe7e9e1c4e673c28afb1f5b4f9572",
+      "repository": "https://github.com/Blackcat-Informatics/purrdf",
+      "notices": [
+        "vendor/licenses/structured-zstd-0.0.49/LICENSE",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/NOTICE.txt",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/upstream-inventory.json",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/third-party/structured-zstd-native/1-NOTICE",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/PROVENANCE.md",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/UPSTREAM-SHA256.json"
+      ],
+      "notice_sha256": {
+        "vendor/licenses/structured-zstd-0.0.49/LICENSE": "5150a07aead61dc34bc33bca091dd91a7fbe1c6c0458da14a4d72030abe30b00",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/NOTICE.txt": "269779c48c54f24e720866d85dcc111f8e3fb2acdd7beca49eda1646d745bf1e",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/upstream-inventory.json": "8832b2609b5a9a731250a6ce4e4bf28891bde534dfbc0a5236dc20c5a68aaf66",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/third-party/structured-zstd-native/1-NOTICE": "ba21bda21a598fe47ef2348a601ef7480566bae8fd5f02e67989a162b77dbdcd",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/PROVENANCE.md": "6fb916bfb15b93fe649dc942b946234ec6e68e2e234b66f1f16c1baa193ce506",
+        "vendor/licenses/purrdf-511f8af/purrdf-zstd/UPSTREAM-SHA256.json": "23fe2b8f5fcbea513048fff0bba7f8a55c5e5bb5998314c75474be063bb7b90b"
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> purrdf-zstd."
     },
     {
       "name": "quote",
@@ -1121,7 +1232,8 @@
       "notice_sha256": {
         "vendor/licenses/quote-1.0.47/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/quote-1.0.47/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro -> quote."
     },
     {
       "name": "r-efi",
@@ -1135,7 +1247,7 @@
       "notice_sha256": {
         "vendor/licenses/r-efi-6.0.0/AUTHORS": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> getrandom -> r-efi."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> getrandom -> r-efi."
     },
     {
       "name": "rayon",
@@ -1151,7 +1263,7 @@
         "vendor/licenses/rayon-1.12.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/rayon-1.12.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon."
     },
     {
       "name": "rayon-core",
@@ -1167,7 +1279,7 @@
         "vendor/licenses/rayon-core-1.13.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/rayon-core-1.13.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> rayon -> rayon-core."
     },
     {
       "name": "regex",
@@ -1183,7 +1295,8 @@
         "vendor/licenses/regex-1.13.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/regex-1.13.1/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
       },
-      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core.",
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> regex."
     },
     {
       "name": "regex-automata",
@@ -1198,7 +1311,8 @@
       "notice_sha256": {
         "vendor/licenses/regex-automata-0.4.18/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/regex-automata-0.4.18/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
-      }
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> regex -> regex-automata."
     },
     {
       "name": "regex-syntax",
@@ -1213,7 +1327,8 @@
       "notice_sha256": {
         "vendor/licenses/regex-syntax-0.8.11/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/regex-syntax-0.8.11/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
-      }
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> regex-syntax."
     },
     {
       "name": "rustversion",
@@ -1229,7 +1344,7 @@
         "vendor/licenses/rustversion-1.0.23/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/rustversion-1.0.23/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> rustversion."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> rustversion."
     },
     {
       "name": "serde",
@@ -1244,7 +1359,8 @@
       "notice_sha256": {
         "vendor/licenses/serde-1.0.229/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/serde-1.0.229/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> serde."
     },
     {
       "name": "serde_core",
@@ -1259,7 +1375,8 @@
       "notice_sha256": {
         "vendor/licenses/serde_core-1.0.229/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/serde_core-1.0.229/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> serde_core."
     },
     {
       "name": "serde_derive",
@@ -1274,7 +1391,8 @@
       "notice_sha256": {
         "vendor/licenses/serde_derive-1.0.229/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/serde_derive-1.0.229/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> serde_core -> serde_derive."
     },
     {
       "name": "serde_json",
@@ -1289,7 +1407,8 @@
       "notice_sha256": {
         "vendor/licenses/serde_json-1.0.151/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/serde_json-1.0.151/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json."
     },
     {
       "name": "sha2",
@@ -1305,7 +1424,7 @@
         "vendor/licenses/sha2-0.11.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/sha2-0.11.1/LICENSE-MIT": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2."
     },
     {
       "name": "shlex",
@@ -1320,7 +1439,8 @@
       "notice_sha256": {
         "vendor/licenses/shlex-2.0.1/LICENSE-APACHE": "553fffcd9b1cb158bc3e9edc35da85ca5c3b3d7d2e61c883ebcfa8a65814b583",
         "vendor/licenses/shlex-2.0.1/LICENSE-MIT": "4455bf75a91154108304cb283e0fea9948c14f13e20d60887cf2552449dea3b1"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> cc -> shlex."
     },
     {
       "name": "streaming-iterator",
@@ -1339,21 +1459,8 @@
       "upstream_notice_sha256": {
         "vendor/licenses/streaming-iterator-0.1.9/LICENSE-APACHE": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
       },
-      "notice_normalization": "LF line endings; trailing horizontal whitespace and final blank lines removed. License text unchanged."
-    },
-    {
-      "name": "structured-zstd",
-      "version": "0.0.49",
-      "license": "Apache-2.0",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "repository": "https://github.com/structured-world/structured-zstd",
-      "notices": [
-        "vendor/licenses/structured-zstd-0.0.49/LICENSE"
-      ],
-      "notice_sha256": {
-        "vendor/licenses/structured-zstd-0.0.49/LICENSE": "5150a07aead61dc34bc33bca091dd91a7fbe1c6c0458da14a4d72030abe30b00"
-      },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> structured-zstd."
+      "notice_normalization": "LF line endings; trailing horizontal whitespace and final blank lines removed. License text unchanged.",
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> streaming-iterator."
     },
     {
       "name": "syn",
@@ -1369,7 +1476,8 @@
         "vendor/licenses/syn-3.0.6/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/syn-3.0.6/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
       },
-      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core."
+      "additional_tooling_use": "Pinned direct dependency of unpublished purrassist-helper-census: syn full+visit parses Rust/module/cfg/AST structure; proc-macro2 span-locations provides token bodies and locations; regex admits ledger forbidden-name patterns. Existing resolved version retained. No dependency of purrassist-core.",
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro -> wasm-bindgen-macro-support -> syn."
     },
     {
       "name": "tree-sitter",
@@ -1382,7 +1490,8 @@
       ],
       "notice_sha256": {
         "vendor/licenses/tree-sitter-0.27.0/LICENSE": "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter."
     },
     {
       "name": "tree-sitter-javascript",
@@ -1395,7 +1504,8 @@
       ],
       "notice_sha256": {
         "vendor/licenses/tree-sitter-javascript-0.25.0/LICENSE": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter-javascript."
     },
     {
       "name": "tree-sitter-language",
@@ -1408,7 +1518,8 @@
       ],
       "notice_sha256": {
         "vendor/licenses/tree-sitter-language-0.1.8/LICENSE": "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> tree-sitter-language."
     },
     {
       "name": "tree-sitter-python",
@@ -1421,7 +1532,8 @@
       ],
       "notice_sha256": {
         "vendor/licenses/tree-sitter-python-0.25.0/LICENSE": "d724405ce238a22c0d35769c5a36b386ad5958192efe8bbb304fb2896254575f"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter-python."
     },
     {
       "name": "tree-sitter-rust",
@@ -1434,7 +1546,8 @@
       ],
       "notice_sha256": {
         "vendor/licenses/tree-sitter-rust-0.24.2/LICENSE": "31d5b6f4243d5c7c6e1c4ebbbb9f6407bd1457a08bcc4f706521710341acba36"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter-rust."
     },
     {
       "name": "tree-sitter-typescript",
@@ -1448,7 +1561,8 @@
       "notice_source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/LICENSE",
       "notice_sha256": {
         "vendor/licenses/tree-sitter-typescript-0.23.2/LICENSE": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter-typescript."
     },
     {
       "name": "twox-hash",
@@ -1462,7 +1576,7 @@
       "notice_sha256": {
         "vendor/licenses/twox-hash-2.1.5/LICENSE.txt": "f59bcb1c02654665f78a5f290bae76b6358137675f6459f51e6d474a4623d8ea"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> structured-zstd -> twox-hash."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> purrdf-zstd -> twox-hash."
     },
     {
       "name": "typenum",
@@ -1480,7 +1594,7 @@
         "vendor/licenses/typenum-1.20.1/LICENSE-APACHE": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406",
         "vendor/licenses/typenum-1.20.1/LICENSE-MIT": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> block-buffer -> hybrid-array -> typenum."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-core -> sha2 -> digest -> block-buffer -> hybrid-array -> typenum."
     },
     {
       "name": "unicode-ident",
@@ -1497,7 +1611,8 @@
         "vendor/licenses/unicode-ident-1.0.26/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
         "vendor/licenses/unicode-ident-1.0.26/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
         "vendor/licenses/unicode-ident-1.0.26/LICENSE-UNICODE": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1"
-      }
+      },
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-shared -> unicode-ident."
     },
     {
       "name": "universal-hash",
@@ -1513,7 +1628,7 @@
         "vendor/licenses/universal-hash-0.6.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
         "vendor/licenses/universal-hash-0.6.1/LICENSE-MIT": "efa52eb70a774b62c50cf50f5e57e2625c29d375d09b91132f4f020e47b9944e"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ghash -> polyval -> universal-hash."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> aes-gcm -> ghash -> polyval -> universal-hash."
     },
     {
       "name": "visual-hashing",
@@ -1531,7 +1646,7 @@
         "vendor/licenses/visual-hashing-1.0.0/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
         "vendor/licenses/visual-hashing-1.0.0/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> visual-hashing."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf -> purrdf-gts -> visual-hashing."
     },
     {
       "name": "wasm-bindgen",
@@ -1547,7 +1662,7 @@
         "vendor/licenses/wasm-bindgen-0.2.129/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/wasm-bindgen-0.2.129/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen."
     },
     {
       "name": "wasm-bindgen-macro",
@@ -1563,7 +1678,7 @@
         "vendor/licenses/wasm-bindgen-macro-0.2.129/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/wasm-bindgen-macro-0.2.129/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro."
     },
     {
       "name": "wasm-bindgen-macro-support",
@@ -1579,7 +1694,7 @@
         "vendor/licenses/wasm-bindgen-macro-support-0.2.129/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/wasm-bindgen-macro-support-0.2.129/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro -> wasm-bindgen-macro-support."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-macro -> wasm-bindgen-macro-support."
     },
     {
       "name": "wasm-bindgen-shared",
@@ -1595,7 +1710,7 @@
         "vendor/licenses/wasm-bindgen-shared-0.2.129/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
         "vendor/licenses/wasm-bindgen-shared-0.2.129/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-shared."
+      "justification": "Required by the tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-sparql-eval -> wasm-bindgen -> wasm-bindgen-shared."
     },
     {
       "name": "windows-link",
@@ -1640,7 +1755,8 @@
       ],
       "notice_sha256": {
         "vendor/licenses/zmij-1.0.23/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-      }
+      },
+      "justification": "Required by the workspace consumer through purrassist-syntax -> tree-sitter -> serde_json -> zmij."
     }
   ],
   "packaged_notices": {
