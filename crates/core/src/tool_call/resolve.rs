@@ -2145,7 +2145,7 @@ impl<'a> Resolver<'a> {
             arguments,
             ledger,
             report: round.report,
-            _metadata: round._metadata,
+            _metadata: round.metadata,
         })
     }
 
@@ -3459,11 +3459,11 @@ struct SchemaRound {
     accepted: Vec<bool>,
     both: Vec<bool>,
     report: ValidationReport,
-    _metadata: ScratchLease,
+    metadata: ScratchLease,
 }
 
 impl SchemaRound {
-    fn new(
+    const fn new(
         arguments: Node,
         accepted: Vec<bool>,
         both: Vec<bool>,
@@ -3475,7 +3475,7 @@ impl SchemaRound {
             accepted,
             both,
             report,
-            _metadata: metadata,
+            metadata,
         }
     }
 }
