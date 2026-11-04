@@ -402,11 +402,11 @@ impl PendingSources {
         // Final replacement stores are distinct from intermediate ID shifts.
         governor.charge(Resource::Work, 2)?;
         self.ascend(lane, plan, floor, cursor, governor)?;
-        if plan.target != plan.hole {
-            plan.movement = Move::Up;
-        } else {
+        if plan.target == plan.hole {
             plan.movement = Move::Down;
             self.descend(lane, plan, floor, cursor, governor)?;
+        } else {
+            plan.movement = Move::Up;
         }
         Ok(())
     }

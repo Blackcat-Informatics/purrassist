@@ -1790,7 +1790,7 @@ impl<'s> Recognizer<'s> {
             update.apply(&mut self.pending_sources);
             ready.push((ready.len(), pending.at(), pending));
         }
-        self.apply_ready(ready, governor)
+        self.apply_ready(&ready, governor)
     }
 
     /// Consuming EOF has no later source-floor reader or report producer.
@@ -1821,7 +1821,8 @@ impl<'s> Recognizer<'s> {
             // Only Pending enters ready; no handle survives its queue slot.
             ready.push((ready.len(), pending.at(), pending));
         }
-        self.apply_ready(ready, governor)?;
+        self.apply_ready(&ready, governor)?;
+        drop(ready);
         if !self.pending.is_empty() {
             return Err(invalid_input(
                 "terminal report dispatch left queued source handles",
@@ -1834,7 +1835,7 @@ impl<'s> Recognizer<'s> {
     /// Preserve the native report grouping and queue-charge handoff.
     fn apply_ready(
         &mut self,
-        ready: Vec<(usize, usize, Pending)>,
+        ready: &[(usize, usize, Pending)],
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if ready.is_empty() {
