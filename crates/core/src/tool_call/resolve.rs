@@ -3509,7 +3509,7 @@ fn schema_rounds(
     mut arguments: Node,
     governor: &mut Governor,
 ) -> Result<Option<SchemaRound>, StopReason> {
-    let metadata = governor.lease_scratch(SCHEMA_REPORT_CONTROL_BYTES)?;
+    let owner = governor.lease_scratch(SCHEMA_REPORT_CONTROL_BYTES)?;
     // A schema the validator cannot evaluate (a `$ref` recurring without
     // instance progress) types nothing: the verbatim text stays, and the
     // arguments' own validation reports the schema as before.
@@ -3618,9 +3618,8 @@ fn schema_rounds(
             }
         }
     }
-    Ok(Some(SchemaRound::new(
-        arguments, accepted, both, report, metadata,
-    )))
+    let round = SchemaRound::new(arguments, accepted, both, report, owner);
+    Ok(Some(round))
 }
 
 /// Per site, how many of `violations` concern it: a violation at the
