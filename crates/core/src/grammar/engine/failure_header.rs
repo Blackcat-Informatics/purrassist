@@ -448,8 +448,67 @@ impl Engine<'_> {
         start: usize,
         governor: &mut Governor,
     ) -> Result<Option<Prefix>, StopReason> {
+        // Both algorithms share the same stack owner. The sparse map remains
+        // empty unless a packed branch requires its complete memoized proof.
+        const CONTROL_BYTES: u64 = 768;
+        const _: () = assert!(
+            core::mem::size_of::<(
+                ScratchMap<u32, Option<Prefix>>,
+                ScratchVec<(u32, bool)>,
+                crate::contract::ScratchLease,
+                u32,
+                usize,
+                bool,
+                Option<Prefix>,
+                Option<Option<Prefix>>,
+                Result<Option<Prefix>, StopReason>,
+            )>() as u64
+                <= CONTROL_BYTES
+        );
+        let _controls = governor.lease_scratch(CONTROL_BYTES)?;
         let mut memo: ScratchMap<u32, Option<Prefix>> = ScratchMap::new(governor);
         let mut stack = ScratchVec::new(governor);
+        let mut node = root;
+        let linear = loop {
+            governor.charge(Resource::Work, 1)?;
+            let history = self
+                .arena
+                .nodes
+                .as_slice()
+                .get(node as usize)
+                .ok_or_else(|| invalid_input("failed header history is outside its arena"))?;
+            match history.kind {
+                HistKind::Root => break true,
+                HistKind::Pack(_) => break false,
+                HistKind::Value(_)
+                | HistKind::Edit(_)
+                | HistKind::Link
+                | HistKind::Next(..)
+                | HistKind::Skipped(_) => return Ok(None),
+                HistKind::Open(..) | HistKind::Close(..) => {
+                    push_scratch(&mut stack, (node, false), governor)?;
+                    node = history.prev;
+                }
+            }
+        };
+        governor.charge(Resource::Work, 1)?;
+        if linear {
+            let mut prefix = Some(Prefix::default());
+            while let Some((node, _)) = stack.pop() {
+                // One forward node read plus the unchanged capture transformer.
+                governor.charge(Resource::Work, 9)?;
+                let history = &self.arena.nodes[node as usize];
+                prefix = prefix.and_then(|prefix| prefix.apply(history.kind, start));
+                governor.charge(Resource::Work, 1)?;
+                if prefix.is_none() {
+                    break;
+                }
+            }
+            return Ok(prefix);
+        }
+        // A Pack requires every branch and descendant, so restart from the
+        // original root with the unchanged complete memo algorithm.
+        stack.clear();
         push_scratch(&mut stack, (root, false), governor)?;
         while let Some((node, finish)) = stack.pop() {
             map_work(memo.len(), governor)?;

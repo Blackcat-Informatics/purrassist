@@ -2,6 +2,14 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+A failed header with one immutable predecessor chain replays the same capture
+transformer from root to tip without constructing a sparse summary map. Every
+history node is checked before replay; unsupported histories retain the same
+absent proof. Encountering a packed branch restarts the complete memoized
+algorithm from the original root. Reverse discovery, forward reads, capture
+application, control metadata and backing buffers retain explicit admissions.
+Runtime and resource qualification remain pending automatic CI.
+
 Selected failed-header certification stops once its complete intersection is
 absent. Later read-only contributors cannot restore that proof; selection,
 source extent, native frame ownership and prior-selection intersection retain
