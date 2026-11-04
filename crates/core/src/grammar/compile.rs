@@ -1780,7 +1780,9 @@ fn trail_matcher(
     source: TrailSources<'_>,
     governor: &mut Governor,
 ) -> Result<TrailMatcher, GrammarError> {
-    const CONTROL: usize = 416;
+    // Push/refusal includes GrammarError's full InvalidLayout carrier and
+    // tuple alignment, alongside the independent StopReason carrier.
+    const CONTROL: usize = 448;
     const {
         assert!(
             core::mem::size_of::<(

@@ -2274,7 +2274,7 @@ owner, initialization, suffix policy and admissions through the same constructor
 
 The retained wrapper scanner reserves 112 portable metadata bytes for its two
 table owners, two positive cutoffs, lease and return carrier; table buffers retain
-their own reservations. Preparation separately reserves 416 bytes for the actual
+their own reservations. Preparation separately reserves 448 bytes for the actual
 caller frame, borrowed token vector owner, rank/cutoff arrays, iteration state,
 input/return carriers and leases. Borrowed tokens reserve 32 bytes each. A source
 lookup admits one Work; preparing both view slots admits two, with one additional
