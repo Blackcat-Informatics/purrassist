@@ -2273,22 +2273,34 @@ Ordinary delimiter and marker callers retain their existing longest-match output
 owner, initialization and suffix policy through the same constructor. Their
 construction Work follows the shared row-copy and sparse-child algorithm below.
 
-The retained wrapper scanner reserves 112 portable metadata bytes for its two
-table owners, two positive cutoffs, lease and return carrier; table buffers retain
-their own reservations. Preparation separately reserves 448 bytes for the actual
-caller frame, borrowed token vector owner, rank/cutoff arrays, iteration state,
-input/return carriers and leases. Borrowed tokens reserve 32 bytes each. A source
+Preparation visits every instruction in both final programs at one Work each,
+plus one Work for each literal's closer-flag observation. If neither program
+contains a closer-tagged literal, it retains no wrapper table. Only repair of
+such a literal can create the inserted-wrapper history that enters lookahead;
+attempt histories begin at the root and pack within their production table.
+The predicate is conservative: any such literal in either program retains both
+complete priority views. It does not inspect grammar syntax or dialect names.
+The absent case prepares no token buffer or dense table and does not enter the
+private matcher constructor. An unexpected runtime scan without a prepared table
+returns an explicit invariant failure.
+
+The retained wrapper record reserves 128 portable metadata bytes for its optional
+table owners, two positive cutoffs, lease and return carrier, including when the
+tables are absent. Present table buffers retain their own reservations.
+Preparation separately reserves 448 bytes for its predicate or gathering frame,
+borrowed token vector owner, rank/cutoff arrays, iteration state, input/return
+carriers and leases. Borrowed tokens reserve 32 bytes each. A source
 lookup admits one Work; preparing both view slots admits two, with one additional
 Work to select a private opener's view. Each token admits four Work to initialize
 its rank slots and staged counters, visits both view slots at one Work each,
 adds four Work per present rank for reading, checked
 advancement and staged publication, and admits one Work for counter commit. Push
 and actual relocation retain their existing admissions. Saving both positive
-cutoffs admits one Work. The shared constructor reserves 768 additional metadata
-bytes covering its sparse-trie and dense-builder phases: goto, transitions,
-depths, failure links, both output projections, queue, terminal replay, iterators,
-cursors, scalars, borrows and return carriers. Complete typed phase assertions
-cover these records, temporary trie nodes, nested initialization iterators,
+cutoffs admits one Work. When needed, the shared constructor reserves 768
+additional metadata bytes covering its sparse-trie and dense-builder phases:
+goto, transitions, depths, failure links, both output projections, queue, terminal
+replay, iterators, cursors, scalars, borrows and return carriers. Complete typed
+phase assertions cover these records, temporary trie nodes, nested initialization iterators,
 row-copy ranges, mutable table slices and queue insertion borrows/results.
 Each metadata reservation admits one Work before preparation.
 

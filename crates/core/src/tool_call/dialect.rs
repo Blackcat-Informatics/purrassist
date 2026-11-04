@@ -136,8 +136,14 @@ impl BuiltIn {
 
     fn grammar(&self) -> &CompiledGrammar {
         self.compiled.get_or_init(|| {
-            Grammar::compile_governed(self.source, &mut Governor::new(Budget::default()))
-                .expect("every built-in dialect grammar compiles under the default budget")
+            let mut governor = Governor::new(Budget::default());
+            Grammar::compile_governed(self.source, &mut governor).unwrap_or_else(|error| {
+                panic!(
+                    "built-in dialect {} must compile under the default budget: {error:?}; usage: {:?}",
+                    self.id,
+                    governor.usage(),
+                )
+            })
         })
     }
 }

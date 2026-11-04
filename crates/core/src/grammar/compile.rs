@@ -1664,17 +1664,18 @@ impl Programs<'_> {
 /// First native opener/marker/closer ending at the current wrapper-tail byte.
 #[derive(Debug)]
 pub(crate) struct TrailMatcher {
-    pub(crate) matcher: PriorityMatcher,
+    pub(crate) matcher: Option<PriorityMatcher>,
     pub(crate) positives: [u32; 2],
     _metadata: ScratchLease,
 }
 
-const TRAIL_MATCHER_BYTES: usize = 112;
+const TRAIL_MATCHER_BYTES: usize = 128;
 const _: () = assert!(core::mem::size_of::<TrailMatcher>() <= TRAIL_MATCHER_BYTES);
 const _: () =
     assert!(core::mem::size_of::<Result<TrailMatcher, GrammarError>>() <= TRAIL_MATCHER_BYTES);
 const _: () = assert!(
-    core::mem::size_of::<(PriorityMatcher, [u32; 2], ScratchLease)>() <= TRAIL_MATCHER_BYTES
+    core::mem::size_of::<(Option<PriorityMatcher>, [u32; 2], ScratchLease)>()
+        <= TRAIL_MATCHER_BYTES
 );
 
 struct TrailSources<'a> {
@@ -1776,83 +1777,134 @@ impl<'a> TrailBuild<'a> {
     }
 }
 
+// Push/refusal includes GrammarError's full InvalidLayout carrier and
+// tuple alignment, alongside the independent StopReason carrier.
+const TRAIL_MATCHER_CONTROL_BYTES: usize = 448;
+const _: () = {
+    assert!(
+        core::mem::size_of::<(
+            TrailSources<'_>,
+            ScratchLease,
+            Result<ScratchLease, crate::StopReason>,
+            &mut Governor,
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+    assert!(
+        core::mem::size_of::<(
+            TrailBuild<'_>,
+            TrailSources<'_>,
+            PriorityLiteral<'_>,
+            [Option<u32>; 2],
+            [u32; 2],
+            [bool; 2],
+            usize,
+            Option<u32>,
+            bool,
+            ScratchLease,
+            ScratchLease,
+            &mut TrailBuild<'_>,
+            &mut ScratchVec<PriorityLiteral<'_>>,
+            Result<u32, crate::StopReason>,
+            &mut Governor,
+            &Literal,
+            &Program,
+            Inst,
+            u32,
+            &[u8],
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+    assert!(
+        core::mem::size_of::<(
+            TrailBuild<'_>,
+            TrailSources<'_>,
+            PriorityLiteral<'_>,
+            ScratchLease,
+            ScratchLease,
+            &mut TrailBuild<'_>,
+            &mut ScratchVec<PriorityLiteral<'_>>,
+            &mut Governor,
+            [Option<u32>; 2],
+            [u32; 2],
+            [bool; 2],
+            Option<u32>,
+            bool,
+            Result<(), GrammarError>,
+            Result<(), crate::StopReason>,
+            usize,
+            &[u8],
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+    // The returned matcher is covered even before final record assembly.
+    assert!(
+        core::mem::size_of::<(
+            TrailBuild<'_>,
+            TrailSources<'_>,
+            PriorityLiteral<'_>,
+            ScratchLease,
+            ScratchLease,
+            Result<PriorityMatcher, crate::StopReason>,
+            Option<PriorityMatcher>,
+            Result<TrailMatcher, GrammarError>,
+            bool,
+            &mut Governor,
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES + TRAIL_MATCHER_BYTES
+    );
+    // The reachability predicate visits both final instruction streams before
+    // any token owner or private matcher construction frame is created.
+    assert!(
+        core::mem::size_of::<(
+            TrailSources<'_>,
+            ScratchLease,
+            ScratchLease,
+            core::slice::Iter<'_, Program>,
+            core::slice::Iter<'_, Inst>,
+            Option<&Program>,
+            Option<&Inst>,
+            &[Inst],
+            &[Program; 2],
+            &Program,
+            &ScratchVec<Inst>,
+            &Inst,
+            Inst,
+            &Literal,
+            u32,
+            bool,
+            Option<CloserId>,
+            [u32; 2],
+            Result<(), crate::StopReason>,
+            Result<TrailMatcher, GrammarError>,
+            &mut Governor,
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+};
+
 fn trail_matcher(
     source: TrailSources<'_>,
     governor: &mut Governor,
 ) -> Result<TrailMatcher, GrammarError> {
-    // Push/refusal includes GrammarError's full InvalidLayout carrier and
-    // tuple alignment, alongside the independent StopReason carrier.
-    const CONTROL: usize = 448;
-    const {
-        assert!(
-            core::mem::size_of::<(
-                TrailSources<'_>,
-                ScratchLease,
-                Result<ScratchLease, crate::StopReason>,
-                &mut Governor,
-            )>() <= CONTROL
-        );
-        assert!(
-            core::mem::size_of::<(
-                TrailBuild<'_>,
-                TrailSources<'_>,
-                PriorityLiteral<'_>,
-                [Option<u32>; 2],
-                [u32; 2],
-                [bool; 2],
-                usize,
-                Option<u32>,
-                ScratchLease,
-                ScratchLease,
-                &mut TrailBuild<'_>,
-                &mut ScratchVec<PriorityLiteral<'_>>,
-                Result<u32, crate::StopReason>,
-                &mut Governor,
-                &Literal,
-                &Program,
-                Inst,
-                u32,
-                &[u8],
-            )>() <= CONTROL
-        );
-        assert!(
-            core::mem::size_of::<(
-                TrailBuild<'_>,
-                TrailSources<'_>,
-                PriorityLiteral<'_>,
-                ScratchLease,
-                ScratchLease,
-                &mut TrailBuild<'_>,
-                &mut ScratchVec<PriorityLiteral<'_>>,
-                &mut Governor,
-                [Option<u32>; 2],
-                [u32; 2],
-                [bool; 2],
-                Option<u32>,
-                Result<(), GrammarError>,
-                Result<(), crate::StopReason>,
-                usize,
-                &[u8],
-            )>() <= CONTROL
-        );
-        // The returned matcher is covered even before final record assembly.
-        assert!(
-            core::mem::size_of::<(
-                TrailBuild<'_>,
-                TrailSources<'_>,
-                PriorityLiteral<'_>,
-                ScratchLease,
-                ScratchLease,
-                Result<PriorityMatcher, crate::StopReason>,
-                Result<TrailMatcher, GrammarError>,
-                &mut Governor,
-            )>() <= CONTROL + TRAIL_MATCHER_BYTES
-        );
-    }
     governor.charge(Resource::Work, 1)?;
     let metadata = governor.lease_scratch(size(TRAIL_MATCHER_BYTES))?;
     governor.charge(Resource::Work, 1)?;
-    let _construction = governor.lease_scratch(size(CONTROL))?;
+    let _construction = governor.lease_scratch(size(TRAIL_MATCHER_CONTROL_BYTES))?;
+    let mut needed = false;
+    for program in source.programs {
+        for inst in &program.insts {
+            governor.charge(Resource::Work, 1)?;
+            if let Inst::Lit { lit, .. } = *inst {
+                governor.charge(Resource::Work, 1)?;
+                needed |= source.literals[lit as usize].closer.is_some();
+            }
+        }
+    }
+    if !needed {
+        // Only repair of a closer-tagged literal can produce the
+        // MissingWrapperClose history required to enter wrapper lookahead.
+        return Ok(TrailMatcher {
+            matcher: None,
+            positives: [0; 2],
+            _metadata: metadata,
+        });
+    }
     let mut build = TrailBuild {
         source,
         tokens: ScratchVec::new(governor),
@@ -1865,7 +1917,7 @@ fn trail_matcher(
     build.gather(governor)?;
     let matcher = PriorityMatcher::build(build.tokens.as_slice(), governor)?;
     Ok(TrailMatcher {
-        matcher,
+        matcher: Some(matcher),
         positives: build.positives,
         _metadata: metadata,
     })

@@ -6499,6 +6499,10 @@ impl<'s> Engine<'s> {
         let Some(mut scan) = trail.scan else {
             return Ok(Verdict::Report);
         };
+        let matcher = scanner
+            .matcher
+            .as_ref()
+            .ok_or_else(|| invalid_input("inserted-wrapper scan has no prepared matcher"))?;
         while trail.at < until {
             governor.charge(Resource::Work, K_THREAD)?;
             let at = trail.at;
@@ -6506,7 +6510,7 @@ impl<'s> Engine<'s> {
             trail.at += 1;
             // Suffix bytes still belong to the scanned input even when the
             // protocol-line state suppresses a token decision on this byte.
-            trail.node = scanner.matcher.step(trail.node, byte);
+            trail.node = matcher.step(trail.node, byte);
             if let Some((token_end, mut suffix)) = trail.fence {
                 match suffix.step(byte) {
                     LineDecision::More => {
@@ -6523,7 +6527,7 @@ impl<'s> Engine<'s> {
             if scan.text.is_none() && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
                 scan.text = Some(at);
             }
-            if let Some((index, length)) = scanner.matcher.found(trail.node, view) {
+            if let Some((index, length)) = matcher.found(trail.node, view) {
                 let start = trail.at - length as usize;
                 if index < scanner.positives[view] {
                     // Another call or a local reasoning opener takes native
