@@ -691,26 +691,6 @@ impl IncrementalRecovery {
         result
     }
 
-    /// A repeated plain byte cannot leave this native quoted-string phase.
-    /// The caller still feeds every byte through the ordinary parser.
-    pub(crate) fn plain_ascii_text_at(&self, byte: u8, next_at: usize) -> bool {
-        (b' '..=b'~').contains(&byte)
-            && !matches!(byte, b'"' | b'\\' | b'[' | b']' | b'{' | b'}')
-            && self.started
-            && self.failed.is_none()
-            && self.utf8.need == 0
-            && self.base.checked_add(self.fed) == Some(next_at)
-            && self.position == next_at
-            && matches!(
-                &self.mode,
-                Mode::Text(Text {
-                    quote: '"',
-                    escape: Escape::None,
-                    ..
-                })
-            )
-    }
-
     /// Consume one U+FFFD standing for the `width` source bytes at the next
     /// offset, which are not well-formed UTF-8: offsets after it stay
     /// exact. The caller records the replacement. Errors as

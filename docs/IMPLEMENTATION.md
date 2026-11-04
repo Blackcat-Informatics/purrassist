@@ -586,7 +586,7 @@ a named 192-byte reservation. Existing long-argument, delimiter, chunk, refusal,
 cost and fuzz cases remain the qualification scope; no new execution or fixed-budget
 success is claimed before automatic CI.
 
-Run eligibility now prepares supported native body presence during the governed
+Run eligibility now prepares native pure-body presence during the governed
 instruction scan. The boolean and existing initial-class mask share their actual
 64-byte descriptor owner; equality includes both facts. Programs without such
 bodies avoid runtime proof probes. Active incremental codecs still decline first,
@@ -652,20 +652,6 @@ keeps its independent payload reservations. These remove discarded copies and
 unused reservations without refunding accepted output or provenance storage.
 Current compiler, runtime and fixed-budget acceptance remain pending CI.
 
-Native JSON bodies can reuse scheduling after a complete plain double-quoted
-string-phase proof. Every repeated byte still enters the ordinary JSON codec
-and parser, retaining source positions, UTF-8 state, lead checks, string growth
-and per-byte Work. Qualification requires aligned cursors, no escape or fault,
-distinct codec slots, a homogeneous cohort and every original body/owner guard.
-Hits feed slots in native thread order at the explicit current offset; unexpected
-completion or a missing owner fails explicitly without replay. Non-string phases
-decline before owner scans. First-slot classification is reused only across
-read-only qualification. Frozen and JSON-feed proofs have distinct tags within
-the existing 32-byte slot bound; qualification controls retain their 192-byte
-reservation. The active JSON feed iterator, slot/result carriers and lease have
-a separate 128-byte transient reservation. Pythonic codecs continue ordinary
-scheduling.
-
 Each table also maintains the exact minimum source start of retained past
 completions. Appending updates it, and existing partition/retain passes rebuild
 it on removal. Byte ownership reads that minimum without revisiting the retained
@@ -686,6 +672,17 @@ past-reading identities without another identity merge. Any attempted repair
 keeps the conservative dirty result and full merge/census; EOF handling remains
 unchanged. These remove actual redundant operations while retaining admissions
 for the remaining probes and scans. Resource acceptance remains pending CI.
+
+An actual native candidate starting at source zero covers the entire admitted
+source, including UTF-8 carry. Byte ownership returns that explicit projection
+after the ordinary engine query; intake then publishes zero held bytes and the
+received candidate-byte count without recombining marker, report, turn or settled
+interval minima. Source, encoding, native parsing, frontier normalization and
+event publication still complete first. Other origins retain the full original
+calculation. The selection probe is admitted on every path; no epoch or retained
+cache is added. Intake's 112-byte control reservation includes the actual private
+projection enum alongside its previous carriers. Runtime qualification remains
+pending automatic CI.
 
 ## Shared contracts
 

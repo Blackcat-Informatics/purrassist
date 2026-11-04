@@ -225,6 +225,13 @@ pub(super) struct ContinuationFrontier {
     pub(super) blocked_from: Option<usize>,
 }
 
+/// A zero-origin candidate absorbs every other source-ownership minimum.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ByteOwnership {
+    WholeCandidate,
+    Floors(Option<usize>, Option<usize>),
+}
+
 /// Exact inputs of the last successful native projection. Any processed
 /// report invalidates this memo before changing the turn state it summarizes.
 #[derive(Clone, Copy, Debug)]
@@ -2211,15 +2218,20 @@ impl<'s> Recognizer<'s> {
     }
 
     /// Project actual retained ownership after the byte's complete report fold.
-    pub(super) fn ownership_floors(
+    pub(super) fn byte_ownership(
         &mut self,
         visited: u32,
         governor: &mut Governor,
-    ) -> Result<(Option<usize>, Option<usize>), StopReason> {
+    ) -> Result<ByteOwnership, StopReason> {
         if !self.engine.tracks_ownership() {
             return Err(invalid_input("candidate accounting was not prepared"));
         }
         let (mut lexical, mut candidate) = self.engine.ownership_floors(governor)?;
+        governor.charge(Resource::Work, 1)?;
+        if candidate == Some(0) {
+            // No turn, report, marker or settled interval can precede zero.
+            return Ok(ByteOwnership::WholeCandidate);
+        }
         if matches!(self.policy, ReasoningPolicy::Separate { .. })
             && self.set.marker_matcher.is_some()
         {
@@ -2274,7 +2286,10 @@ impl<'s> Recognizer<'s> {
             self.ownership_memo = Some((visited, floor));
             floor
         };
-        Ok((lexical, source_min(candidate, turn_floor)))
+        Ok(ByteOwnership::Floors(
+            lexical,
+            source_min(candidate, turn_floor),
+        ))
     }
 
     /// Immutable ancestry identity of the current structurally settled prefix.

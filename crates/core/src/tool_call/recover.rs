@@ -144,7 +144,7 @@ use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::failed_prefix::{FailureChoice, FailureProofs};
 use super::recognizer::{
-    ContinuationFrontier, PathAdmission, edit_entries, escaped, same_source_tree,
+    ByteOwnership, ContinuationFrontier, PathAdmission, edit_entries, escaped, same_source_tree,
 };
 use super::resolve::loss_kind;
 use super::resolve::resolve_traced;
@@ -3176,13 +3176,14 @@ enum BoundaryKind {
     Content,
     Ownership,
 }
-const INTAKE_OWNERSHIP_BYTES: usize = 72;
+const INTAKE_OWNERSHIP_BYTES: usize = 112;
 // The classified boundary now survives recognition before its publication.
 const _: () = assert!(
     core::mem::size_of::<(
         Option<(usize, usize)>,
         [usize; 3],
         CompletedByte,
+        ByteOwnership,
         ScratchLease
     )>() <= INTAKE_OWNERSHIP_BYTES
 );
@@ -3438,12 +3439,21 @@ impl<'s> RecoveryIntake<'s> {
         content: Option<(usize, usize)>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let (lexical, candidate) = self
+        let ownership = self
             .setup
             .as_mut()
             .expect("healthy ownership projection owns its recognizer")
             .recognizer
-            .ownership_floors(self.events.history_checkpoint(), governor)?;
+            .byte_ownership(self.events.history_checkpoint(), governor)?;
+        let (lexical, candidate) = match ownership {
+            ByteOwnership::WholeCandidate => {
+                // The candidate tail is [0, received), including UTF-8 carry.
+                self.held_bytes = 0;
+                self.candidate_bytes = self.received;
+                return Ok(());
+            }
+            ByteOwnership::Floors(lexical, candidate) => (lexical, candidate),
+        };
         let cutoff = lexical
             .into_iter()
             .chain(candidate)
