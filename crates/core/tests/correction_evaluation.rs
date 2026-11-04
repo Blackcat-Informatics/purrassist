@@ -594,7 +594,9 @@ fn diagnostic_recovery_miss(
         StopReason::NoCandidate => "no_candidate".to_owned(),
         StopReason::BudgetExceeded(resource) => format!("budget_exceeded({resource:?})"),
         StopReason::Cancelled => "cancelled".to_owned(),
-        StopReason::InvalidInput(_) => "invalid_input".to_owned(),
+        StopReason::InvalidInput(message) => {
+            format!("invalid_input({})", diagnostic_field(message, 512))
+        }
     };
     eprintln!(
         "recovery-abstention: category={category:?} id={:?} printed_family={:?} allowlist={:?} policy={:?} stop={:?} termination={stopped}",

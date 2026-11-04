@@ -1,44 +1,61 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Prove grouped Class locations belong exclusively to the initial call.
+//! Prepare immutable class and native body eligibility for byte proofs.
 
 use super::{Inst, flags, successors, work_for};
 use crate::contract::{Governor, Resource, ScratchLease, ScratchVec, StopReason, push_scratch};
 use crate::grammar::GrammarError;
+use crate::grammar::codec::CodecKind;
 
 /// The descriptor and its lease are admitted separately from boolean capacity.
 #[derive(Debug)]
-pub(crate) struct InitialClasses {
+pub(crate) struct RunEligibility {
     mask: ScratchVec<bool>,
+    native_body: bool,
     _descriptor: ScratchLease,
 }
 
-const _: () = assert!(core::mem::size_of::<InitialClasses>() <= 64);
+const _: () = assert!(core::mem::size_of::<RunEligibility>() <= 64);
 const _: () =
     assert!(core::mem::size_of::<(ScratchVec<bool>, ScratchVec<u32>, ScratchLease)>() <= 96);
 
-impl PartialEq for InitialClasses {
+impl PartialEq for RunEligibility {
     fn eq(&self, other: &Self) -> bool {
-        self.mask == other.mask
+        self.native_body == other.native_body && self.mask == other.mask
     }
 }
 
-impl Eq for InitialClasses {}
+impl Eq for RunEligibility {}
 
-impl InitialClasses {
+impl RunEligibility {
     pub(crate) fn compile(
         insts: &[Inst],
         start: u32,
         enabled: bool,
+        native_body: bool,
         governor: &mut Governor,
     ) -> Result<Self, GrammarError> {
-        governor.charge(Resource::Work, 1)?;
+        governor.charge(Resource::Work, 2)?;
         let descriptor = governor.lease_scratch(64)?;
         let mut result = Self {
             mask: ScratchVec::new(governor),
+            native_body: false,
             _descriptor: descriptor,
         };
+        if native_body {
+            work_for(insts.len(), 1, 1, governor)?;
+            result.native_body = insts.iter().any(|inst| {
+                matches!(
+                    inst,
+                    Inst::Until { .. }
+                        | Inst::Slot {
+                            codec: CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs,
+                            ..
+                        }
+                )
+            });
+        }
         if !enabled {
             return Ok(result);
         }
@@ -75,6 +92,11 @@ impl InitialClasses {
 
     pub(crate) const fn is_empty(&self) -> bool {
         self.mask.is_empty()
+    }
+
+    /// A native non-grouped program contains a non-incremental body.
+    pub(crate) const fn native_body(&self) -> bool {
+        self.native_body
     }
 
     /// A nonempty proof has exactly one cell for every program instruction.

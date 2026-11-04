@@ -27,7 +27,7 @@ listed workflow and job keys, an `env` of exactly `RUSTUP_TOOLCHAIN` equal to
 the job's stable install, the allowed step keys, a SHA-pinned checkout, and no
 `GITHUB_ENV` or `GITHUB_PATH` write. `verify.yml` must keep an unfiltered
 `pull_request:` trigger, so no pull request skips the gate. Release
-qualification's `package` job has only the install, version-check and
+qualification's `package` job has only the runner-storage, install, version-check and
 `Verify the release gate` steps, `verify.yml`'s `release-gate` job runs the
 same `make release-gate` with the same installs and environment, the Makefile
 `release-gate` target has no prerequisites and exactly its five gates in order,
@@ -146,13 +146,17 @@ repository or its CI configuration at any point.
 dispatch. Its single `package` job (90-minute allowance, Rust 1.98.0) runs these
 steps in order:
 
-1. `Install release toolchain`: stable Rust 1.98.0 with Clippy and rustfmt.
-2. `Install pinned coverage-feedback toolchain`: the registered nightly
+1. `Prepare runner storage`: on the hosted Ubuntu runner, report disk space,
+   remove the unused preinstalled Android and .NET bundles, and report space
+   again. The checker pins this exact command and its position after checkout
+   in both gate jobs. Build artifacts, caches and toolchains remain available.
+2. `Install release toolchain`: stable Rust 1.98.0 with Clippy and rustfmt.
+3. `Install pinned coverage-feedback toolchain`: the registered nightly
    compiler and its LLVM tools, used only by the isolated coverage probe.
-3. `Verify release set and version`: `scripts/check-release.py --tag` on a tag
+4. `Verify release set and version`: `scripts/check-release.py --tag` on a tag
    run (the tag must match the workspace version), plain
    `scripts/check-release.py` on a manual run.
-4. `Verify the release gate`: `make release-gate`, the one gate. It runs
+5. `Verify the release gate`: `make release-gate`, the one gate. It runs
    `make check` (the full local gate; its `make lint` runs workspace Clippy
    with `--workspace --all-targets --locked -- -D warnings` plus Clippy over the
    `test = false` corpus suites), `make corpus`,

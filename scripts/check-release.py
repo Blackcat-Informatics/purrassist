@@ -262,7 +262,14 @@ def validate_publish_workflow(path=None):
           'qualification gate, SHA-pinned actions, dependency order, and verify-published step.')
 
 
-RELEASE_STEPS = ('Install release toolchain', 'Install pinned coverage-feedback toolchain',
+RUNNER_STORAGE_STEP = 'Prepare runner storage'
+RUNNER_STORAGE_COMMAND = ('test "$RUNNER_ENVIRONMENT" = github-hosted\n'
+                          'test "$RUNNER_OS" = Linux\n'
+                          'df -h /\n'
+                          'sudo rm -rf /usr/local/lib/android /usr/share/dotnet\n'
+                          'df -h /')
+INSTALL_STEPS = ('Install release toolchain', 'Install pinned coverage-feedback toolchain')
+RELEASE_STEPS = (RUNNER_STORAGE_STEP, *INSTALL_STEPS,
                  'Verify release set and version', 'Verify the release gate')
 GATE_STEP = 'Verify the release gate'
 GATE_RECIPE = ('$(MAKE) check', '$(MAKE) corpus', 'python3 scripts/test-fuzz-feedback.py',
@@ -447,6 +454,8 @@ def _gate_job_errors(label, job_text):
     and names are checked by the caller."""
     errors = []
     keys = _job_keys(job_text)
+    if keys.get('runs-on') != 'ubuntu-24.04':
+        errors.append(f'{label} job must use ubuntu-24.04 for its runner storage preparation')
     for key in sorted(set(keys) - set(GATE_JOB_KEYS)):
         errors.append(f'{label} job may not set `{key}` (allowed: {list(GATE_JOB_KEYS)})')
     for key in sorted(set(GATE_JOB_KEYS) - set(keys)):
@@ -489,6 +498,11 @@ def _gate_job_errors(label, job_text):
         if _step_with(first) != {'persist-credentials': 'false'} or len(first['body'].get('with', [])) != 1:
             errors.append(f'{label} step 1 `with:` must be exactly persist-credentials: false, '
                           f'found {_step_with(first)}')
+    if (len(steps) < 2 or steps[1]['keys'].get('name') != RUNNER_STORAGE_STEP
+            or steps[1]['keys'].get('run') != '|'
+            or _step_run(steps[1]) != RUNNER_STORAGE_COMMAND):
+        errors.append(f'{label} must prepare hosted runner storage immediately after checkout '
+                      f'with the exact `{RUNNER_STORAGE_STEP}` command')
     return errors
 
 
@@ -591,7 +605,7 @@ def validate_release_gate(root=None):
     if release is not None:
         steps = _load_check_docs().workflow_steps('jobs:\n' + release)
         for step in _job_steps(release) or []:
-            if step['keys'].get('name') in RELEASE_STEPS[:2]:
+            if step['keys'].get('name') in INSTALL_STEPS:
                 run = _step_run(step)
                 if not (run and PLAIN_INSTALL.fullmatch(run)):
                     errors.append(f'release-qualification.yml step `{step["keys"]["name"]}` must run only '
@@ -621,9 +635,11 @@ def validate_release_gate(root=None):
                           f'command; found {runs}')
         verify_steps = _job_steps(verify) or []
         runs = [_step_run(step) for step in verify_steps]
-        if (len(verify_steps) != 4 or runs[0] is not None or runs[3] != 'make release-gate'
-                or not all(run and PLAIN_INSTALL.fullmatch(run) for run in runs[1:3])):
-            errors.append('verify.yml release-gate job must have exactly the steps: checkout, one stable '
+        if (len(verify_steps) != 5 or runs[0] is not None or runs[4] != 'make release-gate'
+                or runs[1] != RUNNER_STORAGE_COMMAND
+                or not all(run and PLAIN_INSTALL.fullmatch(run) for run in runs[2:4])):
+            errors.append('verify.yml release-gate job must have exactly the steps: checkout, '
+                          'hosted runner storage preparation, one stable '
                           'toolchain install, one nightly toolchain install, `make release-gate` '
                           f'(a gate step may be named or unnamed); found commands {runs}')
 

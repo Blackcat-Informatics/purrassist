@@ -182,16 +182,50 @@ their original semantics. JSON repair spellings are not added to call metadata.
 Refusals drop unpublished partial tables and completed metadata from earlier
 steps; a successful borrow does not allocate or readmit the prepared bytes.
 
+### Deferred report release and compact repair keys
+
+A successful deferred-report release certifies its retained reader predicates.
+The engine invalidates this certificate on opening/completion, pending report or
+whole-start insertion, removal of a matching reader, abandonment and EOF.
+Original release points and report order remain; unchanged predicates can omit
+the table census. The certificate lives in the admitted engine controls, and
+invalidation probes and performed membership scans admit Work. Refusal destroys
+unpublished salvage before refunding its aggregate materialization admission.
+
+Repair deduplication keys retain every original field and the complete edit
+digest, encoding five unsigned integers in shortest base-128 form. Search keeps
+its original native tie tuple; key length now reflects the bytes actually
+written. Ordinary fallible key buffers and queue/seen storage keep their existing
+admissions. Reading comparisons likewise reject unequal dialect identities
+before traversing argument metadata. Schema lookup omits vocabulary checks for
+absent or duplicate keywords; disabled present keywords retain their full checks
+and may pay the reordered member lookup.
+
+The reasoning-block mirror tests following-closer compatibility before scanning
+for an earlier opener. Exact and misspelled closers require the same first byte;
+endings without one cannot contribute a mirror result. A 96-byte owner covers
+the added controls, and each actual closer comparison admits Work. Compatible
+endings retain every original body, closer, content and provenance check.
+
+Native submode transitions classify ownership once at their producers. A table
+index retains no cached floor: each successful use rereads its current candidate
+minimum and the ready continuation origin. Equality proves the candidate floor
+and bounds native lexical floors; marker, report, turn and interval consumers
+retain their ordinary accounting. The per-byte repetition memo likewise retains
+only a query over the immutable current window, and keeps every positive class
+and body qualification. Misses and positive queries can add control overhead;
+qualification covers these tradeoffs without changing budgets.
+
 ### Repeated runtime class queries
 
-Each grammar's operation-owned class runtime retains one successful
-transition/deadness query per class. The key includes the full native DFA state
+Each grammar's operation-owned class runtime retains sixty-four exact bucket
+entries for successful transition/deadness queries per class. The key includes the full native DFA state
 and input byte: term identity, matched and zero-width context flags, and the
 complete UTF-8 decoding position. Class sessions append derivative terms without
 remapping existing IDs, so later session growth cannot change a saved answer.
 Call and result tables share their grammar's existing class sessions and cache.
 
-A fixed twelve Work units admit each cache query. A miss runs the original DFA
+A fixed six Work units admit each cache query. A miss runs the original DFA
 transition and deadness checks with their existing admission; only their joint
 success updates the cache. Errors and governor state are never cached. Accepting
 state checks, literal-boundary alternatives, capture boundaries and every
@@ -1159,16 +1193,40 @@ governor, with the named constants of `purrassist_core::grammar::cost`.
 Recovering `n` output bytes charges exactly
 
 ```text
-recover     = 2·n (retaining the output, the encoding scan) + recognition + resolution
+recover     = W_intake + recognition + resolution
+W_intake    = 2·n (source insertion, encoding scan) + G_source(n) + r + G_ranges(r)
 recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment events)
             + K_CAPTURE·(captured bytes and history nodes materialized)
             + K_ERR·(error configurations explored)
             + K_CODEC·(codec scan bytes, name lookups and tree nodes)
             + (JSON recovery units) + (class-automaton units) + (search key bytes)
+            + (admitted control, report-index and buffer-growth units)
+            + (frontier, ownership and streaming-publication units)
 resolution  = one unit per member, option, alternative and validation step,
               plus the recovered value, ids, checks and ledger entries
             + (unparsed-markup scan: one unit per content byte read)
 ```
+
+Here `r` is the number of maximal invalid UTF-8 runs. `G_source` and
+`G_ranges` sum the occupied lengths charged before each capacity growth of
+the source and invalid-range vectors. The shared doubling growth policy gives
+`G_source(n) ≤ 2·n`, `G_ranges(r) ≤ 2·r` and `r ≤ n`, so intake work is at most
+`7·n`. Empty vectors contribute zero relocation work. These terms describe
+admitted work. A governor or capture refusal stops admission at its original
+cause; a semantic request error stops interpretation while admitted source
+capture can continue.
+
+Revision facts prepare one borrowed leaf interval index per raw reading with
+operator payloads. Original leaf positions sort by source interval; balanced
+subtree maximum ends prune leaves that cannot enclose an edit. Every enclosing
+leaf must agree on its parameter pointer. Different overlapping pointers remain
+unknown, including adjacent leaves sharing an empty insertion's endpoint. The
+index copies neither argument trees nor pointer text. Construction, sorting,
+traversal and pointer comparisons admit Work; its fallible scratch storage
+releases after that reading's facts are prepared, including on refusal. The
+existing comparison of matching edit facts across alternatives stays unchanged.
+Disjoint leaf ranges avoid a full leaf scan for every edit; this does not claim
+a measured budget pass or a linear bound for arbitrary overlapping intervals.
 
 Pythonic's finite-state framing and canonical decimal literal path scan
 linearly. Converting a binary, octal or hexadecimal integer with `n` digits
@@ -1186,6 +1244,476 @@ anchor (at most 29.5 units per byte, for `to=functions.` on every line),
 linear within 1.05x and under 32 units per byte. A turn that is a single
 call has no content to scan.
 
+Tool-call recovery now uses one incremental intake path. It admits the source
+document's metadata before validating the request and constructing the
+recognizer. Each input byte then admits the cumulative input length, source
+storage and copying, UTF-8 classification, and recognition, in that order.
+Source and invalid-range vectors admit insertion and relocation work before
+growth; their capacity schedule depends on the byte sequence, never the number
+or size of caller chunks. The pending UTF-8 scalar holds at most three bytes
+between byte steps. Invalid runs retain their original ranges and receive the
+existing loss records once the complete source digest is available.
+
+This intentionally replaces the earlier ordering that retained the whole
+source and scanned its encoding before recognition began. Usage counters and
+the first refusal may therefore differ from that ordering. A semantic invalid
+request stops interpretation but keeps capturing the original source under the
+same healthy governor. If source admission then fails, that explicit refusal
+takes precedence over the semantic error and no retained prefix is published.
+After a governor or capture refusal, remaining supplied bytes contribute only
+to the source digest: no further source copying, admission or interpretation
+occurs. Failed source allocation is never retried. A receipt retains the
+complete admitted source or no source; a fully captured source remains
+available when a later stage refuses. The metadata vector is reserved before
+intake, so publishing a complete source after refusal moves existing storage
+without allocating.
+
+Batch recovery runs this path now. Its recognizer also maintains a conservative
+native continuation frontier after each byte. The frontier intersects the
+content state, every active attempt's turn interpretations, open reasoning and
+promoted bases, and pending and engine ownership barriers. Turn histories cache
+their unambiguous structural prefix with one skip link per node; prefix
+intersection visits those links rather than enumerating or replaying histories.
+Plain-content publication uses current ownership rather than subtracting the
+repair lookbehind window. Native attempts already own partial call/result
+openers from their first admitted byte. Separate reasoning uses a marker-only
+proper-continuation table: for each finalized dense matcher state, take the
+maximum successor depth minus one, saturating at zero. This preserves a suffix
+that can grow into a longer marker, excluding a completed leaf with no viable
+continuation. The original matcher depth and delimiter behavior remain unchanged.
+Completed markers queue their reports before projection; those reports retain
+their own source floors. Repair settlement still uses the original lookbehind
+and held-floor rules, and source publication still caps incomplete UTF-8 scalars.
+
+The marker table is prepared once per dialect set, using four admitted Work
+units per visited dense transition and insertion/relocation admission for each
+stored depth. Its fallible `u32` buffer charges four bytes per reserved entry;
+a retained 64-byte metadata reservation covers the added optional table owner.
+Sets without reasoning markers allocate no continuation table. Each byte admits
+one lexical-planning Work unit and one memo-key lookup Work unit, plus one
+table lookup Work unit when reasoning markers are enabled. As-content
+reasoning uses the current input offset directly. A memo
+is restored only after all fallible floor lookups succeed and its effective
+cutoff agrees. This advances plain live content without claiming full live
+semantic-prefix equivalence, cloning or decoding queries.
+
+The portable history-node reservation is 112 bytes. Traversals admit work before
+each visited step, and scanning live owners admits work for their records.
+Pending reports keep their dispatch order separately from two source-minimum
+heaps: all reports and their candidate subset. Both heaps store identities into
+one reusable slot arena; the sole `Pending` payload remains in the dispatch queue.
+Each row stores its immutable source origin and queue arrival plus both heap
+positions. Keys compare source first, then unique arrival, so duplicate origins
+and arbitrary source order retain exact minima without source-coordinate pages.
+A candidate report with a different source origin is an explicit invariant
+failure. Every candidate key read also checks its mandatory report endpoint.
+
+Each arena slot reserves 40 portable bytes: its 32-byte row and the eight-byte
+opaque handle beside the queued payload. Each heap identity reserves eight bytes.
+Released slots form a free list and are reused before arena growth, bounding
+backing by the largest concurrent queue rather than input offsets or historical
+arrivals. A reused handle must still match its queued arrival, source and candidate
+membership before removal. The unchanged 640-byte metadata lease covers the actual
+three index owners, minima and free head, ownership and frontier memos, both compact
+sift plans inside their update carrier, preparation and replay cursors, and a
+temporary handle. Complete phase layout assertions include those real types and
+the temporary projected-length array; validation borrows its floor array.
+Retirement has a separate assertion covering both the old and replacement index
+owners together with the actual memos and lease.
+
+An update admits ten shared Work for source or removal identity validation, row
+and free-slot checks, checked planning, carrier handoff, row/free publication,
+projected lane/minimum consistency and exact floor-pair publication. Each insertion
+lane admits four Work for length/reservation planning, compact plan handoff,
+incoming identity placement and position publication. Each removal lane admits
+five Work for length planning, endpoint validation, plan handoff, tail removal and
+clearing its old position. A non-tail removal separately admits two Work for final
+replacement placement and its backlink. Each actual checked key/backlink read
+admits one Work, each comparison one, each intermediate identity/backlink move two,
+and each inspected candidate's joint report endpoint one. The last nonmoving test
+is included. Backing growth separately admits every live slot potentially relocated
+before reservation; unused capacity requires no zero initialization.
+
+All growth, comparisons, checked endpoints, replacement minima and movement
+admissions precede dispatch mutation. Preparation retains only compact endpoints:
+an upward path follows parents, and a downward path follows the checked binary
+index of its final descendant. Apply replays those exact moves without allocation,
+comparison or admission and publishes both minima together. Failed preparation can
+retain reserved capacity but changes no live row, free head, heap length, identity
+or minimum. An unchanged cached floor remains exact by the private update invariant;
+its source row is not read again merely to prove that same occupancy.
+
+Consuming EOF queues all final engine reports before terminal dispatch. No later
+report producer or source-floor reader runs, so terminal dispatch validates each
+handle and preserves native report grouping without maintaining either heap.
+It admits six fixed Work for size/minimum consistency, terminal preparation and
+the eventual retirement of three backing owners, then four per report plus one
+for a candidate endpoint. Every record's admission and validation precede its pop.
+All index backing remains until the complete terminal dispatch succeeds: a popped
+handle is stripped before its payload enters native ready buffers. Only then does
+an empty queue permit index retirement before final turn construction. On refusal,
+the pending queue drops before the index, retaining handle coverage throughout.
+The existing mixed-origin minimum/refusal case uses actual report identities;
+held-marker, chunk and refusal cases retain their original limits. Runtime
+qualification of these resource optimizations remains pending.
+
+The engine caches its exact minimum live source origin. A lookup admits one
+work unit; a miss scans every attempt and deferred report under its original
+per-entry admission and stores the minimum only after the complete scan succeeds.
+Attempt insertion, retirement, abandonment and EOF clearing, and deferred-report
+insertion/removal, invalidate this cache before mutating the owner collections.
+Their source origins are immutable; flag changes and input-buffer compaction
+cannot alter the minimum. No owner index or additional heap storage is created.
+
+A successful native projection retains an exact memo of its engine and
+pending-source floors, final ownership barrier and effective cutoff. Every byte
+still reads the admitted engine minimum, then admits one
+work unit for a fixed-key lookup. With both floors unchanged and no processed
+turn report, the memo is reused only when the advancing lexical cutoff capped
+by its saved barrier equals the prior effective cutoff. A stationary candidate
+can therefore avoid repeated interpretation scans and ancestry intersections;
+ordinary content still advances when its cutoff changes. Skipped traversals do
+not run or charge their former work. Any processed report invalidates the memo
+before changing turn histories, interpretations, reasoning or late embedded
+segments. A missed refresh clears the old memo before fallible projection and
+records a replacement only after success. No owner minimum or semantic choice
+is approximated, and feed boundaries do not participate in this key.
+
+The shared intake can notify a private callback when that frontier changes.
+It caps the reported range before incomplete UTF-8 and charges `K_EVENT` work
+per notification. Every reported end also checks its admitted source boundary:
+at most three backward byte probes and one scalar validation of at most four
+bytes move a cutoff inside valid UTF-8 back to the scalar's start. This admits
+12 work units per normalization. Separate fixed prefix/content caches admit
+one work unit per lookup and retain only successful results keyed by the
+UTF-8-capped cutoff integer. An unchanged cutoff skips normalization and its
+charge; matching content and prefix ends still share one result. A capped
+cutoff cannot later fall inside a newly completed valid scalar because the
+encoding cursor withholds every viable incomplete scalar at its start.
+Malformed subparts cannot become valid through later appends. Invalid byte
+sequences retain their exact boundaries. Batch uses the
+same producer with a discard sink. Feed count and chunk boundaries do not
+decide notification boundaries. These notifications
+carry native ownership metadata, not resolved calls or permission to execute.
+The same intake also constructs owned `ContentDelta` events in source order.
+One cursor handles initial content, stored native content nodes, safe trailing
+content and the final reading's remaining ranges. Each payload copies only the
+newly exposed source range into a temporary `ScratchVec`, admitting its capacity,
+`K_EVENT`, one range-lookup work unit and one work unit per copied byte before
+notification. Every event additionally admits 512 bytes for its
+record and per-event collector insertion, plus four work units for amortized
+collector insertion and relocation. The record reservation covers four native
+slots, including a fresh collector receiving one event. A prepared event owns
+that temporary reservation and every payload reservation through sink handoff.
+Vectors, strings, typed parameter trees and copied outcome text transfer their
+reservations into this owner without permanent retention. The producer releases
+its reservations after the sink returns, including a refused collector insertion.
+Batch discard, external sinks and convenience collectors run the same admission
+and release schedule. Performed work and cumulative scratch charges remain;
+discarded event payloads no longer become permanent live scratch debt.
+
+Sink and collector storage belongs to the caller from inception, independently
+of the producer's temporary handoff ownership. Caller retention, collector
+capacity and feed boundaries do not change recovery admissions or releases.
+The convenience collectors reserve fallibly during handoff; allocation failure
+stops interpretation with an explicit refusal. Empty feeds allocate
+no events, and input chunks do not set event boundaries. A closed
+native content node contributes its full settled range, including when the
+lexical boundary lands exactly on its end.
+
+Closed native call and result frames permit subsequent live content when every
+earlier frame is immune to examples-as-content and declaration-as-content
+suppression. A result contributes its exact final content span before any later
+range is published. The cursor retains the source origin and kind of the first
+rejection, reasoning block, suppressible frame or frame needing repairs; content
+after that owner still waits for final normalization. These owners can extend
+rejected markup, remove closers after reasoning or add previously unpublished
+content. Unsupported-markup reports preserve content bytes. No source is replayed.
+At EOF, completed unique and ambiguous outcomes borrow their existing resident
+readings. Ambiguity rejection retains those actual values privately for shared
+source events; exact-effort, resource and other refusal paths retain their barriers.
+A single final producer merges content, reasoning, calls and rejected attempts
+in source order, including local semantic competitors within one turn reading.
+Both batch discard and streaming sinks run the producer. The longest live
+semantic-prefix contract remains incomplete. Lexical holdback and candidate-byte
+ownership use the separate cached counters described below.
+
+
+`ToolCallStream::held_bytes()` counts source bytes retained only by viable finite
+lexical prefixes or UTF-8 publication boundaries. `candidate_bytes()` counts the
+unique source coverage of actual live candidates, unpublished typed turn payloads,
+settled semantic frames awaiting final resolution and content actually suppressed
+by final normalization. Receipt source bytes, historical opener reports and routing
+metadata alone contribute neither count. Top-level result frames become content;
+reasoning publication retires its text owner while retaining actual embedded
+semantic spans. Open reasoning, including `starts_open`, and late discriminators
+can grow candidate ownership without a constant bound.
+
+`hold_back_bound()` is compiled from the request's native finite opener spellings,
+including configured variant, confusable and JSON spellings, and from reasoning
+markers when reasoning is separate. Its bound is `max(3, P_normal,
+P_continuation + 3)`, where each `P` is the maximum proper viable prefix length and
+continuation spellings start with a UTF-8 continuation byte. Incomplete UTF-8 carry
+is included, overlapping lexical coverage is counted once, and valid scalar
+backoff is included for arbitrary custom byte spellings. Ordinary UTF-8 spellings
+reduce the bound to `max(3, P_normal)`. Unrepresented repair modes become candidate
+owners; they do not extend the finite lexical bound. A bound remains available
+when stream preparation refuses.
+
+A byte's complete report fold and settled cursor traversal precede ownership
+refresh. The cursor checkpoint is a native history-node identity, so same-end
+unvisited payloads remain owned. Typed payload minima and jump links skip already
+visited ancestry. Packed histories preserve the earliest actual uncertain payload.
+Native thread phases merge only across equal-ranked configurations; current
+winning configurations determine ownership independently of historical opening.
+Derived native thread minima activate only at their first actual ownership query.
+That query admits two Work per surviving thread while bootstrapping every table;
+its ordinary per-table and trail, past, held and deferred-owner admissions remain.
+Only a complete successful projection publishes activation and the global cache.
+A failed bootstrap can leave partial derived table values, which remain inactive
+and are rebuilt on retry or discarded with the recognizer. Activation is sticky.
+Thereafter the existing admitted reductions and invalidations maintain exact
+minima without full configuration scans per byte. Direct recognizer users that
+never query ownership perform no unused thread-minimum reductions; native phase
+propagation, merging, repair and interpretation still run. Pending candidate
+reports use the candidate lane of the shared typed source index above.
+
+Ordinary grouped programs without deferred commits can settle a resynchronizing
+cohort after the native byte interpreter and first merge have already run. The
+first qualification Work precedes every new dynamic ownership, winner count or
+mode lookup; inactive ownership, fewer than three winners or another mode returns
+to ordinary settlement. A second Work checks the sole opened, incomplete,
+unstuck resynchronized first-call attempt and matching malformed boundary, empty
+current failure/completion/opening outputs, and absent trail, held, past, written,
+stalled and held-failure owners. These are bounded row, length and flag checks,
+with no collection traversal. A third Work requires no recorded skipped outcome
+and no newer opener beyond the failed entry, avoiding global metadata scans.
+
+Each actual winner guard admits one Work and verifies its common attempt, source
+start and failed entry, resynchronization mode, candidate phase and current cursor
+flags. Only a complete successful qualification admits one final Work to publish
+fresh exact thread minima through the normal pair-change invalidation. The first
+merge already made these current winners unique; empty repair/completion inputs
+cannot change them before the second merge. Skipping that idempotent merge and
+per-winner phase reduction therefore retains every target PC, history, cost,
+rank and continuation. Native cursor, quote, escape and token processing have
+already executed. There are no new cursor stores, vector clears, buffers or
+retained cache fields. The usual thread-owner epilogue and local drops remain.
+EOF and every failed eligibility predicate use ordinary settlement; a governor
+refusal propagates without fallback.
+
+For `T` verified winners, successful suffix qualification/publication admits
+`4 + T` Work in place of the second merge and phase reductions' `3 * T`.
+Rejected qualification costs one, two or three fixed Work plus each winner
+actually inspected, before the unchanged native suffix executes. In particular,
+a valid grouped argument body pays the first rejection Work. This actual fallback
+cost remains part of the receipt; no workload or preset success follows from the
+successful-cohort arithmetic alone. Existing DeepSeek argument, resynchronization,
+D7 ownership/chunk and corpus cases retain their limits and expected behavior;
+automatic runtime qualification of this shortcut remains pending.
+
+After a completed byte fold, intake admits three Work to check that retained
+source length and recognizer consumption equal the current input length, and that
+pending UTF-8 bytes end exactly there. The encoding cursor's publication cap is
+already a source boundary: either the current end, or the start of its viable
+incomplete scalar. A cutoff at that cap uses the certified coordinate. Earlier
+cutoffs can reuse a normalized prefix/content coordinate from the same snapshot
+only when their original raw keys agree. Ownership then uses that already
+validated coordinate directly, just as content already reuses a matching prefix;
+there is no unused ownership-cache lookup or store. Unmatched cutoffs consult
+an append-stable cached coordinate, and each actual helper request retains one
+lookup Work. Only a genuine miss executes
+the existing twelve-Work scalar-boundary helper, preserving arbitrary custom-byte
+backoff. A normalized result must not exceed its raw cutoff.
+
+The structural frontier memo also retains its raw marker lexical coordinate.
+Both successful memo reuse and a fresh projection update this field; a stationary
+structural barrier cannot freeze the advancing raw marker coordinate. Ownership
+projection admits one Work for its cached marker read instead of repeating the
+marker table lookup and source subtraction. Processed turn reports and failed
+byte folds invalidate the relevant memos. A missing completed marker projection
+or a coordinate beyond consumed source fails explicitly.
+
+Settled calls and rejections append their exact source spans to an ordered merged
+coverage list. Reasoning appends its sorted embedded semantic spans. Each retained
+interval reserves 24 portable bytes and stores cumulative union coverage. A
+48-byte optional affine basis replaces the two prior prefix-query records. It is
+keyed by candidate start `c` and `m = min(u, c)` under one unchanged interval union,
+and retains discarded prefix `c - F(c)`, coverage before `m`, and held coverage.
+A matching basis returns candidate coverage by checked subtraction from the
+advancing input length. Exact prior coordinates can reuse their prefix evidence;
+other queries retain admitted binary search. An actual union extension or new
+interval invalidates the basis, while empty or contained appends leave it valid.
+Only a successful checked result publishes a replacement basis. When both
+cutoffs equal the current end, the final interval's end and total coverage are
+checked against the source, then its complete coverage is returned directly. For interpreted length
+`n`, candidate suffix start `c` and normalized lexical/encoding boundary `u`, let
+`F(x)` be finite interval coverage before `x`. Candidate coverage is
+`F(c) + n - c`; held coverage is zero when `u >= c`, otherwise
+`c - u - (F(c) - F(u))`. Scalar backoff applies only to `u`, computed from
+the native candidate, lexical and encoding floors. Candidate start `c` and actual
+suppressed content retain their original source boundaries. Source bounds, interval order, ancestry, coverage and arithmetic
+invariants fail explicitly. Finite records remain until EOF consumption or
+abandonment. Each count request admits two Work for coordinate/union bounds and
+basis selection, plus one for a checked matching-basis or complete-coverage
+result. A miss admits four for checked discarded, overlap, held and basis/result
+records, each actual prefix lookup admits one and each visited binary-search step
+two. Reconstructing coverage from a matching prior candidate coordinate admits
+one additional Work. No query allocates another coverage owner.
+
+Added retained metadata reserves 64 bytes per dialect set, 112 bytes per intake,
+128 bytes per event cursor, 904 bytes per recognizer plus 48 bytes for turn-node
+controls, and 56 bytes per engine table plus 160 bytes per engine. Layout assertions cover these portable reservations.
+Counter and bound reads allocate nothing, admit no work and do not poll the
+governor or cancellation token. A shared token requests cancellation; counts
+continue to describe resident owners until the next mutable operation, including
+an empty feed, observes it. Explicit cancellation and interpretation refusal drop
+recognizer, encoding and interval owners together, clear both counts and preserve
+the first resource refusal. Source capture and digest retain their existing
+contract. Batch and stream share the same per-byte accounting path. Added
+behavioral cases cover ownership handoffs, scalar and byte-marker boundaries,
+chunk parity and disposal; compilation and runtime qualification of this unit
+remain pending.
+
+For whole-message ambiguity, a fallible scratch cursor per alternative retains
+four native indices and borrowed value/origin references, with a portable 48-byte
+reservation. A complete prefix-planning pass precedes new EOF publication.
+Every source-family lookup and checked cursor advance admits bounded work;
+string, ledger, diagnostic and provenance comparisons admit their actual visited
+payloads. Call agreement includes identity, every outcome and repair field,
+alternatives and distinguishing provenance. Governed JSON source comparison
+preserves member order, duplicate occurrences, all source spans and exact number
+spellings; it never substitutes mathematical numeric equality. Its explicit
+24-byte comparison-stack records retain fallible ownership and check depth.
+
+Planning continues through overlapping owners before publication: an equal
+rejected wrapper cannot hide an earlier disagreement in a call inside it.
+Content and reasoning ranges are clipped to the common cutoff, normalized
+outside a valid UTF-8 scalar by the same boundary helper used during live intake.
+Rejected attempts publish only when their complete source spans fit before the
+cutoff. Calls can publish a shared start, canonical name and raw argument prefix
+before an internal disagreement; completion and typed parameters require whole
+call agreement. Native captures, ordered edits and semantic values determine
+interior cutoffs. Differences confined to final numbering or other call metadata
+stop publication at the call's end. Later common suffixes stay withheld.
+
+Private structural call identities distinguish pieces, choice branches, segments
+and reasoning-local embedded positions. Semantic slots retain their original raw
+reading through content deduplication and ranking; the legacy raw-zero header
+remains separate. Compact native records retain name/id spans and decoded text,
+all argument capture ranges and the full ordered native edit identity, including
+silent operators, with authentic payloads and leaf ownership. Revision agreement
+precedes omission of empty payloads from events; empty byte owners allocate no
+payload storage.
+They release the native argument trees and forest before final reading construction.
+Only the existing equivalent-option and whole-reading correspondence proofs admit
+origin unions. Whole-turn publication order permutes origin rows with values;
+ambiguity-rejected per-call derivation order never permutes whole-turn rows.
+Metadata, payload copies, lookup, comparison, union and relocation use admitted
+work and fallible scratch owners with portable charges and checked identities.
+The final producer uses these origins directly, replacing global span-based
+capture and edit inference. A discarded raw candidate cannot veto the selected
+argument capture merely because it shares a call span.
+
+After the first shared eligible native edit, a call-local witness index scans
+each actual competing semantic ledger once. Its portable 40-byte keys combine
+the operator and source range with final-view and semantic slots; equivalent
+native origins share the same ledger identity. Governed heapsort charges each
+visited comparison, swap and loop before deduplication. Sorting `E` witness keys
+costs `O(E log E)` work; each revision uses two `O(log E)` numeric prefix searches
+to require a witness in every competing ledger. Evidence visits and registry
+comparisons admit their actual work. Native agreement still visits every
+correlated competing origin for each edit. The index releases on every exit;
+calls without an eligible shared edit allocate no witness index.
+
+No synthetic result, cloned alternative or source replay supplies this prefix.
+Refusal preserves the ordinary explicit failure and source-retention contract.
+
+A native event cursor follows the structurally shared history exactly once.
+Its direct fixed-key lookup admits one work unit. A successful traversal is
+cached by settled native history identity, normalized end and current content
+range; an unchanged key
+skips repeated ancestry traversal and its charges. A changed end reconsiders a
+step held beyond the earlier cutoff. Stored native ancestry is immutable;
+late reasoning embedding changes neither the text ranges nor the call readings
+this event cursor inspects. Progress callbacks precede traversal; historical
+content is published during traversal before the current native content tail.
+Feed boundaries do not affect either cache.
+The next-node lookup uses existing skip ancestry and admits every traversal;
+it does not rebuild or resolve prefix turns. Stored reasoning segments publish
+their exact marker-free text. Calls publish `CallStarted` only when every native
+reading is immune to examples-as-content and declaration-as-content suppression.
+A potentially suppressible call blocks subsequent live call indexing. Canonical
+tool-name or explicit-alias agreement across every reading publishes `CallName`;
+its lookup admission uses the actual canonical-name and alias index cardinality.
+Fuzzy identities wait for final resolution. A unique shared arguments-capture range
+publishes raw `ArgumentDelta`, including for mutating tools: raw bytes make no
+claim about settled parameter values or permission to execute.
+
+Before resolution consumes the finished native turn, the cursor records
+governed argument-capture offsets and authentic grammar-edit payloads. A charged sort and binary lookup allow EOF
+events to use captures whose native alternatives agree, without replaying the
+input or decoding arguments again. The completed common prefix fills missing
+call starts, canonical names and raw arguments. EOF names may follow a guessed
+final identity; the final outcome and receipt retain that uncertainty.
+
+The same EOF producer now emits `CallComplete` with the exact final per-call
+outcome, preserving `BestGuess`, `Ambiguous` and every unresolved reason.
+Blocker text is copied fallibly under a transient storage lease and published
+only after the event record is admitted. For resolved or best-guess calls,
+`ParameterComplete` follows `CallComplete`, including for mutating tools.
+Values use `OwnedDocument::copy_from`; their real reservations stay with the
+prepared event through handoff, preserving lexical numbers, typed values and
+spans. Parameters are emitted in canonical name order. Ambiguous and unresolved calls, and
+duplicate member names, do not publish a supposedly settled parameter value.
+
+`CallRejected` carries each final rejected attempt's complete span and precise
+reason. Its `index` is `None` when no `CallStarted` was emitted for that attempt;
+rejected-list ordinals are never substituted for accepted-call indices. A
+future identity-change event may use `Some` only for that already started
+identity, followed by a new `CallStarted` for its replacement.
+
+Native `Revision` events match retained operator facts against selected ledger
+rule ids and exact source spans. Their original and replacement bytes come
+directly from `MarkupEdit`, and their guess flag comes from that operator's
+registry entry. Multiple native candidates must agree on both payloads. A
+parameter JSON Pointer is carried only when the original argument-leaf owners
+agree; markup or an uncertain owner uses `None`. Neither explanations nor
+serialized diagnostic text are parsed to reconstruct edits. Revisions created
+by semantic search still need structured transformation records at their
+production sites; this native route does not fabricate their missing payloads.
+
+Revision rule lookup uses a static ordinal index sorted at compile time by
+identifier byte length, then lexical bytes. Equal identifiers keep their original
+registry order, so the first matching operator remains the same. An explicit
+lower-bound loop halves its exclusive search interval on every probe. Each
+length comparison admits one Work; only equal lengths require a string comparison,
+which retains the queried identifier's byte length plus one Work. The final
+indexed entry also passes a length check before full equality. A lookup has at
+most the registry count's bit width plus one stages: at most seven for the current
+48 operators, with a length and possible string comparison per stage. The static
+index adds no heap storage; query controls retain a typed 96-byte scratch lease.
+Evidence and event order are preserved. These source bounds do not establish
+whether the remaining workloads fit their Work budgets.
+
+Packed ambiguity and grouped attempts can hold this conservative frontier even
+when later recovery would fold their meanings together. Proving the longest
+semantic stable prefix, maximal intra-call EOF agreement, exact held/candidate
+byte accounting, semantic-search revision events,
+decoding queries, governed cloning and CLI/MCP progress remain
+unfinished under #16.
+
+`ToolSet::stream` and `stream_governed` now own the request and original governor
+while borrowing the tools and static built-in dialect set. Explicit dialect
+constructors borrow a prepared set instead, without a self-reference or clone.
+`ToolCallStream::feed` extends a caller's event sink, and `feed_collect` returns
+newly published events. `cancel` marks the original governor; `finish(stop)`
+checks refusal before completing and resolving the live recognizer.
+`finish_with_events` and `finish_collect` preserve EOF events; plain `finish`
+delegates to the same producer with a discard sink. Allocation refusal during
+EOF collection is explicit in the returned result. This facade implements the
+source facts described above, not the complete streaming event contract.
+
 Each dialect `d` of the explicit prepared allow-list keeps at most `B_d`
 configurations live per input byte, where `B_d` is
 `CompiledGrammar::configuration_bound()` (one per program location plus one
@@ -1195,16 +1723,22 @@ colonless JSON spellings of its envelope literals); `K_d = K_THREAD·B_d` is its
 per-byte term. The published bound is
 
 ```text
-work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E,   K_d = K_THREAD·B_d
+work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux,   K_d = K_THREAD·B_d
 ```
 
-where `E` is the number of error configurations the repair search explores,
+Here `W_aux` includes the separately admitted class-automaton construction,
+segment events, captured history, codec and JSON-recovery work, search keys,
+resolution, control projections, report indexes, buffer growth and streaming
+publication listed in the exact decomposition above. The configuration
+term bounds finite-state framing, not arbitrary codec/schema computation or
+materialization of competing readings. `E` is the number of error configurations the repair search explores,
 capped by the effort's `Work` budget (explicit `BudgetExceeded` beyond it).
-The configuration term is an upper bound per byte: on the fast path only a
+Current intake counters have not been measured; historical throughput rows
+do not qualify the new byte-fold costs. The configuration term is an upper bound per byte: on the fast path only a
 handful of the `B_d` configurations are live at any byte, and the remaining
 linear terms (segment events, captured bytes, codec scans, JSON recovery
-units, resolution) are each a small constant per byte: whole recoveries
-measure 10 to 26 units per byte in total (the throughput table below), far
+units, resolution) are each a small constant per byte: recorded baseline recoveries
+measured 10 to 26 units per byte in total (the throughput table below), far
 inside the slack of any built-in `K_d`.
 `crates/core/tests/tool_call_scale.rs` (`make corpus`) checks the bound on
 64 KiB and 1 MiB Qwen3-Coder XML, Hermes, Llama 3 JSON, Mistral v3, Mistral v11,
@@ -1341,9 +1875,9 @@ evidence_entries = preset.evidence_entries
 
 The per-byte constants and each preset's fixed allowances form a measured
 sizing recipe (see "Dense markup" below). The supplied shapes through
-1 MiB recover under plain
+1 MiB are checked against plain
 `sized(effort, output)`. The budget stays linear in `n`; the published
-worst-case bound `work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E` above is the
+bound `work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux` above is the
 analytical bound, and `RECOVER_WORK_PER_BYTE` is the measured sizing, not a
 replacement for it.
 
@@ -1504,16 +2038,18 @@ the other recorded rows use the twelve-dialect request before GLM.
 
 These are measured ratios, not per-input upper bounds. Fixed storage and
 capacity growth can change them at other input lengths. The supplied
-64 KiB and 1 MiB shapes complete under the sized budgets; larger or
+64 KiB and 1 MiB shapes must complete under the sized budgets; larger or
 schema-heavy inputs can still exhaust explicitly. For the dense Pythonic
 case, scratch is closer to its budget than Work or evidence storage.
 
-The fourteen-dialect default uses `RECOVER_WORK_PER_BYTE` = 224. In the
-current implementation, adding Pythonic to the prepared default set changes
+The recorded fourteen-dialect baseline uses `RECOVER_WORK_PER_BYTE` = 224.
+Adding Pythonic to that prepared baseline changed
 the existing 300-parameter nullable-integer Qwen schema-typing case from
 3,039,693 to 3,162,209 Work for 10,032 bytes. The Standard preset plus
 224 Work per byte admits 3,247,168 Work, preserving that case's complete
-result with 84,959 units remaining. This measured recipe neither bounds
+result with 84,959 units remaining in that measurement. Current execution is
+qualified by the cost checks rather than those historical counters. This
+measured recipe neither bounds
 arbitrary schema complexity nor claims a marginal bound of 16 Work per
 input byte. Explicit caller budgets and effort presets retain their values.
 
@@ -2032,13 +2568,94 @@ and #47. Tool-result `OutputByteLimit` remains its separate contract.
 The existing dense byte `Matcher` owns transitions, depths and matches in
 fallible scratch vectors. Construction borrows admitted literals, reuses the
 fallible sparse trie as its sole goto/prefix authority, checks literal/state
-IDs and row sizes, and admits zero initialization, parent/child scans, binary
-searches, fallback processing and queue growth before work. Temporary trie,
+IDs and row sizes, and admits zero initialization, parent/child scans, trie
+searches, failure-row copying and queue growth before work. Temporary trie,
 failure links and breadth-first queue release on every exit. A final check
 precedes the complete matcher; its final buffers release with their grammar or
 prepared dialect set. Byte-prefix length is iterative and has no 128-byte
 recursion ceiling. Duplicate labels, earliest-ending matches and longest-match
 priority keep their original meaning.
+
+Inserted-wrapper lookahead uses one additional immutable transition table with
+two exact priority projections for the final call/result programs. Each view's
+token order is its literal program openers, local reasoning openers, then every
+declared closer spelling, preserving order within each group. Nonliteral opener
+instructions are visited and skipped. This caller selects the first native token
+among all suffixes ending on a byte, including when that token is shorter than
+another match. Tokens carry independent ranks for the views that admit them.
+Local reasoning and closer spellings enter the shared trie once. Every token,
+including duplicate bytes, replays its ranks into its exact trie terminal before
+breadth-first suffix propagation selects each view's minimum rank. Global trie
+labels cannot hide later duplicates or expose another program's private opener.
+Ordinary delimiter and marker callers retain their existing longest-match output
+owner, initialization and suffix policy through the same constructor. Their
+construction Work follows the shared row-copy and sparse-child algorithm below.
+
+Preparation visits every instruction in both final programs at one Work each,
+plus one Work for each literal's closer-flag observation. If neither program
+contains a closer-tagged literal, it retains no wrapper table. Only repair of
+such a literal can create the inserted-wrapper history that enters lookahead;
+attempt histories begin at the root and pack within their production table.
+The predicate is conservative: any such literal in either program retains both
+complete priority views. It does not inspect grammar syntax or dialect names.
+The absent case prepares no token buffer or dense table and does not enter the
+private matcher constructor. An unexpected runtime scan without a prepared table
+returns an explicit invariant failure.
+
+The retained wrapper record reserves 128 portable metadata bytes for its optional
+table owners, two positive cutoffs, lease and return carrier, including when the
+tables are absent. Present table buffers retain their own reservations.
+Preparation separately reserves 448 bytes for its predicate or gathering frame,
+borrowed token vector owner, rank/cutoff arrays, iteration state, input/return
+carriers and leases. Borrowed tokens reserve 32 bytes each. A source
+lookup admits one Work; preparing both view slots admits two, with one additional
+Work to select a private opener's view. Each token admits four Work to initialize
+its rank slots and staged counters, visits both view slots at one Work each,
+adds four Work per present rank for reading, checked
+advancement and staged publication, and admits one Work for counter commit. Push
+and actual relocation retain their existing admissions. Saving both positive
+cutoffs admits one Work. When needed, the shared constructor reserves 768
+additional metadata bytes covering its sparse-trie and dense-builder phases:
+goto, transitions, depths, failure links, both output projections, queue, terminal
+replay, iterators, cursors, scalars, borrows and return carriers. Complete typed
+phase assertions cover these records, temporary trie nodes, nested initialization iterators,
+row-copy ranges, mutable table slices and queue insertion borrows/results.
+Each metadata reservation admits one Work before preparation.
+
+Shared zero initialization admits 260 Work per trie state: 256 transitions,
+depth, failure and two output slots. Terminal replay admits two Work per token
+for lookup and checked length, each edge's binary-search bound plus two Work for
+state/cursor progression, one Work per view-slot observation and three per present
+rank for terminal selection/publication. Breadth-first propagation adds three
+Work per view per nonroot state. Every matcher retains one Work per breadth-first
+state, then admits eight Work for its two row starts, two ends, two bounds,
+source range and sparse edge cursor. It copies the finalized failure row with
+256 admitted cell copies, then visits only actual child edges. Each edge admits
+ten Work for its two fields, byte conversion, two slot additions, fallback
+lookup, two stores, cursor advance and loop dispatch. Every queue append,
+including root seeding, separately admits one Work and actual relocation before
+growth. Sparse child order preserves the original breadth-first order. Proper
+suffix depth ensures the failure row is finalized first; checked table dimensions
+bound both complete rows. The root keeps its zero-filled and seeded transitions.
+Trie/prefix scans and root transition seeding retain their existing admissions.
+This replaces 256 binary searches per nonroot state for all matcher callers;
+ordinary construction Work changes with the computation. Construction-only depth,
+trie, failure and queue owners release before publication; every partial owner
+releases on refusal. Construction uses the original grammar compilation budgets,
+including built-in preparation. Sharing source tables establishes neither
+default-budget fit nor measured runtime benefit; those require execution evidence.
+
+The runtime replaces per-call spelling-vector construction and per-byte literal
+suffix comparisons with one admitted native matcher step per consumed lookahead
+byte. The existing trail node stores the stray-closer state before wrapper
+lookahead and its matcher state afterward; the native rewind resets it to the
+root. Protocol suffix bytes still advance the matcher even when line validation
+suppresses a decision. Whitespace/text classification, token priority, stray
+absorption, fence verdicts, EOF handling, histories and source ownership keep their
+native paths. No new trail field or buffer is retained. Existing focused matcher
+coverage distinguishes first-token suffix priority from ordinary longest matching.
+Held-report, wrapper, stray-closer, protocol and chunk cases retain their original
+limits; runtime and preset qualification of this change remains pending.
 
 `DialectSet` and `Matcher` no longer deep-clone. The cached built-in set returns
 a static borrow; custom sets remain owned by the caller. `ToolRecoveryRequest`

@@ -31,10 +31,10 @@
 #![allow(clippy::redundant_pub_crate)]
 use super::automaton::ROOT;
 use super::compile::{JsonSpelling, LiteralTables};
-use super::cost::{K_ERR, K_THREAD};
+use super::cost::K_ERR;
 use super::edit::{EditOperator, MarkupEdit};
 use super::engine::{Failure, HistKind, Out, Step, Sub, Thread, extend_digest};
-use super::{CompiledGrammar, Inst, Literal, Program};
+use super::{CompiledGrammar, Inst, Literal};
 use crate::contract::{Governor, Resource, ScratchVec, StopReason};
 use crate::digest::Digest;
 use crate::search::{Acceptance, Proposals, SearchState};
@@ -238,8 +238,25 @@ impl<'a, 's> RepairState<'a, 's> {
         operator: EditOperator,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        let ownership = if self.thread.ownership & 1 != 0 {
+            governor.charge(Resource::Work, 1)?;
+            if matches!(
+                sub,
+                Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
+            ) {
+                self.thread.ownership
+            } else {
+                2
+            }
+        } else {
+            2
+        };
         let mut seeds = ScratchVec::new(governor);
-        seeds.push(Thread { sub, ..self.thread })?;
+        seeds.push(Thread {
+            sub,
+            ownership,
+            ..self.thread
+        })?;
         self.replay(context, proposals, &mut seeds, operator, governor)
     }
 
@@ -277,6 +294,7 @@ impl<'a, 's> RepairState<'a, 's> {
         let mut seeds = ScratchVec::new(governor);
         seeds.push(Thread {
             hist,
+            ownership: 2,
             pos: at + 1,
             entry: at + 1,
             ..self.thread
@@ -360,6 +378,7 @@ impl<'a, 's> RepairState<'a, 's> {
         context.step.closure(
             Thread {
                 hist,
+                ownership: 2,
                 ..self.thread
             },
             next,
@@ -469,35 +488,17 @@ const fn json_skip_operator(pending: &[u8]) -> EditOperator {
     }
 }
 
-/// Whether the production completes from `pc` without consuming input:
-/// whether an inserted literal continuing at `pc` is the production's last.
-pub(crate) fn completes(
-    program: &Program,
-    pc: u32,
-    governor: &mut Governor,
-) -> Result<bool, StopReason> {
-    let mut visited = vec![false; program.insts.len()];
-    let mut pending = vec![pc];
-    while let Some(pc) = pending.pop() {
-        let index = pc as usize;
-        if core::mem::replace(&mut visited[index], true) {
-            continue;
+/// Shortest unsigned base-128 encoding: each integer terminates before the
+/// next field, preserving exact state identity without fixed-width zero bytes.
+fn key_integer(key: &mut ScratchVec<u8>, mut value: u64) -> Result<(), StopReason> {
+    loop {
+        let byte = value.to_le_bytes()[0];
+        value >>= 7;
+        if value == 0 {
+            return key.push(byte);
         }
-        governor.charge(Resource::Work, K_THREAD)?;
-        match program.insts[index] {
-            Inst::Accept => return Ok(true),
-            Inst::Split(first, second) => pending.extend([first, second]),
-            Inst::Open { next, .. }
-            | Inst::Close { next, .. }
-            | Inst::Commit { next }
-            | Inst::Next { next }
-            | Inst::Insert { next, .. } => {
-                pending.push(next);
-            }
-            Inst::Lit { .. } | Inst::Class { .. } | Inst::Until { .. } | Inst::Slot { .. } => {}
-        }
+        key.push(byte | 0x80)?;
     }
-    Ok(false)
 }
 
 impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
@@ -521,11 +522,11 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
         let (mode, node) = self.thread.sub.key();
         key.push(self.status as u8)?;
         key.push(mode)?;
-        key.extend((self.thread.pos as u64).to_be_bytes())?;
-        key.extend(self.thread.pc.to_be_bytes())?;
-        key.extend(node.to_be_bytes())?;
-        key.extend((self.thread.entry as u64).to_be_bytes())?;
-        key.extend(self.thread.attempt.to_be_bytes())?;
+        key_integer(key, self.thread.pos as u64)?;
+        key_integer(key, u64::from(self.thread.pc))?;
+        key_integer(key, u64::from(node))?;
+        key_integer(key, self.thread.entry as u64)?;
+        key_integer(key, self.thread.attempt)?;
         key.extend(*self.digest.as_bytes())
     }
 
@@ -606,7 +607,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     }
                     // A closer missing mid-message: the wrapper's when it
                     // ends the production, an inner element's otherwise.
-                    let wrapper = completes(program, next, governor)?;
+                    let wrapper = program.completes(next, governor)?;
                     let operator = if wrapper {
                         EditOperator::MissingWrapperClose
                     } else {

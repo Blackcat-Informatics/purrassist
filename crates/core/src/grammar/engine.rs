@@ -68,8 +68,8 @@ use super::{CaptureKind, CompiledGrammar, Inst, Program, index_u32};
 use super::{LineDecision, LineSuffix};
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchMap, ScratchMeter, ScratchVec, StopReason,
-    format_output_governed,
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchMap, ScratchMeter, ScratchVec,
+    StopReason, format_output_governed, invalid_input,
 };
 use crate::digest::Digest;
 use crate::pattern::{DerivativeDfa, DfaState};
@@ -83,7 +83,8 @@ use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
-mod class_run;
+mod byte_run;
+mod codec_owner;
 mod envelope;
 mod failure_header;
 pub(crate) use failure_header::{FailureWitness, HeaderSpan};
@@ -234,6 +235,8 @@ pub(crate) struct Thread {
     pub(crate) cost: u64,
     pub(crate) hist: u32,
     pub(crate) opened: bool,
+    /// Metric hypotheses: finite opener prefix (1), candidate (2), or both.
+    pub(crate) ownership: u8,
     pub(crate) stall: u32,
     pub(crate) reach: usize,
     /// Whether the configuration descends from a body that read on past a
@@ -374,11 +377,12 @@ pub(crate) struct Arena {
     pub(crate) edits: Vec<MarkupEdit>,
     /// Live codec states, out of line so a configuration stays `Copy`
     /// whatever state a codec keeps; each body configuration owns its slot.
-    codecs: Vec<Option<CodecState>>,
+    codecs: ScratchVec<Option<codec_owner::OwnedCodec>>,
+    _codec_metadata: ScratchLease,
     /// Bodies ended beside another reading whose codec has not finished
     /// yet (see `Step::end_early`).
     pub(crate) deferred: ScratchVec<Deferred>,
-    /// The scratch charged for `values`, `edits` and `codecs`, released by
+    /// The scratch charged for values, edits and chain records, released by
     /// [`Self::reset`] or, for what is still held, when the arena drops.
     charged: u64,
     meter: ScratchMeter,
@@ -395,17 +399,27 @@ pub(crate) struct Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
+        drop(core::mem::take(&mut self.values));
+        drop(core::mem::take(&mut self.edits));
+        self.codecs.clear();
+        drop(core::mem::take(&mut self.chains));
+        drop(core::mem::take(&mut self.leads));
+        drop(core::mem::take(&mut self.memo));
         let _ = self.meter.release(self.charged);
     }
 }
 
-/// Scratch bytes charged per codec slot (a codec charges any further heap
-/// state it keeps itself).
-const CODEC_SLOT: u64 = 64;
-const _: () = assert!(core::mem::size_of::<Option<CodecState>>() as u64 <= CODEC_SLOT);
+/// Added governed slot header and its covering lease.
+const CODEC_METADATA_BYTES: u64 = 32;
+const _: () = assert!(
+    core::mem::size_of::<(ScratchVec<Option<codec_owner::OwnedCodec>>, ScratchLease)>() as u64
+        <= core::mem::size_of::<Vec<Option<CodecState>>>() as u64 + CODEC_METADATA_BYTES
+);
 
 impl Arena {
     fn new(governor: &Governor) -> Result<Self, StopReason> {
+        governor.scratch_meter().charge(CODEC_METADATA_BYTES)?;
+        let codec_metadata = governor.scratch_lease_for(CODEC_METADATA_BYTES);
         let mut nodes = ScratchVec::new(governor);
         nodes.push(HistNode {
             prev: ROOT,
@@ -416,7 +430,8 @@ impl Arena {
             nodes,
             values: Vec::new(),
             edits: Vec::new(),
-            codecs: Vec::new(),
+            codecs: ScratchVec::new(governor),
+            _codec_metadata: codec_metadata,
             deferred: ScratchVec::new(governor),
             charged: 0,
             meter: governor.scratch_meter(),
@@ -500,24 +515,50 @@ impl Arena {
         self.push(prev, HistKind::Value(index))
     }
 
-    /// A new codec slot holding `state`.
+    /// Admit and construct one native codec and its governed slot.
     fn begin_codec(
         &mut self,
-        state: CodecState,
+        kind: CodecKind,
+        at: usize,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        let bytes = CODEC_SLOT.saturating_add(state.boxed_bytes());
-        governor.charge(Resource::ScratchBytes, bytes)?;
-        self.charged = self.charged.saturating_add(bytes);
-        self.codecs.push(Some(state));
-        Ok(index_u32(self.codecs.len() - 1))
+        let _metadata = governor.lease_scratch(codec_owner::METADATA_BYTES)?;
+        governor.charge(Resource::Work, 4)?;
+        let boxed = governor.lease_scratch(kind.boxed_bytes())?;
+        let index = u32::try_from(self.codecs.len())
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        let state = kind.begin(at, governor)?;
+        crate::contract::push_scratch(
+            &mut self.codecs,
+            Some(codec_owner::OwnedCodec::new(state, boxed)),
+            governor,
+        )?;
+        Ok(index)
     }
 
     /// The codec state in `slot`, which its configuration finishes.
-    fn take_codec(&mut self, slot: u32) -> CodecState {
-        self.codecs[slot as usize]
-            .take()
-            .expect("a codec slot is finished once")
+    fn take_codec(
+        &mut self,
+        slot: u32,
+        governor: &mut Governor,
+    ) -> Result<codec_owner::TakenCodec, StopReason> {
+        let metadata = governor.lease_scratch(codec_owner::METADATA_BYTES)?;
+        governor.charge(Resource::Work, 12)?;
+        let entry = self
+            .codecs
+            .as_mut_slice()
+            .get_mut(slot as usize)
+            .ok_or_else(|| invalid_input("finished codec slot is out of range"))?;
+        let codec = entry
+            .as_ref()
+            .ok_or_else(|| invalid_input("finished codec slot has no live owner"))?;
+        if codec.boxed_bytes() != codec.kind().boxed_bytes() {
+            return Err(invalid_input(
+                "finished codec box has a different scratch owner",
+            ));
+        }
+        let codec = entry.take().expect("the live codec was just checked");
+        Ok(codec_owner::TakenCodec::new(codec, metadata))
     }
 
     fn reset(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
@@ -527,13 +568,13 @@ impl Arena {
             kind: HistKind::Root,
             evidence: HistoryEvidence(0),
         })?;
-        self.values.clear();
-        self.edits.clear();
+        drop(core::mem::take(&mut self.values));
+        drop(core::mem::take(&mut self.edits));
         self.codecs.clear();
         self.deferred.clear();
-        self.chains.clear();
-        self.leads.clear();
-        self.memo.clear();
+        drop(core::mem::take(&mut self.chains));
+        drop(core::mem::take(&mut self.leads));
+        drop(core::mem::take(&mut self.memo));
         governor.release_scratch(core::mem::take(&mut self.charged))
     }
 }
@@ -641,7 +682,7 @@ pub(crate) struct Step<'a, 's> {
     /// closer text; see `Step::repaired_delimiter`).
     pub(crate) kind: ProductionKind,
     pub(crate) dfas: &'a mut [Option<DerivativeDfa<'s>>],
-    class_steps: &'a mut [Option<ClassStep>],
+    class_steps: &'a mut [ClassSteps],
     pub(crate) arena: &'a mut Arena,
     pub(crate) buffer: &'a [u8],
     pub(crate) base: usize,
@@ -664,6 +705,8 @@ pub(crate) struct Step<'a, 's> {
     pub(crate) quoted_openers: &'a mut Vec<(u64, usize)>,
     /// The table's live attempts (see `Step::opens_call`).
     pub(crate) attempts: &'a [Attempt],
+    /// Only the ordinary table step has a guaranteed canonical merge next.
+    ready_limit: Option<usize>,
 }
 
 impl<'s> Step<'_, 's> {
@@ -676,16 +719,22 @@ impl<'s> Step<'_, 's> {
     ) -> Result<&mut DerivativeDfa<'s>, StopReason> {
         let slot = &mut self.dfas[class as usize];
         if slot.is_none() {
-            *slot = Some(
-                self.grammar.classes[class as usize]
-                    .automaton
-                    .dfa(governor)?,
-            );
+            let _metadata = governor.lease_scratch(CLASS_STEP_CONSTRUCTION_BYTES)?;
+            governor.charge(Resource::Work, size(CLASS_STEP_BUCKETS).saturating_add(2))?;
+            let mut steps = ScratchVec::new(governor);
+            steps.reserve(CLASS_STEP_BUCKETS)?;
+            steps.extend(core::iter::repeat_n(None, CLASS_STEP_BUCKETS))?;
+            let dfa = self.grammar.classes[class as usize]
+                .automaton
+                .dfa(governor)?;
+            // Neither owner is visible until both constructions succeed.
+            self.class_steps[class as usize] = Some(steps);
+            *slot = Some(dfa);
         }
         Ok(slot.as_mut().expect("the class automaton was initialized"))
     }
 
-    /// Reuse one successful query over the class's stable operation-owned DFA.
+    /// Reuse successful queries over the class's stable operation-owned DFA.
     /// State identity includes UTF-8 position and every zero-width context flag.
     fn class_step(
         &mut self,
@@ -694,9 +743,14 @@ impl<'s> Step<'_, 's> {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<(DfaState, bool), StopReason> {
-        // Fixed row access, complete state/byte comparisons and result handoff.
-        governor.charge(Resource::Work, 12)?;
-        if let Some(cached) = self.class_steps[class as usize]
+        // Row lookup, bucket selection, canonical state-word and byte
+        // equality, and result handoff replace the former field comparisons.
+        governor.charge(Resource::Work, 6)?;
+        let index = class_step_slot(byte);
+        let steps = self.class_steps[class as usize]
+            .as_ref()
+            .ok_or_else(|| invalid_input("native class has no initialized transition cache"))?;
+        if let Some(cached) = steps[index]
             && cached.state == state
             && cached.byte == byte
         {
@@ -705,7 +759,11 @@ impl<'s> Step<'_, 's> {
         let dfa = self.class_dfa(class, governor)?;
         let stepped = dfa.step(state, byte, governor)?;
         let dead = dfa.is_dead(stepped, governor)?;
-        self.class_steps[class as usize] = Some(ClassStep {
+        // The initialized row has fixed length; native DFA work cannot resize it.
+        let steps = self.class_steps[class as usize]
+            .as_mut()
+            .expect("the native class cache was validated before its DFA query");
+        steps.as_mut_slice()[index] = Some(ClassStep {
             state,
             byte,
             stepped,
@@ -750,6 +808,22 @@ impl<'s> Step<'_, 's> {
         Ok(())
     }
 
+    /// Ordinary byte scheduling publishes ready terminals directly to the
+    /// cohort that settlement immediately sorts and merges. Repair replay and
+    /// EOF retain the original stack order and dispatch path.
+    fn advance_settled(
+        &mut self,
+        stack: &mut ScratchVec<Thread>,
+        until: usize,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.ready_limit = Some(until);
+        let result = self.advance(stack, until, false, out, governor);
+        self.ready_limit = None;
+        result
+    }
+
     fn fail(out: &mut Out, thread: Thread, at: usize, reason: Rejection) -> Result<(), StopReason> {
         out.failed.push(Failure {
             thread,
@@ -761,7 +835,18 @@ impl<'s> Step<'_, 's> {
     }
 
     /// Queue `thread`, which has moved to `thread.pos`.
-    fn queue(&self, mut thread: Thread, stack: &mut ScratchVec<Thread>) -> Result<(), StopReason> {
+    fn queue(
+        &self,
+        mut thread: Thread,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+    ) -> Result<(), StopReason> {
+        if !matches!(
+            thread.sub,
+            Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
+        ) {
+            thread.ownership = 2;
+        }
         if thread.pos > thread.reach {
             thread.reach = thread.pos;
             thread.stall = 0;
@@ -771,7 +856,14 @@ impl<'s> Step<'_, 's> {
                 return Ok(()); // A zero-width cycle: this lineage adds nothing.
             }
         }
-        stack.push(thread)
+        if self.ready_limit.is_some_and(|limit| thread.pos >= limit) {
+            // The omitted stack round trip would only dispatch this terminal
+            // to out.live. All active work keeps its original LIFO order;
+            // settlement canonicalizes these ready terminals before use.
+            out.live.push(thread)
+        } else {
+            stack.push(thread)
+        }
     }
 
     fn step(
@@ -926,7 +1018,7 @@ impl<'s> Step<'_, 's> {
                 }
                 thread.sub = Sub::Lit(depth + 1);
                 thread.pos = pos + 1;
-                return self.queue(thread, stack);
+                return self.queue(thread, stack, out);
             }
             Sub::Variant(node) => (&tables.variants.trie, EditOperator::CloserVariant, node),
             Sub::Confusable(node) => (
@@ -968,7 +1060,7 @@ impl<'s> Step<'_, 's> {
                 pos: pos + 1,
                 ..thread
             };
-            self.queue(longer, stack)?;
+            self.queue(longer, stack, out)?;
         }
         if trie.accept(child).is_none() {
             return Ok(());
@@ -997,7 +1089,7 @@ impl<'s> Step<'_, 's> {
                 kind: FenceKind::Skip,
             };
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         let edit = MarkupEdit {
             operator,
@@ -1015,7 +1107,7 @@ impl<'s> Step<'_, 's> {
             thread.sub = Sub::Lit(0);
             thread.entry = pos + 1;
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         self.finish_literal(thread, next, pos + 1, stack, out, governor)
     }
@@ -1137,7 +1229,7 @@ impl<'s> Step<'_, 's> {
         let state = scan.pack();
         thread.sub = Sub::Resync(state, index_u32(matched));
         thread.pos = pos + 1;
-        self.queue(thread, stack)
+        self.queue(thread, stack, out)
     }
 
     /// One byte of a misspelled closer of literal `lit` after its slip: the
@@ -1169,7 +1261,7 @@ impl<'s> Step<'_, 's> {
         }
         thread.sub = Sub::Misspelled(index_u32(resume), slip);
         thread.pos = pos + 1;
-        self.queue(thread, stack)
+        self.queue(thread, stack, out)
     }
 
     /// The canonical spelling of closer literal `lit` failed on `byte` after
@@ -1250,16 +1342,16 @@ impl<'s> Step<'_, 's> {
                     governor,
                 )?;
             } else {
-                self.queue(at(Sub::Misspelled(index_u32(resume), slip)), stack)?;
+                self.queue(at(Sub::Misspelled(index_u32(resume), slip)), stack, out)?;
             }
         }
         // Inserted before the expected byte.
         if word {
-            self.queue(at(Sub::Misspelled(slip, slip)), stack)?;
+            self.queue(at(Sub::Misspelled(slip, slip)), stack, out)?;
         }
         // The expected byte and the next swapped.
         if depth + 1 < inner_end && canonical[depth + 1] == byte && canonical[depth] != byte {
-            self.queue(at(Sub::Transposed(slip, slip)), stack)?;
+            self.queue(at(Sub::Transposed(slip, slip)), stack, out)?;
         }
         Ok(())
     }
@@ -1393,7 +1485,7 @@ impl<'s> Step<'_, 's> {
         if let Some(state) = next_state {
             thread.sub = Sub::JsonSkip(state);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         let operator = match state {
             1 => EditOperator::JsonTrailingComma,
@@ -1453,7 +1545,7 @@ impl<'s> Step<'_, 's> {
         if let Some(state) = next_state {
             thread.sub = Sub::JsonInner(state, node);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         if state != 6 {
             return Self::fail(out, thread, pos, Rejection::Malformed { at: pos });
@@ -1517,7 +1609,7 @@ impl<'s> Step<'_, 's> {
             }
             thread.sub = Sub::Class(stepped);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         if thread.entry < pos && dfa.accepting(state, governor)? {
             // The run ended before this byte, which the continuation consumes.
@@ -1627,7 +1719,7 @@ impl<'s> Step<'_, 's> {
                     kind: FenceKind::Body,
                 };
                 thread.pos = pos + 1;
-                return self.queue(thread, stack);
+                return self.queue(thread, stack, out);
             }
             if self.repaired_delimiter(&thread, set, index) {
                 // A delimiter that ends the body only by a repair (a closer
@@ -1651,7 +1743,7 @@ impl<'s> Step<'_, 's> {
             };
             thread.sub = Sub::Body(stepped | flags, codec);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         };
         thread.hist = self.closer_in_value(&thread, set, end, governor)?;
         self.end_body(
@@ -1797,7 +1889,7 @@ impl<'s> Step<'_, 's> {
             };
             return self.arena.codecs[slot as usize]
                 .as_ref()
-                .is_some_and(CodecState::in_string);
+                .is_some_and(codec_owner::OwnedCodec::in_string);
         }
         let declared = &self.grammar.delimiters[set as usize].declared;
         let Some(spelling) = declared.get(index as usize) else {
@@ -1968,10 +2060,7 @@ impl<'s> Step<'_, 's> {
             _ => None,
         };
         let codec = match kind {
-            Some(kind) => Some(
-                self.arena
-                    .begin_codec(kind.begin(thread.entry, governor)?, governor)?,
-            ),
+            Some(kind) => Some(self.arena.begin_codec(kind, thread.entry, governor)?),
             None => None,
         };
         if self.program.argument_anchor
@@ -1984,7 +2073,7 @@ impl<'s> Step<'_, 's> {
             }
             if !self.arena.codecs[slot as usize]
                 .as_ref()
-                .is_some_and(CodecState::argument_anchor)
+                .is_some_and(codec_owner::OwnedCodec::argument_anchor)
             {
                 return Self::fail(out, thread, end, Rejection::Malformed { at: end });
             }
@@ -2059,7 +2148,7 @@ impl<'s> Step<'_, 's> {
         range: Range<usize>,
         governor: &mut Governor,
     ) -> Result<Result<Option<usize>, CodecFault>, StopReason> {
-        let codec = self.arena.codecs[slot as usize]
+        let codec = self.arena.codecs.as_mut_slice()[slot as usize]
             .as_mut()
             .expect("a live body owns its codec slot");
         for at in range {
@@ -2104,7 +2193,7 @@ impl<'s> Step<'_, 's> {
             if self.program.argument_anchor
                 && !self.arena.codecs[slot as usize]
                     .as_ref()
-                    .is_some_and(CodecState::argument_anchor)
+                    .is_some_and(codec_owner::OwnedCodec::argument_anchor)
             {
                 return Self::fail(out, thread, end, Rejection::Malformed { at: end });
             }
@@ -2144,12 +2233,13 @@ impl<'s> Step<'_, 's> {
         how: CodecEnd,
         governor: &mut Governor,
     ) -> Result<Result<(u32, u64), Finished>, StopReason> {
-        let codec = self.arena.take_codec(slot);
+        let codec = self.arena.take_codec(slot, governor)?;
         let context = self.context(codec.kind(), hist, governor)?;
         let buffer = self.buffer;
         let bytes = &buffer[body.start - self.base..body.end - self.base];
         let body_end = body.end;
-        match codec.finish(bytes, body, how, context, governor)? {
+        let finished = codec.finish(bytes, body, how, context, governor)?;
+        match finished.result {
             // A JSON value no repair reads is not a call's arguments: the
             // attempt fails where its decoding stopped (see
             // `Step::end_body`), a rejected attempt rather than a call.
@@ -2199,6 +2289,10 @@ impl<'s> Step<'_, 's> {
         let Some((name, _)) = self.name_range(hist, governor)? else {
             return Ok(markup);
         };
+        governor.charge(Resource::Work, 3)?;
+        if name.len() > tools.max_name_bytes() {
+            return Ok(markup);
+        }
         governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
         let shape = core::str::from_utf8(self.bytes(name))
             .ok()
@@ -2265,7 +2359,7 @@ impl<'s> Step<'_, 's> {
                     // history fact. Nameless paths never inspect the codec.
                     observed = true;
                     let anchored = match active
-                        .and_then(|slot| self.arena.codecs[slot as usize].as_mut())
+                        .and_then(|slot| self.arena.codecs.as_mut_slice()[slot as usize].as_mut())
                     {
                         Some(codec) if observe_native => codec.observe_native_anchor(governor)?,
                         Some(codec) => codec.argument_anchor(),
@@ -2327,13 +2421,22 @@ impl<'s> Step<'_, 's> {
         if self.retained_name_prefix(hist, segment.unwrap_or(start)..name.start, governor)? {
             return Ok(true);
         }
-        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
+        governor.charge(Resource::Work, 3)?;
         let bytes = self.bytes(name);
-        if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
-            return Ok(true);
+        if bytes.len() <= tools.max_name_bytes() {
+            governor.charge(Resource::Work, size(bytes.len()).saturating_mul(K_CODEC))?;
+            if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
+                return Ok(true);
+            }
         }
         for &relation in &self.grammar.joint_captures {
-            let boundaries = super::partition::boundaries(self.grammar, relation, bytes, governor)?;
+            // Most prose-like names have no declared prefix. A complete native
+            // partition is relevant only after that necessary condition holds.
+            const _: () = assert!(
+                core::mem::size_of::<Option<ScratchVec<usize>>>()
+                    <= core::mem::size_of::<ScratchVec<usize>>()
+            );
+            let mut boundaries = None;
             for tool in tools.tools() {
                 for candidate in
                     core::iter::once(tool.name()).chain(tool.aliases().iter().map(String::as_str))
@@ -2342,8 +2445,23 @@ impl<'s> Step<'_, 's> {
                         Resource::Work,
                         size(candidate.len().min(bytes.len())).saturating_add(65),
                     )?;
-                    if bytes.starts_with(candidate.as_bytes())
-                        && boundaries.binary_search(&candidate.len()).is_ok()
+                    if !bytes.starts_with(candidate.as_bytes()) {
+                        continue;
+                    }
+                    governor.charge(Resource::Work, 3)?;
+                    if boundaries.is_none() {
+                        boundaries = Some(super::partition::boundaries(
+                            self.grammar,
+                            relation,
+                            bytes,
+                            governor,
+                        )?);
+                    }
+                    if boundaries
+                        .as_ref()
+                        .expect("a matching prefix prepared its native partition")
+                        .binary_search(&candidate.len())
+                        .is_ok()
                     {
                         // This is admission evidence only. Expansion still
                         // retains every original source-valid partition.
@@ -2466,12 +2584,12 @@ impl<'s> Step<'_, 's> {
             LineDecision::More => {
                 thread.sub = Sub::Fence { end, suffix, kind };
                 thread.pos += 1;
-                self.queue(thread, stack)
+                self.queue(thread, stack, out)
             }
             LineDecision::End => self.finish_fence(thread, thread.pos + 1, stack, out, governor),
             LineDecision::Invalid if kind == FenceKind::Body => {
                 thread.sub = Sub::Body(super::automaton::ROOT, None);
-                self.queue(thread, stack)
+                self.queue(thread, stack, out)
             }
             LineDecision::Invalid => {
                 let at = thread.entry;
@@ -2536,7 +2654,7 @@ impl<'s> Step<'_, 's> {
                 thread.sub = Sub::Lit(0);
                 thread.entry = resume;
                 thread.pos = resume;
-                self.queue(thread, stack)
+                self.queue(thread, stack, out)
             }
             _ => unreachable!("validated protocol fence terminal"),
         }
@@ -2551,6 +2669,7 @@ impl<'s> Step<'_, 's> {
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        thread.ownership = 2;
         if let Inst::Lit { lit, .. } = self.program.insts[thread.pc as usize]
             && self
                 .program
@@ -2563,7 +2682,7 @@ impl<'s> Step<'_, 's> {
                 kind: FenceKind::Literal,
             };
             thread.pos = at;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         if !thread.opened && !self.program.deferred() && self.program.openers.contains(&thread.pc) {
             thread.opened = true;
@@ -2586,6 +2705,32 @@ impl<'s> Step<'_, 's> {
         self.closure(thread, next, at, stack, out, governor)
     }
 
+    /// Classify a closure terminal without extending the finite opener phase.
+    fn opener_ownership(
+        &self,
+        ownership: u8,
+        pc: u32,
+        governor: &mut Governor,
+    ) -> Result<u8, StopReason> {
+        if ownership & 1 == 0 {
+            return Ok(2);
+        }
+        governor.charge(Resource::Work, 1)?;
+        // epsilon_closure prepares sorted, unique PCs. Admit only the probes
+        // needed to classify this new terminal, once at its closure boundary.
+        let (mut low, mut high) = (0, self.program.openers.len());
+        while low < high {
+            governor.charge(Resource::Work, 1)?;
+            let middle = low + (high - low) / 2;
+            match self.program.openers[middle].cmp(&pc) {
+                core::cmp::Ordering::Less => low = middle + 1,
+                core::cmp::Ordering::Greater => high = middle,
+                core::cmp::Ordering::Equal => return Ok(ownership),
+            }
+        }
+        Ok(2)
+    }
+
     /// Follow every input-free transition from `pc` at offset `at`.
     pub(crate) fn closure(
         &mut self,
@@ -2597,33 +2742,21 @@ impl<'s> Step<'_, 's> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         self.seed_closure(pc, thread);
-        while let Some((pc, hist, cost, mut header_end)) = self.pending.pop() {
+        while let Some((pc, hist, cost, header_end)) = self.pending.pop() {
             let (word, bit) = (pc as usize / 64, 1_u64 << (pc % 64));
             if self.visited[word] & bit != 0 {
                 continue;
             }
             self.visited[word] |= bit;
             governor.charge(Resource::Work, K_THREAD)?;
-            let sub = match self.program.insts[pc as usize] {
+            let (sub, ownership) = match self.program.insts[pc as usize] {
                 Inst::Split(first, second) => {
                     self.pending.push((second, hist, cost, header_end));
                     self.pending.push((first, hist, cost, header_end));
                     continue;
                 }
                 Inst::Open { kind, next } => {
-                    if matches!(
-                        kind,
-                        CaptureKind::Name
-                            | CaptureKind::Id
-                            | CaptureKind::ParamName
-                            | CaptureKind::Arguments
-                    ) {
-                        // This is the native raw OPEN, before any codec parsing,
-                        // trimming, repair, string decoding or capture completion.
-                        header_end = header_end.min(at);
-                    }
-                    let node = self.arena.push(hist, HistKind::Open(kind, at))?;
-                    self.pending.push((next, node, cost, header_end));
+                    self.open_capture(at, (kind, next, hist, cost, header_end))?;
                     continue;
                 }
                 Inst::Close { kind, next } => {
@@ -2653,6 +2786,7 @@ impl<'s> Step<'_, 's> {
                 // reject never reads it.
                 Inst::Accept => {
                     out.completed.push(Thread {
+                        ownership: 2,
                         pc,
                         hist,
                         header_end,
@@ -2662,9 +2796,14 @@ impl<'s> Step<'_, 's> {
                     })?;
                     continue;
                 }
-                Inst::Lit { .. } => Sub::Lit(0),
-                Inst::Class { class, .. } => Sub::Class(self.class_dfa(class, governor)?.start()),
-                Inst::Until { .. } => Sub::Body(super::automaton::ROOT, None),
+                Inst::Lit { .. } => (
+                    Sub::Lit(0),
+                    self.opener_ownership(thread.ownership, pc, governor)?,
+                ),
+                Inst::Class { class, .. } => {
+                    (Sub::Class(self.class_dfa(class, governor)?.start()), 2)
+                }
+                Inst::Until { .. } => (Sub::Body(super::automaton::ROOT, None), 2),
                 Inst::Slot { codec, .. } => {
                     if !self.weak_name_evidence(hist, thread.start, at, None, governor)? {
                         continue;
@@ -2673,10 +2812,9 @@ impl<'s> Step<'_, 's> {
                     let Some(added) = self.settle_pending(thread.pending, governor)? else {
                         continue;
                     };
-                    let slot = self
-                        .arena
-                        .begin_codec(codec.begin(at, governor)?, governor)?;
+                    let slot = self.arena.begin_codec(codec, at, governor)?;
                     let next = Thread {
+                        ownership: 2,
                         pc,
                         sub: Sub::Body(super::automaton::ROOT, Some(slot)),
                         entry: at,
@@ -2687,11 +2825,12 @@ impl<'s> Step<'_, 's> {
                         pending: 0,
                         ..thread
                     };
-                    self.queue(next, stack)?;
+                    self.queue(next, stack, out)?;
                     continue;
                 }
             };
             let next = Thread {
+                ownership,
                 pc,
                 sub,
                 entry: at,
@@ -2701,8 +2840,27 @@ impl<'s> Step<'_, 's> {
                 cost,
                 ..thread
             };
-            self.queue(next, stack)?;
+            self.queue(next, stack, out)?;
         }
+        Ok(())
+    }
+
+    /// Record a raw capture opening and retain its earliest native header edge.
+    fn open_capture(
+        &mut self,
+        at: usize,
+        (kind, next, hist, cost, mut header_end): (CaptureKind, u32, u32, u64, usize),
+    ) -> Result<(), StopReason> {
+        if matches!(
+            kind,
+            CaptureKind::Name | CaptureKind::Id | CaptureKind::ParamName | CaptureKind::Arguments
+        ) {
+            // This is the native raw OPEN, before any codec parsing,
+            // trimming, repair, string decoding or capture completion.
+            header_end = header_end.min(at);
+        }
+        let node = self.arena.push(hist, HistKind::Open(kind, at))?;
+        self.pending.push((next, node, cost, header_end));
         Ok(())
     }
 
@@ -2873,10 +3031,10 @@ impl<'s> Step<'_, 's> {
         let whole = complete.or_else(|| {
             self.arena.codecs[slot as usize]
                 .as_ref()
-                .and_then(CodecState::complete_end)
+                .and_then(codec_owner::OwnedCodec::complete_end)
         });
         if let Some(end) = whole
-            && super::repair::completes(self.program, next, governor)?
+            && self.program.completes(next, governor)?
         {
             self.end_body(
                 thread,
@@ -4457,6 +4615,8 @@ pub(crate) fn merge_noting(
         (first.key(), first.rank(), first.hist) != (second.key(), second.rank(), second.hist) || {
             first.stall = 0;
             second.stall = 0;
+            first.ownership = 0;
+            second.ownership = 0;
             first == second
         }
     }));
@@ -4469,6 +4629,7 @@ pub(crate) fn merge_noting(
                 winner.hist = arena.pack(winner.hist, current.hist)?;
                 winner.header_end = winner.header_end.min(current.header_end);
                 winner.stall = winner.stall.min(current.stall);
+                winner.ownership |= current.ownership;
             }
             continue;
         }
@@ -4632,6 +4793,24 @@ impl ScratchCharge for Boundary {
 }
 
 impl Event {
+    /// Routing-only reports do not retain candidate bytes by themselves.
+    pub(crate) fn candidate_start(&self) -> Option<usize> {
+        match self {
+            Self::Completed { parts, .. } => parts.parts.first().map(|(part, _)| match part {
+                Part::Call(call) => call.span.start,
+                Part::Rejected { span, .. } => span.start,
+            }),
+            Self::Ended {
+                start,
+                completed: false,
+                outread,
+                salvage,
+                ..
+            } if !outread || salvage.is_some() => Some(*start),
+            Self::Opened { .. } | Self::Ended { .. } => None,
+        }
+    }
+
     pub(crate) const fn at(&self) -> usize {
         match self {
             Self::Opened { at, .. } | Self::Completed { at, .. } | Self::Ended { at, .. } => *at,
@@ -4639,13 +4818,48 @@ impl Event {
     }
 }
 
+type OwnershipFloors = (Option<usize>, Option<usize>);
+const _: () = assert!(core::mem::size_of::<OwnershipFloors>() <= 32);
+const _: () = assert!(core::mem::size_of::<(OwnershipFloors, usize, Option<usize>)>() <= 56);
+const _: () = assert!(
+    core::mem::size_of::<(
+        Option<OwnershipFloors>,
+        bool,
+        bool,
+        // Exact unchanged-input certificate and revalidated table witness.
+        DeferredRelease,
+        Option<usize>,
+        Option<bool>,
+        &'static mut Option<bool>,
+        ScratchLease,
+        usize,
+        usize,
+        Option<usize>,
+        Option<usize>,
+        // Ordinary scheduling's temporary direct-publication cutoff.
+        Option<usize>,
+    )>() <= 160
+);
+
+fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
+    if thread.ownership & 1 != 0 {
+        floors.0 = Some(floors.0.map_or(thread.start, |old| old.min(thread.start)));
+    }
+    if thread.ownership & 2 != 0 {
+        floors.1 = Some(floors.1.map_or(thread.start, |old| old.min(thread.start)));
+    }
+}
+
 struct Table<'s> {
+    thread_ownership: OwnershipFloors,
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
-    /// A `ClassRun` may hold logical pos/reach; consume it before position reads.
+    /// A `RunProof` may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
     attempts: ScratchVec<Attempt>,
+    /// Exact count of attempt records whose opening has not been reported.
+    unopened: usize,
     trails: Vec<Trail>,
     /// Completions of a grouped program's live attempts (see
     /// `Program::grouped`), released when the attempt ends.
@@ -4655,6 +4869,8 @@ struct Table<'s> {
     /// first: when the attempt ends, the newest whose value is read is
     /// reported (see `Engine::release_past`).
     past: Vec<Thread>,
+    /// Minimum source start of every retained past completion, or None if empty.
+    past_floor: Option<usize>,
     /// The completions as written reported for live attempts: attempt, end
     /// and cost. A held completion beside another reading of the same span
     /// that already costs more (its value not read yet: reading it only
@@ -4674,6 +4890,57 @@ struct Table<'s> {
     /// For a grouped program, the last call boundary of each attempt that
     /// got stuck after one (see [`Salvaged`]).
     boundaries: ScratchVec<Boundary>,
+}
+
+impl Table<'_> {
+    /// Partition retained completions and publish the surviving minimum together.
+    fn partition_past(
+        &mut self,
+        attempt: u64,
+        governor: &mut Governor,
+    ) -> Result<Vec<Thread>, StopReason> {
+        // Admit the partition and surviving minimum before taking ownership.
+        governor.charge(Resource::Work, size(self.past.len()).saturating_mul(4))?;
+        let mut floor = None;
+        let (mine, rest): (Vec<Thread>, Vec<Thread>) = core::mem::take(&mut self.past)
+            .into_iter()
+            .partition(|thread| {
+                if thread.attempt == attempt {
+                    true
+                } else {
+                    floor = Some(floor.map_or(thread.start, |old: usize| old.min(thread.start)));
+                    false
+                }
+            });
+        self.past = rest;
+        self.past_floor = floor;
+        governor.release_scratch(
+            size(mine.len()).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+        )?;
+        Ok(mine)
+    }
+
+    /// Retain source order and prepare the surviving minimum in the same pass.
+    fn abandon_past(&mut self, attempt: u64, governor: &mut Governor) -> Result<(), StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.past.len()).saturating_mul(3).saturating_add(1),
+        )?;
+        let before = self.past.len();
+        let mut floor = None;
+        self.past.retain(|thread| {
+            if thread.attempt == attempt {
+                false
+            } else {
+                floor = Some(floor.map_or(thread.start, |old: usize| old.min(thread.start)));
+                true
+            }
+        });
+        self.past_floor = floor;
+        governor.release_scratch(
+            size(before - self.past.len()).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+        )
+    }
 }
 
 /// The scratch one held failure is charged: the failure itself
@@ -4968,7 +5235,7 @@ impl HeldBody {
 struct Trail {
     /// The completed configuration; `pos` is the call's current end.
     thread: Thread,
-    /// The stray-closer trie node of the spelling being matched.
+    /// Stray-closer trie node before `scan`, wrapper-tail matcher state afterward.
     node: u32,
     /// The next byte to examine.
     at: usize,
@@ -5030,12 +5297,42 @@ impl ScratchCharge for Option<ClassStep> {
     };
 }
 
+/// Fixed direct-mapped rows retain full state and byte tags. A collision only
+/// replaces a successful entry; the next different query uses the native DFA.
+const CLASS_STEP_BUCKETS: usize = 64;
+type ClassSteps = Option<ScratchVec<Option<ClassStep>>>;
+
+impl ScratchCharge for ClassSteps {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 64);
+        64
+    };
+}
+
+const CLASS_STEP_CONSTRUCTION_BYTES: u64 = 1024;
+const _: () = assert!(
+    core::mem::size_of::<(
+        ClassSteps,
+        ScratchVec<Option<ClassStep>>,
+        DerivativeDfa<'static>,
+        Result<DerivativeDfa<'static>, StopReason>,
+        ScratchLease,
+        u32,
+        usize,
+    )>() as u64
+        <= CLASS_STEP_CONSTRUCTION_BYTES
+);
+
+fn class_step_slot(byte: u8) -> usize {
+    usize::from(byte) & (CLASS_STEP_BUCKETS - 1)
+}
+
 struct GrammarRuntime<'s> {
     grammar: &'s CompiledGrammar,
     dialect: DialectId,
     dfas: Vec<Option<DerivativeDfa<'s>>>,
     /// Every reserved cache slot, including empty/spare slots, stays admitted.
-    class_steps: ScratchVec<Option<ClassStep>>,
+    class_steps: ScratchVec<ClassSteps>,
 }
 
 impl ScratchCharge for GrammarRuntime<'_> {
@@ -5045,14 +5342,28 @@ impl ScratchCharge for GrammarRuntime<'_> {
     };
 }
 
+/// Whether the immutable live-source origins have a complete cached minimum.
+#[derive(Clone, Copy)]
+enum ContinuationFloor {
+    Invalid,
+    Ready(Option<usize>),
+}
+
+/// Whether deferred release inputs changed since the last completed census.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeferredRelease {
+    Changed,
+    Unchanged,
+}
+
 /// The segment-candidate layer over every table of a dialect set.
 pub(crate) struct Engine<'s> {
     tables: Vec<Table<'s>>,
     failure_headers: ScratchMap<u64, failure_header::State>,
     /// Fixed admitted proof slots, retained even while every slot is empty.
-    class_runs: ScratchVec<Option<class_run::ClassRun>>,
+    byte_runs: ScratchVec<Option<byte_run::RunProof>>,
     /// Empty occupancy skips invalidation probes and whole-slot reset sweeps.
-    class_run_count: usize,
+    byte_run_count: usize,
     grammars: ScratchVec<GrammarRuntime<'s>>,
     buffer: ScratchVec<u8>,
     base: usize,
@@ -5081,6 +5392,16 @@ pub(crate) struct Engine<'s> {
     spawned: Vec<(u64, usize)>,
     /// Ended reports held by [`Self::defer`], with their attempts' start.
     deferred: Vec<(usize, Event)>,
+    /// No deferred reader, report or whole-start input changed since release.
+    deferred_release: DeferredRelease,
+    /// Cached minimum of immutable attempt and deferred-report origins. Every
+    /// insertion or removal invalidates it before changing those collections.
+    continuation_floor: ContinuationFloor,
+    ownership: Option<OwnershipFloors>,
+    /// Revalidated against the current completed-byte thread minimum on use.
+    candidate_floor_table: Option<usize>,
+    ownership_active: bool,
+    _ownership_metadata: ScratchLease,
     /// The openers where an attempt read a whole call, while a held report
     /// or a live attempt at them remains (see [`Self::defer`]).
     whole: Vec<usize>,
@@ -5113,15 +5434,123 @@ const DEFERRED_REPORT_BYTES: u64 = {
 };
 
 impl<'s> Engine<'s> {
+    /// Current retained configurations and payloads, independently of opened metadata.
+    pub(crate) fn ownership_floors(
+        &mut self,
+        governor: &mut Governor,
+    ) -> Result<(Option<usize>, Option<usize>), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if let Some(owned) = self.ownership {
+            return Ok(owned);
+        }
+        let (mut lexical, mut candidate) = (None, None);
+        let include = |floor: &mut Option<usize>, start| {
+            *floor = Some(floor.map_or(start, |old| old.min(start)));
+        };
+        for (index, table) in self.tables.iter_mut().enumerate() {
+            governor.charge(Resource::Work, 1)?;
+            if !self.ownership_active {
+                let mut owned = (None, None);
+                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                for thread in &table.threads {
+                    note_ownership(&mut owned, thread);
+                }
+                table.thread_ownership = owned;
+            }
+            if let Some(start) = table.thread_ownership.0 {
+                include(&mut lexical, start);
+            }
+            if let Some(start) = table.thread_ownership.1 {
+                include(&mut candidate, start);
+                governor.charge(Resource::Work, 1)?;
+                if matches!(self.continuation_floor, ContinuationFloor::Ready(Some(origin)) if origin == start)
+                {
+                    self.candidate_floor_table = Some(index);
+                }
+            }
+            for trail in &table.trails {
+                governor.charge(Resource::Work, 1)?;
+                include(&mut candidate, trail.thread.start);
+            }
+            if let Some(start) = table.past_floor {
+                governor.charge(Resource::Work, 1)?;
+                include(&mut candidate, start);
+            }
+            for &attempt in table.held.by_attempt.keys() {
+                governor.charge(Resource::Work, size(table.attempts.len()).saturating_add(1))?;
+                let record = table
+                    .attempts
+                    .iter()
+                    .find(|row| row.id == attempt)
+                    .ok_or_else(|| invalid_input("held candidate has no native attempt"))?;
+                include(&mut candidate, record.start);
+            }
+        }
+        for (_, event) in &self.deferred {
+            governor.charge(Resource::Work, 1)?;
+            if let Some(start) = event.candidate_start() {
+                include(&mut candidate, start);
+            }
+        }
+        self.ownership_active = true;
+        self.ownership = Some((lexical, candidate));
+        Ok((lexical, candidate))
+    }
+
+    /// A current thread at the ready continuation origin proves the native
+    /// candidate floor; every native lexical floor is at least that origin.
+    /// This witness stores no result and cannot replace the full census.
+    pub(crate) fn source_candidate_floor(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<Option<usize>, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let (Some(index), ContinuationFloor::Ready(Some(origin))) =
+            (self.candidate_floor_table, &self.continuation_floor)
+        else {
+            return Ok(None);
+        };
+        governor.charge(Resource::Work, 1)?;
+        let table = self
+            .tables
+            .get(index)
+            .ok_or_else(|| invalid_input("candidate floor witness has no table"))?;
+        Ok((table.thread_ownership.1 == Some(*origin)).then_some(*origin))
+    }
+
+    /// Whether the interpretation's ownership projection has been prepared.
+    pub(crate) const fn tracks_ownership(&self) -> bool {
+        self.ownership_active
+    }
+
+    /// Admit table ownership fields and count-update controls before allocation.
+    fn table_metadata(
+        dialect_count: usize,
+        governor: &mut Governor,
+    ) -> Result<(usize, ScratchLease), StopReason> {
+        governor.charge(Resource::Work, 4)?;
+        let table_count = dialect_count
+            .checked_mul(2)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let ownership_bytes = size(table_count)
+            .checked_mul(56)
+            .and_then(|bytes| bytes.checked_add(160))
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
+        governor.charge(Resource::Work, size(table_count))?;
+        Ok((table_count, ownership_metadata))
+    }
+
     pub(crate) fn new(
         dialects: &'s [DialectId],
         tools: Option<&'s ToolSet>,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         governor.check()?;
+        let (table_count, ownership_metadata) = Self::table_metadata(dialects.len(), governor)?;
         let mut grammars = ScratchVec::new(governor);
         grammars.reserve(dialects.len())?;
-        let mut tables = Vec::with_capacity(dialects.len() * 2);
+        let mut tables = Vec::with_capacity(table_count);
         let mut protocol_fences = false;
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
@@ -5130,7 +5559,7 @@ impl<'s> Engine<'s> {
             let mut class_steps = ScratchVec::new(governor);
             governor.charge(Resource::Work, size(grammar.classes.len()))?;
             class_steps.reserve(grammar.classes.len())?;
-            class_steps.extend(core::iter::repeat_n(None, grammar.classes.len()))?;
+            class_steps.extend((0..grammar.classes.len()).map(|_| None))?;
             crate::contract::push_scratch(
                 &mut grammars,
                 GrammarRuntime {
@@ -5146,14 +5575,17 @@ impl<'s> Engine<'s> {
                 .zip(&grammar.programs)
             {
                 tables.push(Table {
+                    thread_ownership: (None, None),
                     grammar: index,
                     kind,
                     program,
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
+                    unopened: 0,
                     trails: Vec::new(),
                     held: HeldSet::default(),
                     past: Vec::new(),
+                    past_floor: None,
                     written: Vec::new(),
                     stalled: ScratchVec::new(governor),
                     failures: HeldFailures::new(governor),
@@ -5161,12 +5593,12 @@ impl<'s> Engine<'s> {
                 });
             }
         }
-        let class_runs = class_run::slots(tables.len(), governor)?;
+        let byte_runs = byte_run::slots(tables.len(), governor)?;
         Ok(Self {
             tables,
             failure_headers: ScratchMap::new(governor),
-            class_runs,
-            class_run_count: 0,
+            byte_runs,
+            byte_run_count: 0,
             grammars,
             protocol_fences,
             buffer: ScratchVec::new(governor),
@@ -5184,6 +5616,12 @@ impl<'s> Engine<'s> {
             quoted_openers: Vec::new(),
             spawned: Vec::new(),
             deferred: Vec::new(),
+            deferred_release: DeferredRelease::Changed,
+            continuation_floor: ContinuationFloor::Invalid,
+            ownership: None,
+            candidate_floor_table: None,
+            ownership_active: false,
+            _ownership_metadata: ownership_metadata,
             whole: Vec::new(),
             tools,
             events: Vec::new(),
@@ -5193,6 +5631,33 @@ impl<'s> Engine<'s> {
     /// The number of bytes consumed.
     pub(crate) const fn fed(&self) -> usize {
         self.fed
+    }
+
+    /// Earliest source origin any live engine continuation can still own.
+    /// Attempts retain their record while live threads, held completions or
+    /// trails need it; deferred end reports retain their own origin afterward.
+    pub(crate) fn continuation_floor(
+        &mut self,
+        governor: &mut Governor,
+    ) -> Result<Option<usize>, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if let ContinuationFloor::Ready(earliest) = self.continuation_floor {
+            return Ok(earliest);
+        }
+        let mut earliest = None;
+        for table in &self.tables {
+            governor.charge(Resource::Work, size(table.attempts.len()))?;
+            for attempt in &table.attempts {
+                earliest =
+                    Some(earliest.map_or(attempt.start, |known: usize| known.min(attempt.start)));
+            }
+        }
+        governor.charge(Resource::Work, size(self.deferred.len()))?;
+        for (start, _) in &self.deferred {
+            earliest = Some(earliest.map_or(*start, |known| known.min(*start)));
+        }
+        self.continuation_floor = ContinuationFloor::Ready(earliest);
+        Ok(earliest)
     }
 
     pub(crate) fn dialect(&self, table: u32) -> &DialectId {
@@ -5214,7 +5679,7 @@ impl<'s> Engine<'s> {
         table: usize,
         governor: &mut Governor,
     ) -> Result<(Step<'_, 's>, &mut ScratchVec<Thread>, &mut Out), StopReason> {
-        self.invalidate_class_run(table, governor)?;
+        self.invalidate_byte_run(table, governor)?;
         let stall_cap = self.stall_cap(table);
         let runtime = &mut self.grammars.as_mut_slice()[self.tables[table].grammar];
         let table = &mut self.tables[table];
@@ -5236,6 +5701,7 @@ impl<'s> Engine<'s> {
                 resynced: &mut self.resynced,
                 quoted_openers: &mut self.quoted_openers,
                 attempts: table.attempts.as_slice(),
+                ready_limit: None,
             },
             &mut self.stack,
             &mut self.out,
@@ -5250,8 +5716,9 @@ impl<'s> Engine<'s> {
         }
         self.buffer.push(byte)?;
         self.fed += 1;
+        let mut repeated = None;
         for table in 0..self.tables.len() {
-            self.step_table(table, byte, at, governor)?;
+            self.step_table(table, byte, at, &mut repeated, governor)?;
         }
         self.line_blank = match byte {
             b'\r' | b'\n' => true,
@@ -5310,6 +5777,7 @@ impl<'s> Engine<'s> {
         table: usize,
         byte: u8,
         at: usize,
+        repeated: &mut Option<bool>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let program = self.tables[table].program;
@@ -5330,28 +5798,17 @@ impl<'s> Engine<'s> {
         {
             // Invalidate before either admission path changes the attempt or
             // appends threads: a new attempt never inherits a settled proof.
-            if class_run::eligible(&self.tables[table]) {
-                class_run::invalidate(
-                    &mut self.class_runs,
-                    &mut self.class_run_count,
+            if byte_run::eligible(&self.tables[table]) {
+                byte_run::invalidate(
+                    &mut self.byte_runs,
+                    &mut self.byte_run_count,
                     table,
                     &mut self.tables[table].threads,
+                    Some(at),
                     governor,
                 )?;
             }
-            let id = self.next_attempt;
-            self.next_attempt += 1;
-            self.tables[table].attempts.push(Attempt {
-                id,
-                start: at,
-                opened: false,
-                completed: false,
-                failure: None,
-                end: None,
-                failure_end: FailureEnd::Stop,
-                stuck: false,
-                closed: None,
-            })?;
+            let id = self.start_attempt(table, at, governor)?;
             let thread = Thread {
                 pc: program.start,
                 sub: Sub::Lit(0),
@@ -5362,6 +5819,7 @@ impl<'s> Engine<'s> {
                 cost: 0,
                 hist: ROOT,
                 opened: false,
+                ownership: 1,
                 stall: 0,
                 reach: at,
                 past: false,
@@ -5390,10 +5848,10 @@ impl<'s> Engine<'s> {
         {
             return Ok(());
         }
-        // The existing idle return stays ahead of cache work. Immutable
-        // dispatch excludes result, non-anchored and unproved grouped tables.
-        let class_candidate = class_run::eligible(&self.tables[table]);
-        if class_candidate && self.reuse_class_run(table, byte, at, governor)? {
+        // The existing idle return stays ahead of proof work. Qualified
+        // classes and native bodies share the same cursor materialization.
+        let run_candidate = byte_run::eligible(&self.tables[table]);
+        if run_candidate && self.reuse_byte_run(table, byte, at, governor)? {
             return Ok(());
         }
         // A miss consumed its cursor before this pre-split thread movement.
@@ -5409,10 +5867,58 @@ impl<'s> Engine<'s> {
         if let Some(thread) = spawned {
             step.closure(thread, thread.pc, at, stack, out, governor)?;
         }
-        step.advance(stack, at + 1, false, out, governor)?;
+        step.advance_settled(stack, at + 1, out, governor)?;
         self.settle(table, at, None, governor)?;
-        if class_candidate {
-            self.remember_class_run(table, byte, at + 1, governor)?;
+        if run_candidate && self.byte_run_may_repeat(byte, repeated, governor)? {
+            self.remember_byte_run(table, byte, at + 1, governor)?;
+        }
+        Ok(())
+    }
+
+    /// Publish the record and its unopened count as one admitted mutation.
+    fn start_attempt(
+        &mut self,
+        table: usize,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<u64, StopReason> {
+        let id = self.next_attempt;
+        self.next_attempt += 1;
+        self.note_attempt_start(table, at, governor)?;
+        governor.charge(Resource::Work, 3)?;
+        let unopened = self.tables[table]
+            .unopened
+            .checked_add(1)
+            .ok_or_else(|| invalid_input("unopened attempt count overflows"))?;
+        self.tables[table].attempts.push(Attempt {
+            id,
+            start: at,
+            opened: false,
+            completed: false,
+            failure: None,
+            end: None,
+            failure_end: FailureEnd::Stop,
+            stuck: false,
+            closed: None,
+        })?;
+        self.tables[table].unopened = unopened;
+        Ok(id)
+    }
+
+    /// Invalidate source/phase summaries before inserting a new lexical seed.
+    fn note_attempt_start(
+        &mut self,
+        table: usize,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.continuation_floor = ContinuationFloor::Invalid;
+        self.ownership = None;
+        if self.ownership_active {
+            // No ownership reader runs inside a table step; its first merge
+            // publishes exact floors before the completed byte is exposed.
+            governor.charge(Resource::Work, 1)?;
+            self.tables[table].thread_ownership.0 = Some(at);
         }
         Ok(())
     }
@@ -5428,9 +5934,18 @@ impl<'s> Engine<'s> {
     ) -> Result<(), StopReason> {
         self.advance_trails(table, self.fed, eof.is_some(), governor)?;
         let mut live = core::mem::replace(&mut self.out.live, ScratchVec::new(governor));
-        merge(&mut live, &mut self.arena, governor)?;
+        self.merge_live(table, &mut live, governor)?;
         let mut completed = core::mem::replace(&mut self.out.completed, ScratchVec::new(governor));
         let mut failed = core::mem::replace(&mut self.out.failed, ScratchVec::new(governor));
+        let program = self.tables[table].program;
+        if eof.is_none()
+            && program.grouped
+            && !program.deferred()
+            && self.settle_resync(table, &live, &completed, &failed, governor)?
+        {
+            self.tables[table].threads = live;
+            return Ok(());
+        }
         self.stall(table, &mut failed, governor)?;
         // A literal that failed while a sibling configuration of its
         // attempt, begun at the same place or earlier, lived on (the
@@ -5499,6 +6014,14 @@ impl<'s> Engine<'s> {
                 .copied()
                 .chain(held)
                 .collect();
+            if !program.grouped {
+                governor.charge(Resource::Work, 1)?;
+                if failures.is_empty() {
+                    // There is no seed to resolve a Link, and a native
+                    // non-grouped program has no resynchronization boundary.
+                    continue;
+                }
+            }
             let pending_header =
                 self.note_failure(table, record.id, &failures, eof.is_none(), governor)?;
             self.note_boundary(table, record.id, &failures, governor)?;
@@ -5524,9 +6047,93 @@ impl<'s> Engine<'s> {
         // Without intervening changes or stalled repairs, the first merge
         // and commit already settled these exact configurations.
         if dirty || !self.tables[table].stalled.is_empty() {
-            dirty |= self.merge_settled(table, at, eof, &mut live, &mut completed, governor)?;
+            dirty |=
+                self.merge_settled(table, at, (eof, dirty), &mut live, &mut completed, governor)?;
         }
-        self.unstick(table, &live, governor)?;
+        self.finish_settlement(table, at, (eof, dirty), &mut live, &mut completed, governor)?;
+        self.tables[table].threads = live;
+        Ok(())
+    }
+
+    /// Merge live winners and publish the ownership census from that same pass.
+    fn merge_live(
+        &mut self,
+        table: usize,
+        live: &mut ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if self.ownership_active {
+            let candidate_only = if live.is_empty() {
+                false
+            } else {
+                governor.charge(Resource::Work, 1)?;
+                self.tables[table].thread_ownership.0.is_none()
+            };
+            if candidate_only
+                && live.len() >= 3
+                && let (None, Some(start)) = self.tables[table].thread_ownership
+                && let [owner] = self.tables[table].attempts.as_slice()
+                && owner.start == start
+            {
+                // All previous survivors were candidate-only. Ordinary
+                // transitions preserve that fact, and new lexical seeds
+                // invalidate it above. Held failures may restore lexical
+                // states later, so this proof applies only to this merge.
+                const OWNER_BYTES: usize = 48;
+                const _: () = assert!(
+                    core::mem::size_of::<(u64, usize, ScratchLease, Option<usize>)>()
+                        <= OWNER_BYTES
+                );
+                let _owner = governor.lease_scratch(size(OWNER_BYTES))?;
+                governor.charge(Resource::Work, 2)?;
+                let id = owner.id;
+                if live[0].attempt != id || live[0].start != start {
+                    return Err(invalid_input(
+                        "candidate-only cohort differs from its sole attempt",
+                    ));
+                }
+                merge(live, &mut self.arena, governor)?;
+                self.publish_thread_ownership(table, (None, (!live.is_empty()).then_some(start)));
+                return Ok(());
+            }
+            let mut owned = (None, None);
+            if candidate_only {
+                // The ordinary transition cannot restore a lexical bit. A
+                // new seed invalidates this proof before reaching this merge.
+                governor.charge(Resource::Work, size(live.len()))?;
+                merge_noting(live, &mut self.arena, governor, |thread| {
+                    if thread.ownership & 2 != 0 {
+                        owned.1 = Some(
+                            owned
+                                .1
+                                .map_or(thread.start, |old: usize| old.min(thread.start)),
+                        );
+                    }
+                })?;
+            } else {
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                merge_noting(live, &mut self.arena, governor, |thread| {
+                    note_ownership(&mut owned, thread);
+                })?;
+            }
+            self.publish_thread_ownership(table, owned);
+        } else {
+            merge(live, &mut self.arena, governor)?;
+        }
+        Ok(())
+    }
+
+    /// Finish native settlement after the repair and merge passes.
+    fn finish_settlement(
+        &mut self,
+        table: usize,
+        at: usize,
+        (eof, dirty): (Option<&GenerationStop>, bool),
+        live: &mut ScratchVec<Thread>,
+        completed: &mut ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.unstick(table, live, governor)?;
         // A repair may carry an attempt past its commit, and a completion
         // always commits its attempt.
         if dirty && self.tables[table].program.deferred() {
@@ -5537,12 +6144,109 @@ impl<'s> Engine<'s> {
             )?;
             let opened = self.open(table, governor)?;
             let keep = self.last_written(table, opened, governor)?;
-            Self::stop_past(&mut live, opened, &keep, governor)?;
+            Self::stop_past(live, opened, &keep, governor)?;
+            if opened.is_some() && self.ownership_active {
+                let mut owned = (None, None);
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                for thread in live.as_slice() {
+                    note_ownership(&mut owned, thread);
+                }
+                self.publish_thread_ownership(table, owned);
+            }
         }
-        self.complete(table, &mut completed, eof, governor)?;
-        self.retire(table, &live, at, eof, governor)?;
-        self.tables[table].threads = live;
-        Ok(())
+        self.complete(table, completed, eof, governor)?;
+        self.retire(table, live, at, eof, governor)
+    }
+
+    /// A merged resynchronization cohort with no remaining settlement effects.
+    fn settle_resync(
+        &mut self,
+        table: usize,
+        live: &ScratchVec<Thread>,
+        completed: &ScratchVec<Thread>,
+        failed: &ScratchVec<Failure>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        // Admit dynamic selection, even when an ordinary body rejects it.
+        governor.charge(Resource::Work, 1)?;
+        if !self.ownership_active || live.len() < 3 || !matches!(live[0].sub, Sub::Resync(..)) {
+            return Ok(false);
+        }
+        let first = live[0];
+        // Bounded attempt/boundary and current output/side-owner metadata.
+        governor.charge(Resource::Work, 1)?;
+        let entry = first.entry;
+        let rejected = Some(Rejection::Malformed { at: entry });
+        let source = &self.tables[table];
+        let ([record], [boundary]) = (source.attempts.as_slice(), source.boundaries.as_slice())
+        else {
+            return Ok(false);
+        };
+        let (attempt, start) = (first.attempt, first.start);
+        if record.id != attempt
+            || record.start != start
+            || !record.opened
+            || record.completed
+            || record.closed.is_some()
+            || record.stuck
+            || record.failure_end != FailureEnd::Resynced
+            || record.failure != rejected
+            || record.end != Some(entry)
+            || boundary.attempt != record.id
+            || boundary.at != record.start
+            || boundary.failed != entry
+            || boundary.entry != entry
+            || Some(boundary.reason) != rejected
+            || !completed.is_empty()
+            || !failed.is_empty()
+            || !self.out.opened.is_empty()
+            || !source.trails.is_empty()
+            || !source.held.by_attempt.is_empty()
+            || source.held.floor.is_some()
+            || !source.past.is_empty()
+            || !source.written.is_empty()
+            || !source.stalled.is_empty()
+            || !source.failures.groups.is_empty()
+        {
+            return Ok(false);
+        }
+        // No skipped outcome or newer opener can affect the suffix.
+        governor.charge(Resource::Work, 1)?;
+        if !self.resynced.is_empty() || self.newest_open > entry {
+            return Ok(false);
+        }
+        let fed = self.fed;
+        for thread in live {
+            governor.charge(Resource::Work, 1)?;
+            if thread.attempt != attempt
+                || thread.start != start
+                || thread.entry != entry
+                || !matches!(thread.sub, Sub::Resync(..))
+                || !thread.opened
+                || thread.ownership != 2
+                || thread.past
+                || thread.pending != 0
+                || thread.pos != fed
+                || thread.reach != thread.pos
+                || thread.stall != 0
+            {
+                return Ok(false);
+            }
+        }
+        // The first merge already sorted/deduplicated these actual winners.
+        // Empty repair/completion inputs cannot change them before the second
+        // merge, and every candidate has the same verified source origin.
+        governor.charge(Resource::Work, 1)?;
+        self.publish_thread_ownership(table, (None, Some(start)));
+        Ok(true)
+    }
+
+    /// Publish a table's exact phase minima, preserving global cache validity.
+    fn publish_thread_ownership(&mut self, table: usize, owned: OwnershipFloors) {
+        if self.tables[table].thread_ownership != owned {
+            self.ownership = None;
+            self.tables[table].thread_ownership = owned;
+        }
     }
 
     /// Merge `live`, then repair the stalled failures its merge shows are
@@ -5552,21 +6256,51 @@ impl<'s> Engine<'s> {
         &mut self,
         table: usize,
         at: usize,
-        eof: Option<&GenerationStop>,
+        (eof, dirty): (Option<&GenerationStop>, bool),
         live: &mut ScratchVec<Thread>,
         completed: &mut ScratchVec<Thread>,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
         // The attempts whose body reads on past closers, noted in the merge.
         let mut reading: Vec<u64> = Vec::new();
-        merge_noting(live, &mut self.arena, governor, |thread| {
-            if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
-                reading.push(thread.attempt);
+        let mut owned = (None, None);
+        let tracking = self.ownership_active;
+        if dirty {
+            if tracking {
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
             }
-        })?;
+            merge_noting(live, &mut self.arena, governor, |thread| {
+                if tracking {
+                    note_ownership(&mut owned, thread);
+                }
+                if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
+                    reading.push(thread.attempt);
+                }
+            })?;
+        } else {
+            // The first merge's winners and ownership census remain exact.
+            // Retain the same ordered IDs, including repeated attempt IDs.
+            governor.charge(Resource::Work, size(live.len()).saturating_mul(3))?;
+            for thread in live.as_slice() {
+                if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
+                    reading.push(thread.attempt);
+                }
+            }
+        }
         let repaired = self.repair_stalled(table, at, eof, &reading, live, completed, governor)?;
         if repaired {
-            merge(live, &mut self.arena, governor)?;
+            if tracking {
+                owned = (None, None);
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                merge_noting(live, &mut self.arena, governor, |thread| {
+                    note_ownership(&mut owned, thread);
+                })?;
+            } else {
+                merge(live, &mut self.arena, governor)?;
+            }
+        }
+        if tracking && (dirty || repaired) {
+            self.publish_thread_ownership(table, owned);
         }
         Ok(repaired)
     }
@@ -5842,6 +6576,10 @@ impl<'s> Engine<'s> {
         if !program.deferred() {
             return Ok(());
         }
+        governor.charge(Resource::Work, 1)?;
+        if self.tables[table].unopened == 0 {
+            return Ok(());
+        }
         for thread in threads {
             governor.charge(Resource::Work, K_THREAD)?;
             // An opened attempt never emits another opening report. In
@@ -5905,11 +6643,19 @@ impl<'s> Engine<'s> {
             self.grammars[self.tables[table].grammar].dialect == DialectId::MistralV3;
         let mut latest = None;
         for (attempt, position) in opened {
-            let attempts = self.tables[table].attempts.as_mut_slice();
+            let current = &mut self.tables[table];
+            let attempts = current.attempts.as_mut_slice();
             if let Some(record) = attempts.iter_mut().find(|record| record.id == attempt)
                 && !record.opened
             {
+                governor.charge(Resource::Work, 5)?;
+                let unopened = current
+                    .unopened
+                    .checked_sub(1)
+                    .ok_or_else(|| invalid_input("opening has no unopened attempt owner"))?;
                 record.opened = true;
+                self.deferred_release = DeferredRelease::Changed;
+                current.unopened = unopened;
                 self.newest_open = self.newest_open.max(record.start);
                 latest = latest.max(Some(record.start));
                 governor.charge(Resource::Work, size(self.out.headers.len()))?;
@@ -6264,6 +7010,45 @@ impl<'s> Engine<'s> {
         {
             stuck.failure_end = FailureEnd::Resynced;
         }
+        let (hist, cost) = self.resync_history(&boundary, first, governor)?;
+        for pc in targets {
+            // resync_targets admits only call-closer literals and literal
+            // openers after Next; every target is therefore a literal.
+            let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
+                unreachable!("resynchronization targets are literal locations");
+            };
+            let mut scan = JsonScan::unpack(state);
+            if grammar.literals[lit as usize].bytes.len() > 1 {
+                scan.depth = 0;
+            }
+            live.push(Thread {
+                pc,
+                sub: Sub::Resync(scan.pack(), 0),
+                attempt: record.id,
+                start: record.start,
+                entry: boundary.failed,
+                pos: until,
+                cost,
+                hist,
+                opened: true,
+                ownership: 2,
+                stall: 0,
+                reach: until,
+                past: false,
+                pending: 0,
+                header_end: usize::MAX,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Record the rejected boundary and the actual group-split provenance.
+    fn resync_history(
+        &mut self,
+        boundary: &Boundary,
+        first: bool,
+        governor: &mut Governor,
+    ) -> Result<(u32, u64), StopReason> {
         // The calls before the failing one were read whole: the last of them
         // records the split (`tool_call.markup.group-split`), as when the
         // attempt ends there. A failing first call has none before it: the
@@ -6294,34 +7079,7 @@ impl<'s> Engine<'s> {
             .cost
             .saturating_add(split)
             .saturating_add(super::cost::REJECT);
-        for pc in targets {
-            // resync_targets admits only call-closer literals and literal
-            // openers after Next; every target is therefore a literal.
-            let Inst::Lit { lit, .. } = program.insts[pc as usize] else {
-                unreachable!("resynchronization targets are literal locations");
-            };
-            let mut scan = JsonScan::unpack(state);
-            if grammar.literals[lit as usize].bytes.len() > 1 {
-                scan.depth = 0;
-            }
-            live.push(Thread {
-                pc,
-                sub: Sub::Resync(scan.pack(), 0),
-                attempt: record.id,
-                start: record.start,
-                entry: boundary.failed,
-                pos: until,
-                cost,
-                hist,
-                opened: true,
-                stall: 0,
-                reach: until,
-                past: false,
-                pending: 0,
-                header_end: usize::MAX,
-            })?;
-        }
-        Ok(())
+        Ok((hist, cost))
     }
 
     /// The scanner state a resynchronization of the call at `boundary`
@@ -6429,9 +7187,23 @@ impl<'s> Engine<'s> {
             open_end: boundary.at,
             cost: boundary.cost,
         };
-        let before = governor.scratch_meter().total_charged();
-        let Ok(mut segmentations) = step.segment(boundary.hist, &shape, governor)? else {
-            return Ok(None);
+        let before = governor.scratch_meter().live();
+        let segmentations = step.segment(boundary.hist, &shape, governor);
+        let charged = governor
+            .scratch_meter()
+            .live()
+            .checked_sub(before)
+            .ok_or_else(|| invalid_input("salvage released pre-existing scratch ownership"))?;
+        let mut segmentations = match segmentations {
+            Ok(Ok(parts)) => parts,
+            Ok(Err(_)) => {
+                governor.release_scratch(charged)?;
+                return Ok(None);
+            }
+            Err(reason) => {
+                let cleanup = governor.release_scratch(charged).map(|()| None);
+                return Err::<(), _>(reason).and(cleanup);
+            }
         };
         let rule = EditOperator::GroupSplit.rule();
         for parts in &mut segmentations {
@@ -6451,10 +7223,6 @@ impl<'s> Engine<'s> {
                 }
             }
         }
-        let charged = governor
-            .scratch_meter()
-            .total_charged()
-            .saturating_sub(before);
         let charged = if segmentations.len() == 1 { charged } else { 0 };
         let mut certified = ScratchVec::new(governor);
         for parts in segmentations {
@@ -6586,9 +7354,20 @@ impl<'s> Engine<'s> {
                 self.take_boundary(table, record.id);
                 self.forget_failure_header(record.id, governor)?;
             }
+            self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
+            governor.charge(Resource::Work, 3)?;
+            let unopened = self.tables[table]
+                .unopened
+                .checked_sub(usize::from(!record.opened))
+                .ok_or_else(|| invalid_input("retirement lost its unopened attempt owner"))?;
+            if record.opened && !record.completed {
+                self.note_deferred_reader_removal(record.start, governor)?;
+            }
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
+            self.tables[table].unopened = unopened;
             retired = true;
         }
         // Only an attempt that ended can release a held report.
@@ -6619,8 +7398,23 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if whole && !self.whole.contains(&record.start) {
-            governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+            if let Err(reason) = governor
+                .charge(Resource::Work, 1)
+                .and_then(|()| governor.charge(Resource::ScratchBytes, DEFERRED_BYTES))
+            {
+                let charged = match &ended {
+                    Event::Ended {
+                        salvage: Some(value),
+                        ..
+                    } => value.charged,
+                    _ => 0,
+                };
+                drop(ended);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
             self.whole.push(record.start);
+            self.deferred_release = DeferredRelease::Changed;
         }
         let reads_on =
             !whole
@@ -6631,8 +7425,12 @@ impl<'s> Engine<'s> {
                         })
                 });
         if reads_on {
+            governor.charge(Resource::Work, 1)?;
             governor.charge(Resource::ScratchBytes, DEFERRED_REPORT_BYTES)?;
+            self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
             self.deferred.push((record.start, ended));
+            self.deferred_release = DeferredRelease::Changed;
         } else {
             // Another attempt at the opener may have read a whole call and
             // ended first (this one read on, resynchronizing): the same
@@ -6646,10 +7444,30 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    /// Removing a reader at another start cannot change any held predicate.
+    fn note_deferred_reader_removal(
+        &mut self,
+        start: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if self.deferred_release == DeferredRelease::Unchanged {
+            governor.charge(Resource::Work, size(self.deferred.len() + self.whole.len()))?;
+            if self.whole.contains(&start) || self.deferred.iter().any(|(held, _)| *held == start) {
+                self.deferred_release = DeferredRelease::Changed;
+            }
+        }
+        Ok(())
+    }
+
     /// Report every held end (see [`Self::defer`]) whose opener no attempt
     /// reads on from any more.
     fn release_deferred(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         if self.deferred.is_empty() && self.whole.is_empty() {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, 1)?;
+        if self.deferred_release == DeferredRelease::Unchanged {
             return Ok(());
         }
         governor.charge(
@@ -6672,6 +7490,8 @@ impl<'s> Engine<'s> {
                 index += 1;
                 continue;
             }
+            self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
             let (_, mut ended) = self.deferred.remove(index);
             if let Event::Ended { outread, .. } = &mut ended {
                 *outread = self.whole.contains(&start);
@@ -6684,7 +7504,9 @@ impl<'s> Engine<'s> {
         self.whole.retain(|&start| {
             reading(tables, start) || deferred.iter().any(|(held, _)| *held == start)
         });
-        governor.release_scratch(size(before - self.whole.len()).saturating_mul(DEFERRED_BYTES))
+        governor.release_scratch(size(before - self.whole.len()).saturating_mul(DEFERRED_BYTES))?;
+        self.deferred_release = DeferredRelease::Unchanged;
+        Ok(())
     }
 
     /// Report the held completions of `attempt`, a grouped program's, that
@@ -6709,6 +7531,7 @@ impl<'s> Engine<'s> {
         if mine.as_slice().is_empty() {
             return Ok(());
         }
+        self.ownership = None;
         let mut tables: Vec<Option<Vec<u64>>> = Vec::new();
         let mut table_bytes = 0_u64;
         let mut vectors = None;
@@ -7016,6 +7839,7 @@ impl<'s> Engine<'s> {
                 {
                     record.closed = Some(group.pos);
                 }
+                self.ownership = None;
                 self.tables[table].trails.push(Trail {
                     thread: group,
                     node: ROOT,
@@ -7048,6 +7872,7 @@ impl<'s> Engine<'s> {
                 if self.ended_by_insertion(&trail.thread, governor)? {
                     trail.scan = Some(Scan { text: None });
                     trail.at = trail.thread.pos;
+                    trail.node = ROOT;
                 }
             }
             if trail.scan.is_some() {
@@ -7062,11 +7887,13 @@ impl<'s> Engine<'s> {
                 Verdict::Report => {}
                 Verdict::Guess => self.guess_insertion(&mut trail.thread, governor)?,
                 Verdict::Reject => {
+                    self.ownership = None;
                     self.tables[table].trails.remove(index);
                     self.drop_completion(table, &trail);
                     continue;
                 }
             }
+            self.ownership = None;
             self.tables[table].trails.remove(index);
             self.emit(table, trail.thread, false, governor)?;
         }
@@ -7183,8 +8010,8 @@ impl<'s> Engine<'s> {
     /// Until then the completion is held, and with it its attempt (so the
     /// capture window keeps its bytes, charged as scratch) and every turn
     /// report after the call's end ([`Self::held_floor`]): the decision
-    /// never depends on how the output is chunked. Each byte read charges
-    /// `Work` per literal compared.
+    /// never depends on how the output is chunked. Each byte admits one
+    /// native wrapper-tail matcher step before reading or advancing it.
     fn scan_trail(
         &self,
         table: usize,
@@ -7194,41 +8021,26 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<Verdict, StopReason> {
         let grammar = self.grammars[self.tables[table].grammar].grammar;
-        let program = self.tables[table].program;
-        let openers: Vec<&[u8]> = program
-            .openers
-            .iter()
-            .filter_map(|&pc| match program.insts[pc as usize] {
-                Inst::Lit { lit, .. } => Some(grammar.literals[lit as usize].bytes.as_slice()),
-                _ => None,
-            })
-            .collect();
-        let closers: Vec<&[u8]> = grammar
-            .closers
-            .iter()
-            .flat_map(|class| {
-                class
-                    .spellings
-                    .iter()
-                    .map(crate::contract::ScratchVec::as_slice)
-            })
-            .collect();
-        // A reasoning block's opening marker: the block's bytes belong to
-        // the block, never to the wrapper (see `Recognizer::ended`).
-        let markers: Vec<&[u8]> = grammar
-            .reasoning
-            .iter()
-            .map(|(open, _)| open.as_slice())
-            .collect();
-        let compared = size(openers.len() + closers.len() + markers.len()).saturating_mul(K_THREAD);
+        let scanner = &grammar.trail_matcher;
+        let view = match self.tables[table].kind {
+            ProductionKind::Call => 0,
+            ProductionKind::Result => 1,
+        };
         let Some(mut scan) = trail.scan else {
             return Ok(Verdict::Report);
         };
+        let matcher = scanner
+            .matcher
+            .as_ref()
+            .ok_or_else(|| invalid_input("inserted-wrapper scan has no prepared matcher"))?;
         while trail.at < until {
-            governor.charge(Resource::Work, compared)?;
+            governor.charge(Resource::Work, K_THREAD)?;
             let at = trail.at;
             let byte = self.buffer.as_slice()[at - self.base];
             trail.at += 1;
+            // Suffix bytes still belong to the scanned input even when the
+            // protocol-line state suppresses a token decision on this byte.
+            trail.node = matcher.step(trail.node, byte);
             if let Some((token_end, mut suffix)) = trail.fence {
                 match suffix.step(byte) {
                     LineDecision::More => {
@@ -7245,26 +8057,19 @@ impl<'s> Engine<'s> {
             if scan.text.is_none() && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
                 scan.text = Some(at);
             }
-            let read = &self.buffer.as_slice()[trail.thread.pos - self.base..trail.at - self.base];
-            if let Some(opener) = openers
-                .iter()
-                .chain(&markers)
-                .find(|opener| read.ends_with(opener))
-            {
-                // Another call, or a reasoning block, after the call: the
-                // inserted closer is the only reading when only whitespace
-                // came between, and text before it is a guess as before.
-                let start = trail.at - opener.len();
-                return Ok(scan.before(start, Verdict::Guess));
-            }
-            if let Some(closer) = closers.iter().find(|closer| read.ends_with(closer)) {
+            if let Some((index, length)) = matcher.found(trail.node, view) {
+                let start = trail.at - length as usize;
+                if index < scanner.positives[view] {
+                    // Another call or a local reasoning opener takes native
+                    // priority over every closer ending on this same byte.
+                    return Ok(scan.before(start, Verdict::Guess));
+                }
                 if self.protocol_trail_spelling(table, trail.at) {
                     trail.fence = Some((trail.at, LineSuffix::Horizontal));
                     continue;
                 }
                 // A closer after only whitespace is the wrapper's own,
                 // beyond the stray-closer gap: the call as it was read.
-                let start = trail.at - closer.len();
                 return Ok(scan.before(start, Verdict::Reject));
             }
         }
@@ -7438,11 +8243,20 @@ impl<'s> Engine<'s> {
             // A reading beside another (its value holds closer text): held
             // until its attempt ends, when only the newest is reported (the
             // call ends at the last closer that completes it).
+            governor.charge(Resource::Work, 4)?;
             governor.charge(
                 Resource::ScratchBytes,
                 size(<Thread as ScratchCharge>::CHARGE),
             )?;
-            self.tables[table].past.push(thread);
+            self.ownership = None;
+            let current = &mut self.tables[table];
+            let floor = Some(
+                current
+                    .past_floor
+                    .map_or(thread.start, |old| old.min(thread.start)),
+            );
+            current.past.push(thread);
+            current.past_floor = floor;
             return Ok(());
         }
         self.report(table, thread, dangling, governor)
@@ -7471,25 +8285,16 @@ impl<'s> Engine<'s> {
         {
             return Ok(());
         }
-        let (mine, rest): (Vec<Thread>, Vec<Thread>) =
-            core::mem::take(&mut self.tables[table].past)
-                .into_iter()
-                .partition(|thread| thread.attempt == attempt);
+        self.ownership = None;
+        let mut mine = self.tables[table].partition_past(attempt, governor)?;
         // The partition reads every held completion; each of
         // the attempt's is compared with its completions as written.
         governor.charge(
             Resource::Work,
-            size(mine.len() + rest.len()).saturating_add(
-                size(mine.len()).saturating_mul(size(self.tables[table].written.len()).max(1)),
-            ),
-        )?;
-        self.tables[table].past = rest;
-        governor.release_scratch(
-            size(mine.len()).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
+            size(mine.len()).saturating_mul(size(self.tables[table].written.len()).max(1)),
         )?;
         // The latest end first; within one end, the least cost before the
         // value is read first (reading a value only adds cost).
-        let mut mine = mine;
         mine.sort_by_key(|thread| (Reverse(thread.pos), thread.cost));
         let mut index = 0;
         while index < mine.len() {
@@ -7570,6 +8375,12 @@ impl<'s> Engine<'s> {
         chained: Result<Chained, Rejection>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if let Err(reason) = governor.charge(Resource::Work, 1) {
+            if let Ok(chained) = chained {
+                let _ = HeldBody::Chain(chained).discard(governor);
+            }
+            return Err(reason);
+        }
         if chained.is_ok()
             && let Err(reason) = self.forget_failure_header(thread.attempt, governor)
         {
@@ -7592,6 +8403,7 @@ impl<'s> Engine<'s> {
             }
         };
         record.completed = true;
+        self.deferred_release = DeferredRelease::Changed;
         let start = record.start;
         chained.table = index_u32(table);
         chained.attempt = thread.attempt;
@@ -7604,6 +8416,7 @@ impl<'s> Engine<'s> {
         governor.charge(Resource::Work, super::cost::K_EVENT)?;
         let calls = self.arena.depth_of(&chained) + 1;
         let total = self.arena.total(&chained);
+        self.ownership = None;
         self.tables[table].held.push(Held {
             attempt: thread.attempt,
             at: thread.pos,
@@ -7655,6 +8468,7 @@ impl<'s> Engine<'s> {
                 ),
                 _ => (Vec::new(), false),
             };
+            self.ownership = None;
             self.tables[table].held.push(Held {
                 attempt,
                 at: event.at(),
@@ -7676,6 +8490,7 @@ impl<'s> Engine<'s> {
         dangling: bool,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
         if !thread.beside() && !self.tables[table].program.grouped {
             governor.charge(Resource::ScratchBytes, WRITTEN_BYTES)?;
             self.tables[table]
@@ -7717,14 +8532,24 @@ impl<'s> Engine<'s> {
             return self.hold_chained(table, &thread, dangling, chained, governor);
         }
         let (step, _, _) = self.split(table, governor)?;
-        let before = governor.scratch_meter().total_charged();
-        let segmentations = step.segment(thread.hist, &shape, governor)?;
-        // Materializing charges only retained scratch (no lease), so the
-        // growth of the cumulative total is what the parts hold.
+        let before = governor.scratch_meter().live();
+        let segmentations = step.segment(thread.hist, &shape, governor);
+        // Only outstanding materialization charges transfer to the parts;
+        // joint-capture preparation has already dropped its temporary owners.
         let charged = governor
             .scratch_meter()
-            .total_charged()
-            .saturating_sub(before);
+            .live()
+            .checked_sub(before)
+            .ok_or_else(|| {
+                invalid_input("segment materialization released pre-existing scratch ownership")
+            })?;
+        let segmentations = match segmentations {
+            Ok(value) => value,
+            Err(reason) => {
+                let cleanup = governor.release_scratch(charged);
+                return Err::<(), _>(reason).and(cleanup);
+            }
+        };
         if segmentations.is_ok()
             && let Err(reason) = self.forget_failure_header(thread.attempt, governor)
         {
@@ -7740,30 +8565,68 @@ impl<'s> Engine<'s> {
         match segmentations {
             Ok(segmentations) => {
                 record.completed = true;
-                // It ends whole: a held report at its opener is outread now,
-                // and no longer waits for it (see `Self::defer`).
-                if !self.whole.contains(&record.start) {
-                    governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
-                    self.whole.push(record.start);
-                }
-                let grouped = self.tables[table].program.grouped;
-                let charged = if segmentations.len() == 1 { charged } else { 0 };
-                for parts in segmentations {
-                    governor.charge(Resource::Work, super::cost::K_EVENT)?;
-                    let parts = self.certify_completion(parts, charged, governor)?;
-                    let event = Event::Completed {
-                        table: index_u32(table),
-                        attempt: thread.attempt,
-                        at: thread.pos,
-                        parts,
-                        charged,
-                    };
-                    self.emit_completed(table, event, thread.attempt, dangling, grouped);
-                }
+                self.deferred_release = DeferredRelease::Changed;
+                let start = record.start;
+                self.report_parts(
+                    table,
+                    (thread, dangling),
+                    start,
+                    segmentations,
+                    charged,
+                    governor,
+                )?;
             }
             Err(reason) => {
+                governor.release_scratch(charged)?;
                 record.failure.get_or_insert(reason);
             }
+        }
+        Ok(())
+    }
+
+    /// Transfer materialized parts to report owners, cleaning unqueued refusals.
+    fn report_parts(
+        &mut self,
+        table: usize,
+        (thread, dangling): (Thread, bool),
+        start: usize,
+        segmentations: Vec<Parts>,
+        charged: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        // It ends whole: a held report at its opener is outread now,
+        // and no longer waits for it (see `Self::defer`).
+        if !self.whole.contains(&start) {
+            if let Err(reason) = governor
+                .charge(Resource::Work, 1)
+                .and_then(|()| governor.charge(Resource::ScratchBytes, DEFERRED_BYTES))
+            {
+                drop(segmentations);
+                let cleanup = governor.release_scratch(charged);
+                return Err::<(), _>(reason).and(cleanup);
+            }
+            self.whole.push(start);
+            self.deferred_release = DeferredRelease::Changed;
+        }
+        let grouped = self.tables[table].program.grouped;
+        let charged = if segmentations.len() == 1 { charged } else { 0 };
+        let mut segmentations = segmentations.into_iter();
+        while let Some(parts) = segmentations.next() {
+            if let Err(reason) = governor.charge(Resource::Work, super::cost::K_EVENT) {
+                drop(parts);
+                drop(segmentations);
+                let cleanup = governor.release_scratch(charged);
+                return Err::<(), _>(reason).and(cleanup);
+            }
+            let parts = self.certify_completion(parts, charged, governor)?;
+            let event = Event::Completed {
+                table: index_u32(table),
+                attempt: thread.attempt,
+                at: thread.pos,
+                parts,
+                charged,
+            };
+            self.emit_completed(table, event, thread.attempt, dangling, grouped);
         }
         Ok(())
     }
@@ -7831,7 +8694,7 @@ impl<'s> Engine<'s> {
             })
             .min();
         let Some(earliest) = earliest else {
-            self.clear_class_runs(governor)?;
+            self.clear_byte_runs(governor)?;
             self.arena.reset(governor)?;
             self.buffer.clear();
             self.base = self.fed;
@@ -7860,9 +8723,17 @@ impl<'s> Engine<'s> {
         start: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        self.clear_class_runs(governor)?;
+        self.ownership = None;
+        self.clear_byte_runs(governor)?;
         for table in &mut self.tables {
             Self::stop_past(&mut table.threads, Some(start), &[], governor)?;
+            if self.ownership_active {
+                table.thread_ownership = (None, None);
+                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                for thread in &table.threads {
+                    note_ownership(&mut table.thread_ownership, thread);
+                }
+            }
         }
         Ok(())
     }
@@ -7891,15 +8762,36 @@ impl<'s> Engine<'s> {
                 entries.pop();
             }
         }
+        self.continuation_floor = ContinuationFloor::Invalid;
+        self.ownership = None;
         self.forget_failure_header(attempt, governor)?;
-        self.clear_class_runs(governor)?;
+        self.clear_byte_runs(governor)?;
+        governor.charge(Resource::Work, 1)?;
+        self.deferred_release = DeferredRelease::Changed;
         for table in &mut self.tables {
             governor.charge(
                 Resource::Work,
                 size(table.threads.len() + table.attempts.len() + table.trails.len()),
             )?;
             keep(&mut table.threads, |thread| thread.attempt != attempt);
+            if self.ownership_active {
+                table.thread_ownership = (None, None);
+                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                for thread in &table.threads {
+                    note_ownership(&mut table.thread_ownership, thread);
+                }
+            }
+            governor.charge(Resource::Work, size(table.attempts.len()).saturating_add(4))?;
+            let removed_unopened = table
+                .attempts
+                .iter()
+                .any(|record| record.id == attempt && !record.opened);
+            let unopened = table
+                .unopened
+                .checked_sub(usize::from(removed_unopened))
+                .ok_or_else(|| invalid_input("abandonment lost its unopened attempt owner"))?;
             keep(&mut table.attempts, |record| record.id != attempt);
+            table.unopened = unopened;
             governor.charge(
                 Resource::Work,
                 size(table.failures.count(attempt)).saturating_add(1),
@@ -7917,15 +8809,7 @@ impl<'s> Engine<'s> {
                 }
             }
             governor.release_scratch(freed)?;
-            let dropped = table
-                .past
-                .iter()
-                .filter(|thread| thread.attempt == attempt)
-                .count();
-            table.past.retain(|thread| thread.attempt != attempt);
-            governor.release_scratch(
-                size(dropped).saturating_mul(size(<Thread as ScratchCharge>::CHARGE)),
-            )?;
+            table.abandon_past(attempt, governor)?;
             let written = table.written.len();
             table.written.retain(|&(owner, _, _)| owner != attempt);
             governor.release_scratch(
@@ -7942,7 +8826,7 @@ impl<'s> Engine<'s> {
         generation: &GenerationStop,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        self.clear_class_runs(governor)?;
+        self.clear_byte_runs(governor)?;
         let end = self.fed;
         for table in 0..self.tables.len() {
             if self.tables[table].threads.is_empty() && self.tables[table].attempts.is_empty() {
@@ -7967,7 +8851,13 @@ impl<'s> Engine<'s> {
                 self.settle(table, end, Some(generation), governor)?;
             }
             self.tables[table].threads.clear();
+            self.tables[table].thread_ownership = (None, None);
+            self.continuation_floor = ContinuationFloor::Invalid;
+            self.ownership = None;
+            governor.charge(Resource::Work, 2)?;
             self.tables[table].attempts.clear();
+            self.deferred_release = DeferredRelease::Changed;
+            self.tables[table].unopened = 0;
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();
             let written = core::mem::take(&mut self.tables[table].written);
@@ -8012,7 +8902,7 @@ impl<'s> Engine<'s> {
     /// least-cost configurations, except that a call whose arguments value
     /// was complete at the cut completes.
     fn cut(&mut self, table: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        self.invalidate_class_run(table, governor)?;
+        self.invalidate_byte_run(table, governor)?;
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         let threads: Vec<Thread> = self.tables[table].threads.as_slice().to_vec();
         let grouped = self.tables[table].program.grouped;
@@ -8088,8 +8978,10 @@ impl<'s> Engine<'s> {
                 // A completed or cut-off reading read a whole call: a
                 // rejection held at its opener is outread (see `defer`).
                 if live.completed && !self.whole.contains(&record.start) {
+                    governor.charge(Resource::Work, 1)?;
                     governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
                     self.whole.push(record.start);
+                    self.deferred_release = DeferredRelease::Changed;
                 }
                 self.events.push(Event::Ended {
                     table: index_u32(table),
@@ -8153,6 +9045,7 @@ mod tests {
                 cost: 0,
                 hist: 0,
                 opened: false,
+                ownership: 1,
                 stall: 0,
                 reach: 0,
                 past: false,

@@ -1165,6 +1165,7 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
         // writes too) counts only as structure the attempt framed itself:
         // its markup ends by closing every bracket it opened (see
         // `structural_end`).
+        let pythonic = dialect == &DialectId::Pythonic;
         let closed = grammar
             .call_ends()
             .iter()
@@ -1174,7 +1175,7 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
                 if closer.len() > 1 {
                     trimmed.ends_with(closer)
                 } else {
-                    structural_end(&output[chain..end], failed - chain, &nested)
+                    structural_end(&output[chain..end], failed - chain, &nested, pythonic)
                 }
             });
         let completed = grammar.call_literals().iter().any(|spelling| {
@@ -1249,9 +1250,10 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
                 || cut
                 || invalid
                 || truncated,
-            "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}",
+            "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}; dialect={dialect:?}; reason={:?}; input={output:?}",
             rejected.span,
-            String::from_utf8_lossy(&output[failed..end])
+            String::from_utf8_lossy(&output[failed..end]),
+            rejected.reason
         );
     }
 }
@@ -1440,9 +1442,10 @@ fn prose(bytes: &[u8], from: usize, nested: &[Range<usize>]) -> bool {
     false
 }
 
-/// Whether `raw` ends with JSON structure its grammar read (outside
-/// strings): after trailing whitespace, a separator `,` and closing
-/// brackets that close what `raw` did not open (an enclosing list), its
+/// Whether `raw` ends with bracket structure its grammar read (outside
+/// JSON strings, or Python strings for the Pythonic dialect): after trailing
+/// whitespace, a separator `,` and closing brackets that close what `raw` did
+/// not open (an enclosing list), its
 /// last byte is a `}` or `]` closing a bracket of its kind (brackets pair
 /// by kind) that opened before `failed`
 /// (an offset into `raw`, where the grammar stopped reading), or after it
@@ -1450,27 +1453,22 @@ fn prose(bytes: &[u8], from: usize, nested: &[Range<usize>]) -> bool {
 /// after the failure (`oops. Sorry ... {a, b}`) frames nothing the
 /// attempt read. `nested` (offsets into `raw`) are the calls and attempts
 /// the markup covers, never prose (see `prose`).
-fn structural_end(raw: &[u8], failed: usize, nested: &[Range<usize>]) -> bool {
-    let (mut quoted, mut escaped) = (false, false);
+fn structural_end(raw: &[u8], failed: usize, nested: &[Range<usize>], pythonic: bool) -> bool {
     let mut open: Vec<(usize, u8)> = Vec::new();
     // For each byte, the offset of the bracket it closes (outside strings):
     // the nearest open bracket of its kind (closing any opened inside it),
     // or none `raw` opened (`Some(None)`) when no bracket of its kind is
     // open, so a stray `}` never stands for the `]` of a list.
     let mut closes: Vec<Option<Option<usize>>> = Vec::with_capacity(raw.len());
-    for (offset, &byte) in raw.iter().enumerate() {
-        if quoted {
-            match byte {
-                _ if escaped => escaped = false,
-                b'\\' => escaped = true,
-                b'"' => quoted = false,
-                _ => {}
-            }
-            closes.push(None);
+    let mut offset = 0;
+    while offset < raw.len() {
+        if let Some(end) = quoted_end(raw, offset, pythonic) {
+            closes.resize(end, None);
+            offset = end;
             continue;
         }
+        let byte = raw[offset];
         match byte {
-            b'"' => quoted = true,
             b'{' | b'[' => open.push((offset, byte)),
             b'}' | b']' => {
                 let kind = if byte == b'}' { b'{' } else { b'[' };
@@ -1483,11 +1481,13 @@ fn structural_end(raw: &[u8], failed: usize, nested: &[Range<usize>]) -> bool {
                         opened
                     });
                 closes.push(Some(pair));
+                offset += 1;
                 continue;
             }
             _ => {}
         }
         closes.push(None);
+        offset += 1;
     }
     let mut at = raw.len();
     while at > 0 {
@@ -1509,6 +1509,34 @@ fn structural_end(raw: &[u8], failed: usize, nested: &[Range<usize>]) -> bool {
     at > 0
         && matches!(closes[at - 1], Some(Some(opened))
             if opened < failed || !prose(&raw[..at], failed.min(at), &inside))
+}
+
+/// Skip a lexical string without validating the malformed argument prefix.
+/// Python permits both quote bytes and triple delimiters; every other dialect
+/// retains the JSON double-quote walk. An escape shields the following byte,
+/// and an unfinished string shields the remaining bytes through EOF.
+fn quoted_end(raw: &[u8], start: usize, pythonic: bool) -> Option<usize> {
+    let quote = raw[start];
+    if quote != b'"' && !(pythonic && quote == b'\'') {
+        return None;
+    }
+    let delimiter = [quote; 3];
+    let width = if pythonic && raw[start..].starts_with(&delimiter) {
+        3
+    } else {
+        1
+    };
+    let mut at = start + width;
+    while at < raw.len() {
+        if raw[at] == b'\\' {
+            at = at.saturating_add(2).min(raw.len());
+        } else if raw[at..].starts_with(&delimiter[..width]) {
+            return Some(at + width);
+        } else {
+            at += 1;
+        }
+    }
+    Some(raw.len())
 }
 
 /// Whether `raw` ends with `closer` written with one slip (see `slipped`).
@@ -1939,6 +1967,71 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F4 follows Python string boundaries before pairing a rejected list's
+    /// closer, while JSON readings and independent prose keep their guards.
+    #[test]
+    fn pythonic_rejected_extension_preserves_quote_context() {
+        let output = b"[get_weather(city='Oslo'), read_file(path=notes.txt', limit=10)]notes.txt', limit=10)]notes.txt', limit=10)]";
+        let prefix = &output[..86];
+        assert!(!structural_end(prefix, 84, &[], false));
+        assert!(structural_end(prefix, 84, &[], true));
+        for literal in [
+            b"']'".as_slice(),
+            b"\"]\"",
+            b"''']'''",
+            b"\"\"\"]\"\"\"",
+            b"'\\']'",
+            b"'''\\''']'''",
+        ] {
+            let framed = [b"[".as_slice(), literal, b"]"].concat();
+            assert!(structural_end(&framed, 1, &[], true), "{literal:?}");
+        }
+        for unfinished in [b"['unterminated]".as_slice(), b"['trailing\\]"] {
+            assert!(!structural_end(unfinished, 1, &[], true));
+        }
+        let overrun = [prefix, b" Independent prose. {a, b}"].concat();
+        assert!(!structural_end(&overrun, 84, &[], true));
+
+        let tools = fixed_tools();
+        // These explicit request controls are synthetic; the captured output
+        // does not include the original fuzz driver's control bytes.
+        let request = request(0, 2, None, output);
+        let result = tools.recover(output, &request, DialectSet::built_in());
+        let readings = match &result.outcome {
+            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => std::slice::from_ref(calls),
+            Outcome::Ambiguous(readings) => readings.as_slice(),
+            Outcome::Unresolved => panic!("the captured Pythonic list retains a reading"),
+        };
+        let read = read_spans(&tools, output, &request);
+        assert!(read.iter().any(|(span, dialect)| {
+            span.start == 27 && span.end >= 84 && dialect == &DialectId::Pythonic
+        }));
+        for calls in readings {
+            let first = calls.calls.first().expect("the genuine first call");
+            assert_eq!(first.span, 0..27);
+            assert_eq!(first.dialect, DialectId::Pythonic);
+            assert_eq!(first.tool.as_deref(), Some("get_weather"));
+            assert_eq!(chain_start(calls, &DialectId::Pythonic, 27), 0);
+            let rejected = calls
+                .rejected
+                .iter()
+                .find(|part| {
+                    part.span.start == 27 && part.dialect.as_ref() == Some(&DialectId::Pythonic)
+                })
+                .expect("the malformed second Pythonic call");
+            assert_eq!(rejected.span, 27..86);
+            assert_eq!(rejected.reason, Rejection::Malformed { at: 84 });
+            assert_eq!(rejected.raw.as_slice(), &output[27..86]);
+            assert!(
+                calls
+                    .content
+                    .iter()
+                    .any(|span| span.start <= 86 && span.end == output.len())
+            );
+            check_rejected_extension(output, calls, &read);
+        }
+    }
 
     /// A closer discovered after reasoning owns its following malformed body.
     #[test]

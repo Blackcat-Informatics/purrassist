@@ -81,11 +81,12 @@ use super::ir::{
     ArgOrigin, ArgTree, ArgumentFault, CallSegment, Choice, Closure, Piece, ProductionKind,
     RawCall, ReasoningClosure, ReasoningSegment, Rejection, Segment, Spanned,
 };
+use super::source_min;
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
     Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchLease,
-    ScratchMap, ScratchMeter, ScratchVec, SourceSpan, StopReason,
+    ScratchMap, ScratchMeter, ScratchVec, SourceSpan, StopReason, invalid_input,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
@@ -95,6 +96,7 @@ use crate::grammar::engine::{
     CompletedParts, Engine, Event, FailureWitness, HeaderSpan, Opening, Part, PartEnvelope,
     Salvaged, SourceEnvelope, retained_context,
 };
+use crate::json::same_source_text;
 use crate::provenance::{Derivation, Forest, NodeId, permute};
 use core::fmt;
 use core::fmt::Write as _;
@@ -188,6 +190,69 @@ struct TurnNode {
     prev: u32,
     end: usize,
     kind: TurnKind,
+    /// Last structurally unambiguous prefix, before any packed alternatives.
+    plain: u32,
+    /// Depth and skip ancestor in the unambiguous-prefix tree.
+    depth: u32,
+    jump: u32,
+    payload: Option<usize>,
+    jump_payload: Option<usize>,
+    packed: Option<usize>,
+    tail_payload: Option<usize>,
+}
+
+impl ScratchCharge for TurnNode {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 112);
+        112
+    };
+}
+
+const TURN_NODE_METADATA_BYTES: usize = 48;
+const _: () = assert!(
+    core::mem::size_of::<(ScratchVec<TurnNode>, ScratchMap<u64, usize>, ScratchLease)>()
+        <= core::mem::size_of::<(Vec<TurnNode>, BTreeMap<u64, usize>)>() + TURN_NODE_METADATA_BYTES
+);
+
+/// A conservative native continuation boundary, not a resolved stream event.
+/// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
+/// proving semantic equivalence and the longest stable prefix remains separate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ContinuationFrontier {
+    pub(super) prefix_end: usize,
+    pub(super) content: Option<(usize, usize)>,
+    /// Conservative ownership barrier, not the D7 candidate-byte count.
+    pub(super) blocked_from: Option<usize>,
+}
+
+/// A zero-origin candidate absorbs every other source-ownership minimum.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ByteOwnership {
+    WholeCandidate,
+    Floors(Option<usize>, Option<usize>),
+}
+
+/// Exact inputs of the last successful native projection. Any processed
+/// report invalidates this memo before changing the turn state it summarizes.
+#[derive(Clone, Copy, Debug)]
+struct FrontierMemo {
+    engine_floor: Option<usize>,
+    report_floor: Option<usize>,
+    barrier: Option<usize>,
+    limit: usize,
+    /// None only while source zero pins the projection independently of markers.
+    /// Ownership computes the current marker floor if it actually needs it.
+    lexical: Option<usize>,
+}
+
+/// One next node of the structurally shared native history. Source content has
+/// no stored segment; its original range still advances the same cursor once.
+#[derive(Debug)]
+pub(super) struct SettledStep<'a> {
+    pub(super) history: u32,
+    pub(super) end: usize,
+    pub(super) segment: Option<&'a Segment>,
+    pub(super) content: Option<Range<usize>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -311,12 +376,17 @@ impl LastKill {
         }
     }
 
-    const fn at(self, start: usize) -> Option<Interp> {
-        let (at, top) = match self {
+    /// Retain the cached interpretation's origin alongside its source boundary.
+    const fn source(self) -> (usize, Interp) {
+        match self {
             Self::Top(at, base) => (at, Interp::Top(base)),
             Self::NativePromoted(at, base) => (at, Interp::NativePromoted(base)),
             Self::WeakPromoted(at, owner, base) => (at, Interp::WeakPromoted(owner, base)),
-        };
+        }
+    }
+
+    const fn at(self, start: usize) -> Option<Interp> {
+        let (at, top) = self.source();
         if at == start { Some(top) } else { None }
     }
 }
@@ -331,9 +401,9 @@ const _: () = {
     assert!(core::mem::size_of::<Interp>() <= Interp::CHARGE);
 };
 
-/// The scratch held by queued reports ([`QUEUED_REPORT`] each), released
-/// as they are processed; what is still held when the recognizer is dropped
-/// unprocessed is released then.
+/// The scratch held by queued payloads and any directly admitted handles,
+/// released as reports are processed. Dropping an unfinished recognizer
+/// releases the remaining queue reservation.
 #[derive(Debug)]
 struct Queued {
     meter: ScratchMeter,
@@ -347,7 +417,10 @@ impl Drop for Queued {
 }
 
 // The portable per-report charge never undercounts a report's own size.
-const _: () = assert!(core::mem::size_of::<Pending>() as u64 <= QUEUED_REPORT);
+const _: () = {
+    assert!(core::mem::size_of::<Event>() as u64 <= QUEUED_REPORT);
+    assert!(core::mem::size_of::<Pending>() as u64 <= QUEUED_REPORT);
+};
 
 #[derive(Debug)]
 enum Pending {
@@ -361,10 +434,29 @@ enum Pending {
 }
 
 impl Pending {
+    fn candidate_start(&self) -> Option<usize> {
+        match self {
+            Self::Engine(event) => event.candidate_start(),
+            Self::Marker { start, .. } => Some(*start),
+        }
+    }
     const fn at(&self) -> usize {
         match self {
             Self::Engine(event) => event.at(),
             Self::Marker { end, .. } => *end,
+        }
+    }
+
+    fn source_start(&self) -> usize {
+        match self {
+            Self::Engine(Event::Opened { start, .. } | Event::Ended { start, .. })
+            | Self::Marker { start, .. } => *start,
+            Self::Engine(Event::Completed { at, parts, .. }) => {
+                parts.parts.first().map_or(*at, |(part, _)| match part {
+                    Part::Call(call) => call.span.start,
+                    Part::Rejected { span, .. } => span.start,
+                })
+            }
         }
     }
 
@@ -400,6 +492,143 @@ impl Pending {
     }
 }
 
+#[path = "recognizer_sources.rs"]
+mod sources;
+use sources::{PendingSources, SourceId};
+
+// The arena's extra eight portable bytes per slot cover the queued handle.
+const _: () = assert!(core::mem::size_of::<(Pending, SourceId)>() as u64 <= QUEUED_REPORT + 8);
+
+// The source indexes, caches and their complete preparation/dispatch handles.
+// Queued and ready element storage retain their separate per-report charge.
+const SOURCE_METADATA_BYTES: u64 = 904;
+
+// Projection selection retains the previous memo and its matched copy while
+// the recognizer's slot is empty. Include ordinary floor/limit controls too.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        Option<FrontierMemo>,
+        FrontierMemo,
+        ScratchLease,
+        [Option<usize>; 5],
+        [usize; 3],
+        Result<(), StopReason>,
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Ownership may receive a deferred marker floor and its computed scalar.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        [Option<usize>; 5],
+        usize,
+        u32,
+        Result<ByteOwnership, StopReason>,
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Queue preparation also owns the incoming report and the engine event cursor;
+// no queue slot has been admitted or published for that report yet.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        sources::SourceUpdate,
+        sources::PreparationCursor,
+        [usize; 2],
+        SourceId,
+        Option<Pending>,
+        std::vec::IntoIter<Event>,
+        Option<usize>,
+        u64
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Preparation borrows its floors; the temporary projected lengths still exist.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        sources::SourceUpdate,
+        sources::PreparationCursor,
+        [usize; 2],
+        SourceId,
+        Vec<Pending>
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Apply owns the complete update and its separate replay cursor.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        sources::SourceUpdate,
+        sources::ReplayCursor,
+        SourceId,
+        Vec<Pending>
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Terminal validation retains its actual row cursor and projected-length array.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        sources::PreparationCursor,
+        [usize; 2],
+        SourceId,
+        Vec<Pending>
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Retirement has no update or cursor, but replacement and old owners coexist.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        Vec<Pending>
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
+// Dispatch and cleanup move the ready buffer into its actual iterator; grouping
+// keeps a separate vector header while report slots retain their admission.
+const _: () = assert!(
+    core::mem::size_of::<(
+        PendingSources,
+        Option<(u32, Option<usize>)>,
+        Option<FrontierMemo>,
+        ScratchLease,
+        core::iter::Peekable<std::vec::IntoIter<Pending>>,
+        Vec<Pending>,
+        u64
+    )>() as u64
+        <= SOURCE_METADATA_BYTES
+);
+
 /// The changes one offset's reports make, applied together.
 struct Frame {
     /// The content state before this offset.
@@ -416,7 +645,9 @@ struct Frame {
 
 /// The turn-level segmentation state.
 struct Turn {
-    nodes: Vec<TurnNode>,
+    // Native history never escapes into the owned RecognizedTurn. Its buffer
+    // releases its actual reservation when this private turn is consumed.
+    nodes: ScratchVec<TurnNode>,
     store: Vec<Segment>,
     /// Source proof addressed only by immutable stored call and reading indices.
     envelopes: SourceEnvelopes,
@@ -429,7 +660,8 @@ struct Turn {
     /// where it began, and its interpretations.
     interps: BTreeMap<u64, (usize, ScratchVec<Interp>)>,
     /// Absolute raw OPEN barriers for interpreted derived headers only.
-    weak_headers: BTreeMap<u64, usize>,
+    weak_headers: ScratchMap<u64, usize>,
+    _node_metadata: ScratchLease,
     /// Earliest physically consumed native Mistral frame within each weak header.
     /// The weak attempt remains alive; every completion supplies its own proof.
     native_frames: ScratchMap<u64, (usize, usize)>,
@@ -453,6 +685,52 @@ struct Turn {
 }
 
 impl Turn {
+    /// Ordered removal admits search and physical suffix movement.
+    fn remove_weak_header(
+        &mut self,
+        owner: u64,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.weak_headers.len())
+                .saturating_add(u64::from(self.weak_headers.len().bit_width()))
+                .saturating_add(3),
+        )?;
+        self.weak_headers.remove(&owner);
+        Ok(())
+    }
+
+    /// Typed payloads after a successfully traversed native source checkpoint.
+    fn payload_floor(
+        &self,
+        hist: u32,
+        visited: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<usize>, StopReason> {
+        let root = self.nodes[hist as usize];
+        let mut floor = source_min(root.packed, root.tail_payload);
+        let mut node = root.plain;
+        let depth = self.nodes[visited as usize].depth;
+        while self.nodes[node as usize].depth > depth {
+            governor.charge(Resource::Work, 1)?;
+            let current = self.nodes[node as usize];
+            if current.jump != node && self.nodes[current.jump as usize].depth >= depth {
+                floor = source_min(floor, current.jump_payload);
+                node = current.jump;
+            } else {
+                floor = source_min(floor, current.payload);
+                node = current.prev;
+            }
+        }
+        if node != visited {
+            return Err(invalid_input(
+                "ownership history does not descend from its visited checkpoint",
+            ));
+        }
+        Ok(floor)
+    }
+
     fn push(
         &mut self,
         prev: u32,
@@ -460,9 +738,165 @@ impl Turn {
         kind: TurnKind,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        governor.charge(Resource::ScratchBytes, 32)?;
-        self.nodes.push(TurnNode { prev, end, kind });
-        Ok(u32::try_from(self.nodes.len() - 1).unwrap_or(u32::MAX))
+        let index = u32::try_from(self.nodes.len())
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        let parent = self.nodes[prev as usize];
+        let (plain, depth, jump) = if let TurnKind::Pack(other) = kind {
+            (self.common_plain(prev, other, governor)?, 0, 0)
+        } else if parent.plain == prev {
+            let depth = parent
+                .depth
+                .checked_add(1)
+                .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+            let first = self.nodes[parent.jump as usize];
+            let second = self.nodes[first.jump as usize];
+            let jump = if parent.depth - first.depth == first.depth - second.depth {
+                first.jump
+            } else {
+                prev
+            };
+            (index, depth, jump)
+        } else {
+            (parent.plain, 0, 0)
+        };
+        governor.charge(Resource::Work, 4)?;
+        let payload = match kind {
+            TurnKind::Stored(stored, _) => match &self.store[stored as usize] {
+                Segment::Content(_) => None,
+                other => Some(other.span().start),
+            },
+            _ => None,
+        };
+        let (packed, tail_payload) = if let TurnKind::Pack(other) = kind {
+            let cutoff = plain;
+            (
+                source_min(
+                    self.payload_floor(prev, cutoff, governor)?,
+                    self.payload_floor(other, cutoff, governor)?,
+                ),
+                None,
+            )
+        } else {
+            (
+                parent.packed,
+                if parent.plain == prev {
+                    None
+                } else {
+                    source_min(parent.tail_payload, payload)
+                },
+            )
+        };
+        let jump_payload = if plain == index && jump != prev {
+            source_min(
+                payload,
+                source_min(
+                    parent.jump_payload,
+                    self.nodes[parent.jump as usize].jump_payload,
+                ),
+            )
+        } else {
+            payload
+        };
+        crate::contract::push_scratch(
+            &mut self.nodes,
+            TurnNode {
+                prev,
+                end,
+                kind,
+                plain,
+                depth,
+                jump,
+                payload,
+                jump_payload,
+                packed,
+                tail_payload,
+            },
+            governor,
+        )?;
+        Ok(index)
+    }
+
+    /// Intersect cached prefix trees using one logarithmic skip link per node.
+    /// Histories behind a packed disagreement are never enumerated or replayed.
+    fn common_plain(
+        &self,
+        left: u32,
+        right: u32,
+        governor: &mut Governor,
+    ) -> Result<u32, StopReason> {
+        let mut left = self.nodes[left as usize].plain;
+        let mut right = self.nodes[right as usize].plain;
+        if self.nodes[left as usize].depth < self.nodes[right as usize].depth {
+            core::mem::swap(&mut left, &mut right);
+        }
+        let target = self.nodes[right as usize].depth;
+        while self.nodes[left as usize].depth > target {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let node = self.nodes[left as usize];
+            left = if self.nodes[node.jump as usize].depth >= target {
+                node.jump
+            } else {
+                node.prev
+            };
+        }
+        while left != right {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let (a, b) = (self.nodes[left as usize], self.nodes[right as usize]);
+            if a.jump == b.jump {
+                left = a.prev;
+                right = b.prev;
+            } else {
+                left = a.jump;
+                right = b.jump;
+            }
+        }
+        Ok(left)
+    }
+
+    fn prefix_before(
+        &self,
+        mut node: u32,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(u32, Option<(usize, usize)>), StopReason> {
+        let mut crossing = None;
+        while self.nodes[node as usize].end > at {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let current = self.nodes[node as usize];
+            node = if self.nodes[current.jump as usize].end > at {
+                current.jump
+            } else {
+                crossing = Some(node);
+                current.prev
+            };
+        }
+        let content = crossing
+            .and_then(|index| match self.nodes[index as usize].kind {
+                TurnKind::Content(start) if start < at => Some((start, at)),
+                _ => None,
+            })
+            .or_else(|| {
+                let current = self.nodes[node as usize];
+                match current.kind {
+                    TurnKind::Content(start) => Some((start, current.end)),
+                    _ => None,
+                }
+            });
+        Ok((node, content))
+    }
+
+    fn include_plain(
+        &self,
+        common: &mut Option<u32>,
+        hist: u32,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, K_CAPTURE)?;
+        *common = Some(match *common {
+            Some(previous) => self.common_plain(previous, hist, governor)?,
+            None => self.nodes[hist as usize].plain,
+        });
+        Ok(())
     }
 
     fn store(&mut self, segment: Segment, governor: &mut Governor) -> Result<u32, StopReason> {
@@ -1081,20 +1515,6 @@ fn same_embedded_invocation(
     Ok(cost == shadow.cost)
 }
 
-pub(super) fn same_source_text(
-    left: &str,
-    right: &str,
-    governor: &mut Governor,
-) -> Result<bool, StopReason> {
-    governor.charge(
-        Resource::Work,
-        size(left.len())
-            .saturating_add(size(right.len()))
-            .saturating_add(1),
-    )?;
-    Ok(left == right)
-}
-
 fn same_embedded_binding(
     left: Option<&Spanned<String>>,
     right: Option<&Spanned<String>>,
@@ -1450,10 +1870,22 @@ fn same_example_call(
         return Ok(false);
     }
     for (left, right) in left.readings.iter().zip(&right.readings) {
+        // Different native dialect identities cannot be equal readings. Check
+        // their bounded identity before traversing either argument's metadata.
+        governor.charge(Resource::Work, 1)?;
+        if left.dialect.name().len() != right.dialect.name().len() {
+            return Ok(false);
+        }
+        governor.charge(
+            Resource::Work,
+            size(left.dialect.name().len()).saturating_add(32),
+        )?;
+        if left.dialect != right.dialect {
+            return Ok(false);
+        }
         admit_example_call_metadata(left, governor)?;
         admit_example_call_metadata(right, governor)?;
         if left.span != right.span
-            || left.dialect != right.dialect
             || left.kind != right.kind
             || left.order != right.order
             || left.name != right.name
@@ -1617,11 +2049,20 @@ pub struct Recognizer<'s> {
     digest: DigestBuilder,
     marker: u32,
     /// The queued reports, by offset, phase and arrival.
-    pending: BTreeMap<(usize, u8, u64), Pending>,
+    pending: BTreeMap<(usize, u8, u64), (Pending, SourceId)>,
+    /// Declared after pending: queued handles must drop before arena coverage.
+    /// Prepared intake indexes source order separately from dispatch order.
+    /// Standalone queue slots retain an explicitly untracked handle instead.
+    pending_sources: PendingSources,
+    ownership_memo: Option<(u32, Option<usize>)>,
+    _ownership_metadata: ScratchLease,
     arrivals: u64,
     queued: Queued,
     turn: Turn,
     context: ContextTracker,
+    frontier: ContinuationFrontier,
+    frontier_memo: Option<FrontierMemo>,
+    settled_history: u32,
     failed: Option<StopReason>,
 }
 
@@ -1634,7 +2075,7 @@ impl fmt::Debug for Recognizer<'_> {
             .field("fed", &self.engine.fed())
             .field("content_state", &self.turn.top)
             .field("live_interpretations", &self.turn.interps)
-            .field("native_history", &self.turn.nodes)
+            .field("native_history", &self.turn.nodes.as_slice())
             .field("stored_segments", &self.turn.store)
             .field("pending_reports", &self.pending)
             .finish_non_exhaustive()
@@ -1709,15 +2150,26 @@ impl<'s> Recognizer<'s> {
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         let engine = Engine::new(&set.dialects, tools, governor)?;
+        let ownership_metadata = governor.lease_scratch(SOURCE_METADATA_BYTES)?;
         let context = ContextTracker::new(engine.protocol_fences());
         let starts_open = matches!(policy, ReasoningPolicy::Separate { starts_open: true });
         let root = TurnNode {
             prev: 0,
             end: 0,
             kind: TurnKind::Root,
+            plain: 0,
+            depth: 0,
+            jump: 0,
+            payload: None,
+            jump_payload: None,
+            packed: None,
+            tail_payload: None,
         };
+        let node_metadata = governor.lease_scratch(size(TURN_NODE_METADATA_BYTES))?;
+        let mut nodes = ScratchVec::new(governor);
+        crate::contract::push_scratch(&mut nodes, root, governor)?;
         let turn = Turn {
-            nodes: vec![root],
+            nodes,
             store: Vec::new(),
             envelopes: SourceEnvelopes::new(governor),
             failure_proofs: ScratchMap::new(governor),
@@ -1737,7 +2189,8 @@ impl<'s> Recognizer<'s> {
                 embedded: Vec::new(),
             }),
             interps: BTreeMap::new(),
-            weak_headers: BTreeMap::new(),
+            weak_headers: ScratchMap::new(governor),
+            _node_metadata: node_metadata,
             native_frames: ScratchMap::new(governor),
             last_kill: None,
             blocks: BTreeMap::new(),
@@ -1751,6 +2204,9 @@ impl<'s> Recognizer<'s> {
             digest: DigestBuilder::new(),
             marker: 0,
             pending: BTreeMap::new(),
+            pending_sources: PendingSources::new(governor),
+            ownership_memo: None,
+            _ownership_metadata: ownership_metadata,
             arrivals: 0,
             queued: Queued {
                 meter: governor.scratch_meter(),
@@ -1758,6 +2214,9 @@ impl<'s> Recognizer<'s> {
             },
             turn,
             context,
+            frontier: ContinuationFrontier::default(),
+            frontier_memo: None,
+            settled_history: 0,
             failed: None,
         })
     }
@@ -1779,6 +2238,126 @@ impl<'s> Recognizer<'s> {
     #[must_use]
     pub const fn fed(&self) -> usize {
         self.engine.fed()
+    }
+
+    pub(super) const fn continuation_frontier(&self) -> ContinuationFrontier {
+        self.frontier
+    }
+
+    /// Prepare candidate accounting before any report can enter the queue.
+    /// Standalone recognition has no consumer for the candidate-only index.
+    pub(super) fn prepare_ownership(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if self.failed.is_some()
+            || self.engine.tracks_ownership()
+            || self.engine.fed() != 0
+            || self.arrivals != 0
+            || !self.pending.is_empty()
+            || self.pending_sources.floor().is_some()
+            || self.pending_sources.candidate_floor().is_some()
+        {
+            return Err(invalid_input(
+                "candidate accounting must be prepared on a pristine recognizer",
+            ));
+        }
+        let _ = self.engine.ownership_floors(governor)?;
+        Ok(())
+    }
+
+    /// Project actual retained ownership after the byte's complete report fold.
+    pub(super) fn byte_ownership(
+        &mut self,
+        visited: u32,
+        governor: &mut Governor,
+    ) -> Result<ByteOwnership, StopReason> {
+        if !self.engine.tracks_ownership() {
+            return Err(invalid_input("candidate accounting was not prepared"));
+        }
+        let (mut lexical, mut candidate) =
+            if let Some(origin) = self.engine.source_candidate_floor(governor)? {
+                if origin == 0 {
+                    return Ok(ByteOwnership::WholeCandidate);
+                }
+                // The ready continuation origin lower-bounds native lexical
+                // owners, so none can precede this exact native candidate.
+                (None, Some(origin))
+            } else {
+                self.engine.ownership_floors(governor)?
+            };
+        governor.charge(Resource::Work, 1)?;
+        if candidate == Some(0) {
+            // No turn, report, marker or settled interval can precede zero.
+            return Ok(ByteOwnership::WholeCandidate);
+        }
+        if matches!(self.policy, ReasoningPolicy::Separate { .. })
+            && self.set.marker_matcher.is_some()
+        {
+            governor.charge(Resource::Work, 1)?;
+            let marker = self
+                .frontier_memo
+                .as_ref()
+                .ok_or_else(|| invalid_input("ownership has no completed marker projection"))?
+                .lexical;
+            let marker = match marker {
+                Some(marker) => marker,
+                None => self.current_marker_floor(governor)?,
+            };
+            if marker > self.fed() {
+                return Err(invalid_input("marker projection exceeds consumed source"));
+            }
+            lexical = source_min(lexical, Some(marker));
+        }
+        candidate = source_min(candidate, self.pending_sources.candidate_floor());
+        let turn_floor = if let Some((_, floor)) =
+            self.ownership_memo.filter(|(known, _)| *known == visited)
+        {
+            floor
+        } else {
+            let mut floor = None;
+            if let Some(top) = self.turn.top {
+                floor = source_min(floor, self.turn.payload_floor(top.hist, visited, governor)?);
+            }
+            if let Some(think) = &self.turn.think {
+                floor = source_min(floor, Some(think.start));
+                floor = source_min(
+                    floor,
+                    self.turn.payload_floor(think.hist, visited, governor)?,
+                );
+                if let Some(base) = think.promoted.map(Promotion::base) {
+                    floor = source_min(
+                        floor,
+                        self.turn.payload_floor(base.hist, visited, governor)?,
+                    );
+                }
+            }
+            for (_, interps) in self.turn.interps.values() {
+                governor.charge(Resource::Work, 1)?;
+                for interp in interps {
+                    governor.charge(Resource::Work, 1)?;
+                    if let Some(base) = interp.base() {
+                        floor = source_min(
+                            floor,
+                            self.turn.payload_floor(base.hist, visited, governor)?,
+                        );
+                    }
+                    // Embedded routing keeps its real active reasoning payload
+                    // in the histories above; historical block entries are not owners.
+                }
+            }
+            self.ownership_memo = Some((visited, floor));
+            floor
+        };
+        Ok(ByteOwnership::Floors(
+            lexical,
+            source_min(candidate, turn_floor),
+        ))
+    }
+
+    /// Immutable ancestry identity of the current structurally settled prefix.
+    /// Stored reasoning may gain embedded calls later; event traversal reads
+    /// only its unchanged text range, not that mutable embedded projection.
+    pub(super) const fn settled_history_id(&self) -> u32 {
+        self.settled_history
     }
 
     /// Consume the next chunk of output.
@@ -1804,6 +2383,8 @@ impl<'s> Recognizer<'s> {
                 Ok(())
             }
             Err(reason) => {
+                self.frontier_memo = None;
+                self.ownership_memo = None;
                 self.engine.discard_failure_headers(governor);
                 self.failed = Some(reason.clone());
                 Err(reason)
@@ -1853,47 +2434,408 @@ impl<'s> Recognizer<'s> {
                 .map_or(limit, |floor| limit.min(floor.saturating_sub(1)));
             self.settle(limit, governor)?;
         }
+        // Only recovery intake reads the structural projection. It prepares
+        // ownership before input; standalone recognition publishes its whole
+        // turn at EOF and needs no per-byte ancestry or marker-floor query.
+        if self.engine.tracks_ownership() {
+            self.update_frontier(governor)?;
+        }
         Ok(())
     }
 
-    /// Queue one report, charging [`QUEUED_REPORT`] scratch bytes until it
-    /// is processed: reports wait at most the lookbehind, or behind a call
-    /// whose inserted wrapper closer is still being decided, and a queue too
-    /// long for the budget is `BudgetExceeded(ScratchBytes)`.
-    fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
-        governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
-        self.queued.bytes += QUEUED_REPORT;
-        self.arrivals += 1;
-        self.pending
-            .insert((pending.at(), pending.phase(), self.arrivals), pending);
+    /// The current marker floor, shared by eager and deferred projections.
+    fn current_marker_floor(&self, governor: &mut Governor) -> Result<usize, StopReason> {
+        let held = if matches!(self.policy, ReasoningPolicy::Separate { .. })
+            && self.set.marker_matcher.is_some()
+        {
+            self.set.marker_prefix_len(self.marker, governor)?
+        } else {
+            0
+        };
+        self.fed()
+            .checked_sub(held)
+            .ok_or_else(|| invalid_input("reasoning marker prefix exceeds consumed source"))
+    }
+
+    /// Refresh the structural projection after each byte, reusing a successful
+    /// result only while its owner floors, turn state and effective cutoff agree.
+    /// A packed disagreement is not resolved here.
+    fn update_frontier(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        // Restore a previous memo only after every fallible floor lookup has
+        // succeeded; refusal must never leave an older projection reusable.
+        let previous = self.frontier_memo.take();
+        let engine_floor = self.engine.continuation_floor(governor)?;
+        // Select the projection before consulting sources it may not need.
+        governor.charge(Resource::Work, 1)?;
+        if engine_floor == Some(0)
+            && let Some(mut memo) = previous
+            && memo.engine_floor == Some(0)
+            && memo.barrier == Some(0)
+            && memo.limit == 0
+        {
+            // Report processing invalidates the memo before changing Turn.
+            // Every other source floor is nonnegative, so the complete prior
+            // zero-limit projection and history stay exact. Marker ownership
+            // is independent: defer its current value instead of caching a
+            // stale floor or assuming the settled history must be the root.
+            memo.lexical = None;
+            self.frontier_memo = Some(memo);
+            return Ok(());
+        }
+        let report_floor = self.pending_sources.floor();
+        let lexical = self.current_marker_floor(governor)?;
+        governor.charge(Resource::Work, 1)?;
+        if let Some(mut memo) = previous
+            && memo.engine_floor == engine_floor
+            && memo.report_floor == report_floor
+            && memo.limit == memo.barrier.map_or(lexical, |floor| lexical.min(floor))
+        {
+            memo.lexical = Some(lexical);
+            self.frontier_memo = Some(memo);
+            return Ok(());
+        }
+        let mut barrier = engine_floor.into_iter().chain(report_floor).min();
+        let mut common = None;
+        if let Some(top) = self.turn.top {
+            self.turn.include_plain(&mut common, top.hist, governor)?;
+        }
+        for (_, interpretations) in self.turn.interps.values() {
+            governor.charge(Resource::Work, size(interpretations.len()))?;
+            for interpretation in interpretations {
+                match interpretation {
+                    Interp::Top(base)
+                    | Interp::NativePromoted(base)
+                    | Interp::WeakPromoted(_, base) => {
+                        self.turn.include_plain(&mut common, base.hist, governor)?;
+                    }
+                    Interp::Embedded(start) => {
+                        barrier = Some(barrier.map_or(*start, |known| known.min(*start)));
+                    }
+                }
+            }
+        }
+        if let Some(think) = &self.turn.think {
+            self.turn.include_plain(&mut common, think.hist, governor)?;
+            if let Some(base) = think.promoted.map(Promotion::base) {
+                self.turn.include_plain(&mut common, base.hist, governor)?;
+            }
+            barrier = Some(barrier.map_or(think.start, |known| known.min(think.start)));
+        }
+        if let Some((start, interp)) = self.turn.last_kill.map(LastKill::source)
+            && barrier.is_some_and(|floor| floor <= start)
+        {
+            // Every LastKill variant contains a top base, preserving its origin.
+            let base = interp.base().expect("same-start cache retains a top base");
+            self.turn.include_plain(&mut common, base.hist, governor)?;
+        }
+        let limit = barrier.map_or(lexical, |floor| lexical.min(floor));
+        let (node, mut content) = self
+            .turn
+            .prefix_before(common.unwrap_or(0), limit, governor)?;
+        self.settled_history = node;
+        let prefix_end = if let Some(top) = self.turn.top
+            && self.turn.think.is_none()
+            && self.turn.interps.is_empty()
+            && node == top.hist
+            && self.turn.nodes[top.hist as usize].plain == top.hist
+            && top.boundary < limit
+        {
+            content = Some((top.boundary, limit));
+            limit
+        } else {
+            content.map_or(self.turn.nodes[node as usize].end, |(_, end)| end)
+        };
+        self.frontier = ContinuationFrontier {
+            prefix_end,
+            content,
+            blocked_from: barrier,
+        };
+        self.frontier_memo = Some(FrontierMemo {
+            engine_floor,
+            report_floor,
+            barrier,
+            limit,
+            lexical: Some(lexical),
+        });
         Ok(())
+    }
+
+    /// Visit only the next shared native node, never rebuilding a prefix turn.
+    /// Skip ancestry bounds each lookup by the history depth rather than by
+    /// source length. A packed disagreement cannot enter this history.
+    pub(super) fn settled_step(
+        &self,
+        previous: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<SettledStep<'_>>, StopReason> {
+        governor.charge(Resource::Work, K_CAPTURE)?;
+        let mut node = self.settled_history;
+        let target = self.turn.nodes[previous as usize]
+            .depth
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+        if self.turn.nodes[node as usize].depth < target {
+            return Ok(None);
+        }
+        while self.turn.nodes[node as usize].depth > target {
+            governor.charge(Resource::Work, K_CAPTURE)?;
+            let current = self.turn.nodes[node as usize];
+            node = if self.turn.nodes[current.jump as usize].depth >= target {
+                current.jump
+            } else {
+                current.prev
+            };
+        }
+        let current = self.turn.nodes[node as usize];
+        if current.prev != previous {
+            return Err(crate::contract::invalid_input(
+                "settled native event history diverged from its published prefix",
+            ));
+        }
+        let (segment, content) = match current.kind {
+            TurnKind::Stored(index, _) => (Some(&self.turn.store[index as usize]), None),
+            TurnKind::Content(start) => (None, Some(start..current.end)),
+            TurnKind::Root | TurnKind::Pack(_) => {
+                return Err(crate::contract::invalid_input(
+                    "settled native event history contains a non-segment node",
+                ));
+            }
+        };
+        Ok(Some(SettledStep {
+            history: node,
+            end: current.end,
+            segment,
+            content,
+        }))
+    }
+
+    /// The source arena covers indexed handles; standalone slots admit the
+    /// same handle word directly, without building an unused source index.
+    const fn queued_report_bytes(&self) -> u64 {
+        if self.engine.tracks_ownership() {
+            QUEUED_REPORT
+        } else {
+            QUEUED_REPORT + 8
+        }
+    }
+
+    /// Queue one report with its payload and handle admitted until dispatch.
+    /// Reports wait at most the lookbehind, or behind an undecided inserted
+    /// wrapper closer; excessive storage refuses explicitly.
+    fn queue(&mut self, pending: Pending, governor: &mut Governor) -> Result<(), StopReason> {
+        let mut pending = Some(pending);
+        let result = (|| {
+            let report = pending.as_ref().expect("incoming report is still owned");
+            let source = report.source_start();
+            let candidate = report.candidate_start();
+            if candidate.is_some_and(|start| start != source) {
+                return Err(invalid_input(
+                    "candidate report has a different source origin",
+                ));
+            }
+            let arrival = self
+                .arrivals
+                .checked_add(1)
+                .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+            let handle = if self.engine.tracks_ownership() {
+                let update = self.pending_sources.prepare_add(
+                    source,
+                    arrival,
+                    candidate.is_some(),
+                    self.engine.fed(),
+                    governor,
+                )?;
+                governor.charge(Resource::ScratchBytes, QUEUED_REPORT)?;
+                let handle = update.handle();
+                update.apply(&mut self.pending_sources);
+                handle
+            } else {
+                governor.charge(Resource::Work, 1)?;
+                if source > self.engine.fed() || u64::try_from(source).is_err() || arrival == 0 {
+                    return Err(invalid_input(
+                        "queued source origin or arrival exceeds its admitted domain",
+                    ));
+                }
+                governor.charge(Resource::ScratchBytes, self.queued_report_bytes())?;
+                SourceId::untracked()
+            };
+            let key = (report.at(), report.phase(), arrival);
+            self.queued.bytes += self.queued_report_bytes();
+            self.arrivals = arrival;
+            self.pending.insert(
+                key,
+                (
+                    pending.take().expect("incoming report is still owned"),
+                    handle,
+                ),
+            );
+            Ok(())
+        })();
+        if let Some(pending) = pending {
+            // No queue slot or source handle was published for this payload.
+            let cleanup = Pending::discard_all(core::iter::once(pending), governor);
+            return result.and(cleanup);
+        }
+        result
     }
 
     /// Queue every report the engine produced.
     fn queue_events(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
-        let events = core::mem::take(&mut self.engine.events);
-        for event in events {
-            self.queue(Pending::Engine(event), governor)?;
-        }
-        Ok(())
+        let mut events = core::mem::take(&mut self.engine.events).into_iter();
+        let result = events
+            .by_ref()
+            .try_for_each(|event| self.queue(Pending::Engine(event), governor));
+        let cleanup = Pending::discard_all(events.map(Pending::Engine), governor);
+        result.and(cleanup)
     }
 
     /// Process every pending report at an offset up to `limit`, releasing
     /// each one's queue charge.
     fn settle(&mut self, limit: usize, governor: &mut Governor) -> Result<(), StopReason> {
         let mut ready = Vec::new();
-        // Stable order: offset, then phase, then arrival.
-        while let Some(entry) = self.pending.first_entry() {
-            if entry.key().0 > limit {
-                break;
+        let prepared = (|| {
+            // Stable order: offset, then phase, then arrival.
+            while let Some((&key, (pending, handle))) = self.pending.first_key_value() {
+                if key.0 > limit {
+                    break;
+                }
+                // Admit before removing either index entry, so work refusal
+                // leaves both orders and their ownership intact.
+                let source = pending.source_start();
+                let candidate = pending.candidate_start();
+                if candidate.is_some_and(|start| start != source) {
+                    return Err(invalid_input(
+                        "candidate report has a different source origin",
+                    ));
+                }
+                let pending = if self.engine.tracks_ownership() {
+                    let update = self.pending_sources.prepare_remove(
+                        *handle,
+                        source,
+                        key.2,
+                        candidate.is_some(),
+                        governor,
+                    )?;
+                    let (_, (pending, _)) = self
+                        .pending
+                        .pop_first()
+                        .expect("pending minimum was just read");
+                    update.apply(&mut self.pending_sources);
+                    pending
+                } else {
+                    governor.charge(Resource::Work, 1)?;
+                    if !handle.is_untracked() {
+                        return Err(invalid_input(
+                            "standalone report owns an indexed source handle",
+                        ));
+                    }
+                    let (_, (pending, _)) = self
+                        .pending
+                        .pop_first()
+                        .expect("pending minimum was just read");
+                    pending
+                };
+                ready.push(pending);
             }
-            ready.push(entry.remove());
+            Ok(())
+        })();
+        if prepared.is_err() {
+            let cleanup = self.discard_ready(ready, governor);
+            return prepared.and(cleanup);
         }
+        self.apply_ready(ready, governor)
+    }
+
+    /// Consuming EOF has no later source-floor reader or report producer.
+    /// Retain all index owners until every queued handle has been stripped.
+    fn settle_final(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
+        if self.engine.tracks_ownership() {
+            self.pending_sources
+                .prepare_terminal(self.pending.len(), governor)?;
+        }
+        let mut ready = Vec::new();
+        let prepared = (|| {
+            while let Some((&key, (pending, handle))) = self.pending.first_key_value() {
+                let source = pending.source_start();
+                let candidate = pending.candidate_start();
+                if candidate.is_some_and(|start| start != source) {
+                    return Err(invalid_input(
+                        "candidate report has a different source origin",
+                    ));
+                }
+                if self.engine.tracks_ownership() {
+                    self.pending_sources.terminal_entry(
+                        *handle,
+                        source,
+                        key.2,
+                        candidate.is_some(),
+                        governor,
+                    )?;
+                } else {
+                    governor.charge(Resource::Work, 1)?;
+                    if !handle.is_untracked() {
+                        return Err(invalid_input(
+                            "standalone report owns an indexed source handle",
+                        ));
+                    }
+                }
+                let (_, (pending, _)) = self
+                    .pending
+                    .pop_first()
+                    .expect("pending minimum was just read");
+                // Only Pending enters ready; no handle survives its queue slot.
+                ready.push(pending);
+            }
+            Ok(())
+        })();
+        if prepared.is_err() {
+            // Unstripped queued handles still own the source indexes.
+            let cleanup = self.discard_ready(ready, governor);
+            return prepared.and(cleanup);
+        }
+        self.apply_ready(ready, governor)?;
+        if !self.pending.is_empty() {
+            return Err(invalid_input(
+                "terminal report dispatch left queued source handles",
+            ));
+        }
+        if self.engine.tracks_ownership() {
+            self.pending_sources.retire(governor);
+        }
+        Ok(())
+    }
+
+    /// Drop removed reports and refund only their payload and queue admissions.
+    /// Reports still queued retain their source handles and queue reservations.
+    fn discard_ready(
+        &mut self,
+        ready: Vec<Pending>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        let released = size(ready.len()).saturating_mul(self.queued_report_bytes());
+        let payloads = Pending::discard_all(ready.into_iter(), governor);
+        let queue = governor.release_scratch(released);
+        if queue.is_ok() {
+            self.queued.bytes -= released;
+        }
+        payloads.and(queue)
+    }
+
+    /// Preserve the native report grouping and queue-charge handoff.
+    fn apply_ready(
+        &mut self,
+        ready: Vec<Pending>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
         if ready.is_empty() {
             return Ok(());
         }
-        let released = size(ready.len()).saturating_mul(QUEUED_REPORT);
-        governor.release_scratch(released)?;
+        let released = size(ready.len()).saturating_mul(self.queued_report_bytes());
+        if let Err(reason) = governor.release_scratch(released) {
+            // The queue reservation remains owned by self.queued on refusal.
+            let cleanup = Pending::discard_all(ready.into_iter(), governor);
+            return Err::<(), _>(reason).and(cleanup);
+        }
         self.queued.bytes -= released;
         let mut ready = ready.into_iter().peekable();
         while let Some(pending) = ready.next() {
@@ -1903,8 +2845,8 @@ impl<'s> Recognizer<'s> {
                 group.push(ready.next().expect("peeked report"));
             }
             if let Err(reason) = self.position(at, group, governor) {
-                let _ = Pending::discard_all(ready, governor);
-                return Err(reason);
+                let cleanup = Pending::discard_all(ready, governor);
+                return Err::<(), _>(reason).and(cleanup);
             }
         }
         Ok(())
@@ -1919,6 +2861,9 @@ impl<'s> Recognizer<'s> {
         group: Vec<Pending>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        // Every live turn mutation invalidates the projected frontiers.
+        self.frontier_memo = None;
+        self.ownership_memo = None;
         let mut group = group.into_iter();
         let result = (|| {
             governor.charge(Resource::Work, size(group.len()).saturating_mul(K_EVENT))?;
@@ -2096,8 +3041,14 @@ impl<'s> Recognizer<'s> {
                 self.suppress_weak_prefix(start, opening.native_frame_end, governor)?;
             }
             if let Some(barrier) = weak_header {
-                governor.charge(Resource::ScratchBytes, 64)?;
-                self.turn.weak_headers.insert(attempt, barrier);
+                governor.charge(
+                    Resource::Work,
+                    size(self.turn.weak_headers.len())
+                        .saturating_mul(2)
+                        .saturating_add(u64::from(self.turn.weak_headers.len().bit_width()))
+                        .saturating_add(4),
+                )?;
+                self.turn.weak_headers.insert(attempt, barrier)?;
             }
             self.turn.interps.insert(attempt, (start, interps));
         }
@@ -2125,7 +3076,7 @@ impl<'s> Recognizer<'s> {
         let mut replace_weak = None;
         governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
         let mut origins = ScratchVec::new(governor);
-        for (&owner, &barrier) in &self.turn.weak_headers {
+        for &(owner, barrier) in self.turn.weak_headers.iter() {
             let Some((prefix, inherited)) = self.turn.interps.get(&owner) else {
                 continue;
             };
@@ -2205,7 +3156,7 @@ impl<'s> Recognizer<'s> {
     ) -> Result<(), StopReason> {
         governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
         let mut suppressed = ScratchVec::new(governor);
-        for &owner in self.turn.weak_headers.keys() {
+        for &(owner, _) in self.turn.weak_headers.iter() {
             if self
                 .turn
                 .interps
@@ -2217,7 +3168,7 @@ impl<'s> Recognizer<'s> {
         }
         for &owner in &suppressed {
             self.forget_native_frame(owner, governor)?;
-            self.turn.weak_headers.remove(&owner);
+            self.turn.remove_weak_header(owner, governor)?;
             self.turn.interps.remove(&owner);
             self.engine.abandon(owner, governor)?;
         }
@@ -2233,7 +3184,7 @@ impl<'s> Recognizer<'s> {
     ) -> Result<(), StopReason> {
         let Some(end) = end else { return Ok(()) };
         governor.charge(Resource::Work, size(self.turn.weak_headers.len()))?;
-        for (&owner, &barrier) in &self.turn.weak_headers {
+        for &(owner, barrier) in self.turn.weak_headers.iter() {
             let Some((prefix, _)) = self.turn.interps.get(&owner) else {
                 continue;
             };
@@ -2349,9 +3300,14 @@ impl<'s> Recognizer<'s> {
 
     /// Weak framing cannot reopen the committed span of a native attempt.
     fn has_exact_outer(&self, start: usize, governor: &mut Governor) -> Result<bool, StopReason> {
-        governor.charge(Resource::Work, size(self.turn.interps.len()))?;
+        governor.charge(
+            Resource::Work,
+            size(self.turn.interps.len()).saturating_mul(
+                u64::from(self.turn.weak_headers.len().bit_width()).saturating_add(1),
+            ),
+        )?;
         Ok(self.turn.interps.iter().any(|(owner, (prefix, _))| {
-            *prefix < start && !self.turn.weak_headers.contains_key(owner)
+            *prefix < start && self.turn.weak_headers.get(owner).is_none()
         }))
     }
 
@@ -2597,7 +3553,10 @@ impl<'s> Recognizer<'s> {
         salvage: Option<Salvaged>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        let witnessed = match self.ended_witness(&ended, governor) {
+        let witnessed = match self.ended_witness(&ended, governor).and_then(|witnessed| {
+            self.turn.remove_weak_header(ended.attempt, governor)?;
+            Ok(witnessed)
+        }) {
             Ok(witnessed) => witnessed,
             Err(reason) => {
                 let charged = salvage.as_ref().map_or(0, |salvage| salvage.charged);
@@ -2606,7 +3565,6 @@ impl<'s> Recognizer<'s> {
                 return Err(reason);
             }
         };
-        self.turn.weak_headers.remove(&ended.attempt);
         let removed = self.turn.interps.remove(&ended.attempt);
         // An opening reasoning marker the attempt read over cuts it: the
         // marker's bytes belong to the block, which opens where the
@@ -3129,17 +4087,20 @@ impl<'s> Recognizer<'s> {
         stop: GenerationStop,
         governor: &mut Governor,
     ) -> Result<RecognizedTurn, StopReason> {
-        self.finish_over(stop, None, governor)
+        self.finish_over(stop, None, PathAdmission::Native, governor)
     }
 
     /// [`Self::finish`], given the whole `output` when the caller holds it:
     /// a rejected attempt's markup then extends as far as recovery reads it
     /// (`RejectedCall::span`) when fences inside it are kept out of the
     /// prose context; without it, the span its grammar read is used.
-    pub(crate) fn finish_over(
+    /// Recovery admits whole-message candidates after semantic framing folds;
+    /// standalone recognition admits the native paths it publishes here.
+    pub(super) fn finish_over(
         mut self,
         stop: GenerationStop,
         output: Option<&[u8]>,
+        path_admission: PathAdmission,
         governor: &mut Governor,
     ) -> Result<RecognizedTurn, StopReason> {
         if let Some(reason) = self.failed.take() {
@@ -3149,7 +4110,7 @@ impl<'s> Recognizer<'s> {
         self.context.finish(end, governor)?;
         self.engine.finish(&stop, governor)?;
         self.queue_events(governor)?;
-        self.settle(usize::MAX, governor)?;
+        self.settle_final(governor)?;
         if let Some(think) = self.turn.think.take()
             && think.promoted.is_none()
         {
@@ -3176,6 +4137,7 @@ impl<'s> Recognizer<'s> {
             context: &self.context,
             len: end,
             output,
+            path_admission,
             example_regions: None,
         };
         let (pieces, failure_proofs) = builder.pieces(last, governor)?;
@@ -3224,6 +4186,14 @@ impl<'s> Recognizer<'s> {
 
 /// The fenced and inline regions shared by normalization and attempt reporting.
 type ExampleRegions = (Vec<Range<usize>>, Vec<Range<usize>>);
+
+/// The selection boundary that owns admission of distinct segmentations.
+pub(super) enum PathAdmission {
+    /// Native recognition publishes these paths directly.
+    Native,
+    /// Recovery folds equivalent resolved framing before its product gate.
+    Resolved,
+}
 
 struct BuiltReading {
     segments: Vec<Segment>,
@@ -3314,7 +4284,8 @@ impl<'t> PlannedReading<'t> {
         Ok(true)
     }
 
-    /// Only admitted, distinct plans enter the existing owned public IR path.
+    /// Distinct plans enter the existing owned IR path under their caller's
+    /// admission purpose; discovery storage and work are always governed.
     fn materialize(self, governor: &mut Governor) -> Result<BuiltReading, StopReason> {
         governor.charge(Resource::Work, size(self.segments.len()))?;
         let mut segments = Vec::with_capacity(self.segments.len());
@@ -3378,6 +4349,7 @@ const _: () = {
             ScratchVec<u32>,
             ScratchVec<(u32, usize)>,
             PlannedReading<'static>,
+            PathAdmission,
         )>() as u64
             <= PATH_METADATA_BYTES
     );
@@ -3394,6 +4366,7 @@ const _: () = {
             std::vec::IntoIter<PlannedSegment<'static>>,
             ScratchLease,
             BuiltReading,
+            PathAdmission,
         )>() as u64
             <= PATH_METADATA_BYTES
     );
@@ -3408,6 +4381,7 @@ struct Builder<'t> {
     len: usize,
     /// The whole output, when the caller holds it.
     output: Option<&'t [u8]>,
+    path_admission: PathAdmission,
     example_regions: Option<ExampleRegions>,
 }
 
@@ -3497,7 +4471,9 @@ impl<'t> Builder<'t> {
         Ok(reading)
     }
 
-    /// Admit every distinct segmentation without cloning its stored payloads.
+    /// Discover distinct segmentations without cloning stored payloads.
+    /// Native publication admits them here; recovery admits the final product
+    /// after its source-preserving semantic framing folds.
     fn paths(
         &self,
         node: u32,
@@ -3540,7 +4516,9 @@ impl<'t> Builder<'t> {
                         .proofs
                         .intersect(&reading.proofs, governor)?;
                 } else {
-                    governor.charge(Resource::Candidates, 1)?;
+                    if matches!(self.path_admission, PathAdmission::Native) {
+                        governor.charge(Resource::Candidates, 1)?;
+                    }
                     crate::contract::push_scratch(&mut readings.readings, reading, governor)?;
                 }
                 continue;

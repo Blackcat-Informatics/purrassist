@@ -936,7 +936,7 @@ pub(super) fn is_match(
     let mut state = dfa.start();
     for &byte in text.as_bytes() {
         state = dfa.step(state, byte, governor)?;
-        if state.matched {
+        if state.matched() {
             return Ok(true);
         }
     }
@@ -983,13 +983,24 @@ enum Utf8 {
 /// assert!(dfa.accepting(end, &mut governor)?);
 /// # Ok::<(), purrassist_core::StopReason>(())
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DfaState {
-    live: u32,
-    matched: bool,
-    at_start: bool,
-    prev_word: bool,
-    utf8: Utf8,
+    // Canonical encoding makes exact state equality one logical word
+    // comparison, including every assertion and UTF-8 decoding field.
+    packed: u64,
+}
+
+impl core::fmt::Debug for DfaState {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("DfaState")
+            .field("live", &self.live())
+            .field("matched", &self.matched())
+            .field("at_start", &self.at_start())
+            .field("prev_word", &self.prev_word())
+            .field("utf8", &self.utf8())
+            .finish()
+    }
 }
 
 /// A resumable, byte-level automaton for one derivative-engine pattern,
@@ -1058,13 +1069,7 @@ impl<'p> DerivativeDfa<'p> {
     /// ```
     #[must_use]
     pub const fn start(&self) -> DfaState {
-        DfaState {
-            live: self.compiled.root,
-            matched: false,
-            at_start: true,
-            prev_word: false,
-            utf8: Utf8::Boundary,
-        }
+        DfaState::initial(self.compiled.root)
     }
 
     /// Consume one UTF-8 byte.
@@ -1108,17 +1113,17 @@ impl<'p> DerivativeDfa<'p> {
             bits,
             remaining: remaining @ 2..,
             length,
-        } = state.utf8
+        } = state.utf8()
         {
             let mut next = state;
-            next.utf8 = match continue_character(bits, remaining, length, byte) {
+            next.set_utf8(match continue_character(bits, remaining, length, byte) {
                 Some((bits, remaining)) => Utf8::Partial {
                     bits,
                     remaining,
                     length,
                 },
                 None => Utf8::Invalid,
-            };
+            });
             return Ok(next);
         }
         self.step_slow(state, byte, governor)
@@ -1134,7 +1139,7 @@ impl<'p> DerivativeDfa<'p> {
         governor: &mut Governor,
     ) -> Result<DfaState, StopReason> {
         let mut next = state;
-        let (bits, remaining, length) = match state.utf8 {
+        let (bits, remaining, length) = match state.utf8() {
             Utf8::Invalid => {
                 governor.charge(Resource::Work, 1)?;
                 return Ok(state);
@@ -1153,18 +1158,21 @@ impl<'p> DerivativeDfa<'p> {
                 // The lead byte charges the whole character's bytes, so a
                 // continuation byte needs no governor call of its own.
                 governor.charge(Resource::Work, u64::from(length))?;
-                if !state.matched {
+                if !state.matched() {
                     // A multi-byte lead byte never starts an ASCII word
                     // character, so the next character's word status is
                     // known from its first byte.
                     let ctx = state.context(false, length == 1 && is_word(char::from(byte)));
-                    next.matched = cached_nullable(
-                        &self.session.arena,
-                        state.live,
-                        ctx,
-                        &mut self.session.nullability,
-                        governor,
-                    )?;
+                    next.set_flag(
+                        DfaState::MATCHED,
+                        cached_nullable(
+                            &self.session.arena,
+                            state.live(),
+                            ctx,
+                            &mut self.session.nullability,
+                            governor,
+                        )?,
+                    );
                 }
                 (bits, length - 1, length)
             }
@@ -1181,18 +1189,18 @@ impl<'p> DerivativeDfa<'p> {
             }
         };
         if remaining > 0 {
-            next.utf8 = Utf8::Partial {
+            next.set_utf8(Utf8::Partial {
                 bits,
                 remaining,
                 length,
-            };
+            });
             return Ok(next);
         }
-        next.utf8 = Utf8::Boundary;
+        next.set_utf8(Utf8::Boundary);
         let Some(character) = char::from_u32(bits) else {
             return Ok(next.invalid());
         };
-        if !next.matched {
+        if !next.matched() {
             let (minterm, code) = minterm_representative(&self.compiled.cuts.values, bits);
             let ctx = state.context(false, is_word(character));
             let stepped = cached_step(
@@ -1200,22 +1208,22 @@ impl<'p> DerivativeDfa<'p> {
                 &self.compiled.classes,
                 &mut self.session.cache,
                 &Transition {
-                    state: state.live,
+                    state: state.live(),
                     code,
                     minterm,
                     ctx,
                 },
                 governor,
             )?;
-            next.live = mk_or(
+            next.set_live(mk_or(
                 stepped,
                 self.compiled.root,
                 &mut self.session.arena,
                 governor,
-            )?;
+            )?);
         }
-        next.at_start = false;
-        next.prev_word = is_word(character);
+        next.set_flag(DfaState::AT_START, false);
+        next.set_flag(DfaState::PREV_WORD, is_word(character));
         Ok(next)
     }
 
@@ -1243,16 +1251,16 @@ impl<'p> DerivativeDfa<'p> {
         state: DfaState,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        if state.utf8 != Utf8::Boundary {
+        if state.utf8() != Utf8::Boundary {
             return Ok(false);
         }
-        if state.matched {
+        if state.matched() {
             return Ok(true);
         }
         let ctx = state.context(true, false);
         cached_nullable(
             &self.session.arena,
-            state.live,
+            state.live(),
             ctx,
             &mut self.session.nullability,
             governor,
@@ -1294,13 +1302,16 @@ impl<'p> DerivativeDfa<'p> {
         state: DfaState,
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
-        if state.utf8 == Utf8::Invalid {
+        if state.utf8() == Utf8::Invalid {
             return Ok(true);
         }
-        if state.matched {
+        if state.matched() {
             return Ok(false);
         }
-        for (term, at_start) in [(state.live, state.at_start), (self.compiled.root, false)] {
+        for (term, at_start) in [
+            (state.live(), state.at_start()),
+            (self.compiled.root, false),
+        ] {
             let ctx = Ctx {
                 at_start,
                 at_end: false,
@@ -1323,25 +1334,115 @@ impl<'p> DerivativeDfa<'p> {
 }
 
 impl DfaState {
+    const LIVE_MASK: u64 = 0xFFFF_FFFF;
+    const MATCHED: u64 = 1 << 32;
+    const AT_START: u64 = 1 << 33;
+    const PREV_WORD: u64 = 1 << 34;
+    const CORE_MASK: u64 = (1 << 35) - 1;
+
+    const fn initial(live: u32) -> Self {
+        Self {
+            packed: live as u64 | Self::AT_START,
+        }
+    }
+
+    const fn live(self) -> u32 {
+        let bytes = self.packed.to_le_bytes();
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+
+    const fn matched(self) -> bool {
+        self.packed & Self::MATCHED != 0
+    }
+
+    const fn at_start(self) -> bool {
+        self.packed & Self::AT_START != 0
+    }
+
+    const fn prev_word(self) -> bool {
+        self.packed & Self::PREV_WORD != 0
+    }
+
+    const fn set_live(&mut self, live: u32) {
+        self.packed = (self.packed & !Self::LIVE_MASK) | live as u64;
+    }
+
+    const fn set_flag(&mut self, flag: u64, value: bool) {
+        self.packed = if value {
+            self.packed | flag
+        } else {
+            self.packed & !flag
+        };
+    }
+
+    const fn utf8(self) -> Utf8 {
+        match (self.packed >> 35).to_le_bytes()[0] & 3 {
+            0 => Utf8::Boundary,
+            1 => {
+                let bytes = (self.packed >> 37).to_le_bytes();
+                Utf8::Partial {
+                    bits: u32::from_le_bytes([bytes[0], bytes[1], bytes[2] & 0x1F, 0]),
+                    remaining: (self.packed >> 58).to_le_bytes()[0] & 3,
+                    length: (self.packed >> 60).to_le_bytes()[0] & 7,
+                }
+            }
+            2 => Utf8::Invalid,
+            // Private constructors emit only tags zero, one and two. A
+            // literal panic keeps this invariant failure usable in const code.
+            _ => panic!("native DFA state has an unassigned UTF-8 tag"),
+        }
+    }
+
+    const fn set_utf8(&mut self, utf8: Utf8) {
+        let encoded = match utf8 {
+            Utf8::Boundary => 0,
+            Utf8::Invalid => 2 << 35,
+            Utf8::Partial {
+                bits,
+                remaining,
+                length,
+            } => {
+                // Persistent partials contain at most fifteen payload bits:
+                // the final scalar is never stored as Partial. Retain the
+                // wider Unicode bound without rejecting provisional prefixes.
+                assert!(
+                    bits <= 0x1F_FFFF,
+                    "native DFA UTF-8 payload exceeds its field"
+                );
+                assert!(
+                    length >= 2 && length <= 4 && remaining > 0 && remaining < length,
+                    "native DFA UTF-8 position exceeds its field"
+                );
+                (1 << 35)
+                    | ((bits as u64) << 37)
+                    | ((remaining as u64) << 58)
+                    | ((length as u64) << 60)
+            }
+        };
+        // Boundary/Invalid have no payload; preserve all core fields while
+        // clearing the entire prior UTF-8 region, including its unused bits.
+        self.packed = (self.packed & Self::CORE_MASK) | encoded;
+    }
+
     const fn context(self, at_end: bool, next_word: bool) -> Ctx {
         Ctx {
-            at_start: self.at_start,
+            at_start: self.at_start(),
             at_end,
-            prev_word: self.prev_word,
+            prev_word: self.prev_word(),
             next_word,
             viable: false,
         }
     }
 
     const fn invalid(mut self) -> Self {
-        self.utf8 = Utf8::Invalid;
+        self.set_utf8(Utf8::Invalid);
         self
     }
 
     /// The number of bytes of a partially decoded character this state has
     /// consumed: zero at a character boundary and after invalid UTF-8.
     pub(crate) const fn partial_bytes(self) -> usize {
-        match self.utf8 {
+        match self.utf8() {
             Utf8::Partial {
                 remaining, length, ..
             } => (length - remaining) as usize,
@@ -1360,10 +1461,9 @@ impl DfaState {
     /// result is therefore [`DerivativeDfa::accepting`] exactly when the
     /// bytes before the character's lead byte are.
     pub(crate) const fn character_start(self) -> Option<Self> {
-        match self.utf8 {
+        match self.utf8() {
             Utf8::Partial { .. } => Some(Self {
-                utf8: Utf8::Boundary,
-                ..self
+                packed: self.packed & Self::CORE_MASK,
             }),
             Utf8::Boundary | Utf8::Invalid => None,
         }

@@ -853,6 +853,8 @@ pub struct CompiledGrammar {
     /// of any alternative (see `CodecContext::openers`).
     pub(crate) call_markup: [crate::contract::ScratchVec<crate::contract::ScratchVec<u8>>; 2],
     pub(crate) programs: [Program; 2],
+    /// Exact native priority for deciding inserted-wrapper completions.
+    pub(crate) trail_matcher: compile::TrailMatcher,
     pub(crate) stray: automaton::Trie,
     pub(crate) longest: usize,
     pub(crate) layouts: crate::contract::ScratchVec<Option<crate::contract::ScratchVec<u8>>>,

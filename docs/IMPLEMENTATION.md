@@ -2,20 +2,161 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Deferred report release retains an exact unchanged-input certificate between
+its original release points. Open/completed transitions, whole/report insertion,
+matching reader retirement, abandonment and EOF invalidate it before reuse.
+Unrelated retirements can omit a proven no-op table census; real release order,
+outread decisions and payload disposal remain complete. Certificate controls
+and performed comparisons retain explicit admission.
+
+The reasoning-block mirror checks a possible following closer's first byte
+before scanning for an earlier opener. Exact and misspelled closers require
+that same byte; incompatible endings omit the unused scan while retaining the
+complete positive source and provenance path. Query controls and comparisons
+retain explicit admission.
+
+Repair search keys encode their five unsigned integer fields in shortest
+base-128 form, retaining status, mode and the complete edit digest. Native tie
+ordering and exact duplicate identity remain unchanged; actual key bytes and
+fallible buffers retain the search's existing admissions.
+
+Native ownership classification occurs at actual submode and closure changes.
+A revalidated table index can prove the candidate floor equal to the current
+ready continuation origin; other native lexical floors cannot precede it.
+Marker, report, turn and coverage accounting retain their normal paths. One
+lazy per-byte repetition query rules out impossible table certificates while
+preserving every positive class and body guard.
+
+Reading equality rejects differing native dialect identities before traversing
+argument metadata. Equal identities retain all original comparisons. Governed
+schema keyword lookup checks membership before vocabulary applicability; absent
+or duplicate keywords omit unused applicability work, while present keywords
+retain dialect and reference-sibling rules.
+
+Compiled programs retain one owned mask proving completion through zero-input
+edges. Repair and native EOF queries read that mask under the caller governor;
+call-ending metadata and protocol-fence validation borrow the same prepared
+proof. The compiler uses the original backward reachability walk, including
+Next and Insert edges, and retains the distinct call-boundary calculation.
+Descriptor, construction controls and mask capacity remain admitted. Invalid
+query PCs fail explicitly. Runtime, cold-compilation and resource qualification
+remain pending automatic CI.
+
+Each schema evaluation frame resolves its immutable compiled location once and
+shares that borrowed keyword view with same-location helpers. Keyword lookups,
+applicability, child evaluation, dynamic references, active-cycle checks, Depth
+and report ordering retain their existing governed paths. Child frames resolve
+their own views; no cross-frame cache is retained. Layout helpers retain their
+independent route walks. The view and recursive borrow controls keep a typed
+owner for their full frame lifetime. Runtime and resource qualification remain
+pending automatic CI.
+
+Schema typing carries the last whole-instance validation report with its exact
+accepted argument value. Quiet counterfactual probes change only site flags;
+they never replace that report. The resolver publishes its existing diagnostics
+without validating the same value again, after observing the current governor.
+Paths without schema-typing rounds retain ordinary validation. Typed carrier
+owners span ledger construction, consumption, refusal and readback disposal;
+the report's original heap admissions remain separate. Runtime and resource
+qualification remain pending automatic CI.
+
+Revision lookup orders its existing compile-time operator index by byte length,
+then lexical identifier. Runtime search compares lengths before scanning text;
+only equal lengths require the original full identifier comparison. Stable
+ordinals preserve the first registry match for duplicate IDs. Query controls
+retain a typed scratch owner, and each performed comparison admits its work.
+Runtime and resource qualification remain pending automatic CI.
+
+A failed header with one immutable predecessor chain replays the same capture
+transformer from root to tip without constructing a sparse summary map. Every
+history node is checked before replay; unsupported histories retain the same
+absent proof. Encountering a packed branch restarts the complete memoized
+algorithm from the original root. Reverse discovery, forward reads, capture
+application, control metadata and backing buffers retain explicit admissions.
+Runtime and resource qualification remain pending automatic CI.
+
+Selected failed-header certification stops once its complete intersection is
+absent. Later read-only contributors cannot restore that proof; selection,
+source extent, native frame ownership and prior-selection intersection retain
+their existing persistence path. The absorbing-result probe admits its work.
+Runtime and resource qualification remain pending automatic CI.
+
+Ordinary native table steps publish byte-ready terminals directly to their
+immediately merged live cohort, omitting a stack round trip and its redundant
+dispatch. Active replay work retains LIFO order; the existing full key, rank and
+history merge still precedes every consumer. EOF, repair replay and seeded
+closures retain ordinary scheduling. The temporary optional cutoff is admitted
+within the expanded engine metadata owner and resets on success or refusal.
+Runtime, refusal-order and resource qualification remain pending automatic CI.
+
+Native body-run selection classifies the current instruction before inspecting
+its predecessor byte. Incremental codecs cannot qualify and omit that unused
+comparison; supported bodies retain every run, owner and codec guard. Existing
+operation charges follow the reordered work. Runtime savings and dense-body
+tradeoffs remain pending automatic CI.
+
+The native derivative DFA state uses one canonical private word containing its
+complete term ID, assertion flags and UTF-8 decoding position. Partial prefixes
+retain their payload and position; boundary and invalid states clear only the
+UTF-8 region. Character-start projection preserves the sticky match flag.
+Exact class-cache state comparisons now read that word. Native stepping,
+acceptance, deadness, charging and readable diagnostics keep their existing paths;
+storage tariffs remain unchanged. Runtime and portable qualification are pending CI.
+
+Recovery admits eligible resolved native paths after failed-frame certificates
+and framing dominance have selected the surviving sources. Ordinary semantic
+equivalence still retains the paths that competed for its representative;
+certified frame shadows contribute provenance without another candidate grant.
+Contested spans admit their remaining paths individually before the existing
+whole-message product gate. Standalone native admission remains unchanged.
+Runtime, refusal-order and resource qualification remain pending automatic CI.
+
+Native class queries retain sixty-four exact successful transition/deadness entries
+per initialized class, indexed by the low byte bits with full state and byte tags.
+Collisions use the original native query. DFA and governed row construction
+publish together; unused classes allocate no row, and rows survive arena resets
+for the lifetime of their native DFA. Byte proofs inspect the same selected
+entry and keep every existing self-loop guard. Query and initialization work,
+row capacity and construction controls remain admitted. Runtime and resource
+qualification remain pending automatic CI.
+
+An unchanged native frontier pinned at source zero retains its complete prior
+projection and settled history after the ordinary engine-floor query succeeds.
+Nonnegative report and marker floors cannot move that limit. Marker ownership
+is explicitly deferred and computed by the byte-accounting consumer when needed;
+native parsing, report-driven invalidation and UTF-8 publication remain complete.
+The expanded optional marker floor is covered by the actual metadata assertions.
+Runtime and resource qualification remain pending automatic CI.
+
+Standalone recognition omits the per-byte structural frontier projection that
+only recovery intake consumes. Intake prepares ownership before accepting input
+and keeps its existing frontier, event and counter computations. Native byte
+processing, report dispatch, EOF publication and cancellation remain governed.
+Runtime and resource qualification remain pending automatic CI.
+
+Standalone report dispatch also omits the unused source-order index. Its queue
+retains explicit untracked handles and admits their storage directly; every
+dequeue validates the fixed tracking mode before mutation. Prepared intake keeps
+both indexes and all terminal owner checks. Payload admissions, dispatch order
+and refusal cleanup remain separate. Runtime qualification is pending CI.
+
 Turn-path discovery retains normalized Content ranges and immutable stored
 Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
 preserve branch order without copying each prefix. Exact governed equality keeps
 the first equal plan and intersects its failure proofs in discovery order. Each
-distinct plan crosses the existing Candidate gate before its public IR is
-materialized. One bounded descriptor owner covers discovery handles, an incoming
+distinct native plan crosses the Candidate gate before standalone recognition
+publishes its IR. Recovery discovers those paths under the same Work, ScratchBytes
+and cancellation authority, then admits its whole-message candidate product after
+source-preserving semantic framing folds. Resolver candidate charges remain separate.
+One bounded descriptor owner covers discovery handles, an incoming
 plan and serial materialization; backing buffers retain their separate owners.
 Plan, path and checkpoint storage release with their owners.
 Dominator storage, final raw copies and annotation, resolution, layout admission
 and Forest payload/index ownership remain separate work. Compilation, behavioral
 and resource qualification remain pending normal verification.
 
-Class-run certificates retain their logical position in the existing absolute
-cursor. Repeated hits update only that cursor; every native boundary restores
+Class-run certificates use the engine's shared absolute cursor at completed byte
+boundaries. Repeated hits retain their proof; every native boundary restores
 physical `pos` and `reach` before position reads, thread movement or mutation. Single
 and global materialization admit all stores before changing any proof or
 subject. All original PCs, phases, histories, anchors and qualification guards
@@ -494,6 +635,213 @@ requirement. Fine-grained `network/af_unix` is required; no coarse network
 fallback, file-language matcher or host authority is implied. Complete admitted-
 graph synthesis, original v3/v4 integration, static permission/owner/deny
 analysis, other IPC families and host confinement remain under #34/#35.
+
+Streaming intake also accepts the class-leading derived programs used by marker
+projections. Their initial class runs become candidate owners before input is
+consumed; only literal spelling prefixes contribute to the finite holdback bound,
+which still includes UTF-8 carry. Completion envelopes and failed-frame proofs
+survive source retirement and traced resolution. Proven dominated readings union
+native origin correlations before their owner is removed. The existing long-name
+projection cases now check candidate ownership before commitment and complete
+stream/batch parity. Completion and salvage payload charges exclude refunded
+joint-capture temporaries; unqueued materialization refusals destroy payloads
+before refunding their admissions. Legacy multi-segmentation ownership remains
+unchanged. Combined-head compilation and behavioral qualification remain pending
+automatic CI.
+
+JSON envelope key classification reuses one governed visitation-tag table per
+program. Each literal PC names its own traversal, preserving full successor and
+colon checks through cycles and converging paths without repeatedly initializing
+a program-sized boolean table. Class-only programs allocate no tag table. Actual
+8-byte tag slots, generation controls, comparisons and stores remain admitted;
+peak scratch can increase. This removes repeated initialization work and does not
+establish that every built-in grammar fits its original budget. Compilation and
+resource qualification remain pending automatic CI.
+
+Native origin membership now retains whether a whole-option dominance proof
+suppressed that witness. Every raw identity and original span remains stored;
+ordinary equivalence can promote an identity back to genuine competition and
+never demotes one. Final event limits, revision agreement and ledger witnesses
+check all retained native IDs and intrinsic reading bounds while comparing only
+selected or genuinely competing origins against the kept semantic call. The
+first origin must remain the selected competitor. This preserves proven exterior
+frame dominance without rewriting source facts or relaxing genuine span and
+semantic agreement checks. Actual 16-byte slots, role controls and mutation work
+remain admitted. The existing singleton-array framing case now checks complete
+stream events, original arguments and exterior content across selected splits.
+Compilation, corpus totals and resource qualification remain pending automatic CI.
+
+Certified class cohorts now use the engine's shared absolute cursor at completed
+byte boundaries. Each successful byte fold visits every retained cohort once;
+cache hits keep the byte proof without comparing, incrementing or storing a
+separate cursor. A pre-byte opener or mismatch supplies its explicit old position
+before native processing. Clear-all consumption runs only at completed boundaries;
+an unexpected occupied proof at an ordinary split fails before mutation. Existing
+thread, history, owner, queue, DFA, ASCII and source-position certification remains
+required. Actual hit work removes the deleted comparison, addition and store;
+slot and cursor-handoff metadata stays admitted. Existing long-name, Unicode,
+chunk, refusal and budget cases cover these paths. Runtime savings and original
+fixed-budget success remain pending automatic CI.
+
+Healthy source publication now receives a completed-byte UTF-8 boundary only after
+capture, encoding and recognition have all succeeded. Their private cursors start
+at zero and advance once on the sole healthy byte path; refusal abandons that path.
+This removes repeated snapshot reads while preserving malformed-subpart boundaries.
+Exact source-cutoff cache hits reuse their already validated result without writing
+the identical entry again. The encoding classification directly returns its boundary,
+removing a second pending-length choice after recognition. Encoding and cache probes
+retain their actual Work admission. The extra boundary scalar across recognition is
+included in the fixed metadata reservation; no buffer is added.
+
+Literal thread construction and PC-changing closures now establish opener membership
+once. Byte steps retain the necessary submode check without repeating a linear
+opener search. Closure classification probes the compiler's sorted, unique opener
+PCs by governed binary search. Repair and equal-PC merge transitions preserve the
+membership implication; genuine opener completion checks remain unchanged. These
+changes remove computation without changing parser anchors or resource limits.
+Compilation, runtime savings and fixed-budget acceptance remain pending automatic CI.
+
+The first native merge can also reuse a candidate-only ownership proof for a
+single-attempt cohort. New lexical seeds invalidate that proof before insertion.
+For sufficiently large cohorts, ordinary merging still runs, then publishes the
+same sole candidate origin without another survivor census. The temporary owner
+descriptor and actual checks are admitted. Later repair merges retain their full
+censuses because held failures can restore lexical states. One-thread cohorts
+retain their existing admission path. Runtime benefit remains pending automatic CI.
+
+Native non-grouped call bodies can reuse the same admitted byte-proof slots when
+their real codec feed is a no-op. Raw, XML-parameter and key/value codecs retain
+the full source for parsing at the delimiter; JSON and Pythonic parsers continue
+their ordinary incremental steps. Qualification proves every opened owner still
+has a body, every thread matches its owner, delimiter state is unchanged, and no
+misspelling, history, completion or pending work can change the interpretation.
+ASCII repetition and minimum run length exclude initial guards. Cache hits advance
+only the shared cursor; all original PCs, histories, ranks, ownership and codec slots
+remain. Mismatches, new openers and native boundaries materialize positions before
+ordinary processing. Source, context, reasoning and counter folds still process
+every byte. The body qualification's actual temporary controls are admitted within
+a named 192-byte reservation. Existing long-argument, delimiter, chunk, refusal,
+cost and fuzz cases remain the qualification scope; no new execution or fixed-budget
+success is claimed before automatic CI.
+
+Run eligibility now prepares native pure-body presence during the governed
+instruction scan. The boolean and existing initial-class mask share their actual
+64-byte descriptor owner; equality includes both facts. Programs without such
+bodies avoid runtime proof probes. Active incremental codecs still decline first,
+and known past/pending or non-root body states decline before full certification.
+The complete body guards remain required.
+
+Weak-name admission now prepares a relation's native name/ID partition only after
+a declared tool name or alias actually matches the captured byte prefix. A false
+prefix cannot use any split from that partition. A matching prefix still runs the
+complete native partition and original boundary search, including every word,
+UTF-8 and suffix constraint. The relation-local optional owner remembers an empty
+result as well as a nonempty one; existing prefix/search fees and new selection
+work are admitted. Complete alternative expansion remains unchanged. Compiler
+and runtime resource qualification remain pending automatic CI.
+
+Private turn-history nodes now retain their actual governed vector owner through
+recognition and Builder traversal. Root insertion, growth and relocation use the
+same fallible vector path under the original 112-byte node bound. Native nodes
+never escape into the owned recognized pieces, so consuming or dropping the
+recognizer destroys their buffer and releases its reservation before later semantic
+assembly. Output trees, native capture facts, provenance forests and source grants
+remain independently owned. The additional header and lease are admitted within
+a named 48-byte metadata reservation shared with weak-header storage. Capacity peaks, insertion/relocation Work
+and scratch refusal points change; current resource acceptance remains pending CI.
+
+Recovery prepares ownership accounting on a pristine recognizer before publishing
+its intake state. The existing monotone engine tracking state also selects the
+pending candidate subset index. Standalone native recognition has no consumer for
+that subset and maintains only the mandatory report-source index. Insertion,
+removal and terminal validation use the same lifetime selection while preserving
+real report origins and dispatch order. Late preparation fails explicitly; no
+existing report is silently omitted. Batch and streaming recovery retain identical
+preparation and all candidate accounting. Cold setup work changes, and resource
+acceptance remains pending automatic CI.
+
+Tool-set assembly prepares the maximum exact name/alias byte length under an
+owned 24-byte metadata reservation. Codec context declines an impossible exact
+lookup before scanning the captured bytes; weak-name admission still checks
+every original joint name/ID prefix partition. This imposes no spelling cap.
+
+Weak-header barriers now use an ordered governed map. Search, shifting and
+relocation are admitted before mutation; capacity remains owned until turn drop.
+Native event correlation copies raw zero and each distinct raw index referenced
+by semantic reading order, preserving repeated references to the same identity.
+Unreferenced raw facts are never constructed. The temporary index owns its
+capacity and 192-byte control reservation, and refusal drops the complete trace.
+No output, provenance or original materialization grants are retired by this
+change. Runtime and fixed-budget qualification remain pending automatic CI.
+
+Opening election now keeps an exact count of unopened attempt records. An
+all-opened table cannot emit another opening, so it omits the repeated thread
+election walk; tables with an unopened record retain the complete original
+election. Creation, opening, retirement, abandonment and EOF clear update the
+count beside the corresponding record mutation, with checked work admission.
+The added counter and temporary controls are admitted before table allocation.
+
+XML lookahead reuses the complete declared-owner scan to decide whether a new
+parameter opener ends the current value, removing a duplicate scope walk.
+Aliases, enclosing scopes and unknown-tool behavior remain unchanged. Semantic
+resolution moves a sole owned occurrence into typing and admits unresolved
+root/name clones only where each clone is actually constructed. Object assembly
+keeps its independent payload reservations. These remove discarded copies and
+unused reservations without refunding accepted output or provenance storage.
+Current compiler, runtime and fixed-budget acceptance remain pending CI.
+
+Each table also maintains the exact minimum source start of retained past
+completions. Appending updates it, and existing partition/retain passes rebuild
+it on removal. Byte ownership reads that minimum without revisiting the retained
+cohort after each invalidation. Every completion, history and ordering remains;
+vector and minimum updates have no intervening fallible operation. Table metadata
+admits 56 bytes for ownership floors, unopened count and past minimum, plus the
+112-byte shared controls. Removed parked-thread reservations release before later
+Work admission can refuse. Runtime savings and fixed-budget success remain pending
+automatic CI.
+
+Native body-run qualification now rejects an unequal preceding byte before reading
+instructions, codecs or owner cohorts; every supported proof still requires the
+complete eight-byte repetition and original source-position checks. Non-grouped
+settlement with no gathered failure has no repair seed or resynchronization
+boundary, so it preserves the first merge without marking it dirty. With pending
+stalled failures and unchanged winners, settlement collects the same ordered
+past-reading identities without another identity merge. Any attempted repair
+keeps the conservative dirty result and full merge/census; EOF handling remains
+unchanged. These remove actual redundant operations while retaining admissions
+for the remaining probes and scans. Resource acceptance remains pending CI.
+
+An actual native candidate starting at source zero covers the entire admitted
+source, including UTF-8 carry. Byte ownership returns that explicit projection
+after the ordinary engine query; intake then publishes zero held bytes and the
+received candidate-byte count without recombining marker, report, turn or settled
+interval minima. Source, encoding, native parsing, frontier normalization and
+event publication still complete first. Other origins retain the full original
+calculation. The selection probe is admitted on every path; no epoch or retained
+cache is added. Intake's 112-byte control reservation includes the actual private
+projection enum alongside its previous carriers. Runtime qualification remains
+pending automatic CI.
+
+Native codec boxes now own their declared storage from before allocation until
+the native state is destroyed. Context lookup and complete, deferred or truncated
+finish keep that owner alive through the full native call, including refusal.
+The box reservation releases on its original meter afterward; parser growth,
+argument trees, edits, source and output grants remain independent. Slot capacity
+uses one governed buffer with a 96-byte cell bound, including its box-lease header;
+empty slots retain their real capacity reservation. The added buffer header and
+lease have a 32-byte reservation, and construction/finalization controls have
+asserted 640-byte phase bounds. Arena reset and destruction physically free the
+ordinary value/edit/chain/lead/map buffers before releasing their aggregate grants.
+Current runtime and fixed-budget qualification remain pending automatic CI.
+
+The first ordinary merge can also retain a proved absence of lexical ownership
+across multiple attempts. New lexical seeds invalidate that fact before insertion;
+ordinary transitions can only retain or remove existing lexical bits. Such a merge
+still checks the candidate bit and recomputes the exact candidate minimum from its
+actual winners, omitting the empty lexical projection. Other first merges and all
+repair/final-stop censuses retain both phases. The selector and remaining phase
+work are admitted, and empty cohorts keep their original zero-census path. No new
+state, buffer or source origin is inferred. Runtime qualification remains pending CI.
 
 ## Shared contracts
 
