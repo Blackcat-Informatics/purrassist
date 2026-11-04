@@ -705,6 +705,8 @@ pub(crate) struct Step<'a, 's> {
     pub(crate) quoted_openers: &'a mut Vec<(u64, usize)>,
     /// The table's live attempts (see `Step::opens_call`).
     pub(crate) attempts: &'a [Attempt],
+    /// Only the ordinary table step has a guaranteed canonical merge next.
+    ready_limit: Option<usize>,
 }
 
 impl<'s> Step<'_, 's> {
@@ -806,6 +808,22 @@ impl<'s> Step<'_, 's> {
         Ok(())
     }
 
+    /// Ordinary byte scheduling publishes ready terminals directly to the
+    /// cohort that settlement immediately sorts and merges. Repair replay and
+    /// EOF retain the original stack order and dispatch path.
+    fn advance_settled(
+        &mut self,
+        stack: &mut ScratchVec<Thread>,
+        until: usize,
+        out: &mut Out,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.ready_limit = Some(until);
+        let result = self.advance(stack, until, false, out, governor);
+        self.ready_limit = None;
+        result
+    }
+
     fn fail(out: &mut Out, thread: Thread, at: usize, reason: Rejection) -> Result<(), StopReason> {
         out.failed.push(Failure {
             thread,
@@ -817,7 +835,12 @@ impl<'s> Step<'_, 's> {
     }
 
     /// Queue `thread`, which has moved to `thread.pos`.
-    fn queue(&self, mut thread: Thread, stack: &mut ScratchVec<Thread>) -> Result<(), StopReason> {
+    fn queue(
+        &self,
+        mut thread: Thread,
+        stack: &mut ScratchVec<Thread>,
+        out: &mut Out,
+    ) -> Result<(), StopReason> {
         if !matches!(
             thread.sub,
             Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
@@ -833,7 +856,14 @@ impl<'s> Step<'_, 's> {
                 return Ok(()); // A zero-width cycle: this lineage adds nothing.
             }
         }
-        stack.push(thread)
+        if self.ready_limit.is_some_and(|limit| thread.pos >= limit) {
+            // The omitted stack round trip would only dispatch this terminal
+            // to out.live. All active work keeps its original LIFO order;
+            // settlement canonicalizes these ready terminals before use.
+            out.live.push(thread)
+        } else {
+            stack.push(thread)
+        }
     }
 
     fn step(
@@ -1002,7 +1032,7 @@ impl<'s> Step<'_, 's> {
                 }
                 thread.sub = Sub::Lit(depth + 1);
                 thread.pos = pos + 1;
-                return self.queue(thread, stack);
+                return self.queue(thread, stack, out);
             }
             Sub::Variant(node) => (&tables.variants.trie, EditOperator::CloserVariant, node),
             Sub::Confusable(node) => (
@@ -1044,7 +1074,7 @@ impl<'s> Step<'_, 's> {
                 pos: pos + 1,
                 ..thread
             };
-            self.queue(longer, stack)?;
+            self.queue(longer, stack, out)?;
         }
         if trie.accept(child).is_none() {
             return Ok(());
@@ -1073,7 +1103,7 @@ impl<'s> Step<'_, 's> {
                 kind: FenceKind::Skip,
             };
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         let edit = MarkupEdit {
             operator,
@@ -1091,7 +1121,7 @@ impl<'s> Step<'_, 's> {
             thread.sub = Sub::Lit(0);
             thread.entry = pos + 1;
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         self.finish_literal(thread, next, pos + 1, stack, out, governor)
     }
@@ -1213,7 +1243,7 @@ impl<'s> Step<'_, 's> {
         let state = scan.pack();
         thread.sub = Sub::Resync(state, index_u32(matched));
         thread.pos = pos + 1;
-        self.queue(thread, stack)
+        self.queue(thread, stack, out)
     }
 
     /// One byte of a misspelled closer of literal `lit` after its slip: the
@@ -1245,7 +1275,7 @@ impl<'s> Step<'_, 's> {
         }
         thread.sub = Sub::Misspelled(index_u32(resume), slip);
         thread.pos = pos + 1;
-        self.queue(thread, stack)
+        self.queue(thread, stack, out)
     }
 
     /// The canonical spelling of closer literal `lit` failed on `byte` after
@@ -1326,16 +1356,16 @@ impl<'s> Step<'_, 's> {
                     governor,
                 )?;
             } else {
-                self.queue(at(Sub::Misspelled(index_u32(resume), slip)), stack)?;
+                self.queue(at(Sub::Misspelled(index_u32(resume), slip)), stack, out)?;
             }
         }
         // Inserted before the expected byte.
         if word {
-            self.queue(at(Sub::Misspelled(slip, slip)), stack)?;
+            self.queue(at(Sub::Misspelled(slip, slip)), stack, out)?;
         }
         // The expected byte and the next swapped.
         if depth + 1 < inner_end && canonical[depth + 1] == byte && canonical[depth] != byte {
-            self.queue(at(Sub::Transposed(slip, slip)), stack)?;
+            self.queue(at(Sub::Transposed(slip, slip)), stack, out)?;
         }
         Ok(())
     }
@@ -1469,7 +1499,7 @@ impl<'s> Step<'_, 's> {
         if let Some(state) = next_state {
             thread.sub = Sub::JsonSkip(state);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         let operator = match state {
             1 => EditOperator::JsonTrailingComma,
@@ -1529,7 +1559,7 @@ impl<'s> Step<'_, 's> {
         if let Some(state) = next_state {
             thread.sub = Sub::JsonInner(state, node);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         if state != 6 {
             return Self::fail(out, thread, pos, Rejection::Malformed { at: pos });
@@ -1593,7 +1623,7 @@ impl<'s> Step<'_, 's> {
             }
             thread.sub = Sub::Class(stepped);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         if thread.entry < pos && dfa.accepting(state, governor)? {
             // The run ended before this byte, which the continuation consumes.
@@ -1703,7 +1733,7 @@ impl<'s> Step<'_, 's> {
                     kind: FenceKind::Body,
                 };
                 thread.pos = pos + 1;
-                return self.queue(thread, stack);
+                return self.queue(thread, stack, out);
             }
             if self.repaired_delimiter(&thread, set, index) {
                 // A delimiter that ends the body only by a repair (a closer
@@ -1727,7 +1757,7 @@ impl<'s> Step<'_, 's> {
             };
             thread.sub = Sub::Body(stepped | flags, codec);
             thread.pos = pos + 1;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         };
         thread.hist = self.closer_in_value(&thread, set, end, governor)?;
         self.end_body(
@@ -2568,12 +2598,12 @@ impl<'s> Step<'_, 's> {
             LineDecision::More => {
                 thread.sub = Sub::Fence { end, suffix, kind };
                 thread.pos += 1;
-                self.queue(thread, stack)
+                self.queue(thread, stack, out)
             }
             LineDecision::End => self.finish_fence(thread, thread.pos + 1, stack, out, governor),
             LineDecision::Invalid if kind == FenceKind::Body => {
                 thread.sub = Sub::Body(super::automaton::ROOT, None);
-                self.queue(thread, stack)
+                self.queue(thread, stack, out)
             }
             LineDecision::Invalid => {
                 let at = thread.entry;
@@ -2638,7 +2668,7 @@ impl<'s> Step<'_, 's> {
                 thread.sub = Sub::Lit(0);
                 thread.entry = resume;
                 thread.pos = resume;
-                self.queue(thread, stack)
+                self.queue(thread, stack, out)
             }
             _ => unreachable!("validated protocol fence terminal"),
         }
@@ -2666,7 +2696,7 @@ impl<'s> Step<'_, 's> {
                 kind: FenceKind::Literal,
             };
             thread.pos = at;
-            return self.queue(thread, stack);
+            return self.queue(thread, stack, out);
         }
         if !thread.opened && !self.program.deferred() && self.program.openers.contains(&thread.pc) {
             thread.opened = true;
@@ -2804,7 +2834,7 @@ impl<'s> Step<'_, 's> {
                         pending: 0,
                         ..thread
                     };
-                    self.queue(next, stack)?;
+                    self.queue(next, stack, out)?;
                     continue;
                 }
             };
@@ -2820,7 +2850,7 @@ impl<'s> Step<'_, 's> {
                 cost,
                 ..thread
             };
-            self.queue(next, stack)?;
+            self.queue(next, stack, out)?;
         }
         Ok(())
     }
@@ -4811,7 +4841,9 @@ const _: () = assert!(
         usize,
         Option<usize>,
         Option<usize>,
-    )>() <= 112
+        // Ordinary scheduling's temporary direct-publication cutoff.
+        Option<usize>,
+    )>() <= 128
 );
 
 fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
@@ -5470,7 +5502,7 @@ impl<'s> Engine<'s> {
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let ownership_bytes = size(table_count)
             .checked_mul(56)
-            .and_then(|bytes| bytes.checked_add(112))
+            .and_then(|bytes| bytes.checked_add(128))
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
         governor.charge(Resource::Work, size(table_count))?;
@@ -5635,6 +5667,7 @@ impl<'s> Engine<'s> {
                 resynced: &mut self.resynced,
                 quoted_openers: &mut self.quoted_openers,
                 attempts: table.attempts.as_slice(),
+                ready_limit: None,
             },
             &mut self.stack,
             &mut self.out,
@@ -5798,7 +5831,7 @@ impl<'s> Engine<'s> {
         if let Some(thread) = spawned {
             step.closure(thread, thread.pc, at, stack, out, governor)?;
         }
-        step.advance(stack, at + 1, false, out, governor)?;
+        step.advance_settled(stack, at + 1, out, governor)?;
         self.settle(table, at, None, governor)?;
         if run_candidate {
             self.remember_byte_run(table, byte, at + 1, governor)?;

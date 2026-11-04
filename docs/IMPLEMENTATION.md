@@ -2,6 +2,14 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Ordinary native table steps publish byte-ready terminals directly to their
+immediately merged live cohort, omitting a stack round trip and its redundant
+dispatch. Active replay work retains LIFO order; the existing full key, rank and
+history merge still precedes every consumer. EOF, repair replay and seeded
+closures retain ordinary scheduling. The temporary optional cutoff is admitted
+within the expanded engine metadata owner and resets on success or refusal.
+Runtime, refusal-order and resource qualification remain pending automatic CI.
+
 Native body-run selection classifies the current instruction before inspecting
 its predecessor byte. Incremental codecs cannot qualify and omit that unused
 comparison; supported bodies retain every run, owner and codec guard. Existing
