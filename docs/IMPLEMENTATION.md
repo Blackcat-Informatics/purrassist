@@ -2,6 +2,14 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+The native derivative DFA state uses one canonical private word containing its
+complete term ID, assertion flags and UTF-8 decoding position. Partial prefixes
+retain their payload and position; boundary and invalid states clear only the
+UTF-8 region. Character-start projection preserves the sticky match flag.
+Exact class-cache state comparisons now read that word. Native stepping,
+acceptance, deadness, charging and readable diagnostics keep their existing paths;
+storage tariffs remain unchanged. Runtime and portable qualification are pending CI.
+
 Recovery admits eligible resolved native paths after failed-frame certificates
 and framing dominance have selected the surviving sources. Ordinary semantic
 equivalence still retains the paths that competed for its representative;

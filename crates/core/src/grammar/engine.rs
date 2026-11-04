@@ -741,8 +741,9 @@ impl<'s> Step<'_, 's> {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<(DfaState, bool), StopReason> {
-        // Fixed row access, complete state/byte comparisons and result handoff.
-        governor.charge(Resource::Work, 13)?;
+        // Row lookup, bucket selection, canonical state-word and byte
+        // equality, and result handoff replace the former field comparisons.
+        governor.charge(Resource::Work, 6)?;
         let index = class_step_slot(byte);
         let steps = self.class_steps[class as usize]
             .as_ref()
