@@ -4643,7 +4643,7 @@ struct Table<'s> {
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
-    /// A ClassRun may hold logical pos/reach; consume it before position reads.
+    /// A `ClassRun` may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
     attempts: ScratchVec<Attempt>,
     trails: Vec<Trail>,
