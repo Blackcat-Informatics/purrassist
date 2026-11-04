@@ -3923,6 +3923,9 @@ fn more(rest: usize) -> String {
 struct Fold<'t> {
     segments: &'t [ResolvedSegment],
     branch: usize,
+    /// Resolved native paths still eligible after failed-frame certificates.
+    /// Ordinary semantic equivalence preserves this admission count.
+    native_paths: u64,
     origins: ScratchVec<OriginRow>,
     /// The dialects that read each call, by the call's source range.
     calls: BTreeMap<(usize, usize), BTreeSet<DialectId>>,
@@ -3938,6 +3941,10 @@ const _: () = assert!(
     core::mem::size_of::<(usize, Fold<'static>)>()
         <= <(usize, Fold<'static>) as ScratchCharge>::CHARGE
 );
+const _: () = assert!(
+    core::mem::size_of::<(usize, u64, Fold<'static>)>()
+        <= <(usize, Fold<'static>) as ScratchCharge>::CHARGE
+);
 
 struct FoldBorrow<'a>(&'a Fold<'a>);
 impl ScratchCharge for FoldBorrow<'_> {
@@ -3949,12 +3956,14 @@ impl<'t> Fold<'t> {
     fn new(
         segments: &'t [ResolvedSegment],
         base: CallSite,
+        native_paths: u64,
         trace: &NativeTrace,
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
         let mut fold = Self {
             segments,
             branch: base.0[1],
+            native_paths,
             origins: option_origins(segments, base, trace, governor)?,
             calls: BTreeMap::new(),
             attempts: BTreeMap::new(),
@@ -5329,6 +5338,7 @@ impl Recovery<'_> {
                     &FailureChoice::new(failure_proofs, piece, &choice.span, governor)?,
                     governor,
                 )?;
+                admit_native_paths(&options, governor)?;
                 push_scratch(&mut choices, options, governor)?;
             }
         }
@@ -6808,13 +6818,15 @@ fn fold_options<'t>(
     }
     let mut folds = ScratchVec::new(governor);
     for members in &groups {
-        let kept = equivalent_representative(options, members, output, failures, governor)?;
+        let (kept, native_paths) =
+            equivalent_representative(options, members, output, failures, governor)?;
         let kept_branch = kept
             .checked_add(1)
             .ok_or_else(|| invalid_input("fold capture branch overflows"))?;
         let mut fold = Fold::new(
             &options[kept],
             CallSite([piece, kept_branch, 0, 0]),
+            native_paths,
             trace,
             governor,
         )?;
@@ -6929,12 +6941,17 @@ fn equivalent_representative(
     output: &[u8],
     failures: &FailureChoice<'_>,
     governor: &mut Governor,
-) -> Result<usize, StopReason> {
+) -> Result<(usize, u64), StopReason> {
     let mut kept = None;
+    let mut native_paths = 0_u64;
     for &member in members {
         if failures.dominated(member, members, options, governor)? {
             continue;
         }
+        governor.charge(Resource::Work, 1)?;
+        native_paths = native_paths
+            .checked_add(1)
+            .ok_or_else(|| governor.stop_resource(Resource::Candidates))?;
         let preference = |index: usize| {
             let exact = options[index]
                 .iter()
@@ -6951,7 +6968,41 @@ fn equivalent_representative(
     }
     let kept =
         kept.ok_or_else(|| invalid_input("failed frame preference removed every representative"))?;
-    Ok(kept)
+    Ok((kept, native_paths))
+}
+
+/// Admit eligible native paths only when the span remains contested. Proven
+/// frame dominance has already removed its paths; semantic grouping alone
+/// does not erase the native paths that competed for the representative.
+fn admit_native_paths(options: &[Fold<'_>], governor: &mut Governor) -> Result<(), StopReason> {
+    const METADATA_BYTES: usize = 112;
+    const _: () = assert!(
+        core::mem::size_of::<(
+            ScratchLease,
+            u64,
+            core::slice::Iter<'static, Fold<'static>>,
+            Result<u64, StopReason>,
+            Range<u64>,
+            usize,
+        )>() <= METADATA_BYTES
+    );
+    let _metadata = governor.lease_scratch(size(METADATA_BYTES))?;
+    governor.charge(Resource::Work, size(options.len()).saturating_add(1))?;
+    let count = options.iter().try_fold(0_u64, |count, fold| {
+        if fold.native_paths == 0 {
+            return Err(invalid_input("resolved native fold has no eligible path"));
+        }
+        count
+            .checked_add(fold.native_paths)
+            .ok_or_else(|| governor.stop_resource(Resource::Candidates))
+    })?;
+    if count > 1 {
+        for _ in 0..count {
+            governor.charge(Resource::Work, 1)?;
+            governor.charge(Resource::Candidates, 1)?;
+        }
+    }
+    Ok(())
 }
 
 /// Record on a reading built from folded options the dialects of every

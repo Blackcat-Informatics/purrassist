@@ -2,6 +2,14 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Recovery admits eligible resolved native paths after failed-frame certificates
+and framing dominance have selected the surviving sources. Ordinary semantic
+equivalence still retains the paths that competed for its representative;
+certified frame shadows contribute provenance without another candidate grant.
+Contested spans admit their remaining paths individually before the existing
+whole-message product gate. Standalone native admission remains unchanged.
+Runtime, refusal-order and resource qualification remain pending automatic CI.
+
 Native class queries retain sixteen exact successful transition/deadness entries
 per initialized class, indexed by the low byte bits with full state and byte tags.
 Collisions use the original native query. DFA and governed row construction
