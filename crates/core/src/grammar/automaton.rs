@@ -692,6 +692,108 @@ impl MatcherBuild<PriorityOutputs> {
     }
 }
 
+const PRIORITY_MATCHER_CONTROL_BYTES: usize = 768;
+const _: () = {
+    // Prefix, terminal replay, BFS and final ownership publication.
+    assert!(
+        core::mem::size_of::<(
+            MatcherBuild<PriorityOutputs>,
+            MatcherCursor<'_>,
+            &mut MatcherBuild<PriorityOutputs>,
+            &mut MatcherCursor<'_>,
+            Result<PriorityMatcher, StopReason>,
+            &[PriorityLiteral<'_>],
+            &[PriorityLiteral<'_>],
+            &[u8],
+            &PriorityLiteral<'_>,
+            &TrieNode,
+            &ScratchVec<(u8, u32)>,
+            &mut [Option<(u32, u32)>; 2],
+            &mut [[Option<(u32, u32)>; 2]],
+            &mut PriorityOutputs,
+            Result<usize, usize>,
+            Result<u32, core::num::TryFromIntError>,
+            Result<(), StopReason>,
+            usize,
+            u32,
+            Option<u32>,
+            Option<(u32, u32)>,
+            (Option<(u32, u32)>, Option<(u32, u32)>),
+            &mut Governor,
+            ScratchLease,
+        )>() <= PRIORITY_MATCHER_CONTROL_BYTES
+    );
+    // Root seeding, failure-row copy and sparse child publication.
+    assert!(
+        core::mem::size_of::<(
+            MatcherBuild<PriorityOutputs>,
+            MatcherCursor<'_>,
+            &mut MatcherBuild<PriorityOutputs>,
+            &mut MatcherCursor<'_>,
+            Result<PriorityMatcher, StopReason>,
+            &[PriorityLiteral<'_>],
+            &[PriorityLiteral<'_>],
+            &[u8],
+            &TrieNode,
+            &ScratchVec<(u8, u32)>,
+            core::ops::Range<usize>,
+            &mut [u32],
+            &mut ScratchVec<u32>,
+            Result<(), StopReason>,
+            usize,
+            usize,
+            &mut Governor,
+            ScratchLease,
+        )>() <= PRIORITY_MATCHER_CONTROL_BYTES
+    );
+    // Nested trie ownership, its iterator and insertion temporaries.
+    assert!(
+        core::mem::size_of::<(
+            MatcherCursor<'_>,
+            &mut MatcherCursor<'_>,
+            TrieBuild<IndexedLiterals<'_, PriorityLiteral<'_>>>,
+            TrieCursor<'_>,
+            TrieNode,
+            Result<Trie, StopReason>,
+            IndexedLiterals<'_, PriorityLiteral<'_>>,
+            Option<(&[u8], u32)>,
+            &[PriorityLiteral<'_>],
+            &[PriorityLiteral<'_>],
+            &PriorityLiteral<'_>,
+            &ScratchVec<(u8, u32)>,
+            &mut ScratchVec<(u8, u32)>,
+            &mut ScratchVec<TrieNode>,
+            Result<usize, usize>,
+            Result<u32, core::num::TryFromIntError>,
+            Result<(), StopReason>,
+            usize,
+            &mut Governor,
+            ScratchLease,
+        )>() <= PRIORITY_MATCHER_CONTROL_BYTES
+    );
+    // Allocation/prepare return carriers and nested zero iterators.
+    assert!(
+        core::mem::size_of::<(
+            Result<MatcherBuild<PriorityOutputs>, StopReason>,
+            MatcherCursor<'_>,
+            &mut MatcherCursor<'_>,
+            Result<Trie, StopReason>,
+            &[PriorityLiteral<'_>],
+            &[PriorityLiteral<'_>],
+            &[u8],
+            &mut PriorityOutputs,
+            core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
+            core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
+            core::iter::RepeatN<u32>,
+            Result<(), StopReason>,
+            Option<usize>,
+            u64,
+            &mut Governor,
+            ScratchLease,
+        )>() <= PRIORITY_MATCHER_CONTROL_BYTES
+    );
+};
+
 impl PriorityMatcher {
     /// Build both native priority views, retaining only their shared tables.
     /// Every duplicate spelling replays its own ranks into its exact terminal.
@@ -699,109 +801,8 @@ impl PriorityMatcher {
         literals: &[PriorityLiteral<'_>],
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
-        const CONTROL: usize = 768;
-        const {
-            // Prefix, terminal replay, BFS and final ownership publication.
-            assert!(
-                core::mem::size_of::<(
-                    MatcherBuild<PriorityOutputs>,
-                    MatcherCursor<'_>,
-                    &mut MatcherBuild<PriorityOutputs>,
-                    &mut MatcherCursor<'_>,
-                    Result<PriorityMatcher, StopReason>,
-                    &[PriorityLiteral<'_>],
-                    &[PriorityLiteral<'_>],
-                    &[u8],
-                    &PriorityLiteral<'_>,
-                    &TrieNode,
-                    &ScratchVec<(u8, u32)>,
-                    &mut [Option<(u32, u32)>; 2],
-                    &mut [[Option<(u32, u32)>; 2]],
-                    &mut PriorityOutputs,
-                    Result<usize, usize>,
-                    Result<u32, core::num::TryFromIntError>,
-                    Result<(), StopReason>,
-                    usize,
-                    u32,
-                    Option<u32>,
-                    Option<(u32, u32)>,
-                    (Option<(u32, u32)>, Option<(u32, u32)>),
-                    &mut Governor,
-                    ScratchLease,
-                )>() <= CONTROL
-            );
-            // Root seeding, failure-row copy and sparse child publication.
-            assert!(
-                core::mem::size_of::<(
-                    MatcherBuild<PriorityOutputs>,
-                    MatcherCursor<'_>,
-                    &mut MatcherBuild<PriorityOutputs>,
-                    &mut MatcherCursor<'_>,
-                    Result<PriorityMatcher, StopReason>,
-                    &[PriorityLiteral<'_>],
-                    &[PriorityLiteral<'_>],
-                    &[u8],
-                    &TrieNode,
-                    &ScratchVec<(u8, u32)>,
-                    core::ops::Range<usize>,
-                    &mut [u32],
-                    &mut ScratchVec<u32>,
-                    Result<(), StopReason>,
-                    usize,
-                    usize,
-                    &mut Governor,
-                    ScratchLease,
-                )>() <= CONTROL
-            );
-            // Nested trie ownership, its iterator and insertion temporaries.
-            assert!(
-                core::mem::size_of::<(
-                    MatcherCursor<'_>,
-                    &mut MatcherCursor<'_>,
-                    TrieBuild<IndexedLiterals<'_, PriorityLiteral<'_>>>,
-                    TrieCursor<'_>,
-                    TrieNode,
-                    Result<Trie, StopReason>,
-                    IndexedLiterals<'_, PriorityLiteral<'_>>,
-                    Option<(&[u8], u32)>,
-                    &[PriorityLiteral<'_>],
-                    &[PriorityLiteral<'_>],
-                    &PriorityLiteral<'_>,
-                    &ScratchVec<(u8, u32)>,
-                    &mut ScratchVec<(u8, u32)>,
-                    &mut ScratchVec<TrieNode>,
-                    Result<usize, usize>,
-                    Result<u32, core::num::TryFromIntError>,
-                    Result<(), StopReason>,
-                    usize,
-                    &mut Governor,
-                    ScratchLease,
-                )>() <= CONTROL
-            );
-            // Allocation/prepare return carriers and nested zero iterators.
-            assert!(
-                core::mem::size_of::<(
-                    Result<MatcherBuild<PriorityOutputs>, StopReason>,
-                    MatcherCursor<'_>,
-                    &mut MatcherCursor<'_>,
-                    Result<Trie, StopReason>,
-                    &[PriorityLiteral<'_>],
-                    &[PriorityLiteral<'_>],
-                    &[u8],
-                    &mut PriorityOutputs,
-                    core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
-                    core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
-                    core::iter::RepeatN<u32>,
-                    Result<(), StopReason>,
-                    Option<usize>,
-                    u64,
-                    &mut Governor,
-                    ScratchLease,
-                )>() <= CONTROL
-            );
-        }
         governor.charge(Resource::Work, 1)?;
-        let _construction = governor.lease_scratch(size(CONTROL))?;
+        let _construction = governor.lease_scratch(size(PRIORITY_MATCHER_CONTROL_BYTES))?;
         let mut cursor = MatcherCursor::new();
         let mut build = MatcherBuild::<PriorityOutputs>::prepare(literals, &mut cursor, governor)?;
         build.terminals(literals, &mut cursor, governor)?;
