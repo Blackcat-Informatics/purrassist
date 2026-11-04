@@ -780,6 +780,14 @@ const fn dialect_label(dialect: &DialectId) -> &'static str {
         DialectId::OpenAiToolCalls => "openai",
         DialectId::Pythonic => "pythonic",
         DialectId::Qwen3CoderXml => "qwen",
+        DialectId::DeepSeekV31Stripped => "deepseek31-stripped",
+        DialectId::DeepSeekV3Stripped => "deepseek3-stripped",
+        DialectId::HarmonyStripped => "harmony-stripped",
+        DialectId::HermesStripped => "hermes-stripped",
+        DialectId::KimiK2Stripped => "kimi-stripped",
+        DialectId::Llama3JsonStripped => "llama3-stripped",
+        DialectId::MistralV11Stripped => "mistral11-stripped",
+        DialectId::MistralV3Stripped => "mistral3-stripped",
         DialectId::Custom(_) => "custom",
     }
 }
@@ -3522,7 +3530,7 @@ const fn policy_of(seed: u64) -> Policy {
     }
 }
 
-const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony.v1,hermes.v1,kimi-k2.v1,llama3-json.v1,mistral-v11.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
+const ALL_DIALECTS: &str = "anthropic-tool-use.v1,bare-json.v1,deepseek-v3-stripped.v1,deepseek-v3.1-stripped.v1,deepseek-v3.1.v1,deepseek-v3.v1,gemma3-tool-code.v1,glm-4.5.v1,harmony-stripped.v1,harmony.v1,hermes-stripped.v1,hermes.v1,kimi-k2-stripped.v1,kimi-k2.v1,llama3-json-stripped.v1,llama3-json.v1,mistral-v11-stripped.v1,mistral-v11.v1,mistral-v3-stripped.v1,mistral-v3.v1,openai-tool-calls.v1,pythonic.v1,qwen3-coder-xml.v1";
 
 /// The cases of every single-call mutation of `base`, appended to `cases`;
 /// with `under`, only those of categories with fewer than [`TARGET`] cases
@@ -3722,6 +3730,7 @@ pub fn generate() -> Vec<Case> {
     glm_cases(&mut cases);
     pythonic_cases(&mut cases);
     gemma3_cases(&mut cases);
+    stripped_cases(&mut cases);
     let identities: BTreeSet<&str> = cases.iter().map(|case| case.id.as_str()).collect();
     assert_eq!(identities.len(), cases.len(), "case identities are unique");
     cases
@@ -3848,6 +3857,80 @@ fn gemma3_cases(cases: &mut Vec<Case>) {
                     }]
                 }),
             });
+        }
+    }
+}
+
+/// Marker projections use hand-authored protocol anchors and one native JSON
+/// repair; labels come from the retained declared call, never recovery output.
+fn stripped_cases(cases: &mut Vec<Case>) {
+    for (dialect, canonical) in [
+        (
+            "deepseek-v3-stripped.v1",
+            "functionsearch_index\n```json\n{\"query\":\"cats\"}\n```",
+        ),
+        (
+            "deepseek-v3.1-stripped.v1",
+            "search_index{\"query\":\"cats\"}",
+        ),
+        (
+            "harmony-stripped.v1",
+            "commentary to=functions.search_index json{\"query\":\"cats\"}",
+        ),
+        (
+            "hermes-stripped.v1",
+            "{\"name\":\"search_index\",\"arguments\":{\"query\":\"cats\"}}",
+        ),
+        (
+            "kimi-k2-stripped.v1",
+            "functions.search_index:0{\"query\":\"cats\"}",
+        ),
+        (
+            "llama3-json-stripped.v1",
+            "{\"name\":\"search_index\",\"parameters\":{\"query\":\"cats\"}}",
+        ),
+        (
+            "mistral-v11-stripped.v1",
+            "search_index c1 {\"query\":\"cats\"}",
+        ),
+        (
+            "mistral-v3-stripped.v1",
+            "[{\"name\":\"search_index\",\"arguments\":{\"query\":\"cats\"},\"id\":\"c1\"}]",
+        ),
+    ] {
+        for (variant, input, category, truth) in [
+            ("canonical", canonical.to_owned(), "canonical", true),
+            (
+                "trailing-comma",
+                canonical.replacen("\"cats\"}", "\"cats\",}", 1),
+                "json.syntax.trailing-comma",
+                true,
+            ),
+            (
+                "ordinary-prose",
+                "No tool is needed.".to_owned(),
+                "canonical",
+                false,
+            ),
+        ] {
+            for (label, allow) in [("explicit", dialect), ("default", ALL_DIALECTS)] {
+                cases.push(Case {
+                    tool_set: Some("adapter"),
+                    invalid: None,
+                    id: format!("adapter/search_index/{dialect}/{label}/{variant}"),
+                    category: category.to_owned(),
+                    dialect: allow.to_owned(),
+                    policy: Policy::PerTool,
+                    stop: Ending::Stop,
+                    input: input.clone(),
+                    truth: truth.then(|| {
+                        vec![Call {
+                            name: "search_index".to_owned(),
+                            arguments: json::parse(r#"{"query":"cats"}"#).expect("truth"),
+                        }]
+                    }),
+                });
+            }
         }
     }
 }

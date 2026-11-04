@@ -39,11 +39,137 @@
   },
   "emit": "openai",
   "input": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"b\"}} junk junk {{{\n</tool_call>",
-  "default_justification": "Under the default allow-list the bare-json dialect also reads the second body's inner object as a call, so two readings compete (one with the second body a rejected attempt, one with it a second call). Both fail the strict check: nothing is usable or emitted in either reading, and no reading loses the first call.",
+  "default_justification": "Under the default allow-list, exact and projected grammars also read the second body as a call. Equivalent object frames share candidate labels; Hermes also admits trailing whitespace as framing. Strict forced choice retains these source partitions, producing three readings. Every reading keeps the valid first call and the entire rejected attempt, fails the strict check, and has no usable or emitted calls.",
   "default_expect": {
     "outcome": "ambiguous",
     "stopped": "completed",
     "readings": [
+      {
+        "finish": "unresolved",
+        "openai_finish_reason": "stop",
+        "verdict": "nothing_usable",
+        "usable_calls": {
+          "strict": 0,
+          "accepting_guesses": 0
+        },
+        "calls": [
+          {
+            "tool": "read_file",
+            "arguments": {
+              "path": "a"
+            },
+            "candidate_dialects": [
+              "hermes.v1"
+            ],
+            "outcome": "resolved",
+            "rules": []
+          },
+          {
+            "tool": "read_file",
+            "arguments": {
+              "path": "b"
+            },
+            "candidate_dialects": [
+              "bare-json.v1",
+              "hermes-stripped.v1",
+              "llama3-json-stripped.v1"
+            ],
+            "outcome": "unresolved: tool_choice_cardinality: the request's tool choice forces exactly one call and this is not the first",
+            "rules": []
+          }
+        ],
+        "rejected": [
+          {
+            "span": [
+              75,
+              163
+            ],
+            "dialect": "glm-4.5.v1",
+            "candidate_dialects": [
+              "glm-4.5.v1",
+              "hermes.v1",
+              "qwen3-coder-xml.v1"
+            ],
+            "reason": "Malformed { at: 87 }",
+            "raw": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"b\"}} junk junk {{{\n</tool_call>"
+          }
+        ],
+        "embedded": [],
+        "content": [
+          "\n"
+        ],
+        "reasoning_text": [],
+        "emitted": {
+          "calls": 0,
+          "skipped": [
+            "call 0: tool_choice_failed",
+            "rejected 0",
+            "call 1: unresolved"
+          ]
+        }
+      },
+      {
+        "finish": "unresolved",
+        "openai_finish_reason": "stop",
+        "verdict": "nothing_usable",
+        "usable_calls": {
+          "strict": 0,
+          "accepting_guesses": 0
+        },
+        "calls": [
+          {
+            "tool": "read_file",
+            "arguments": {
+              "path": "a"
+            },
+            "candidate_dialects": [
+              "hermes.v1"
+            ],
+            "outcome": "resolved",
+            "rules": []
+          },
+          {
+            "tool": "read_file",
+            "arguments": {
+              "path": "b"
+            },
+            "candidate_dialects": [
+              "hermes-stripped.v1"
+            ],
+            "outcome": "unresolved: tool_choice_cardinality: the request's tool choice forces exactly one call and this is not the first",
+            "rules": []
+          }
+        ],
+        "rejected": [
+          {
+            "span": [
+              75,
+              163
+            ],
+            "dialect": "glm-4.5.v1",
+            "candidate_dialects": [
+              "glm-4.5.v1",
+              "hermes.v1",
+              "qwen3-coder-xml.v1"
+            ],
+            "reason": "Malformed { at: 87 }",
+            "raw": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"b\"}} junk junk {{{\n</tool_call>"
+          }
+        ],
+        "embedded": [],
+        "content": [
+          "\n"
+        ],
+        "reasoning_text": [],
+        "emitted": {
+          "calls": 0,
+          "skipped": [
+            "call 0: tool_choice_failed",
+            "rejected 0",
+            "call 1: unresolved"
+          ]
+        }
+      },
       {
         "finish": "unresolved",
         "openai_finish_reason": "stop",
@@ -91,68 +217,6 @@
           "skipped": [
             "call 0: tool_choice_failed",
             "rejected 0"
-          ]
-        }
-      },
-      {
-        "finish": "unresolved",
-        "openai_finish_reason": "stop",
-        "verdict": "nothing_usable",
-        "usable_calls": {
-          "strict": 0,
-          "accepting_guesses": 0
-        },
-        "calls": [
-          {
-            "tool": "read_file",
-            "arguments": {
-              "path": "a"
-            },
-            "candidate_dialects": [
-              "hermes.v1"
-            ],
-            "outcome": "resolved",
-            "rules": []
-          },
-          {
-            "tool": "read_file",
-            "arguments": {
-              "path": "b"
-            },
-            "candidate_dialects": [
-              "bare-json.v1"
-            ],
-            "outcome": "unresolved: tool_choice_cardinality: the request's tool choice forces exactly one call and this is not the first",
-            "rules": []
-          }
-        ],
-        "rejected": [
-          {
-            "span": [
-              75,
-              163
-            ],
-            "dialect": "glm-4.5.v1",
-            "candidate_dialects": [
-              "glm-4.5.v1",
-              "hermes.v1",
-              "qwen3-coder-xml.v1"
-            ],
-            "reason": "Malformed { at: 87 }",
-            "raw": "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"b\"}} junk junk {{{\n</tool_call>"
-          }
-        ],
-        "embedded": [],
-        "content": [
-          "\n"
-        ],
-        "reasoning_text": [],
-        "emitted": {
-          "calls": 0,
-          "skipped": [
-            "call 0: tool_choice_failed",
-            "rejected 0",
-            "call 1: unresolved"
           ]
         }
       }

@@ -1,5 +1,5 @@
 {
-  "description": "A call object cut off by the length limit: it never completed, so it stays content (finish truncated) rather than becoming a call attempt.",
+  "description": "A call object cut off by the length limit never commits under Bare JSON, so its native reading stays content with finish truncated. The default allow-list retains the explicit truncated, unusable call recognized by the projected Hermes and Llama grammars, with the original source preserved.",
   "tools_openai": [
     {
       "type": "function",
@@ -65,5 +65,44 @@
   ],
   "reasoning_text": [],
   "failed_validations": [],
-  "ledger_rules": []
+  "ledger_rules": [],
+  "default_expect": {
+    "outcome": "best_guess",
+    "stopped": "completed",
+    "finish": "truncated",
+    "openai_finish_reason": "length",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [
+      {
+        "tool": "get_weather",
+        "arguments": {
+          "city": "Os"
+        },
+        "candidate_dialects": [
+          "hermes-stripped.v1",
+          "llama3-json-stripped.v1"
+        ],
+        "outcome": "unresolved: truncated: the call was cut off by a length stop",
+        "rules": [
+          "json.syntax.unterminated-string",
+          "json.syntax.close-container",
+          "tool_call.truncated"
+        ]
+      }
+    ],
+    "rejected": [],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": [
+      "json.syntax.unterminated-string",
+      "json.syntax.close-container",
+      "tool_call.truncated"
+    ]
+  }
 }

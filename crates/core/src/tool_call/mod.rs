@@ -55,6 +55,7 @@ mod derive_support;
 mod detect;
 mod dialect;
 pub mod emit;
+mod failed_prefix;
 mod from_node;
 mod ir;
 mod metadata;

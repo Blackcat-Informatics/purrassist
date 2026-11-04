@@ -1,5 +1,5 @@
 {
-  "description": "A name and arguments plus another member (a description): not a call object, so it stays content.",
+  "description": "Pinned Bare JSON keeps the object with an extra description member as content. The default projected grammars commit on native name and argument evidence, then reject the entire malformed call without making any call usable.",
   "tools_openai": [
     {
       "type": "function",
@@ -65,5 +65,38 @@
   ],
   "reasoning_text": [],
   "failed_validations": [],
-  "ledger_rules": []
+  "ledger_rules": [],
+  "default_expect": {
+    "outcome": "resolved",
+    "stopped": "completed",
+    "finish": "unresolved",
+    "openai_finish_reason": "stop",
+    "verdict": "nothing_usable",
+    "usable_calls": {
+      "strict": 0,
+      "accepting_guesses": 0
+    },
+    "calls": [],
+    "rejected": [
+      {
+        "span": [
+          0,
+          87
+        ],
+        "dialect": "mistral-v3-stripped.v1",
+        "candidate_dialects": [
+          "hermes-stripped.v1",
+          "llama3-json-stripped.v1",
+          "mistral-v3-stripped.v1"
+        ],
+        "reason": "Malformed { at: 56 }",
+        "raw": "{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Oslo\"}, \"description\": \"weather lookup\"}"
+      }
+    ],
+    "embedded": [],
+    "content": [],
+    "reasoning_text": [],
+    "failed_validations": [],
+    "ledger_rules": []
+  }
 }

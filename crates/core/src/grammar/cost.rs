@@ -227,7 +227,7 @@ pub const STRAY_CLOSER_GAP: usize = 32;
 /// the output is chunked.
 ///
 /// [`DialectSet::lookbehind`]: crate::tool_call::DialectSet::lookbehind
-pub const QUEUED_REPORT: u64 = 96;
+pub const QUEUED_REPORT: u64 = 128;
 
 /// Cost of dropping prose inside a call's markup (`tool_call.extract.prose`):
 /// the dropped text may carry data, so it costs as much as inserting a

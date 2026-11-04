@@ -2,6 +2,54 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Turn-path discovery retains normalized Content ranges and immutable stored
+Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
+preserve branch order without copying each prefix. Exact governed equality keeps
+the first equal plan and intersects its failure proofs in discovery order. Each
+distinct plan crosses the existing Candidate gate before its public IR is
+materialized. One bounded descriptor owner covers discovery handles, an incoming
+plan and serial materialization; backing buffers retain their separate owners.
+Plan, path and checkpoint storage release with their owners.
+Dominator storage, final raw copies and annotation, resolution, layout admission
+and Forest payload/index ownership remain separate work. Compilation, behavioral
+and resource qualification remain pending normal verification.
+
+Class-run certificates retain their logical position in the existing absolute
+cursor. Repeated hits update only that cursor; every native boundary restores
+physical `pos` and `reach` before position reads, thread movement or mutation. Single
+and global materialization admit all stores before changing any proof or
+subject. All original PCs, phases, histories, anchors and qualification guards
+remain unchanged, with no new owner or layout field. Chunk returns do not flush
+cursors. Runtime and resource qualification remain pending normal verification.
+
+Unopened failure-header selections defer only negative persistence until actual
+repair and resynchronization finish. Six empty whole-table owner sources prove
+terminality; otherwise the same selected key retains sticky absence before a
+later commit. Opened certification keeps its original source/history boundary.
+This removes unused certificate-map work from proved terminal preambles without
+changing budgets, source preservation or parser anchors. Resource acceptance
+remains pending normal verification.
+
+Grouped argument-anchored projections can reuse a settled Class run only at
+compiler-proved initial-call PCs that are unreachable after every `next`.
+All existing pristine-owner, side-work, history, native-DFA, name-follower,
+UTF-8, source-position and lifecycle checks remain required. Governed mask and
+temporary descriptors release with their owners across recompilation and
+refusal. Named long-source and compiler-refusal coverage is extended; execution
+and resource acceptance remain pending normal verification. Dense Qwen calls
+do not meet the run-length guard and can pay additional probes without a hit.
+
+Failed native Mistral framing and its Hermes marker-projected shadow now carry
+private selected-failure header certificates through source retirement, stored
+segments, Builder normalization and resolution. Exact source capture geometry and
+the unread JSON object-body route establish the narrow relation; every retained
+packed branch and duplicate origin must agree. Late equivalence folding can keep
+the native rejection and its exterior content while retaining every member's
+dialect evidence and original rejection span. Initial support is one rejection
+and otherwise content. The original unclosed-arguments prose fixture, raw weak
+alternative and chunk parity have named behavioral coverage; execution and
+resource qualification remain pending normal verification.
+
 Internal grammar repair proposals retain only their saturated search cost.
 Actual edit provenance stays in the parser history and is still published by
 the existing resolver. A cost-only proposal refuses a parent that carries
@@ -322,10 +370,10 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
   definitions or lossless `OpenAI`, MCP, and Anthropic declarations, whose
   exact parameters schemas are validated under Draft 2020-12 or Draft-07 (the
   dialect MCP servers commonly declare). Dialects are weighted, invertible
-  grammars in a first-party DSL; fifteen ship (`qwen3-coder-xml.v1`,
+  grammars in a first-party DSL; twenty-three dialects are built in (`qwen3-coder-xml.v1`,
   `hermes.v1`, `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
   `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`) and callers compile
+  `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`) and callers compile
   their own. A
   best-first search repairs call markup with named, costed rules; each call
   is resolved against its tool with a per-call outcome, itemized repairs,
@@ -338,8 +386,7 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
   governed quadratic conversion), and exposed through Rust, CLI
   (`recover-tool-calls`), and MCP (`recover_tool_calls`). Typed tool
   definitions can be derived from Rust structs and enums (`purrassist-derive`).
-  Still tracked: the `*-stripped` variants (#18),
-  streaming recognition (#16), and provider streaming events (#17).
+  Streaming recognition (#16) and provider streaming events (#17) remain tracked.
   See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
@@ -447,6 +494,19 @@ requirement. Fine-grained `network/af_unix` is required; no coarse network
 fallback, file-language matcher or host authority is implied. Complete admitted-
 graph synthesis, original v3/v4 integration, static permission/owner/deny
 analysis, other IPC families and host confinement remain under #34/#35.
+
+Streaming intake also accepts the class-leading derived programs used by marker
+projections. Their initial class runs become candidate owners before input is
+consumed; only literal spelling prefixes contribute to the finite holdback bound,
+which still includes UTF-8 carry. Completion envelopes and failed-frame proofs
+survive source retirement and traced resolution. Proven dominated readings union
+native origin correlations before their owner is removed. The existing long-name
+projection cases now check candidate ownership before commitment and complete
+stream/batch parity. Completion and salvage payload charges exclude refunded
+joint-capture temporaries; unqueued materialization refusals destroy payloads
+before refunding their admissions. Legacy multi-segmentation ownership remains
+unchanged. Combined-head compilation and behavioral qualification remain pending
+automatic CI.
 
 ## Shared contracts
 
@@ -952,3 +1012,136 @@ consumption, comparison, cloning, formatting and destruction are iterative.
 the reading, or consume it with `into_value()` to move its fields and remaining
 alternatives without cloning. The link retains its original allocation lease
 until its buffer is destroyed.
+
+## Native JSON framing
+
+Before constructing whole-message alternatives, a known projected JSON
+envelope yields only to the same intact canonical bare JSON invocation
+sequence. Source-spanned name and ID captures, order, argument trees,
+schema validations, effects, policy and blockers must match. Alternatives,
+reasoning, embedded calls, results and rejected attempts do not qualify.
+Mistral V3 margins must be the actual written array brackets and separators.
+Hermes margins may contain only layout or source bytes retained by its
+exterior prose-extraction losses; no argument repair is ignored.
+
+The native segmentation retains its full spans, content and ledgers. Candidate
+dialects are combined only for the proven matching invocation. Strict forced
+tool choices retain separate readings because native exterior content can affect
+their checks. This selects the intact native reading without upgrading the
+projected fallback's guess or loss status. Other invocation differences remain
+distinct. Current corrections have not been executed.
+
+Optional layout representatives compare the complete resolved call, every
+alternative and distinguishing provenance node with governed text and strict
+source-tree comparisons. Argument occurrence order, node and key spans, and
+exact number spellings must match. Only whitespace may cross a changed frame
+boundary, and every changed pair must retain the same derived dialect.
+Unchanged native calls can accompany such a pair only when all their source and
+interpretation fields agree. Evidence, losses, inference kinds and values,
+validations and blockers remain equal; a differing destination is accepted only
+as the canonical whole-frame address of its own call. The selected record is
+kept intact. Strict forced tool choices retain the original alternatives. This
+source-inspected change has been formatted but has not been executed; it does
+not establish new corpus totals.
+
+
+Projected entry admission retains the original program-location commit map
+before an erased marker's commit is replaced. Only those locations can regain
+admission from a completed native name and current or retained JSON evidence;
+a sibling's pre-commit path cannot inherit it. Surviving commits remain
+authoritative. Projected name classes retain their maximal reading and also
+follow compiled literal continuations, preserving an adjacent name and channel
+word when their former separator vanished.
+
+Weak admission reads immutable name/value facts stored on each history node
+under its existing reservation. Root and Next reset those facts; Pack follows
+only its original prev path. Link marks older ancestry unknown permanently,
+including after deferred resolution. Sufficient immutable suffix witnesses can
+answer directly; unresolved linked ancestry uses the original charged walk.
+Active codec observation occurs only after name evidence and at most once per
+query. There is no separate per-location history cache. Current execution and
+cost acceptance remain unverified.
+
+Erased-entry admission now observes the existing native JSON parser separately
+from its acceptance policy. A root object frame supplies object evidence;
+decoded root-string prefixes are examined incrementally for a stringified object.
+The observation admits one work unit per query plus the newly inspected decoded
+bytes. It does not change the codec's lead policy, parser state, accepted values,
+repairs or provenance. Existing weak name-only argument anchors keep their
+stricter admission path. Current runtime and cost evidence remains pending.
+
+For whitespace-separated weak names, written framing excludes source spans
+captured as dropped text or retained as prose/fence extraction edits. These
+spans cannot turn an ordinary heading into protocol evidence. Actual retained
+literals still count; adjacent name/JSON forms and declared names, aliases and
+joint name/ID partitions keep their existing admission paths.
+
+A canonical native Mistral V3 opening report now carries the end of its
+physically consumed `[TOOL_CALLS]` marker. The recognizer retains the earliest
+such frame per weak owner in governed storage until that owner's Ended report.
+Native reports precede affected completions in offset/phase/arrival order.
+Each materialized Hermes stripped completion independently proves the full
+marker lies inside a leading Dropped capture with its matching ExtractProse
+edit, before every raw name, ID and argument capture. Every raw reading must
+prove it; otherwise the entire completion remains. The attempt and its future
+configurations stay alive. Same-start suppression remains unchanged, and later
+calls with distinct source prefixes retain their own interpretations.
+Native malformed group members and cut-off tails keep their recovery and
+provenance. Pending reports move into position groups without payload clones.
+Suppression or proof refusal drops the current payload before refunding its
+recorded admission; unprocessed ready/group payloads drop and refund their own
+recorded admissions on refusal. The original refusal takes precedence over
+cleanup errors. No scratch delta is refunded. This correction has not been
+executed.
+
+Unclosed-reasoning promotion records the actual compiled program origin in
+opening metadata before an attempt retires. The promotion cache, top
+interpretations and same-start cache retain native or projected origin and the
+issuing weak owner's identity. A native attempt admitted inside that exact
+owner's header can retain its actual reasoning prefix. A sibling profile's
+later first-OPEN barrier cannot authorize replacing the first weak promotion,
+even when both profiles share a source prefix and promoted base. Same-boundary
+reuse retains the issuing owner, and replacement rechecks that identity.
+Native admission bypasses weak promoted bases instead of turning them into
+content. Ordinary top histories containing earlier calls remain available.
+Native-versus-native and projected-versus-projected admission keep the
+first-opener policy. Earlier projected interpretations keep their own bases,
+raw spans and extraction provenance. No ranking, repair cost, raw-call trimming
+or closed embedded-call containment changes accompany this unit.
+
+Closed-reasoning embedded selection now uses one shared insertion policy for
+initial and late completions. Before overriding geometric containment, a
+native Bare JSON or Anthropic frame must equal the projected Hermes frame
+remaining after proven exterior `Dropped` captures and matching extraction
+edits. Payload-nested native objects keep the existing containment behavior.
+Within that source relation, native preference requires singleton canonical
+readings with matching invocation captures, ordered argument nodes, member and
+node source spans, exact number spellings, leaf provenance, public argument
+metadata, and effective ID and context behavior. Unresolved or collected
+arguments are conservatively retained as alternatives. The comparison admits
+work, depth and temporary traversal storage and propagates refusal.
+
+Both readings must be `Closed` before folding. Extraction edits currently make
+a Hermes shadow `Repaired`, so these same-frame candidates remain together;
+unproved source, closure or interpretation equivalence also keeps both. The
+existing embedded-call guess annotation and its cost are preserved. This
+implementation has been source-inspected and formatted; its behavior has not
+been executed.
+
+Persistent interpretation buffers and fallible copies use ScratchVec with a
+portable 32-byte element admission. Copies reserve before copying; pushes admit
+relocation. Copy refusal drops the current completion payload before refunding
+its recorded admission and preserves the original refusal. Removed buffers
+retain their own reservations until dropped. Think has a 104-byte inline bound;
+promotion and same-start caches have 40-byte bounds each, adding one word to
+each previous cache. The temporary owner-bearing header-origin buffer uses
+ScratchVec with a 64-byte admission per capacity slot, releases its reservation
+on every exit and admits deduplication scans and relocation. The existing
+BTreeMap topology and node-accounting policy remain outside this ownership
+correction; it does not complete the
+broader recovery-storage contract. The queued-report size assertion continues
+to guard opening metadata. No budget limit changes accompany these owners.
+Extraction cost enters raw-call ranking after materialization and does not
+prove a unique whole-turn result. Native reasoning-source preservation,
+remaining alternatives and the static bounds still require compilation and
+execution evidence.
