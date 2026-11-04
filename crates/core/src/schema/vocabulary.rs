@@ -298,10 +298,13 @@ impl<'a> Keywords<'a> {
         keyword: &str,
         governor: &mut Governor,
     ) -> Result<Option<&'a Node>, StopReason> {
-        if !super::compile::applies(self.vocabularies, self.node, keyword, governor)? {
+        let Some(value) = super::compile::member(self.node, keyword, governor)? else {
             return Ok(None);
-        }
-        super::compile::member(self.node, keyword, governor)
+        };
+        Ok(
+            super::compile::applies(self.vocabularies, self.node, keyword, governor)?
+                .then_some(value),
+        )
     }
 
     pub(super) fn get(&self, keyword: &str) -> Option<&'a Node> {

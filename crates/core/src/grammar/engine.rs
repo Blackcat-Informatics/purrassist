@@ -743,15 +743,16 @@ impl<'s> Step<'_, 's> {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<(DfaState, bool), StopReason> {
-        // The exact byte addresses its own cell: no bucket mask or byte tag
-        // comparison remains. Row lookup, state equality and handoff stay paid.
-        governor.charge(Resource::Work, 4)?;
+        // Row lookup, bucket selection, canonical state-word and byte
+        // equality, and result handoff replace the former field comparisons.
+        governor.charge(Resource::Work, 6)?;
         let index = class_step_slot(byte);
         let steps = self.class_steps[class as usize]
             .as_ref()
             .ok_or_else(|| invalid_input("native class has no initialized transition cache"))?;
         if let Some(cached) = steps[index]
             && cached.state == state
+            && cached.byte == byte
         {
             return Ok((cached.stepped, cached.dead));
         }
@@ -764,6 +765,7 @@ impl<'s> Step<'_, 's> {
             .expect("the native class cache was validated before its DFA query");
         steps.as_mut_slice()[index] = Some(ClassStep {
             state,
+            byte,
             stepped,
             dead,
         });
@@ -866,26 +868,12 @@ impl<'s> Step<'_, 's> {
 
     fn step(
         &mut self,
-        mut thread: Thread,
+        thread: Thread,
         byte: u8,
         stack: &mut ScratchVec<Thread>,
         out: &mut Out,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        if thread.ownership & 1 != 0 {
-            // Direct seeds name an opener, and every PC-changing closure
-            // classifies membership before publishing its terminal. Repairs
-            // either retain that PC or explicitly enter candidate ownership;
-            // equal-PC merging preserves the implication. Only the submode
-            // may have changed without another closure (for example respelling).
-            governor.charge(Resource::Work, 1)?;
-            if !matches!(
-                thread.sub,
-                Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
-            ) {
-                thread.ownership = 2;
-            }
-        }
         if self.writes_inserted(&thread, byte) {
             // The token this reading inserted is written right here: the
             // reading that reads it as written is the reading.
@@ -2761,7 +2749,7 @@ impl<'s> Step<'_, 's> {
             }
             self.visited[word] |= bit;
             governor.charge(Resource::Work, K_THREAD)?;
-            let sub = match self.program.insts[pc as usize] {
+            let (sub, ownership) = match self.program.insts[pc as usize] {
                 Inst::Split(first, second) => {
                     self.pending.push((second, hist, cost, header_end));
                     self.pending.push((first, hist, cost, header_end));
@@ -2808,9 +2796,14 @@ impl<'s> Step<'_, 's> {
                     })?;
                     continue;
                 }
-                Inst::Lit { .. } => Sub::Lit(0),
-                Inst::Class { class, .. } => Sub::Class(self.class_dfa(class, governor)?.start()),
-                Inst::Until { .. } => Sub::Body(super::automaton::ROOT, None),
+                Inst::Lit { .. } => (
+                    Sub::Lit(0),
+                    self.opener_ownership(thread.ownership, pc, governor)?,
+                ),
+                Inst::Class { class, .. } => {
+                    (Sub::Class(self.class_dfa(class, governor)?.start()), 2)
+                }
+                Inst::Until { .. } => (Sub::Body(super::automaton::ROOT, None), 2),
                 Inst::Slot { codec, .. } => {
                     if !self.weak_name_evidence(hist, thread.start, at, None, governor)? {
                         continue;
@@ -2836,7 +2829,6 @@ impl<'s> Step<'_, 's> {
                     continue;
                 }
             };
-            let ownership = self.opener_ownership(thread.ownership, pc, governor)?;
             let next = Thread {
                 ownership,
                 pc,
@@ -4834,6 +4826,11 @@ const _: () = assert!(
         Option<OwnershipFloors>,
         bool,
         bool,
+        // Exact unchanged-input certificate and revalidated table witness.
+        DeferredRelease,
+        Option<usize>,
+        Option<bool>,
+        &'static mut Option<bool>,
         ScratchLease,
         usize,
         usize,
@@ -4841,7 +4838,7 @@ const _: () = assert!(
         Option<usize>,
         // Ordinary scheduling's temporary direct-publication cutoff.
         Option<usize>,
-    )>() <= 128
+    )>() <= 160
 );
 
 fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
@@ -5288,6 +5285,7 @@ enum Verdict {
 #[derive(Clone, Copy)]
 struct ClassStep {
     state: DfaState,
+    byte: u8,
     stepped: DfaState,
     dead: bool,
 }
@@ -5299,9 +5297,9 @@ impl ScratchCharge for Option<ClassStep> {
     };
 }
 
-/// Every byte has its own cell; full state tags still select native fallback
-/// when that byte is queried from a different derivative state.
-const CLASS_STEP_BUCKETS: usize = 256;
+/// Fixed direct-mapped rows retain full state and byte tags. A collision only
+/// replaces a successful entry; the next different query uses the native DFA.
+const CLASS_STEP_BUCKETS: usize = 64;
 type ClassSteps = Option<ScratchVec<Option<ClassStep>>>;
 
 impl ScratchCharge for ClassSteps {
@@ -5326,7 +5324,7 @@ const _: () = assert!(
 );
 
 fn class_step_slot(byte: u8) -> usize {
-    usize::from(byte)
+    usize::from(byte) & (CLASS_STEP_BUCKETS - 1)
 }
 
 struct GrammarRuntime<'s> {
@@ -5349,6 +5347,13 @@ impl ScratchCharge for GrammarRuntime<'_> {
 enum ContinuationFloor {
     Invalid,
     Ready(Option<usize>),
+}
+
+/// Whether deferred release inputs changed since the last completed census.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeferredRelease {
+    Changed,
+    Unchanged,
 }
 
 /// The segment-candidate layer over every table of a dialect set.
@@ -5387,10 +5392,14 @@ pub(crate) struct Engine<'s> {
     spawned: Vec<(u64, usize)>,
     /// Ended reports held by [`Self::defer`], with their attempts' start.
     deferred: Vec<(usize, Event)>,
+    /// No deferred reader, report or whole-start input changed since release.
+    deferred_release: DeferredRelease,
     /// Cached minimum of immutable attempt and deferred-report origins. Every
     /// insertion or removal invalidates it before changing those collections.
     continuation_floor: ContinuationFloor,
     ownership: Option<OwnershipFloors>,
+    /// Revalidated against the current completed-byte thread minimum on use.
+    candidate_floor_table: Option<usize>,
     ownership_active: bool,
     _ownership_metadata: ScratchLease,
     /// The openers where an attempt read a whole call, while a held report
@@ -5438,7 +5447,7 @@ impl<'s> Engine<'s> {
         let include = |floor: &mut Option<usize>, start| {
             *floor = Some(floor.map_or(start, |old| old.min(start)));
         };
-        for table in &mut self.tables {
+        for (index, table) in self.tables.iter_mut().enumerate() {
             governor.charge(Resource::Work, 1)?;
             if !self.ownership_active {
                 let mut owned = (None, None);
@@ -5453,6 +5462,11 @@ impl<'s> Engine<'s> {
             }
             if let Some(start) = table.thread_ownership.1 {
                 include(&mut candidate, start);
+                governor.charge(Resource::Work, 1)?;
+                if matches!(self.continuation_floor, ContinuationFloor::Ready(Some(origin)) if origin == start)
+                {
+                    self.candidate_floor_table = Some(index);
+                }
             }
             for trail in &table.trails {
                 governor.charge(Resource::Work, 1)?;
@@ -5483,6 +5497,27 @@ impl<'s> Engine<'s> {
         Ok((lexical, candidate))
     }
 
+    /// A current thread at the ready continuation origin proves the native
+    /// candidate floor; every native lexical floor is at least that origin.
+    /// This witness stores no result and cannot replace the full census.
+    pub(crate) fn source_candidate_floor(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<Option<usize>, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let (Some(index), ContinuationFloor::Ready(Some(origin))) =
+            (self.candidate_floor_table, &self.continuation_floor)
+        else {
+            return Ok(None);
+        };
+        governor.charge(Resource::Work, 1)?;
+        let table = self
+            .tables
+            .get(index)
+            .ok_or_else(|| invalid_input("candidate floor witness has no table"))?;
+        Ok((table.thread_ownership.1 == Some(*origin)).then_some(*origin))
+    }
+
     /// Whether the interpretation's ownership projection has been prepared.
     pub(crate) const fn tracks_ownership(&self) -> bool {
         self.ownership_active
@@ -5499,7 +5534,7 @@ impl<'s> Engine<'s> {
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let ownership_bytes = size(table_count)
             .checked_mul(56)
-            .and_then(|bytes| bytes.checked_add(128))
+            .and_then(|bytes| bytes.checked_add(160))
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
         governor.charge(Resource::Work, size(table_count))?;
@@ -5581,8 +5616,10 @@ impl<'s> Engine<'s> {
             quoted_openers: Vec::new(),
             spawned: Vec::new(),
             deferred: Vec::new(),
+            deferred_release: DeferredRelease::Changed,
             continuation_floor: ContinuationFloor::Invalid,
             ownership: None,
+            candidate_floor_table: None,
             ownership_active: false,
             _ownership_metadata: ownership_metadata,
             whole: Vec::new(),
@@ -5679,8 +5716,9 @@ impl<'s> Engine<'s> {
         }
         self.buffer.push(byte)?;
         self.fed += 1;
+        let mut repeated = None;
         for table in 0..self.tables.len() {
-            self.step_table(table, byte, at, governor)?;
+            self.step_table(table, byte, at, &mut repeated, governor)?;
         }
         self.line_blank = match byte {
             b'\r' | b'\n' => true,
@@ -5739,6 +5777,7 @@ impl<'s> Engine<'s> {
         table: usize,
         byte: u8,
         at: usize,
+        repeated: &mut Option<bool>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let program = self.tables[table].program;
@@ -5830,7 +5869,7 @@ impl<'s> Engine<'s> {
         }
         step.advance_settled(stack, at + 1, out, governor)?;
         self.settle(table, at, None, governor)?;
-        if run_candidate {
+        if run_candidate && self.byte_run_may_repeat(byte, repeated, governor)? {
             self.remember_byte_run(table, byte, at + 1, governor)?;
         }
         Ok(())
@@ -6609,12 +6648,13 @@ impl<'s> Engine<'s> {
             if let Some(record) = attempts.iter_mut().find(|record| record.id == attempt)
                 && !record.opened
             {
-                governor.charge(Resource::Work, 4)?;
+                governor.charge(Resource::Work, 5)?;
                 let unopened = current
                     .unopened
                     .checked_sub(1)
                     .ok_or_else(|| invalid_input("opening has no unopened attempt owner"))?;
                 record.opened = true;
+                self.deferred_release = DeferredRelease::Changed;
                 current.unopened = unopened;
                 self.newest_open = self.newest_open.max(record.start);
                 latest = latest.max(Some(record.start));
@@ -7321,6 +7361,9 @@ impl<'s> Engine<'s> {
                 .unopened
                 .checked_sub(usize::from(!record.opened))
                 .ok_or_else(|| invalid_input("retirement lost its unopened attempt owner"))?;
+            if record.opened && !record.completed {
+                self.note_deferred_reader_removal(record.start, governor)?;
+            }
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
@@ -7355,8 +7398,23 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if whole && !self.whole.contains(&record.start) {
-            governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
+            if let Err(reason) = governor
+                .charge(Resource::Work, 1)
+                .and_then(|()| governor.charge(Resource::ScratchBytes, DEFERRED_BYTES))
+            {
+                let charged = match &ended {
+                    Event::Ended {
+                        salvage: Some(value),
+                        ..
+                    } => value.charged,
+                    _ => 0,
+                };
+                drop(ended);
+                let _ = governor.release_scratch(charged);
+                return Err(reason);
+            }
             self.whole.push(record.start);
+            self.deferred_release = DeferredRelease::Changed;
         }
         let reads_on =
             !whole
@@ -7367,10 +7425,12 @@ impl<'s> Engine<'s> {
                         })
                 });
         if reads_on {
+            governor.charge(Resource::Work, 1)?;
             governor.charge(Resource::ScratchBytes, DEFERRED_REPORT_BYTES)?;
             self.continuation_floor = ContinuationFloor::Invalid;
             self.ownership = None;
             self.deferred.push((record.start, ended));
+            self.deferred_release = DeferredRelease::Changed;
         } else {
             // Another attempt at the opener may have read a whole call and
             // ended first (this one read on, resynchronizing): the same
@@ -7384,10 +7444,30 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
+    /// Removing a reader at another start cannot change any held predicate.
+    fn note_deferred_reader_removal(
+        &mut self,
+        start: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if self.deferred_release == DeferredRelease::Unchanged {
+            governor.charge(Resource::Work, size(self.deferred.len() + self.whole.len()))?;
+            if self.whole.contains(&start) || self.deferred.iter().any(|(held, _)| *held == start) {
+                self.deferred_release = DeferredRelease::Changed;
+            }
+        }
+        Ok(())
+    }
+
     /// Report every held end (see [`Self::defer`]) whose opener no attempt
     /// reads on from any more.
     fn release_deferred(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         if self.deferred.is_empty() && self.whole.is_empty() {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, 1)?;
+        if self.deferred_release == DeferredRelease::Unchanged {
             return Ok(());
         }
         governor.charge(
@@ -7424,7 +7504,9 @@ impl<'s> Engine<'s> {
         self.whole.retain(|&start| {
             reading(tables, start) || deferred.iter().any(|(held, _)| *held == start)
         });
-        governor.release_scratch(size(before - self.whole.len()).saturating_mul(DEFERRED_BYTES))
+        governor.release_scratch(size(before - self.whole.len()).saturating_mul(DEFERRED_BYTES))?;
+        self.deferred_release = DeferredRelease::Unchanged;
+        Ok(())
     }
 
     /// Report the held completions of `attempt`, a grouped program's, that
@@ -8293,6 +8375,12 @@ impl<'s> Engine<'s> {
         chained: Result<Chained, Rejection>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if let Err(reason) = governor.charge(Resource::Work, 1) {
+            if let Ok(chained) = chained {
+                let _ = HeldBody::Chain(chained).discard(governor);
+            }
+            return Err(reason);
+        }
         if chained.is_ok()
             && let Err(reason) = self.forget_failure_header(thread.attempt, governor)
         {
@@ -8315,6 +8403,7 @@ impl<'s> Engine<'s> {
             }
         };
         record.completed = true;
+        self.deferred_release = DeferredRelease::Changed;
         let start = record.start;
         chained.table = index_u32(table);
         chained.attempt = thread.attempt;
@@ -8401,6 +8490,7 @@ impl<'s> Engine<'s> {
         dangling: bool,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
         if !thread.beside() && !self.tables[table].program.grouped {
             governor.charge(Resource::ScratchBytes, WRITTEN_BYTES)?;
             self.tables[table]
@@ -8475,6 +8565,7 @@ impl<'s> Engine<'s> {
         match segmentations {
             Ok(segmentations) => {
                 record.completed = true;
+                self.deferred_release = DeferredRelease::Changed;
                 let start = record.start;
                 self.report_parts(
                     table,
@@ -8506,12 +8597,16 @@ impl<'s> Engine<'s> {
         // It ends whole: a held report at its opener is outread now,
         // and no longer waits for it (see `Self::defer`).
         if !self.whole.contains(&start) {
-            if let Err(reason) = governor.charge(Resource::ScratchBytes, DEFERRED_BYTES) {
+            if let Err(reason) = governor
+                .charge(Resource::Work, 1)
+                .and_then(|()| governor.charge(Resource::ScratchBytes, DEFERRED_BYTES))
+            {
                 drop(segmentations);
                 let cleanup = governor.release_scratch(charged);
                 return Err::<(), _>(reason).and(cleanup);
             }
             self.whole.push(start);
+            self.deferred_release = DeferredRelease::Changed;
         }
         let grouped = self.tables[table].program.grouped;
         let charged = if segmentations.len() == 1 { charged } else { 0 };
@@ -8671,6 +8766,8 @@ impl<'s> Engine<'s> {
         self.ownership = None;
         self.forget_failure_header(attempt, governor)?;
         self.clear_byte_runs(governor)?;
+        governor.charge(Resource::Work, 1)?;
+        self.deferred_release = DeferredRelease::Changed;
         for table in &mut self.tables {
             governor.charge(
                 Resource::Work,
@@ -8757,8 +8854,9 @@ impl<'s> Engine<'s> {
             self.tables[table].thread_ownership = (None, None);
             self.continuation_floor = ContinuationFloor::Invalid;
             self.ownership = None;
-            governor.charge(Resource::Work, 1)?;
+            governor.charge(Resource::Work, 2)?;
             self.tables[table].attempts.clear();
+            self.deferred_release = DeferredRelease::Changed;
             self.tables[table].unopened = 0;
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();
@@ -8880,8 +8978,10 @@ impl<'s> Engine<'s> {
                 // A completed or cut-off reading read a whole call: a
                 // rejection held at its opener is outread (see `defer`).
                 if live.completed && !self.whole.contains(&record.start) {
+                    governor.charge(Resource::Work, 1)?;
                     governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
                     self.whole.push(record.start);
+                    self.deferred_release = DeferredRelease::Changed;
                 }
                 self.events.push(Event::Ended {
                     table: index_u32(table),

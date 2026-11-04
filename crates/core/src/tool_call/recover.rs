@@ -6040,12 +6040,41 @@ impl Recovery<'_> {
         found: &mut Vec<StrayCloser>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        const CONTROL_BYTES: u64 = 96;
+        const _: () = assert!(
+            core::mem::size_of::<(
+                ScratchLease,
+                Option<&u8>,
+                bool,
+                core::slice::Iter<ScratchVec<u8>>,
+                Result<bool, StopReason>,
+            )>() as u64
+                <= CONTROL_BYTES
+        );
+        let _controls = governor.lease_scratch(CONTROL_BYTES)?;
         for block in &reading.value.reasoning {
             let at = self.after(block);
+            governor.charge(Resource::Work, 1)?;
+            let Some(first) = self.output.get(at) else {
+                continue;
+            };
             let inside = &self.output[block.clone()];
             let mut dialects: Vec<(DialectId, usize)> = Vec::new();
             for dialect in self.dialects.dialects() {
                 for end in dialect.grammar().call_ends() {
+                    // Exact and misspelled closers both require the same first
+                    // byte. Without one, the preceding block cannot own a closer.
+                    let mut possible = false;
+                    for closer in end.closers() {
+                        governor.charge(Resource::Work, 1)?;
+                        if closer.len() > 1 && closer.first() == Some(first) {
+                            possible = true;
+                            break;
+                        }
+                    }
+                    if !possible {
+                        continue;
+                    }
                     governor.charge(Resource::Work, size(inside.len()))?;
                     let open =
                         end.openers()

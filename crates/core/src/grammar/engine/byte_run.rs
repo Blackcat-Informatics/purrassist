@@ -273,6 +273,30 @@ impl Engine<'_> {
         Ok(true)
     }
 
+    /// The byte window stays immutable across one push's table loop. Both
+    /// class and body certificates require this predecessor before any proof.
+    pub(super) fn byte_run_may_repeat(
+        &self,
+        byte: u8,
+        repeated: &mut Option<bool>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if let Some(known) = *repeated {
+            return Ok(known);
+        }
+        governor.charge(Resource::Work, 4)?;
+        let known = byte.is_ascii()
+            && self
+                .buffer
+                .len()
+                .checked_sub(2)
+                .and_then(|at| self.buffer.get(at))
+                .is_some_and(|previous| *previous == byte);
+        *repeated = Some(known);
+        Ok(known)
+    }
+
     /// Certify the actual settled cohort through its native classifiers.
     /// Class and body proofs retain their separate qualification guards.
     pub(super) fn remember_byte_run(
@@ -722,7 +746,11 @@ impl Engine<'_> {
             let Some(cached) = steps[super::class_step_slot(byte)] else {
                 return Ok(false);
             };
-            if cached.dead || cached.state != state || cached.stepped != state {
+            if cached.byte != byte
+                || cached.dead
+                || cached.state != state
+                || cached.stepped != state
+            {
                 return Ok(false);
             }
             if !current.program.name_follower_index.is_empty() {

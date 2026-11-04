@@ -2,6 +2,37 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Deferred report release retains an exact unchanged-input certificate between
+its original release points. Open/completed transitions, whole/report insertion,
+matching reader retirement, abandonment and EOF invalidate it before reuse.
+Unrelated retirements can omit a proven no-op table census; real release order,
+outread decisions and payload disposal remain complete. Certificate controls
+and performed comparisons retain explicit admission.
+
+The reasoning-block mirror checks a possible following closer's first byte
+before scanning for an earlier opener. Exact and misspelled closers require
+that same byte; incompatible endings omit the unused scan while retaining the
+complete positive source and provenance path. Query controls and comparisons
+retain explicit admission.
+
+Repair search keys encode their five unsigned integer fields in shortest
+base-128 form, retaining status, mode and the complete edit digest. Native tie
+ordering and exact duplicate identity remain unchanged; actual key bytes and
+fallible buffers retain the search's existing admissions.
+
+Native ownership classification occurs at actual submode and closure changes.
+A revalidated table index can prove the candidate floor equal to the current
+ready continuation origin; other native lexical floors cannot precede it.
+Marker, report, turn and coverage accounting retain their normal paths. One
+lazy per-byte repetition query rules out impossible table certificates while
+preserving every positive class and body guard.
+
+Reading equality rejects differing native dialect identities before traversing
+argument metadata. Equal identities retain all original comparisons. Governed
+schema keyword lookup checks membership before vocabulary applicability; absent
+or duplicate keywords omit unused applicability work, while present keywords
+retain dialect and reference-sibling rules.
+
 Compiled programs retain one owned mask proving completion through zero-input
 edges. Repair and native EOF queries read that mask under the caller governor;
 call-ending metadata and protocol-fence validation borrow the same prepared
@@ -80,15 +111,14 @@ Contested spans admit their remaining paths individually before the existing
 whole-message product gate. Standalone native admission remains unchanged.
 Runtime, refusal-order and resource qualification remain pending automatic CI.
 
-Native class queries retain one exact transition/deadness cell for each of the
-256 input bytes per initialized class. The byte directly addresses its cell;
-full canonical state tags retain native fallback for other states. Bucket masking
-and byte-tag comparison are removed, while lookup and result handoff remain
-admitted. DFA and governed row construction publish together; unused classes
-allocate no row, and rows survive arena resets with their DFA. Byte proofs
-inspect the same cell and retain their remaining guards and admission. Cold
-initialization and full row capacity are paid before publication. Runtime and
-resource qualification, including short and tight-budget callers, remain pending CI.
+Native class queries retain sixty-four exact successful transition/deadness entries
+per initialized class, indexed by the low byte bits with full state and byte tags.
+Collisions use the original native query. DFA and governed row construction
+publish together; unused classes allocate no row, and rows survive arena resets
+for the lifetime of their native DFA. Byte proofs inspect the same selected
+entry and keep every existing self-loop guard. Query and initialization work,
+row capacity and construction controls remain admitted. Runtime and resource
+qualification remain pending automatic CI.
 
 An unchanged native frontier pinned at source zero retains its complete prior
 projection and settled history after the ordinary engine-floor query succeeds.

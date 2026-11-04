@@ -182,28 +182,58 @@ their original semantics. JSON repair spellings are not added to call metadata.
 Refusals drop unpublished partial tables and completed metadata from earlier
 steps; a successful borrow does not allocate or readmit the prepared bytes.
 
+### Deferred report release and compact repair keys
+
+A successful deferred-report release certifies its retained reader predicates.
+The engine invalidates this certificate on opening/completion, pending report or
+whole-start insertion, removal of a matching reader, abandonment and EOF.
+Original release points and report order remain; unchanged predicates can omit
+the table census. The certificate lives in the admitted engine controls, and
+invalidation probes and performed membership scans admit Work. Refusal destroys
+unpublished salvage before refunding its aggregate materialization admission.
+
+Repair deduplication keys retain every original field and the complete edit
+digest, encoding five unsigned integers in shortest base-128 form. Search keeps
+its original native tie tuple; key length now reflects the bytes actually
+written. Ordinary fallible key buffers and queue/seen storage keep their existing
+admissions. Reading comparisons likewise reject unequal dialect identities
+before traversing argument metadata. Schema lookup omits vocabulary checks for
+absent or duplicate keywords; disabled present keywords retain their full checks
+and may pay the reordered member lookup.
+
+The reasoning-block mirror tests following-closer compatibility before scanning
+for an earlier opener. Exact and misspelled closers require the same first byte;
+endings without one cannot contribute a mirror result. A 96-byte owner covers
+the added controls, and each actual closer comparison admits Work. Compatible
+endings retain every original body, closer, content and provenance check.
+
+Native submode transitions classify ownership once at their producers. A table
+index retains no cached floor: each successful use rereads its current candidate
+minimum and the ready continuation origin. Equality proves the candidate floor
+and bounds native lexical floors; marker, report, turn and interval consumers
+retain their ordinary accounting. The per-byte repetition memo likewise retains
+only a query over the immutable current window, and keeps every positive class
+and body qualification. Misses and positive queries can add control overhead;
+qualification covers these tradeoffs without changing budgets.
+
 ### Repeated runtime class queries
 
-Each initialized class in a grammar's operation-owned runtime retains 256 cells,
-one for each input byte. The byte directly addresses its cell; the full native
-DFA state remains the tag: term identity, matched and zero-width context flags,
-and the complete UTF-8 decoding position. Class sessions append derivative terms
-without remapping IDs, so later growth cannot change a saved answer. Call and
-result tables share their grammar's existing class sessions and cache.
+Each grammar's operation-owned class runtime retains sixty-four exact bucket
+entries for successful transition/deadness queries per class. The key includes the full native DFA state
+and input byte: term identity, matched and zero-width context flags, and the
+complete UTF-8 decoding position. Class sessions append derivative terms without
+remapping existing IDs, so later session growth cannot change a saved answer.
+Call and result tables share their grammar's existing class sessions and cache.
 
-Four Work units admit each cache query after removing bucket masking and the
-redundant byte-tag comparison. A state miss runs the original DFA transition and
-deadness checks with their existing admission; only joint success updates the
-cell. Errors and governor state are never cached. Accepting state checks,
-literal-boundary alternatives, capture boundaries and every permitted opener
-remain on the original production path.
+A fixed six Work units admit each cache query. A miss runs the original DFA
+transition and deadness checks with their existing admission; only their joint
+success updates the cache. Errors and governor state are never cached. Accepting
+state checks, literal-boundary alternatives, capture boundaries and every
+permitted opener remain on the original production path.
 
-The fallible row admits initialization Work and every reserved cell, including
-empty and spare cells, at a portable 64 bytes per cell: 16,384 bytes per
-initialized class. Unused classes allocate no row. Row and DFA construction
-publish together only after both succeed. Storage releases when the engine drops,
-including construction or processing refusal. Larger cold admission is a runtime
-tradeoff; current short-input and tight-budget qualification remains pending CI.
+The fallible cache vector admits initialization Work and all reserved slots,
+including empty and spare slots, at a portable 64 bytes per slot. Its storage
+releases when the engine drops, including construction or processing refusal.
 The grammar runtime metadata uses its own fallible scratch vector, with portable
 96-byte rows covering the added owner handle and all reserved metadata slots.
 The existing table and DFA-slot vectors retain their earlier allocation paths;
@@ -1531,9 +1561,9 @@ records, each actual prefix lookup admits one and each visited binary-search ste
 two. Reconstructing coverage from a matching prior candidate coordinate admits
 one additional Work. No query allocates another coverage owner.
 
-Added retained metadata reserves 64 bytes per dialect set, 64 bytes per intake,
-128 bytes per event cursor, 640 bytes per recognizer and 32 bytes per engine table
-plus 64 bytes per engine. Layout assertions cover these portable reservations.
+Added retained metadata reserves 64 bytes per dialect set, 112 bytes per intake,
+128 bytes per event cursor, 904 bytes per recognizer plus 48 bytes for turn-node
+controls, and 56 bytes per engine table plus 160 bytes per engine. Layout assertions cover these portable reservations.
 Counter and bound reads allocate nothing, admit no work and do not poll the
 governor or cancellation token. A shared token requests cancellation; counts
 continue to describe resident owners until the next mutable operation, including

@@ -238,8 +238,25 @@ impl<'a, 's> RepairState<'a, 's> {
         operator: EditOperator,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        let ownership = if self.thread.ownership & 1 != 0 {
+            governor.charge(Resource::Work, 1)?;
+            if matches!(
+                sub,
+                Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
+            ) {
+                self.thread.ownership
+            } else {
+                2
+            }
+        } else {
+            2
+        };
         let mut seeds = ScratchVec::new(governor);
-        seeds.push(Thread { sub, ..self.thread })?;
+        seeds.push(Thread {
+            sub,
+            ownership,
+            ..self.thread
+        })?;
         self.replay(context, proposals, &mut seeds, operator, governor)
     }
 
@@ -471,6 +488,19 @@ const fn json_skip_operator(pending: &[u8]) -> EditOperator {
     }
 }
 
+/// Shortest unsigned base-128 encoding: each integer terminates before the
+/// next field, preserving exact state identity without fixed-width zero bytes.
+fn key_integer(key: &mut ScratchVec<u8>, mut value: u64) -> Result<(), StopReason> {
+    loop {
+        let byte = value.to_le_bytes()[0];
+        value >>= 7;
+        if value == 0 {
+            return key.push(byte);
+        }
+        key.push(byte | 0x80)?;
+    }
+}
+
 impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
     type Tie = (usize, u32, u8, u32, Status, usize, Digest);
     type Context<'c> = RepairContext<'a, 's>;
@@ -492,11 +522,11 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
         let (mode, node) = self.thread.sub.key();
         key.push(self.status as u8)?;
         key.push(mode)?;
-        key.extend((self.thread.pos as u64).to_be_bytes())?;
-        key.extend(self.thread.pc.to_be_bytes())?;
-        key.extend(node.to_be_bytes())?;
-        key.extend((self.thread.entry as u64).to_be_bytes())?;
-        key.extend(self.thread.attempt.to_be_bytes())?;
+        key_integer(key, self.thread.pos as u64)?;
+        key_integer(key, u64::from(self.thread.pc))?;
+        key_integer(key, u64::from(node))?;
+        key_integer(key, self.thread.entry as u64)?;
+        key_integer(key, self.thread.attempt)?;
         key.extend(*self.digest.as_bytes())
     }
 

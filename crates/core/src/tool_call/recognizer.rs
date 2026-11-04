@@ -1870,10 +1870,22 @@ fn same_example_call(
         return Ok(false);
     }
     for (left, right) in left.readings.iter().zip(&right.readings) {
+        // Different native dialect identities cannot be equal readings. Check
+        // their bounded identity before traversing either argument's metadata.
+        governor.charge(Resource::Work, 1)?;
+        if left.dialect.name().len() != right.dialect.name().len() {
+            return Ok(false);
+        }
+        governor.charge(
+            Resource::Work,
+            size(left.dialect.name().len()).saturating_add(32),
+        )?;
+        if left.dialect != right.dialect {
+            return Ok(false);
+        }
         admit_example_call_metadata(left, governor)?;
         admit_example_call_metadata(right, governor)?;
         if left.span != right.span
-            || left.dialect != right.dialect
             || left.kind != right.kind
             || left.order != right.order
             || left.name != right.name
@@ -2261,7 +2273,17 @@ impl<'s> Recognizer<'s> {
         if !self.engine.tracks_ownership() {
             return Err(invalid_input("candidate accounting was not prepared"));
         }
-        let (mut lexical, mut candidate) = self.engine.ownership_floors(governor)?;
+        let (mut lexical, mut candidate) =
+            if let Some(origin) = self.engine.source_candidate_floor(governor)? {
+                if origin == 0 {
+                    return Ok(ByteOwnership::WholeCandidate);
+                }
+                // The ready continuation origin lower-bounds native lexical
+                // owners, so none can precede this exact native candidate.
+                (None, Some(origin))
+            } else {
+                self.engine.ownership_floors(governor)?
+            };
         governor.charge(Resource::Work, 1)?;
         if candidate == Some(0) {
             // No turn, report, marker or settled interval can precede zero.

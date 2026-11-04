@@ -3498,6 +3498,20 @@ const _: () = assert!(
         <= SCHEMA_REPORT_CONTROL_BYTES
 );
 
+/// An unevaluable schema types nothing; argument validation retains its
+/// ordinary diagnostic. Resource and cancellation refusals still propagate.
+fn round_validation(
+    tool: &CompiledTool,
+    instance: &Node,
+    governor: &mut Governor,
+) -> Result<Option<ValidationReport>, StopReason> {
+    match tool.schema().validate_with(instance, governor) {
+        Ok(report) => Ok(Some(report)),
+        Err(StopReason::InvalidInput(_)) => Ok(None),
+        Err(reason) => Err(reason),
+    }
+}
+
 /// The schema-typing rounds of [`Resolver::schema_typed`] over `sites`:
 /// the arguments with the accepted JSON readings, and per site whether its
 /// JSON reading was taken and whether the schema admits both readings.
@@ -3510,18 +3524,7 @@ fn schema_rounds(
     governor: &mut Governor,
 ) -> Result<Option<SchemaRound>, StopReason> {
     let owner = governor.lease_scratch(SCHEMA_REPORT_CONTROL_BYTES)?;
-    // A schema the validator cannot evaluate (a `$ref` recurring without
-    // instance progress) types nothing: the verbatim text stays, and the
-    // arguments' own validation reports the schema as before.
-    let validate = |instance: &Node, governor: &mut Governor| match tool
-        .schema()
-        .validate_with(instance, governor)
-    {
-        Ok(report) => Ok(Some(report)),
-        Err(StopReason::InvalidInput(_)) => Ok(None),
-        Err(reason) => Err(reason),
-    };
-    let Some(mut report) = validate(&arguments, governor)? else {
+    let Some(mut report) = round_validation(tool, &arguments, governor)? else {
         return Ok(None);
     };
     let flip = |base: &Node, indices: &[usize], governor: &mut Governor| {
@@ -3548,7 +3551,7 @@ fn schema_rounds(
             break;
         }
         let candidate = flip(&arguments, &implicated, governor)?;
-        let Some(tried) = validate(&candidate, governor)? else {
+        let Some(tried) = round_validation(tool, &candidate, governor)? else {
             break;
         };
         let after = related_counts(&tried.violations, sites, governor)?;
@@ -3567,7 +3570,7 @@ fn schema_rounds(
         }
         if !better.is_empty() {
             let next = flip(&arguments, &better, governor)?;
-            if let Some(next_report) = validate(&next, governor)?
+            if let Some(next_report) = round_validation(tool, &next, governor)?
                 && next_report.violations.len() < report.violations.len()
             {
                 arguments = next;
@@ -3585,7 +3588,7 @@ fn schema_rounds(
                 continue;
             }
             let next = flip(&arguments, &[index], governor)?;
-            let Some(next_report) = validate(&next, governor)? else {
+            let Some(next_report) = round_validation(tool, &next, governor)? else {
                 continue;
             };
             let after = related_counts(&next_report.violations, sites, governor)?;
@@ -3611,7 +3614,7 @@ fn schema_rounds(
     let mut both = vec![false; sites.len()];
     if !quiet.is_empty() {
         let candidate = flip(&arguments, &quiet, governor)?;
-        if let Some(tried) = validate(&candidate, governor)? {
+        if let Some(tried) = round_validation(tool, &candidate, governor)? {
             let after = related_counts(&tried.violations, sites, governor)?;
             for &index in &quiet {
                 both[index] = after[index] == 0;
