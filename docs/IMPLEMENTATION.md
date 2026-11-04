@@ -2,6 +2,12 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Native body-run selection classifies the current instruction before inspecting
+its predecessor byte. Incremental codecs cannot qualify and omit that unused
+comparison; supported bodies retain every run, owner and codec guard. Existing
+operation charges follow the reordered work. Runtime savings and dense-body
+tradeoffs remain pending automatic CI.
+
 The native derivative DFA state uses one canonical private word containing its
 complete term ID, assertion flags and UTF-8 decoding position. Partial prefixes
 retain their payload and position; boundary and invalid states clear only the

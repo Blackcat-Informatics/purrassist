@@ -344,8 +344,21 @@ impl Engine<'_> {
         let Sub::Body(raw, _) = first.sub else {
             return Ok(());
         };
-        // Every supported proof needs eight equal bytes. Reject an unequal
-        // preceding byte before examining instructions, codecs or owners.
+        // Incremental bodies cannot qualify. Classify the actual instruction
+        // before examining a predecessor that cannot change that result.
+        governor.charge(Resource::Work, 2)?;
+        if !matches!(
+            current.program.insts[first.pc as usize],
+            Inst::Until { .. }
+                | Inst::Slot {
+                    codec: CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs,
+                    ..
+                }
+        ) {
+            return Ok(());
+        }
+        // Supported bodies still need an equal predecessor before inspecting
+        // their full run, codecs or owners.
         governor.charge(Resource::Work, 4)?;
         let Some(previous) = self
             .buffer
@@ -356,17 +369,6 @@ impl Engine<'_> {
             return Ok(());
         };
         if *previous != byte {
-            return Ok(());
-        }
-        governor.charge(Resource::Work, 2)?;
-        if !matches!(
-            current.program.insts[first.pc as usize],
-            Inst::Until { .. }
-                | Inst::Slot {
-                    codec: CodecKind::Raw | CodecKind::XmlParams | CodecKind::KvPairs,
-                    ..
-                }
-        ) {
             return Ok(());
         }
         governor.charge(Resource::Work, 3)?;
