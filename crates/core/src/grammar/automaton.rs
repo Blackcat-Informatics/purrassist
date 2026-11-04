@@ -193,9 +193,8 @@ impl Trie {
 
 /// A dense Aho–Corasick automaton over a set of non-empty byte literals.
 ///
-/// By default, [`Matcher::found`] reports the longest literal that ends at
-/// each byte. [`Matcher::build_first`] instead selects the first input literal
-/// among those ending together. Both select the earliest-ending occurrence;
+/// [`Matcher::found`] reports the longest literal that ends at each byte,
+/// selecting the earliest-ending occurrence;
 /// [`Matcher::depth`] the length of the longest suffix represented by a trie
 /// prefix, including completed leaves. Marker holdback uses the separately
 /// prepared proper-continuation depths from [`Matcher::continuation_depths`].
@@ -224,12 +223,12 @@ impl<'a, B: AsRef<[u8]>> Iterator for IndexedLiterals<'a, B> {
     }
 }
 
-struct MatcherBuild {
+struct MatcherBuild<O> {
     goto: Trie,
     delta: ScratchVec<u32>,
     depth: ScratchVec<u32>,
     fail: ScratchVec<u32>,
-    found: ScratchVec<Option<(u32, u32)>>,
+    outputs: O,
     queue: ScratchVec<u32>,
     count: usize,
     cells: usize,
@@ -276,14 +275,105 @@ impl MatcherCursor<'_> {
     }
 }
 
-impl MatcherBuild {
+/// Concrete output owners keep ordinary matching free of projection storage.
+trait MatcherOutputs: Sized {
+    const TABLES: u64;
+
+    fn new(governor: &Governor) -> Self;
+    fn initialize(&mut self, count: usize) -> Result<(), StopReason>;
+    fn prefix(&mut self, state: usize, label: Option<u32>, depth: u32);
+    fn inherit(
+        &mut self,
+        cursor: &mut MatcherCursor<'_>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason>;
+}
+
+type LongestOutputs = ScratchVec<Option<(u32, u32)>>;
+
+impl MatcherOutputs for LongestOutputs {
+    const TABLES: u64 = 1;
+
+    fn new(governor: &Governor) -> Self {
+        ScratchVec::new(governor)
+    }
+
+    fn initialize(&mut self, count: usize) -> Result<(), StopReason> {
+        self.extend(core::iter::repeat_n(None, count))
+    }
+
+    fn prefix(&mut self, state: usize, label: Option<u32>, depth: u32) {
+        self.as_mut_slice()[state] = label.map(|label| (label, depth));
+    }
+
+    fn inherit(
+        &mut self,
+        cursor: &mut MatcherCursor<'_>,
+        _governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        if self[cursor.state].is_none() {
+            self.as_mut_slice()[cursor.state] = self[cursor.fallback];
+        }
+        Ok(())
+    }
+}
+
+type PriorityOutputs = ScratchVec<[Option<(u32, u32)>; 2]>;
+
+impl MatcherOutputs for PriorityOutputs {
+    const TABLES: u64 = 2;
+
+    fn new(governor: &Governor) -> Self {
+        ScratchVec::new(governor)
+    }
+
+    fn initialize(&mut self, count: usize) -> Result<(), StopReason> {
+        self.extend(core::iter::repeat_n([None; 2], count))
+    }
+
+    fn prefix(&mut self, _state: usize, _label: Option<u32>, _depth: u32) {
+        // Global trie labels cannot express two independent input orders.
+        // Exact terminal replay initializes both projections before BFS.
+    }
+
+    fn inherit(
+        &mut self,
+        cursor: &mut MatcherCursor<'_>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        cursor.edge = 0;
+        while cursor.edge < 2 {
+            // Read the candidates, select original view order, publish.
+            governor.charge(Resource::Work, 3)?;
+            cursor.current = self[cursor.state][cursor.edge];
+            cursor.inherited = self[cursor.fallback][cursor.edge];
+            self.as_mut_slice()[cursor.state][cursor.edge] =
+                first_output(cursor.current, cursor.inherited);
+            cursor.edge += 1;
+        }
+        Ok(())
+    }
+}
+
+const fn first_output(
+    current: Option<(u32, u32)>,
+    inherited: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    match (current, inherited) {
+        (Some(own), Some(other)) if own.0 <= other.0 => current,
+        (Some(_), None) => current,
+        _ => inherited,
+    }
+}
+
+impl<O: MatcherOutputs> MatcherBuild<O> {
     fn allocate(goto: Trie, governor: &mut Governor) -> Result<Self, StopReason> {
         let mut build = Self {
             goto,
             delta: ScratchVec::new(governor),
             depth: ScratchVec::new(governor),
             fail: ScratchVec::new(governor),
-            found: ScratchVec::new(governor),
+            outputs: O::new(governor),
             queue: ScratchVec::new(governor),
             count: 0,
             cells: 0,
@@ -298,7 +388,7 @@ impl MatcherBuild {
         let work = size(build.cells)
             .checked_add(
                 size(build.count)
-                    .checked_mul(3)
+                    .checked_mul(2 + O::TABLES)
                     .ok_or_else(|| governor.stop_resource(Resource::Work))?,
             )
             .ok_or_else(|| governor.stop_resource(Resource::Work))?;
@@ -312,9 +402,7 @@ impl MatcherBuild {
         build
             .fail
             .extend(core::iter::repeat_n(0_u32, build.count))?;
-        build
-            .found
-            .extend(core::iter::repeat_n(None, build.count))?;
+        build.outputs.initialize(build.count)?;
         Ok(build)
     }
 
@@ -337,8 +425,8 @@ impl MatcherBuild {
                 self.depth.as_mut_slice()[cursor.child as usize] = cursor.next_depth;
                 cursor.edge += 1;
             }
-            self.found.as_mut_slice()[cursor.state] =
-                node.accept.map(|label| (label, self.depth[cursor.state]));
+            self.outputs
+                .prefix(cursor.state, node.accept, self.depth[cursor.state]);
             cursor.state += 1;
         }
         governor.charge(Resource::Work, size(self.goto.nodes[0].children.len()))?;
@@ -353,7 +441,7 @@ impl MatcherBuild {
         Ok(())
     }
 
-    fn transitions<const FIRST: bool>(
+    fn transitions(
         &mut self,
         cursor: &mut MatcherCursor<'_>,
         governor: &mut Governor,
@@ -363,20 +451,7 @@ impl MatcherBuild {
             cursor.state = self.queue[self.cursor] as usize;
             self.cursor += 1;
             cursor.fallback = self.fail[cursor.state] as usize;
-            if FIRST {
-                // Read both suffix candidates, select original order, publish.
-                governor.charge(Resource::Work, 3)?;
-                cursor.current = self.found[cursor.state];
-                cursor.inherited = self.found[cursor.fallback];
-                self.found.as_mut_slice()[cursor.state] = match (&cursor.current, &cursor.inherited)
-                {
-                    (Some(own), Some(other)) if own.0 <= other.0 => cursor.current,
-                    (Some(_), None) => cursor.current,
-                    _ => cursor.inherited,
-                };
-            } else if self.found[cursor.state].is_none() {
-                self.found.as_mut_slice()[cursor.state] = self.found[cursor.fallback];
-            }
+            self.outputs.inherit(cursor, governor)?;
             let children = &self.goto.nodes[cursor.state].children;
             cursor.comparisons = u64::from(children.len().bit_width()) + 1;
             cursor.byte = 0;
@@ -403,6 +478,33 @@ impl MatcherBuild {
         }
         Ok(())
     }
+
+    fn prepare<'a, B: AsRef<[u8]>>(
+        literals: &'a [B],
+        cursor: &mut MatcherCursor<'a>,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        governor.charge(Resource::Depth, 1)?;
+        governor.charge(Resource::Work, size(literals.len()))?;
+        u32::try_from(literals.len())
+            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        while cursor.literal < literals.len() {
+            cursor.bytes = literals[cursor.literal].as_ref();
+            governor.charge(Resource::InputBytes, size(cursor.bytes.len()))?;
+            governor.charge(Resource::Work, size(cursor.bytes.len()).saturating_add(1))?;
+            u32::try_from(cursor.bytes.len())
+                .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+            cursor.longest = cursor.longest.max(cursor.bytes.len());
+            cursor.literal += 1;
+        }
+        // The existing fallible trie is the only goto/prefix authority.
+        let mut build = Self::allocate(
+            Trie::build(IndexedLiterals { literals, next: 0 }, governor)?,
+            governor,
+        )?;
+        build.prefixes(cursor, governor)?;
+        Ok(build)
+    }
 }
 
 impl ScratchCharge for Matcher {
@@ -412,10 +514,17 @@ impl ScratchCharge for Matcher {
 impl ScratchCharge for Option<(u32, u32)> {
     const CHARGE: usize = 16;
 }
+impl ScratchCharge for [Option<(u32, u32)>; 2] {
+    const CHARGE: usize = 32;
+}
 const _: () = assert!(
     core::mem::size_of::<Option<(u32, u32)>>() <= <Option<(u32, u32)> as ScratchCharge>::CHARGE
 );
 const _: () = assert!(core::mem::size_of::<Matcher>() <= Matcher::CHARGE);
+const _: () = assert!(
+    core::mem::size_of::<[Option<(u32, u32)>; 2]>()
+        <= <[Option<(u32, u32)>; 2] as ScratchCharge>::CHARGE
+);
 
 impl Matcher {
     /// Build proper continuation depths only for a caller needing lexical
@@ -462,109 +571,14 @@ impl Matcher {
         literals: &[B],
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
-        Self::build_ordered::<B, false>(literals, governor)
-    }
-
-    /// Prefer the first input literal among all suffixes ending together.
-    /// The private lease covers real construction frames and return carriers.
-    pub(crate) fn build_first<B: AsRef<[u8]>>(
-        literals: &[B],
-        governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
-        const CONTROL: usize = 656;
-        // Final projection: owners, working records, input/borrow/return values.
-        const {
-            assert!(
-                core::mem::size_of::<(
-                    MatcherBuild,
-                    MatcherCursor<'_>,
-                    Result<Matcher, StopReason>,
-                    &[B],
-                    &[u8],
-                    &B,
-                    &TrieNode,
-                    &ScratchVec<(u8, u32)>,
-                    Result<usize, usize>,
-                    usize,
-                    Option<(u32, u32)>,
-                    (&(u32, u32), &(u32, u32)),
-                    &mut Governor,
-                    ScratchLease,
-                )>() <= CONTROL
-            );
-            // Nested trie creation precedes the MatcherBuild owner frame.
-            assert!(
-                core::mem::size_of::<(
-                    MatcherCursor<'_>,
-                    TrieBuild<IndexedLiterals<'_, B>>,
-                    TrieCursor<'_>,
-                    TrieNode,
-                    Result<Trie, StopReason>,
-                    IndexedLiterals<'_, B>,
-                    Option<(&[u8], u32)>,
-                    &[B],
-                    &B,
-                    &ScratchVec<(u8, u32)>,
-                    &mut ScratchVec<(u8, u32)>,
-                    Result<usize, usize>,
-                    Result<u32, core::num::TryFromIntError>,
-                    usize,
-                    &mut Governor,
-                    ScratchLease,
-                )>() <= CONTROL
-            );
-            // Allocation temporarily owns the returned goto and zero iterators.
-            assert!(
-                core::mem::size_of::<(
-                    Result<MatcherBuild, StopReason>,
-                    MatcherCursor<'_>,
-                    Result<Trie, StopReason>,
-                    &[B],
-                    &[u8],
-                    core::iter::RepeatN<Option<(u32, u32)>>,
-                    core::iter::RepeatN<Option<(u32, u32)>>,
-                    core::iter::RepeatN<u32>,
-                    u64,
-                    &mut Governor,
-                    ScratchLease,
-                )>() <= CONTROL
-            );
-        }
-        governor.charge(Resource::Work, 1)?;
-        let _construction = governor.lease_scratch(size(CONTROL))?;
-        Self::build_ordered::<B, true>(literals, governor)
-    }
-
-    fn build_ordered<B: AsRef<[u8]>, const FIRST: bool>(
-        literals: &[B],
-        governor: &mut Governor,
-    ) -> Result<Self, StopReason> {
-        governor.charge(Resource::Depth, 1)?;
-        governor.charge(Resource::Work, size(literals.len()))?;
-        u32::try_from(literals.len())
-            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
         let mut cursor = MatcherCursor::new();
-        while cursor.literal < literals.len() {
-            cursor.bytes = literals[cursor.literal].as_ref();
-            governor.charge(Resource::InputBytes, size(cursor.bytes.len()))?;
-            governor.charge(Resource::Work, size(cursor.bytes.len()).saturating_add(1))?;
-            u32::try_from(cursor.bytes.len())
-                .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
-            cursor.longest = cursor.longest.max(cursor.bytes.len());
-            cursor.literal += 1;
-        }
-        // The existing fallible trie is the only goto/prefix authority.
-        let mut build = MatcherBuild::allocate(
-            Trie::build(IndexedLiterals { literals, next: 0 }, governor)?,
-            governor,
-        )?;
-        build.prefixes(&mut cursor, governor)?;
-        build.transitions::<FIRST>(&mut cursor, governor)?;
+        let mut build = MatcherBuild::<LongestOutputs>::prepare(literals, &mut cursor, governor)?;
+        build.transitions(&mut cursor, governor)?;
         governor.check()?;
         Ok(Self {
             delta: build.delta,
             depth: build.depth,
-            found: build.found,
+            found: build.outputs,
             longest: cursor.longest,
         })
     }
@@ -575,7 +589,7 @@ impl Matcher {
         self.delta[state as usize * 256 + usize::from(byte)]
     }
 
-    /// `(literal index, length)` selected by the construction's suffix policy.
+    /// `(literal index, length)` of the longest literal ending at `state`.
     #[inline]
     pub(crate) fn found(&self, state: u32) -> Option<(u32, u32)> {
         self.found[state as usize]
@@ -593,9 +607,198 @@ impl Matcher {
     }
 }
 
+/// One borrowed spelling with its independent priority in each native program.
+pub(crate) struct PriorityLiteral<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) ranks: [Option<u32>; 2],
+}
+
+impl AsRef<[u8]> for PriorityLiteral<'_> {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes
+    }
+}
+
+impl ScratchCharge for PriorityLiteral<'_> {
+    const CHARGE: usize = 32;
+}
+const _: () = assert!(
+    core::mem::size_of::<PriorityLiteral<'_>>() <= <PriorityLiteral<'_> as ScratchCharge>::CHARGE
+);
+
+/// One transition table with two exact first-priority suffix projections.
+#[derive(Debug)]
+pub(crate) struct PriorityMatcher {
+    delta: ScratchVec<u32>,
+    outputs: PriorityOutputs,
+}
+
+impl ScratchCharge for PriorityMatcher {
+    const CHARGE: usize = 80;
+}
+const _: () = assert!(core::mem::size_of::<PriorityMatcher>() <= PriorityMatcher::CHARGE);
+
+impl MatcherBuild<PriorityOutputs> {
+    fn terminals<'a>(
+        &mut self,
+        literals: &'a [PriorityLiteral<'_>],
+        cursor: &mut MatcherCursor<'a>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        cursor.literal = 0;
+        while cursor.literal < literals.len() {
+            // Token lookup and checked terminal length preparation.
+            governor.charge(Resource::Work, 2)?;
+            cursor.bytes = literals[cursor.literal].bytes;
+            cursor.next_depth = u32::try_from(cursor.bytes.len())
+                .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+            cursor.state = ROOT as usize;
+            cursor.position = 0;
+            while cursor.position < cursor.bytes.len() {
+                let children = &self.goto.nodes[cursor.state].children;
+                cursor.comparisons = u64::from(children.len().bit_width()) + 1;
+                // Edge lookup, state publication and byte-cursor progression.
+                governor.charge(Resource::Work, cursor.comparisons + 2)?;
+                cursor.byte = cursor.bytes[cursor.position];
+                cursor.state = match children.binary_search_by_key(&cursor.byte, |(key, _)| *key) {
+                    Ok(index) => children[index].1 as usize,
+                    Err(_) => return Err(invalid_input("priority literal has no trie terminal")),
+                };
+                cursor.position += 1;
+            }
+            cursor.edge = 0;
+            while cursor.edge < 2 {
+                // Absent ranks still require a view-slot observation.
+                governor.charge(Resource::Work, 1)?;
+                if let Some(rank) = literals[cursor.literal].ranks[cursor.edge] {
+                    governor.charge(Resource::Work, 3)?;
+                    cursor.current = self.outputs[cursor.state][cursor.edge];
+                    cursor.inherited = Some((rank, cursor.next_depth));
+                    self.outputs.as_mut_slice()[cursor.state][cursor.edge] =
+                        first_output(cursor.current, cursor.inherited);
+                }
+                cursor.edge += 1;
+            }
+            cursor.literal += 1;
+        }
+        Ok(())
+    }
+}
+
+impl PriorityMatcher {
+    /// Build both native priority views, retaining only their shared tables.
+    /// Every duplicate spelling replays its own ranks into its exact terminal.
+    pub(crate) fn build(
+        literals: &[PriorityLiteral<'_>],
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        const CONTROL: usize = 768;
+        const {
+            // Prefix, terminal replay, BFS and final ownership publication.
+            assert!(
+                core::mem::size_of::<(
+                    MatcherBuild<PriorityOutputs>,
+                    MatcherCursor<'_>,
+                    &mut MatcherBuild<PriorityOutputs>,
+                    &mut MatcherCursor<'_>,
+                    Result<PriorityMatcher, StopReason>,
+                    &[PriorityLiteral<'_>],
+                    &[PriorityLiteral<'_>],
+                    &[u8],
+                    &PriorityLiteral<'_>,
+                    &TrieNode,
+                    &ScratchVec<(u8, u32)>,
+                    &mut [Option<(u32, u32)>; 2],
+                    &mut [[Option<(u32, u32)>; 2]],
+                    &mut PriorityOutputs,
+                    Result<usize, usize>,
+                    Result<u32, core::num::TryFromIntError>,
+                    Result<(), StopReason>,
+                    usize,
+                    u32,
+                    Option<u32>,
+                    Option<(u32, u32)>,
+                    (Option<(u32, u32)>, Option<(u32, u32)>),
+                    &mut Governor,
+                    ScratchLease,
+                )>() <= CONTROL
+            );
+            // Nested trie ownership, its iterator and insertion temporaries.
+            assert!(
+                core::mem::size_of::<(
+                    MatcherCursor<'_>,
+                    &mut MatcherCursor<'_>,
+                    TrieBuild<IndexedLiterals<'_, PriorityLiteral<'_>>>,
+                    TrieCursor<'_>,
+                    TrieNode,
+                    Result<Trie, StopReason>,
+                    IndexedLiterals<'_, PriorityLiteral<'_>>,
+                    Option<(&[u8], u32)>,
+                    &[PriorityLiteral<'_>],
+                    &[PriorityLiteral<'_>],
+                    &PriorityLiteral<'_>,
+                    &ScratchVec<(u8, u32)>,
+                    &mut ScratchVec<(u8, u32)>,
+                    &mut ScratchVec<TrieNode>,
+                    Result<usize, usize>,
+                    Result<u32, core::num::TryFromIntError>,
+                    Result<(), StopReason>,
+                    usize,
+                    &mut Governor,
+                    ScratchLease,
+                )>() <= CONTROL
+            );
+            // Allocation/prepare return carriers and nested zero iterators.
+            assert!(
+                core::mem::size_of::<(
+                    Result<MatcherBuild<PriorityOutputs>, StopReason>,
+                    MatcherCursor<'_>,
+                    &mut MatcherCursor<'_>,
+                    Result<Trie, StopReason>,
+                    &[PriorityLiteral<'_>],
+                    &[PriorityLiteral<'_>],
+                    &[u8],
+                    &mut PriorityOutputs,
+                    core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
+                    core::iter::RepeatN<[Option<(u32, u32)>; 2]>,
+                    core::iter::RepeatN<u32>,
+                    Result<(), StopReason>,
+                    Option<usize>,
+                    u64,
+                    &mut Governor,
+                    ScratchLease,
+                )>() <= CONTROL
+            );
+        }
+        governor.charge(Resource::Work, 1)?;
+        let _construction = governor.lease_scratch(size(CONTROL))?;
+        let mut cursor = MatcherCursor::new();
+        let mut build = MatcherBuild::<PriorityOutputs>::prepare(literals, &mut cursor, governor)?;
+        build.terminals(literals, &mut cursor, governor)?;
+        build.transitions(&mut cursor, governor)?;
+        governor.check()?;
+        Ok(Self {
+            delta: build.delta,
+            outputs: build.outputs,
+        })
+    }
+
+    /// The shared state after `byte`, including tokens invisible to one view.
+    #[inline]
+    pub(crate) fn step(&self, state: u32, byte: u8) -> u32 {
+        self.delta[state as usize * 256 + usize::from(byte)]
+    }
+
+    /// `(view rank, length)` of the first native suffix in `view`.
+    #[inline]
+    pub(crate) fn found(&self, state: u32, view: usize) -> Option<(u32, u32)> {
+        self.outputs[state as usize][view]
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Matcher, ROOT, Trie};
+    use super::{Matcher, PriorityLiteral, PriorityMatcher, ROOT, Trie};
     use crate::{Budget, Governor};
 
     #[test]
@@ -628,14 +831,51 @@ mod tests {
         // a longer closer. Ordinary delimiter matching still keeps the longest.
         let priority = [b"g>".as_slice(), b"</arg>", b"</arg>"];
         let longest = Matcher::build(&priority, &mut governor).unwrap();
-        let first = Matcher::build_first(&priority, &mut governor).unwrap();
+        let projected = [
+            PriorityLiteral {
+                bytes: b"g>",
+                ranks: [Some(0), None],
+            },
+            PriorityLiteral {
+                bytes: b"</arg>",
+                ranks: [Some(1), None],
+            },
+            PriorityLiteral {
+                bytes: b"x>",
+                ranks: [None, Some(0)],
+            },
+            PriorityLiteral {
+                bytes: b"</arg>",
+                ranks: [None, Some(1)],
+            },
+            PriorityLiteral {
+                bytes: b"</arg>",
+                ranks: [Some(2), Some(2)],
+            },
+        ];
+        let first = PriorityMatcher::build(&projected, &mut governor).unwrap();
         let (mut longest_state, mut first_state) = (ROOT, ROOT);
         for &byte in b"</arg>" {
             longest_state = longest.step(longest_state, byte);
             first_state = first.step(first_state, byte);
         }
         assert_eq!(longest.found(longest_state), Some((1, 6)));
-        assert_eq!(first.found(first_state), Some((0, 2)));
+        assert_eq!(first.found(first_state, 0), Some((0, 2)));
+        assert_eq!(first.found(first_state, 1), Some((1, 6)));
+        // A first global trie label cannot make a spelling visible in the
+        // other program, or hide that program's later duplicate label.
+        let mut state = ROOT;
+        for &byte in b"x>" {
+            state = first.step(state, byte);
+        }
+        assert_eq!(first.found(state, 0), None);
+        assert_eq!(first.found(state, 1), Some((0, 2)));
+        let mut state = ROOT;
+        for &byte in b"g>" {
+            state = first.step(state, byte);
+        }
+        assert_eq!(first.found(state, 0), Some((0, 2)));
+        assert_eq!(first.found(state, 1), None);
     }
 
     #[test]

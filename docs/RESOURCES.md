@@ -2258,32 +2258,49 @@ prepared dialect set. Byte-prefix length is iterative and has no 128-byte
 recursion ceiling. Duplicate labels, earliest-ending matches and longest-match
 priority keep their original meaning.
 
-Inserted-wrapper lookahead uses two additional immutable matchers, one for each
-final call/result program. Its token order is the canonical program openers,
-local reasoning openers, then every declared closer spelling, preserving order
-within each group. This caller selects the first original token among all
-suffixes ending on a byte, including when that token is shorter than another
-match. Shared trie insertion retains the first duplicate label; a construction
-projection propagates the smallest label along failure links. Ordinary delimiter
-and marker callers keep their existing longest-match policy and admissions.
+Inserted-wrapper lookahead uses one additional immutable transition table with
+two exact priority projections for the final call/result programs. Each view's
+token order is its literal program openers, local reasoning openers, then every
+declared closer spelling, preserving order within each group. Nonliteral opener
+instructions are visited and skipped. This caller selects the first native token
+among all suffixes ending on a byte, including when that token is shorter than
+another match. Tokens carry independent ranks for the views that admit them.
+Local reasoning and closer spellings enter the shared trie once. Every token,
+including duplicate bytes, replays its ranks into its exact trie terminal before
+breadth-first suffix propagation selects each view's minimum rank. Global trie
+labels cannot hide later duplicates or expose another program's private opener.
+Ordinary delimiter and marker callers retain their existing longest-match output
+owner, initialization, suffix policy and admissions through the same constructor.
 
-Each retained wrapper matcher reserves 152 portable metadata bytes for its real
-matcher, opener cutoff and lease; table buffers retain their own reservations.
-Preparation separately reserves 256 bytes for the actual caller frame, borrowed
-token vector owner, input/return carriers and lease. Borrowed tokens reserve
-16 bytes each; their source lookup and push each admit one Work, with actual live
-relocation admitted on growth. Cutoff conversion admits one Work. The ordered
-constructor reserves 656 additional metadata bytes covering its real sparse-trie
-and dense-builder phases: goto, transitions, depths, failure links, matches, queue,
-iterators, cursors, scalars, borrows and return carriers. Complete typed phase
-assertions cover these records, including temporary trie nodes and initialization
-iterators. Both new caller metadata reservations and the private construction
-reservation admit one Work each. Existing constructor scans, initialization,
-lookups and growth remain admitted; priority projection adds three Work per
-breadth-first state before reading, selecting and publishing its suffix result.
-No complete table buffer is copied. A first finished matcher stays charged while
-the second builds, and every partial owner releases on refusal. Construction uses
-the original grammar compilation budgets, including built-in preparation.
+The retained wrapper scanner reserves 112 portable metadata bytes for its two
+table owners, two positive cutoffs, lease and return carrier; table buffers retain
+their own reservations. Preparation separately reserves 416 bytes for the actual
+caller frame, borrowed token vector owner, rank/cutoff arrays, iteration state,
+input/return carriers and leases. Borrowed tokens reserve 32 bytes each. A source
+lookup admits one Work; preparing both view slots admits two, with one additional
+Work to select a private opener's view. Each token admits four Work to initialize
+its rank slots and staged counters, visits both view slots at one Work each,
+adds four Work per present rank for reading, checked
+advancement and staged publication, and admits one Work for counter commit. Push
+and actual relocation retain their existing admissions. Saving both positive
+cutoffs admits one Work. The shared constructor reserves 768 additional metadata
+bytes covering its sparse-trie and dense-builder phases: goto, transitions,
+depths, failure links, both output projections, queue, terminal replay, iterators,
+cursors, scalars, borrows and return carriers. Complete typed phase assertions
+cover these records, temporary trie nodes and nested initialization iterators.
+Each metadata reservation admits one Work before preparation.
+
+Shared zero initialization admits 260 Work per trie state: 256 transitions,
+depth, failure and two output slots. Terminal replay admits two Work per token
+for lookup and checked length, each edge's binary-search bound plus two Work for
+state/cursor progression, one Work per view-slot observation and three per present
+rank for terminal selection/publication. Breadth-first propagation adds three
+Work per view per nonroot state. Prefix scans, root seeding, dense transition
+lookups and growth retain their existing admissions. Construction-only depth,
+trie, failure and queue owners release before publication; every partial owner
+releases on refusal. Construction uses the original grammar compilation budgets,
+including built-in preparation. Sharing source tables establishes neither
+default-budget fit nor measured runtime benefit; those require execution evidence.
 
 The runtime replaces per-call spelling-vector construction and per-byte literal
 suffix comparisons with one admitted native matcher step per consumed lookahead

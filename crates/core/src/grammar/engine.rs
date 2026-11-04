@@ -6491,10 +6491,11 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<Verdict, StopReason> {
         let grammar = self.grammars[self.tables[table].grammar].grammar;
-        let scanner = &grammar.trail_matchers[match self.tables[table].kind {
+        let scanner = &grammar.trail_matcher;
+        let view = match self.tables[table].kind {
             ProductionKind::Call => 0,
             ProductionKind::Result => 1,
-        }];
+        };
         let Some(mut scan) = trail.scan else {
             return Ok(Verdict::Report);
         };
@@ -6522,9 +6523,9 @@ impl<'s> Engine<'s> {
             if scan.text.is_none() && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
                 scan.text = Some(at);
             }
-            if let Some((index, length)) = scanner.matcher.found(trail.node) {
+            if let Some((index, length)) = scanner.matcher.found(trail.node, view) {
                 let start = trail.at - length as usize;
-                if index < scanner.positives {
+                if index < scanner.positives[view] {
                     // Another call or a local reasoning opener takes native
                     // priority over every closer ending on this same byte.
                     return Ok(scan.before(start, Verdict::Guess));

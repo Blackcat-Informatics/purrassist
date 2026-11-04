@@ -17,7 +17,7 @@
 // shared across the grammar and tool-call modules, so `pub(crate)` (matching
 // `unreachable_pub`) wins, as in `pattern::derive`.
 #![allow(clippy::redundant_pub_crate)]
-use super::automaton::{Matcher, Trie};
+use super::automaton::{Matcher, PriorityLiteral, PriorityMatcher, Trie};
 use super::codec::CodecKind;
 use super::cost::K_COMPILE;
 use super::syntax::{Document, PExpr, Statement};
@@ -1664,35 +1664,21 @@ impl Programs<'_> {
 /// First native opener/marker/closer ending at the current wrapper-tail byte.
 #[derive(Debug)]
 pub(crate) struct TrailMatcher {
-    pub(crate) matcher: Matcher,
-    pub(crate) positives: u32,
+    pub(crate) matcher: PriorityMatcher,
+    pub(crate) positives: [u32; 2],
     _metadata: ScratchLease,
 }
 
-const TRAIL_MATCHER_BYTES: usize = 152;
+const TRAIL_MATCHER_BYTES: usize = 112;
 const _: () = assert!(core::mem::size_of::<TrailMatcher>() <= TRAIL_MATCHER_BYTES);
-const _: () = assert!(core::mem::size_of::<[TrailMatcher; 2]>() <= 2 * TRAIL_MATCHER_BYTES);
 const _: () =
     assert!(core::mem::size_of::<Result<TrailMatcher, GrammarError>>() <= TRAIL_MATCHER_BYTES);
 const _: () = assert!(
-    core::mem::size_of::<Result<[TrailMatcher; 2], GrammarError>>() <= 2 * TRAIL_MATCHER_BYTES
+    core::mem::size_of::<(PriorityMatcher, [u32; 2], ScratchLease)>() <= TRAIL_MATCHER_BYTES
 );
-const _: () = assert!(core::mem::size_of::<(Matcher, u32, ScratchLease)>() <= TRAIL_MATCHER_BYTES);
-
-struct TrailToken<'a>(&'a [u8]);
-impl AsRef<[u8]> for TrailToken<'_> {
-    fn as_ref(&self) -> &[u8] {
-        self.0
-    }
-}
-impl ScratchCharge for TrailToken<'_> {
-    const CHARGE: usize = 16;
-}
-const _: () =
-    assert!(core::mem::size_of::<TrailToken<'_>>() <= <TrailToken<'_> as ScratchCharge>::CHARGE);
 
 struct TrailSources<'a> {
-    program: &'a Program,
+    programs: &'a [Program; 2],
     literals: &'a [Literal],
     closers: &'a [CloserClass],
     reasoning: &'a [(Bytes, Bytes)],
@@ -1700,51 +1686,86 @@ struct TrailSources<'a> {
 
 struct TrailBuild<'a> {
     source: TrailSources<'a>,
-    tokens: ScratchVec<TrailToken<'a>>,
-    cutoff: u32,
+    tokens: ScratchVec<PriorityLiteral<'a>>,
+    next: [u32; 2],
+    positives: [u32; 2],
+    view: usize,
     outer: usize,
     inner: usize,
-    count: usize,
 }
 
-impl TrailBuild<'_> {
+impl<'a> TrailBuild<'a> {
+    fn push(
+        &mut self,
+        bytes: &'a [u8],
+        views: [bool; 2],
+        governor: &mut Governor,
+    ) -> Result<(), GrammarError> {
+        // Initialize both rank slots and copy both staged counters.
+        governor.charge(Resource::Work, 4)?;
+        let mut ranks = [None; 2];
+        let mut next = self.next;
+        let mut view = 0;
+        while view < 2 {
+            governor.charge(Resource::Work, 1)?;
+            if views[view] {
+                // Read rank, check advancement, publish rank and staged count.
+                governor.charge(Resource::Work, 4)?;
+                ranks[view] = Some(next[view]);
+                next[view] = next[view]
+                    .checked_add(1)
+                    .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+            }
+            view += 1;
+        }
+        governor.charge(Resource::Work, 1)?;
+        push_scratch(&mut self.tokens, PriorityLiteral { bytes, ranks }, governor)?;
+        self.next = next;
+        Ok(())
+    }
+
     /// Gather exactly the lists the native wrapper scan searched, in order.
     fn gather(&mut self, governor: &mut Governor) -> Result<(), GrammarError> {
-        while self.outer < self.source.program.openers.len() {
-            governor.charge(Resource::Work, 1)?;
-            if let Inst::Lit { lit, .. } =
-                self.source.program.insts[self.source.program.openers[self.outer] as usize]
-            {
-                push_scratch(
-                    &mut self.tokens,
-                    TrailToken(self.source.literals[lit as usize].bytes.as_slice()),
-                    governor,
-                )?;
+        while self.view < 2 {
+            self.outer = 0;
+            while self.outer < self.source.programs[self.view].openers.len() {
+                governor.charge(Resource::Work, 1)?;
+                let program = &self.source.programs[self.view];
+                if let Inst::Lit { lit, .. } = program.insts[program.openers[self.outer] as usize] {
+                    governor.charge(Resource::Work, 3)?;
+                    let mut views = [false; 2];
+                    views[self.view] = true;
+                    self.push(
+                        self.source.literals[lit as usize].bytes.as_slice(),
+                        views,
+                        governor,
+                    )?;
+                }
+                self.outer += 1;
             }
-            self.outer += 1;
+            self.view += 1;
         }
         self.outer = 0;
         while self.outer < self.source.reasoning.len() {
-            governor.charge(Resource::Work, 1)?;
-            push_scratch(
-                &mut self.tokens,
-                TrailToken(self.source.reasoning[self.outer].0.as_slice()),
+            // Source lookup and both selected-view slots precede push.
+            governor.charge(Resource::Work, 3)?;
+            self.push(
+                self.source.reasoning[self.outer].0.as_slice(),
+                [true; 2],
                 governor,
             )?;
             self.outer += 1;
         }
         governor.charge(Resource::Work, 1)?;
-        self.count = self.tokens.len();
-        self.cutoff = u32::try_from(self.count)
-            .map_err(|_| governor.stop_resource(Resource::ScratchBytes))?;
+        self.positives = self.next;
         self.outer = 0;
         while self.outer < self.source.closers.len() {
             self.inner = 0;
             while self.inner < self.source.closers[self.outer].spellings.len() {
-                governor.charge(Resource::Work, 1)?;
-                push_scratch(
-                    &mut self.tokens,
-                    TrailToken(self.source.closers[self.outer].spellings[self.inner].as_slice()),
+                governor.charge(Resource::Work, 3)?;
+                self.push(
+                    self.source.closers[self.outer].spellings[self.inner].as_slice(),
+                    [true; 2],
                     governor,
                 )?;
                 self.inner += 1;
@@ -1759,28 +1780,57 @@ fn trail_matcher(
     source: TrailSources<'_>,
     governor: &mut Governor,
 ) -> Result<TrailMatcher, GrammarError> {
-    const CONTROL: usize = 256;
+    const CONTROL: usize = 416;
     const {
         assert!(
             core::mem::size_of::<(
-                TrailBuild<'_>,
                 TrailSources<'_>,
-                TrailToken<'_>,
                 ScratchLease,
+                Result<ScratchLease, crate::StopReason>,
                 &mut Governor,
-                &Literal,
-                Inst,
-                u32,
             )>() <= CONTROL
         );
         assert!(
             core::mem::size_of::<(
                 TrailBuild<'_>,
                 TrailSources<'_>,
-                TrailToken<'_>,
+                PriorityLiteral<'_>,
+                [Option<u32>; 2],
+                [u32; 2],
+                [bool; 2],
+                usize,
+                Option<u32>,
                 ScratchLease,
+                ScratchLease,
+                &mut TrailBuild<'_>,
+                &mut ScratchVec<PriorityLiteral<'_>>,
+                Result<u32, crate::StopReason>,
                 &mut Governor,
-                Result<u32, core::num::TryFromIntError>,
+                &Literal,
+                &Program,
+                Inst,
+                u32,
+                &[u8],
+            )>() <= CONTROL
+        );
+        assert!(
+            core::mem::size_of::<(
+                TrailBuild<'_>,
+                TrailSources<'_>,
+                PriorityLiteral<'_>,
+                ScratchLease,
+                ScratchLease,
+                &mut TrailBuild<'_>,
+                &mut ScratchVec<PriorityLiteral<'_>>,
+                &mut Governor,
+                [Option<u32>; 2],
+                [u32; 2],
+                [bool; 2],
+                Option<u32>,
+                Result<(), GrammarError>,
+                Result<(), crate::StopReason>,
+                usize,
+                &[u8],
             )>() <= CONTROL
         );
         // The returned matcher is covered even before final record assembly.
@@ -1788,8 +1838,10 @@ fn trail_matcher(
             core::mem::size_of::<(
                 TrailBuild<'_>,
                 TrailSources<'_>,
-                TrailToken<'_>,
+                PriorityLiteral<'_>,
                 ScratchLease,
+                ScratchLease,
+                Result<PriorityMatcher, crate::StopReason>,
                 Result<TrailMatcher, GrammarError>,
                 &mut Governor,
             )>() <= CONTROL + TRAIL_MATCHER_BYTES
@@ -1802,47 +1854,19 @@ fn trail_matcher(
     let mut build = TrailBuild {
         source,
         tokens: ScratchVec::new(governor),
-        cutoff: 0,
+        next: [0; 2],
+        positives: [0; 2],
+        view: 0,
         outer: 0,
         inner: 0,
-        count: 0,
     };
     build.gather(governor)?;
-    let matcher = Matcher::build_first(build.tokens.as_slice(), governor)?;
+    let matcher = PriorityMatcher::build(build.tokens.as_slice(), governor)?;
     Ok(TrailMatcher {
         matcher,
-        positives: build.cutoff,
+        positives: build.positives,
         _metadata: metadata,
     })
-}
-
-fn trail_matchers(
-    programs: &[Program; 2],
-    literals: &[Literal],
-    closers: &[CloserClass],
-    reasoning: &[(Bytes, Bytes)],
-    governor: &mut Governor,
-) -> Result<[TrailMatcher; 2], GrammarError> {
-    Ok([
-        trail_matcher(
-            TrailSources {
-                program: &programs[0],
-                literals,
-                closers,
-                reasoning,
-            },
-            governor,
-        )?,
-        trail_matcher(
-            TrailSources {
-                program: &programs[1],
-                literals,
-                closers,
-                reasoning,
-            },
-            governor,
-        )?,
-    ])
 }
 
 /// The non-production statements of a document, and its production bodies
@@ -2386,7 +2410,15 @@ pub(crate) fn compile(
     // An optional-id grammar reads model-added ids absent from its markup.
     let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id, governor)?;
     let call_markup = call_markup(&call_ends, governor)?;
-    let trail_matchers = trail_matchers(&programs, &literals, &closers, &reasoning, governor)?;
+    let trail_matcher = trail_matcher(
+        TrailSources {
+            programs: &programs,
+            literals: &literals,
+            closers: &closers,
+            reasoning: &reasoning,
+        },
+        governor,
+    )?;
     governor.check()?;
     Ok(CompiledGrammar {
         id: document.id.into_string(),
@@ -2411,7 +2443,7 @@ pub(crate) fn compile(
         call_ends,
         call_literals,
         programs,
-        trail_matchers,
+        trail_matcher,
         stray: stray.trie,
         longest,
         layouts,
