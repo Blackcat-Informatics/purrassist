@@ -31,10 +31,10 @@
 #![allow(clippy::redundant_pub_crate)]
 use super::automaton::ROOT;
 use super::compile::{JsonSpelling, LiteralTables};
-use super::cost::{K_ERR, K_THREAD};
+use super::cost::K_ERR;
 use super::edit::{EditOperator, MarkupEdit};
 use super::engine::{Failure, HistKind, Out, Step, Sub, Thread, extend_digest};
-use super::{CompiledGrammar, Inst, Literal, Program};
+use super::{CompiledGrammar, Inst, Literal};
 use crate::contract::{Governor, Resource, ScratchVec, StopReason};
 use crate::digest::Digest;
 use crate::search::{Acceptance, Proposals, SearchState};
@@ -471,37 +471,6 @@ const fn json_skip_operator(pending: &[u8]) -> EditOperator {
     }
 }
 
-/// Whether the production completes from `pc` without consuming input:
-/// whether an inserted literal continuing at `pc` is the production's last.
-pub(crate) fn completes(
-    program: &Program,
-    pc: u32,
-    governor: &mut Governor,
-) -> Result<bool, StopReason> {
-    let mut visited = vec![false; program.insts.len()];
-    let mut pending = vec![pc];
-    while let Some(pc) = pending.pop() {
-        let index = pc as usize;
-        if core::mem::replace(&mut visited[index], true) {
-            continue;
-        }
-        governor.charge(Resource::Work, K_THREAD)?;
-        match program.insts[index] {
-            Inst::Accept => return Ok(true),
-            Inst::Split(first, second) => pending.extend([first, second]),
-            Inst::Open { next, .. }
-            | Inst::Close { next, .. }
-            | Inst::Commit { next }
-            | Inst::Next { next }
-            | Inst::Insert { next, .. } => {
-                pending.push(next);
-            }
-            Inst::Lit { .. } | Inst::Class { .. } | Inst::Until { .. } | Inst::Slot { .. } => {}
-        }
-    }
-    Ok(false)
-}
-
 impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
     type Tie = (usize, u32, u8, u32, Status, usize, Digest);
     type Context<'c> = RepairContext<'a, 's>;
@@ -608,7 +577,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
                     }
                     // A closer missing mid-message: the wrapper's when it
                     // ends the production, an inner element's otherwise.
-                    let wrapper = completes(program, next, governor)?;
+                    let wrapper = program.completes(next, governor)?;
                     let operator = if wrapper {
                         EditOperator::MissingWrapperClose
                     } else {

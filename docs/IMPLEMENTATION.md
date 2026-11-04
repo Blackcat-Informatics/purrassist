@@ -2,6 +2,15 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Compiled programs retain one owned mask proving completion through zero-input
+edges. Repair and native EOF queries read that mask under the caller governor;
+call-ending metadata and protocol-fence validation borrow the same prepared
+proof. The compiler uses the original backward reachability walk, including
+Next and Insert edges, and retains the distinct call-boundary calculation.
+Descriptor, construction controls and mask capacity remain admitted. Invalid
+query PCs fail explicitly. Runtime, cold-compilation and resource qualification
+remain pending automatic CI.
+
 Each schema evaluation frame resolves its immutable compiled location once and
 shares that borrowed keyword view with same-location helpers. Keyword lookups,
 applicability, child evaluation, dynamic references, active-cycle checks, Depth

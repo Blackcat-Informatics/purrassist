@@ -3042,7 +3042,7 @@ impl<'s> Step<'_, 's> {
                 .and_then(codec_owner::OwnedCodec::complete_end)
         });
         if let Some(end) = whole
-            && super::repair::completes(self.program, next, governor)?
+            && self.program.completes(next, governor)?
         {
             self.end_body(
                 thread,

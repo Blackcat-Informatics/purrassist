@@ -28,7 +28,7 @@ use super::{
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec,
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
     format_output_governed, format_scratch_governed, push_scratch,
 };
 use crate::digest::Digest;
@@ -98,10 +98,54 @@ impl ScratchCharge for ClassOpener {
     };
 }
 
+/// Immutable existential reachability of Accept through zero-input edges.
+/// The descriptor stays owned independently of its fallible mask capacity.
+#[derive(Debug)]
+struct CompletionReachability {
+    mask: ScratchVec<bool>,
+    _descriptor: ScratchLease,
+}
+
+impl PartialEq for CompletionReachability {
+    fn eq(&self, other: &Self) -> bool {
+        self.mask == other.mask
+    }
+}
+
+impl Eq for CompletionReachability {}
+
+impl CompletionReachability {
+    fn compile(insts: &[Inst], governor: &mut Governor) -> Result<Self, GrammarError> {
+        const DESCRIPTOR_BYTES: u64 = 64;
+        const CONTROL_BYTES: u64 = 384;
+        const _: () =
+            assert!(core::mem::size_of::<CompletionReachability>() as u64 <= DESCRIPTOR_BYTES);
+        const _: () = assert!(
+            core::mem::size_of::<(
+                CompletionReachability,
+                Result<CompletionReachability, GrammarError>,
+                ScratchVec<ScratchVec<u32>>,
+                ScratchVec<u32>,
+                ScratchVec<bool>,
+                [ScratchLease; 2],
+            )>() as u64
+                <= CONTROL_BYTES
+        );
+        let descriptor = governor.lease_scratch(DESCRIPTOR_BYTES)?;
+        let _construction = governor.lease_scratch(CONTROL_BYTES)?;
+        let mask = reach_back(insts, |inst| matches!(inst, Inst::Accept), true, governor)?;
+        Ok(Self {
+            mask,
+            _descriptor: descriptor,
+        })
+    }
+}
+
 /// The recognizer program of one production.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program {
     pub(crate) insts: ScratchVec<Inst>,
+    completing: CompletionReachability,
     /// The program's entry location.
     pub(crate) start: u32,
     /// The literal instructions reachable from the start without input.
@@ -206,6 +250,20 @@ impl Program {
     #[inline]
     pub(crate) const fn deferred(&self) -> bool {
         self.origin.is_projected() || self.argument_anchor || !self.committed.is_empty()
+    }
+
+    /// Whether this exact continuation can complete without consuming input.
+    pub(crate) fn completes(&self, pc: u32, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        let Some(completes) = self.completing.mask.get(pc as usize).copied() else {
+            return Err(StopReason::InvalidInput(format_output_governed(
+                format_args!(
+                    "completion query at program location {pc} is outside its instruction table"
+                ),
+                governor,
+            )?));
+        };
+        Ok(completes)
     }
 
     /// Whether a configuration at `pc` belongs to a committed attempt.
@@ -1718,9 +1776,11 @@ fn compile_program(
     let call_closers = call_closer_lits(&insts, grouped, governor)?;
     let call_openers = call_opener_lits(&insts, governor)?;
     let insert_alternatives = insert_alternatives(&insts, governor)?;
+    let completing = CompletionReachability::compile(&insts, governor)?;
     governor.check()?;
     Ok(Program {
         insts,
+        completing,
         start,
         openers,
         class_openers,
@@ -3124,12 +3184,7 @@ fn call_ends(
     tables: &[LiteralTables],
     governor: &mut Governor,
 ) -> Result<ScratchVec<CallEnd>, GrammarError> {
-    let completing = reach_back(
-        &program.insts,
-        |inst| matches!(inst, Inst::Accept),
-        true,
-        governor,
-    )?;
+    let completing = &program.completing.mask;
     let ending = reach_back(
         &program.insts,
         |inst| matches!(inst, Inst::Accept | Inst::Next { .. }),
@@ -3316,12 +3371,7 @@ fn protocol_closer(
     repairs: &[LiteralTables],
     governor: &mut Governor,
 ) -> Result<u32, GrammarError> {
-    let completing = reach_back(
-        &program.insts,
-        |inst| matches!(inst, Inst::Accept),
-        true,
-        governor,
-    )?;
+    let completing = &program.completing.mask;
     if completing[program.start as usize] {
         return Err(protocol_error(
             "every path must end in a literal fence",
