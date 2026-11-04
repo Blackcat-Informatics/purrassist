@@ -129,6 +129,9 @@ pub fn resolved(
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     let Outcome::Resolved(calls) = &result.outcome else {
+        if input.len() >= 1 << 20 && input.starts_with("<tool_call>") {
+            diagnose_native_budget(tools, input, request);
+        }
         panic!(
             "{:?}; input_bytes={}; prefix={:?}; effort={:?}; budget={:?}; usage={:?}",
             result.receipt.stopped,
@@ -670,7 +673,11 @@ fn diagnose_native_budget(tools: &ToolSet, input: &str, request: &ToolRecoveryRe
         )?;
         eprintln!("native setup: {:?}", governor.usage());
         let pushed = recognizer.push(input.as_bytes(), &mut governor);
-        eprintln!("native push: {pushed:?}; {:?}", governor.usage());
+        eprintln!(
+            "native push: {pushed:?}; fed={}; {:?}",
+            recognizer.fed(),
+            governor.usage()
+        );
         pushed?;
         let finished = recognizer.finish(request.stop.clone(), &mut governor);
         eprintln!(
