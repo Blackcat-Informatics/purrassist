@@ -5864,6 +5864,14 @@ impl<'s> Engine<'s> {
                 .copied()
                 .chain(held)
                 .collect();
+            if !program.grouped {
+                governor.charge(Resource::Work, 1)?;
+                if failures.is_empty() {
+                    // There is no seed to resolve a Link, and a native
+                    // non-grouped program has no resynchronization boundary.
+                    continue;
+                }
+            }
             let pending_header =
                 self.note_failure(table, record.id, &failures, eof.is_none(), governor)?;
             self.note_boundary(table, record.id, &failures, governor)?;
@@ -5889,7 +5897,8 @@ impl<'s> Engine<'s> {
         // Without intervening changes or stalled repairs, the first merge
         // and commit already settled these exact configurations.
         if dirty || !self.tables[table].stalled.is_empty() {
-            dirty |= self.merge_settled(table, at, eof, &mut live, &mut completed, governor)?;
+            dirty |=
+                self.merge_settled(table, at, (eof, dirty), &mut live, &mut completed, governor)?;
         }
         self.finish_settlement(table, at, (eof, dirty), &mut live, &mut completed, governor)?;
         self.tables[table].threads = live;
@@ -6080,7 +6089,7 @@ impl<'s> Engine<'s> {
         &mut self,
         table: usize,
         at: usize,
-        eof: Option<&GenerationStop>,
+        (eof, dirty): (Option<&GenerationStop>, bool),
         live: &mut ScratchVec<Thread>,
         completed: &mut ScratchVec<Thread>,
         governor: &mut Governor,
@@ -6089,17 +6098,28 @@ impl<'s> Engine<'s> {
         let mut reading: Vec<u64> = Vec::new();
         let mut owned = (None, None);
         let tracking = self.ownership_active;
-        if tracking {
-            governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
-        }
-        merge_noting(live, &mut self.arena, governor, |thread| {
+        if dirty {
             if tracking {
-                note_ownership(&mut owned, thread);
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
             }
-            if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
-                reading.push(thread.attempt);
+            merge_noting(live, &mut self.arena, governor, |thread| {
+                if tracking {
+                    note_ownership(&mut owned, thread);
+                }
+                if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
+                    reading.push(thread.attempt);
+                }
+            })?;
+        } else {
+            // The first merge's winners and ownership census remain exact.
+            // Retain the same ordered IDs, including repeated attempt IDs.
+            governor.charge(Resource::Work, size(live.len()).saturating_mul(3))?;
+            for thread in live.as_slice() {
+                if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
+                    reading.push(thread.attempt);
+                }
             }
-        })?;
+        }
         let repaired = self.repair_stalled(table, at, eof, &reading, live, completed, governor)?;
         if repaired {
             if tracking {
@@ -6112,7 +6132,7 @@ impl<'s> Engine<'s> {
                 merge(live, &mut self.arena, governor)?;
             }
         }
-        if tracking {
+        if tracking && (dirty || repaired) {
             self.publish_thread_ownership(table, owned);
         }
         Ok(repaired)

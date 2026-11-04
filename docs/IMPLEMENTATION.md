@@ -676,6 +676,17 @@ admits 56 bytes for ownership floors, unopened count and past minimum, plus the
 Work admission can refuse. Runtime savings and fixed-budget success remain pending
 automatic CI.
 
+Native body-run qualification now rejects an unequal preceding byte before reading
+instructions, codecs or owner cohorts; every supported proof still requires the
+complete eight-byte repetition and original source-position checks. Non-grouped
+settlement with no gathered failure has no repair seed or resynchronization
+boundary, so it preserves the first merge without marking it dirty. With pending
+stalled failures and unchanged winners, settlement collects the same ordered
+past-reading identities without another identity merge. Any attempted repair
+keeps the conservative dirty result and full merge/census; EOF handling remains
+unchanged. These remove actual redundant operations while retaining admissions
+for the remaining probes and scans. Resource acceptance remains pending CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

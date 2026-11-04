@@ -405,6 +405,20 @@ impl Engine<'_> {
         let Sub::Body(raw, slot) = first.sub else {
             return Ok(());
         };
+        // Every supported proof needs eight equal bytes. Reject an unequal
+        // preceding byte before examining instructions, codecs or owners.
+        governor.charge(Resource::Work, 4)?;
+        let Some(previous) = self
+            .buffer
+            .len()
+            .checked_sub(2)
+            .and_then(|at| self.buffer.get(at))
+        else {
+            return Ok(());
+        };
+        if *previous != byte {
+            return Ok(());
+        }
         governor.charge(Resource::Work, 2)?;
         let expected = match current.program.insts[first.pc as usize] {
             Inst::Until { .. } => None,
