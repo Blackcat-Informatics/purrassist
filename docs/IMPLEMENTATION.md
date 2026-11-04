@@ -602,6 +602,16 @@ result as well as a nonempty one; existing prefix/search fees and new selection
 work are admitted. Complete alternative expansion remains unchanged. Compiler
 and runtime resource qualification remain pending automatic CI.
 
+Private turn-history nodes now retain their actual governed vector owner through
+recognition and Builder traversal. Root insertion, growth and relocation use the
+same fallible vector path under the original 112-byte node bound. Native nodes
+never escape into the owned recognized pieces, so consuming or dropping the
+recognizer destroys their buffer and releases its reservation before later semantic
+assembly. Output trees, native capture facts, provenance forests and source grants
+remain independently owned. The additional header and lease are admitted within
+a named 32-byte metadata reservation. Capacity peaks, insertion/relocation Work
+and scratch refusal points change; current resource acceptance remains pending CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

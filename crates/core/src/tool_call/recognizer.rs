@@ -201,8 +201,18 @@ struct TurnNode {
     tail_payload: Option<usize>,
 }
 
-const TURN_NODE_BYTES: u64 = 112;
-const _: () = assert!(core::mem::size_of::<TurnNode>() as u64 <= TURN_NODE_BYTES);
+impl ScratchCharge for TurnNode {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 112);
+        112
+    };
+}
+
+const TURN_NODE_METADATA_BYTES: usize = 32;
+const _: () = assert!(
+    core::mem::size_of::<(ScratchVec<TurnNode>, ScratchLease)>()
+        <= core::mem::size_of::<Vec<TurnNode>>() + TURN_NODE_METADATA_BYTES
+);
 
 /// A conservative native continuation boundary, not a resolved stream event.
 /// Packed ambiguity, live calls and open reasoning can hold it indefinitely;
@@ -594,7 +604,10 @@ struct Frame {
 
 /// The turn-level segmentation state.
 struct Turn {
-    nodes: Vec<TurnNode>,
+    // Native history never escapes into the owned RecognizedTurn. Its buffer
+    // releases its actual reservation when this private turn is consumed.
+    nodes: ScratchVec<TurnNode>,
+    _node_metadata: ScratchLease,
     store: Vec<Segment>,
     /// Source proof addressed only by immutable stored call and reading indices.
     envelopes: SourceEnvelopes,
@@ -727,19 +740,22 @@ impl Turn {
         } else {
             payload
         };
-        governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
-        self.nodes.push(TurnNode {
-            prev,
-            end,
-            kind,
-            plain,
-            depth,
-            jump,
-            payload,
-            jump_payload,
-            packed,
-            tail_payload,
-        });
+        crate::contract::push_scratch(
+            &mut self.nodes,
+            TurnNode {
+                prev,
+                end,
+                kind,
+                plain,
+                depth,
+                jump,
+                payload,
+                jump_payload,
+                packed,
+                tail_payload,
+            },
+            governor,
+        )?;
         Ok(index)
     }
 
@@ -1989,7 +2005,7 @@ impl fmt::Debug for Recognizer<'_> {
             .field("fed", &self.engine.fed())
             .field("content_state", &self.turn.top)
             .field("live_interpretations", &self.turn.interps)
-            .field("native_history", &self.turn.nodes)
+            .field("native_history", &self.turn.nodes.as_slice())
             .field("stored_segments", &self.turn.store)
             .field("pending_reports", &self.pending)
             .finish_non_exhaustive()
@@ -2079,9 +2095,12 @@ impl<'s> Recognizer<'s> {
             packed: None,
             tail_payload: None,
         };
-        governor.charge(Resource::ScratchBytes, TURN_NODE_BYTES)?;
+        let node_metadata = governor.lease_scratch(size(TURN_NODE_METADATA_BYTES))?;
+        let mut nodes = ScratchVec::new(governor);
+        crate::contract::push_scratch(&mut nodes, root, governor)?;
         let turn = Turn {
-            nodes: vec![root],
+            nodes,
+            _node_metadata: node_metadata,
             store: Vec::new(),
             envelopes: SourceEnvelopes::new(governor),
             failure_proofs: ScratchMap::new(governor),
