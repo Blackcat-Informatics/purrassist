@@ -2,6 +2,12 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Standalone recognition omits the per-byte structural frontier projection that
+only recovery intake consumes. Intake prepares ownership before accepting input
+and keeps its existing frontier, event and counter computations. Native byte
+processing, report dispatch, EOF publication and cancellation remain governed.
+Runtime and resource qualification remain pending automatic CI.
+
 Turn-path discovery retains normalized Content ranges and immutable stored
 Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
 preserve branch order without copying each prefix. Exact governed equality keeps

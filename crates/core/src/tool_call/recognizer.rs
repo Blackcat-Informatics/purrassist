@@ -2373,7 +2373,13 @@ impl<'s> Recognizer<'s> {
                 .map_or(limit, |floor| limit.min(floor.saturating_sub(1)));
             self.settle(limit, governor)?;
         }
-        self.update_frontier(governor)
+        // Only recovery intake reads the structural projection. It prepares
+        // ownership before input; standalone recognition publishes its whole
+        // turn at EOF and needs no per-byte ancestry or marker-floor query.
+        if self.engine.tracks_ownership() {
+            self.update_frontier(governor)?;
+        }
+        Ok(())
     }
 
     /// Refresh the structural projection after each byte, reusing a successful
