@@ -696,6 +696,15 @@ asserted 640-byte phase bounds. Arena reset and destruction physically free the
 ordinary value/edit/chain/lead/map buffers before releasing their aggregate grants.
 Current runtime and fixed-budget qualification remain pending automatic CI.
 
+The first ordinary merge can also retain a proved absence of lexical ownership
+across multiple attempts. New lexical seeds invalidate that fact before insertion;
+ordinary transitions can only retain or remove existing lexical bits. Such a merge
+still checks the candidate bit and recomputes the exact candidate minimum from its
+actual winners, omitting the empty lexical projection. Other first merges and all
+repair/final-stop censuses retain both phases. The selector and remaining phase
+work are admitted, and empty cohorts keep their original zero-census path. No new
+state, buffer or source origin is inferred. Runtime qualification remains pending CI.
+
 ## Shared contracts
 
 Intent + input + context -> candidates -> validation/ranking -> result + receipt.

@@ -4790,6 +4790,7 @@ const _: () = assert!(
     core::mem::size_of::<(
         Option<OwnershipFloors>,
         bool,
+        bool,
         ScratchLease,
         usize,
         usize,
@@ -5948,42 +5949,59 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if self.ownership_active {
-            if live.len() >= 3 {
+            let candidate_only = if live.is_empty() {
+                false
+            } else {
                 governor.charge(Resource::Work, 1)?;
-                if let (None, Some(start)) = self.tables[table].thread_ownership
-                    && let [owner] = self.tables[table].attempts.as_slice()
-                    && owner.start == start
-                {
-                    // All previous survivors were candidate-only. Ordinary
-                    // transitions preserve that fact, and new lexical seeds
-                    // invalidate it above. Held failures may restore lexical
-                    // states later, so this proof applies only to this merge.
-                    const OWNER_BYTES: usize = 48;
-                    const _: () = assert!(
-                        core::mem::size_of::<(u64, usize, ScratchLease, Option<usize>)>()
-                            <= OWNER_BYTES
-                    );
-                    let _owner = governor.lease_scratch(size(OWNER_BYTES))?;
-                    governor.charge(Resource::Work, 2)?;
-                    let id = owner.id;
-                    if live[0].attempt != id || live[0].start != start {
-                        return Err(invalid_input(
-                            "candidate-only cohort differs from its sole attempt",
-                        ));
-                    }
-                    merge(live, &mut self.arena, governor)?;
-                    self.publish_thread_ownership(
-                        table,
-                        (None, (!live.is_empty()).then_some(start)),
-                    );
-                    return Ok(());
+                self.tables[table].thread_ownership.0.is_none()
+            };
+            if candidate_only
+                && live.len() >= 3
+                && let (None, Some(start)) = self.tables[table].thread_ownership
+                && let [owner] = self.tables[table].attempts.as_slice()
+                && owner.start == start
+            {
+                // All previous survivors were candidate-only. Ordinary
+                // transitions preserve that fact, and new lexical seeds
+                // invalidate it above. Held failures may restore lexical
+                // states later, so this proof applies only to this merge.
+                const OWNER_BYTES: usize = 48;
+                const _: () = assert!(
+                    core::mem::size_of::<(u64, usize, ScratchLease, Option<usize>)>()
+                        <= OWNER_BYTES
+                );
+                let _owner = governor.lease_scratch(size(OWNER_BYTES))?;
+                governor.charge(Resource::Work, 2)?;
+                let id = owner.id;
+                if live[0].attempt != id || live[0].start != start {
+                    return Err(invalid_input(
+                        "candidate-only cohort differs from its sole attempt",
+                    ));
                 }
+                merge(live, &mut self.arena, governor)?;
+                self.publish_thread_ownership(table, (None, (!live.is_empty()).then_some(start)));
+                return Ok(());
             }
             let mut owned = (None, None);
-            governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
-            merge_noting(live, &mut self.arena, governor, |thread| {
-                note_ownership(&mut owned, thread);
-            })?;
+            if candidate_only {
+                // The ordinary transition cannot restore a lexical bit. A
+                // new seed invalidates this proof before reaching this merge.
+                governor.charge(Resource::Work, size(live.len()))?;
+                merge_noting(live, &mut self.arena, governor, |thread| {
+                    if thread.ownership & 2 != 0 {
+                        owned.1 = Some(
+                            owned
+                                .1
+                                .map_or(thread.start, |old: usize| old.min(thread.start)),
+                        );
+                    }
+                })?;
+            } else {
+                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                merge_noting(live, &mut self.arena, governor, |thread| {
+                    note_ownership(&mut owned, thread);
+                })?;
+            }
             self.publish_thread_ownership(table, owned);
         } else {
             merge(live, &mut self.arena, governor)?;
