@@ -113,8 +113,8 @@ use super::{
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Resource, ScratchVec, SourceSpan,
-    StopReason, Validation, invalid_input, push_scratch,
+    Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Resource, ScratchLease,
+    ScratchVec, SourceSpan, StopReason, Validation, invalid_input, push_scratch,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
@@ -122,6 +122,7 @@ use crate::grammar::edit::{EditOperator, LossKind};
 use crate::json::{Member, Node, Value, pointer_segment};
 use crate::matching::{self, Candidate, MatchRequest, SelectionPolicy};
 use crate::provenance::{Derivation, Forest, ProvenanceNode};
+use crate::schema::ValidationReport;
 use crate::schema::recovery::{FOLDED_NAME_COST, name_cost};
 use crate::search::{Acceptance, Change, Ledger, Proposals, Search, SearchState};
 use core::fmt;
@@ -2025,11 +2026,13 @@ impl<'a> Resolver<'a> {
             let mut validations = Vec::new();
             let mut arguments = arguments;
             if blocker.is_none() {
-                let (typed, ledger) = self.schema_typed(raw, tool, arguments, governor)?;
-                arguments = typed;
-                repairs.extend(ledger);
-                let report = tool.schema().validate_with(&arguments, governor)?;
-                let validation = report.to_validation();
+                let typed = self.schema_typed(raw, tool, arguments, governor)?;
+                arguments = typed.arguments;
+                repairs.extend(typed.ledger);
+                // Reusing an already completed validation still observes the
+                // operation's current cancellation or sticky refusal state.
+                governor.check()?;
+                let validation = typed.report.to_validation();
                 governor.charge(
                     Resource::ScratchBytes,
                     size(
@@ -2078,10 +2081,10 @@ impl<'a> Resolver<'a> {
         tool: &CompiledTool,
         mut arguments: Node,
         governor: &mut Governor,
-    ) -> Result<(Node, CallLedger), StopReason> {
+    ) -> Result<TypedArguments, StopReason> {
         let mut ledger = CallLedger::default();
         if !holds_unmodeled(&tool.argument_shape().arguments) {
-            return Ok((arguments, ledger));
+            return TypedArguments::validate(arguments, ledger, tool, governor);
         }
         let mut sites = Vec::new();
         schema_sites(
@@ -2095,17 +2098,15 @@ impl<'a> Resolver<'a> {
             governor,
         )?;
         if sites.is_empty() {
-            return Ok((arguments, ledger));
+            return TypedArguments::validate(arguments, ledger, tool, governor);
         }
         let rule = rules::resolution_rule("tool_call.value.schema-typed");
-        let Some((typed, accepted, both)) =
-            schema_rounds(tool, &sites, arguments.clone(), governor)?
-        else {
-            return Ok((arguments, ledger));
+        let Some(round) = schema_rounds(tool, &sites, arguments.clone(), governor)? else {
+            return TypedArguments::validate(arguments, ledger, tool, governor);
         };
-        arguments = typed;
+        arguments = round.arguments;
         for (index, site) in sites.iter().enumerate() {
-            if !accepted[index] && !both[index] {
+            if !round.accepted[index] && !round.both[index] {
                 continue;
             }
             let keywords: Vec<String> = tool
@@ -2121,7 +2122,7 @@ impl<'a> Resolver<'a> {
             };
             let reading = site.reading.to_json();
             let kind = json_kind(&site.reading.value);
-            let explanation = if accepted[index] {
+            let explanation = if round.accepted[index] {
                 format!(
                     "read XML text `{}` as the JSON {kind} `{reading}`: the exact schema at `{}`{keywords} admits it and not the verbatim string",
                     site.text, site.schema
@@ -2140,7 +2141,12 @@ impl<'a> Resolver<'a> {
             );
             ledger.record(rule, evidence, String::new(), String::new(), governor)?;
         }
-        Ok((arguments, ledger))
+        Ok(TypedArguments {
+            arguments,
+            ledger,
+            report: round.report,
+            _metadata: round._metadata,
+        })
     }
 
     /// Every reading of an object scope's members against `shape`.
@@ -3294,7 +3300,7 @@ pub(super) fn schema_readback(
     if sites.is_empty() {
         return Ok(Some(raw.root.clone()));
     }
-    Ok(schema_rounds(tool, &sites, raw.root.clone(), governor)?.map(|(typed, _, _)| typed))
+    Ok(schema_rounds(tool, &sites, raw.root.clone(), governor)?.map(|round| round.arguments))
 }
 
 /// Collect every XML-text string inside the unmodeled values of an object
@@ -3419,17 +3425,91 @@ fn unmodeled_sites(
     Ok(())
 }
 
+/// The current report and arguments move together; metadata outlives the
+/// report through ledger construction, publication or refusal.
+struct TypedArguments {
+    arguments: Node,
+    ledger: CallLedger,
+    report: ValidationReport,
+    _metadata: ScratchLease,
+}
+
+impl TypedArguments {
+    fn validate(
+        arguments: Node,
+        ledger: CallLedger,
+        tool: &CompiledTool,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(SCHEMA_REPORT_CONTROL_BYTES)?;
+        let report = tool.schema().validate_with(&arguments, governor)?;
+        Ok(Self {
+            arguments,
+            ledger,
+            report,
+            _metadata: metadata,
+        })
+    }
+}
+
+/// The last actual validation of the current round, with its exact argument
+/// value. Counterfactual quiet-site probes never replace either field.
+struct SchemaRound {
+    arguments: Node,
+    accepted: Vec<bool>,
+    both: Vec<bool>,
+    report: ValidationReport,
+    _metadata: ScratchLease,
+}
+
+impl SchemaRound {
+    fn new(
+        arguments: Node,
+        accepted: Vec<bool>,
+        both: Vec<bool>,
+        report: ValidationReport,
+        metadata: ScratchLease,
+    ) -> Self {
+        Self {
+            arguments,
+            accepted,
+            both,
+            report,
+            _metadata: metadata,
+        }
+    }
+}
+
+const SCHEMA_REPORT_CONTROL_BYTES: u64 = 640;
+const _: () = assert!(
+    core::mem::size_of::<(
+        TypedArguments,
+        Result<TypedArguments, StopReason>,
+        ScratchLease
+    )>() as u64
+        <= SCHEMA_REPORT_CONTROL_BYTES
+);
+const _: () = assert!(
+    core::mem::size_of::<(
+        SchemaRound,
+        Result<Option<SchemaRound>, StopReason>,
+        ScratchLease,
+    )>() as u64
+        <= SCHEMA_REPORT_CONTROL_BYTES
+);
+
 /// The schema-typing rounds of [`Resolver::schema_typed`] over `sites`:
 /// the arguments with the accepted JSON readings, and per site whether its
 /// JSON reading was taken and whether the schema admits both readings.
+/// The retained report validates that same current argument value.
 /// `None` when the validator cannot evaluate the schema.
-#[allow(clippy::type_complexity)]
 fn schema_rounds(
     tool: &CompiledTool,
     sites: &[SchemaSite],
     mut arguments: Node,
     governor: &mut Governor,
-) -> Result<Option<(Node, Vec<bool>, Vec<bool>)>, StopReason> {
+) -> Result<Option<SchemaRound>, StopReason> {
+    let metadata = governor.lease_scratch(SCHEMA_REPORT_CONTROL_BYTES)?;
     // A schema the validator cannot evaluate (a `$ref` recurring without
     // instance progress) types nothing: the verbatim text stays, and the
     // arguments' own validation reports the schema as before.
@@ -3538,7 +3618,9 @@ fn schema_rounds(
             }
         }
     }
-    Ok(Some((arguments, accepted, both)))
+    Ok(Some(SchemaRound::new(
+        arguments, accepted, both, report, metadata,
+    )))
 }
 
 /// Per site, how many of `violations` concern it: a violation at the

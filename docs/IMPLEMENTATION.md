@@ -2,6 +2,15 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Schema typing carries the last whole-instance validation report with its exact
+accepted argument value. Quiet counterfactual probes change only site flags;
+they never replace that report. The resolver publishes its existing diagnostics
+without validating the same value again, after observing the current governor.
+Paths without schema-typing rounds retain ordinary validation. Typed carrier
+owners span ledger construction, consumption, refusal and readback disposal;
+the report's original heap admissions remain separate. Runtime and resource
+qualification remain pending automatic CI.
+
 Revision lookup orders its existing compile-time operator index by byte length,
 then lexical identifier. Runtime search compares lengths before scanning text;
 only equal lengths require the original full identifier comparison. Stable
