@@ -2,6 +2,10 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Scratch vectors and strings destroy their owned payloads and backing buffers
+before releasing the buffers' reservations. A payload destructor therefore sees
+its enclosing storage still admitted.
+
 Internal grammar repair proposals retain only their saturated search cost.
 Actual edit provenance stays in the parser history and is still published by
 the existing resolver. A cost-only proposal refuses a parent that carries

@@ -9,24 +9,27 @@ edit distances, phonetics, recovery search, and receipts are first-party Rust.
 The unpublished `purrassist-toolgraph` foundation uses `purrdf-core` for native
 IRI validation and the shared loss registry, and `purrdf-shapes` for its shared
 namespace table, FnO reader and public plain argument-schema compiler. Both use
-exact Git revision `742bbbfbe2240e1fc6f178badd049420753ef358` of the public
-PurRDF repository. This retains the plain profile from upstream issue #788 / PR
-#806 and adopts numeric projection from upstream issue #885 / merged PR #888.
-Default and all-feature metadata at adoption contain the same 99 package
-identities as the previous pin: all 19 PurRDF Git packages change source
-revision, with no registry package/version or core dependency drift. The
-registered name/version baseline therefore stays unchanged. License notices
-remain byte-identical; their existing `purrdf-2ed9845` storage paths are retained,
-while each package's source registration identifies the adopted revision.
-The numeric compiler shares upstream's exact XSD arithmetic and records the
-original SHACL representability check for unrestricted IEEE domains; it adds no
-dependency to the core.
-The graph crate's resolved all-target normal/build closure contains 19 PurRDF
-packages, 53 registry packages and the first-party core. This revision update
-adds no package identity to the workspace inventory. Every resolved
-package and its shortest dependency path is registered in
-`vendor/dependencies.json` and `scripts/data/dependency-baseline.json`, with
-byte-preserved license notices under `vendor/licenses/`.
+exact Git revision `511f8af4efafe7e9e1c4e673c28afb1f5b4f9572`, the upstream
+main HEAD resolved for this update. The plain argument-schema and exact numeric
+projection APIs remain the concrete downstream consumers.
+Default and all-feature dependency metadata contain 98 packages, including
+20 PurRDF Git packages. The update adds `purrdf-zstd` and removes the registry
+packages `structured-zstd` and `fastrand`; every remaining registry package
+retains its version. The tool-graph normal/build closure contains 20 PurRDF
+packages, 50 registry packages and the first-party core. The computational core's
+direct dependency list remains empty. Exact package identities, source revisions,
+shortest dependency paths and retained notice hashes are registered in
+`vendor/dependencies.json` and `scripts/data/dependency-baseline.json`.
+
+The maintained Zstandard package preserves the original Apache grant and
+attribution for its incorporated `structured-zstd` source. Its upstream notice
+and source-provenance records accompany the dependency registration. The native table retains its original hashbrown grant and modification
+attribution. Shapes embeds SHACL specification data under W3C-20150513; that
+grant is included in its registered composite license. The archived upstream
+inventory labels this component source-only, so the retained notice README
+records the concrete embedding sites and the scope correction. RDF conformance
+notices retain their source-only scope. Earlier byte-identical notices remain at their
+existing registered paths.
 
 The three PurRDF first-party grants are retained alongside Unicode-3.0 notices
 for embedded Unicode data. The lexical crate additionally retains the original
