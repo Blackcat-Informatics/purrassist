@@ -550,8 +550,10 @@ capture, encoding and recognition have all succeeded. Their private cursors star
 at zero and advance once on the sole healthy byte path; refusal abandons that path.
 This removes repeated snapshot reads while preserving malformed-subpart boundaries.
 Exact source-cutoff cache hits reuse their already validated result without writing
-the identical entry again. Boundary choice and cache probes retain their actual Work
-admission, with no retained owner or buffer added.
+the identical entry again. The encoding classification directly returns its boundary,
+removing a second pending-length choice after recognition. Encoding and cache probes
+retain their actual Work admission. The extra boundary scalar across recognition is
+included in the fixed metadata reservation; no buffer is added.
 
 Literal thread construction and PC-changing closures now establish opener membership
 once. Byte steps retain the necessary submode check without repeating a linear
@@ -568,6 +570,21 @@ same sole candidate origin without another survivor census. The temporary owner
 descriptor and actual checks are admitted. Later repair merges retain their full
 censuses because held failures can restore lexical states. One-thread cohorts
 retain their existing admission path. Runtime benefit remains pending automatic CI.
+
+Native non-grouped call bodies can reuse the same admitted byte-proof slots when
+their real codec feed is a no-op. Raw, XML-parameter and key/value codecs retain
+the full source for parsing at the delimiter; JSON and Pythonic parsers continue
+their ordinary incremental steps. Qualification proves every opened owner still
+has a body, every thread matches its owner, delimiter state is unchanged, and no
+misspelling, history, completion or pending work can change the interpretation.
+ASCII repetition and minimum run length exclude initial guards. Cache hits advance
+only the shared cursor; all original PCs, histories, ranks, ownership and codec slots
+remain. Mismatches, new openers and native boundaries materialize positions before
+ordinary processing. Source, context, reasoning and counter folds still process
+every byte. The body qualification's actual temporary controls are admitted within
+a named 192-byte reservation. Existing long-argument, delimiter, chunk, refusal,
+cost and fuzz cases remain the qualification scope; no new execution or fixed-budget
+success is claimed before automatic CI.
 
 ## Shared contracts
 

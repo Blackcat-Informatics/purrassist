@@ -83,7 +83,7 @@ use core::cmp::Reverse;
 use core::ops::Range;
 use std::collections::{BTreeMap, BTreeSet};
 
-mod class_run;
+mod byte_run;
 mod envelope;
 mod failure_header;
 pub(crate) use failure_header::{FailureWitness, HeaderSpan};
@@ -4738,7 +4738,7 @@ struct Table<'s> {
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
-    /// A `ClassRun` may hold logical pos/reach; consume it before position reads.
+    /// A `RunProof` may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
     attempts: ScratchVec<Attempt>,
     trails: Vec<Trail>,
@@ -5152,9 +5152,9 @@ pub(crate) struct Engine<'s> {
     tables: Vec<Table<'s>>,
     failure_headers: ScratchMap<u64, failure_header::State>,
     /// Fixed admitted proof slots, retained even while every slot is empty.
-    class_runs: ScratchVec<Option<class_run::ClassRun>>,
+    byte_runs: ScratchVec<Option<byte_run::RunProof>>,
     /// Empty occupancy skips invalidation probes and whole-slot reset sweeps.
-    class_run_count: usize,
+    byte_run_count: usize,
     grammars: ScratchVec<GrammarRuntime<'s>>,
     buffer: ScratchVec<u8>,
     base: usize,
@@ -5333,12 +5333,12 @@ impl<'s> Engine<'s> {
             .and_then(|bytes| bytes.checked_add(64))
             .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
         let ownership_metadata = governor.lease_scratch(ownership_bytes)?;
-        let class_runs = class_run::slots(tables.len(), governor)?;
+        let byte_runs = byte_run::slots(tables.len(), governor)?;
         Ok(Self {
             tables,
             failure_headers: ScratchMap::new(governor),
-            class_runs,
-            class_run_count: 0,
+            byte_runs,
+            byte_run_count: 0,
             grammars,
             protocol_fences,
             buffer: ScratchVec::new(governor),
@@ -5417,7 +5417,7 @@ impl<'s> Engine<'s> {
         table: usize,
         governor: &mut Governor,
     ) -> Result<(Step<'_, 's>, &mut ScratchVec<Thread>, &mut Out), StopReason> {
-        self.invalidate_class_run(table, governor)?;
+        self.invalidate_byte_run(table, governor)?;
         let stall_cap = self.stall_cap(table);
         let runtime = &mut self.grammars.as_mut_slice()[self.tables[table].grammar];
         let table = &mut self.tables[table];
@@ -5533,10 +5533,10 @@ impl<'s> Engine<'s> {
         {
             // Invalidate before either admission path changes the attempt or
             // appends threads: a new attempt never inherits a settled proof.
-            if class_run::eligible(&self.tables[table]) {
-                class_run::invalidate(
-                    &mut self.class_runs,
-                    &mut self.class_run_count,
+            if byte_run::eligible(&self.tables[table]) {
+                byte_run::invalidate(
+                    &mut self.byte_runs,
+                    &mut self.byte_run_count,
                     table,
                     &mut self.tables[table].threads,
                     Some(at),
@@ -5545,15 +5545,7 @@ impl<'s> Engine<'s> {
             }
             let id = self.next_attempt;
             self.next_attempt += 1;
-            self.continuation_floor = ContinuationFloor::Invalid;
-            self.ownership = None;
-            if self.ownership_active {
-                // A new lexical seed invalidates the candidate-only induction.
-                // No ownership reader runs inside a table step; its first merge
-                // publishes exact floors before the completed byte is exposed.
-                governor.charge(Resource::Work, 1)?;
-                self.tables[table].thread_ownership.0 = Some(at);
-            }
+            self.note_attempt_start(table, at, governor)?;
             self.tables[table].attempts.push(Attempt {
                 id,
                 start: at,
@@ -5604,10 +5596,10 @@ impl<'s> Engine<'s> {
         {
             return Ok(());
         }
-        // The existing idle return stays ahead of cache work. Immutable
-        // dispatch excludes result, non-anchored and unproved grouped tables.
-        let class_candidate = class_run::eligible(&self.tables[table]);
-        if class_candidate && self.reuse_class_run(table, byte, at, governor)? {
+        // The existing idle return stays ahead of proof work. Qualified
+        // classes and native bodies share the same cursor materialization.
+        let run_candidate = byte_run::eligible(&self.tables[table]);
+        if run_candidate && self.reuse_byte_run(table, byte, at, governor)? {
             return Ok(());
         }
         // A miss consumed its cursor before this pre-split thread movement.
@@ -5625,8 +5617,26 @@ impl<'s> Engine<'s> {
         }
         step.advance(stack, at + 1, false, out, governor)?;
         self.settle(table, at, None, governor)?;
-        if class_candidate {
-            self.remember_class_run(table, byte, at + 1, governor)?;
+        if run_candidate {
+            self.remember_byte_run(table, byte, at + 1, governor)?;
+        }
+        Ok(())
+    }
+
+    /// Invalidate source/phase summaries before inserting a new lexical seed.
+    fn note_attempt_start(
+        &mut self,
+        table: usize,
+        at: usize,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        self.continuation_floor = ContinuationFloor::Invalid;
+        self.ownership = None;
+        if self.ownership_active {
+            // No ownership reader runs inside a table step; its first merge
+            // publishes exact floors before the completed byte is exposed.
+            governor.charge(Resource::Work, 1)?;
+            self.tables[table].thread_ownership.0 = Some(at);
         }
         Ok(())
     }
@@ -5772,12 +5782,12 @@ impl<'s> Engine<'s> {
                     // transitions preserve that fact, and new lexical seeds
                     // invalidate it above. Held failures may restore lexical
                     // states later, so this proof applies only to this merge.
-                    const OWNER_BYTES: u64 = 48;
+                    const OWNER_BYTES: usize = 48;
                     const _: () = assert!(
                         core::mem::size_of::<(u64, usize, ScratchLease, Option<usize>)>()
-                            <= OWNER_BYTES as usize
+                            <= OWNER_BYTES
                     );
-                    let _owner = governor.lease_scratch(OWNER_BYTES)?;
+                    let _owner = governor.lease_scratch(size(OWNER_BYTES))?;
                     governor.charge(Resource::Work, 2)?;
                     let id = owner.id;
                     if live[0].attempt != id || live[0].start != start {
@@ -8294,7 +8304,7 @@ impl<'s> Engine<'s> {
             })
             .min();
         let Some(earliest) = earliest else {
-            self.clear_class_runs(governor)?;
+            self.clear_byte_runs(governor)?;
             self.arena.reset(governor)?;
             self.buffer.clear();
             self.base = self.fed;
@@ -8324,7 +8334,7 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         self.ownership = None;
-        self.clear_class_runs(governor)?;
+        self.clear_byte_runs(governor)?;
         for table in &mut self.tables {
             Self::stop_past(&mut table.threads, Some(start), &[], governor)?;
             if self.ownership_active {
@@ -8365,7 +8375,7 @@ impl<'s> Engine<'s> {
         self.continuation_floor = ContinuationFloor::Invalid;
         self.ownership = None;
         self.forget_failure_header(attempt, governor)?;
-        self.clear_class_runs(governor)?;
+        self.clear_byte_runs(governor)?;
         for table in &mut self.tables {
             governor.charge(
                 Resource::Work,
@@ -8422,7 +8432,7 @@ impl<'s> Engine<'s> {
         generation: &GenerationStop,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        self.clear_class_runs(governor)?;
+        self.clear_byte_runs(governor)?;
         let end = self.fed;
         for table in 0..self.tables.len() {
             if self.tables[table].threads.is_empty() && self.tables[table].attempts.is_empty() {
@@ -8495,7 +8505,7 @@ impl<'s> Engine<'s> {
     /// least-cost configurations, except that a call whose arguments value
     /// was complete at the cut completes.
     fn cut(&mut self, table: usize, governor: &mut Governor) -> Result<(), StopReason> {
-        self.invalidate_class_run(table, governor)?;
+        self.invalidate_byte_run(table, governor)?;
         let records: Vec<Attempt> = self.tables[table].attempts.as_slice().to_vec();
         let threads: Vec<Thread> = self.tables[table].threads.as_slice().to_vec();
         let grouped = self.tables[table].program.grouped;

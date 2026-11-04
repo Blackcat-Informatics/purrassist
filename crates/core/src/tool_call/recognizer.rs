@@ -3875,7 +3875,7 @@ impl<'s> Recognizer<'s> {
     /// prose context; without it, the span its grammar read is used.
     /// Recovery admits whole-message candidates after semantic framing folds;
     /// standalone recognition admits the native paths it publishes here.
-    pub(crate) fn finish_over(
+    pub(super) fn finish_over(
         mut self,
         stop: GenerationStop,
         output: Option<&[u8]>,

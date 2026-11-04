@@ -3104,10 +3104,12 @@ impl EncodingCursor {
         self.bad = Some(start..end);
     }
 
-    fn step(&mut self, byte: u8, at: usize, governor: &mut Governor) -> Result<(), StopReason> {
+    /// Classify one captured byte, returning its completed UTF-8 boundary.
+    /// The caller's checked append guarantees that `end` is positive.
+    fn step(&mut self, byte: u8, end: usize, governor: &mut Governor) -> Result<usize, StopReason> {
         governor.charge(Resource::Work, 1)?;
         if self.len == 0 {
-            self.start = at;
+            self.start = end - 1;
         }
         self.pending[self.len] = byte;
         self.len += 1;
@@ -3116,11 +3118,11 @@ impl EncodingCursor {
                 Ok(_) => {
                     self.flush_bad(governor)?;
                     self.len = 0;
-                    return Ok(());
+                    return Ok(end);
                 }
                 Err(error) => {
                     let Some(width) = error.error_len() else {
-                        return Ok(());
+                        return Ok(self.start);
                     };
                     // The cursor starts at one scalar: a valid scalar was
                     // flushed on its final byte, so no valid prefix precedes it.
@@ -3130,7 +3132,7 @@ impl EncodingCursor {
                     self.len -= width;
                     self.start += width;
                     if self.len == 0 {
-                        return Ok(());
+                        return Ok(end);
                     }
                 }
             }
@@ -3174,8 +3176,16 @@ enum BoundaryKind {
     Content,
     Ownership,
 }
-const _: () =
-    assert!(core::mem::size_of::<(Option<(usize, usize)>, [usize; 3], ScratchLease)>() <= 64);
+const INTAKE_OWNERSHIP_BYTES: usize = 72;
+// The classified boundary now survives recognition before its publication.
+const _: () = assert!(
+    core::mem::size_of::<(
+        Option<(usize, usize)>,
+        [usize; 3],
+        CompletedByte,
+        ScratchLease
+    )>() <= INTAKE_OWNERSHIP_BYTES
+);
 
 /// Shared byte intake for batch recovery and the live stream facade.
 /// It owns source storage without lending it to its live recognizer. Every
@@ -3249,7 +3259,7 @@ impl<'s> RecoveryIntake<'s> {
                 },
             };
             let forced = recovery.preconditions(governor)?;
-            intake.ownership_metadata = governor.lease_scratch(64)?;
+            intake.ownership_metadata = governor.lease_scratch(size(INTAKE_OWNERSHIP_BYTES))?;
             intake.events.prepare_ownership(governor)?;
             intake.setup = Some(IntakeSetup {
                 recognizer: Recognizer::with_tools(dialects, tools, request.reasoning, governor)?,
@@ -3537,7 +3547,7 @@ impl<'s> RecoveryIntake<'s> {
         byte: u8,
         governor: &mut Governor,
     ) -> Result<CompletedByte, StopReason> {
-        self.encoding.step(byte, self.received - 1, governor)?;
+        let utf8 = self.encoding.step(byte, self.received, governor)?;
         self.setup
             .as_mut()
             .expect("healthy intake owns a recognizer")
@@ -3548,14 +3558,7 @@ impl<'s> RecoveryIntake<'s> {
         // failure abandons interpretation before publication can resume.
         // Encoding leaves either no pending bytes or one viable incomplete
         // scalar ending at received, including after malformed-subpart removal.
-        governor.charge(Resource::Work, 1)?;
-        Ok(CompletedByte {
-            utf8: if self.encoding.len == 0 {
-                self.received
-            } else {
-                self.encoding.start
-            },
-        })
+        Ok(CompletedByte { utf8 })
     }
 
     fn recognize(
