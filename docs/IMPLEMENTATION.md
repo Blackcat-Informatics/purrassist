@@ -2,6 +2,18 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Turn-path discovery retains normalized Content ranges and immutable stored
+Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
+preserve branch order without copying each prefix. Exact governed equality keeps
+the first equal plan and intersects its failure proofs in discovery order. Each
+distinct plan crosses the existing Candidate gate before its public IR is
+materialized. One bounded descriptor owner covers discovery handles, an incoming
+plan and serial materialization; backing buffers retain their separate owners.
+Plan, path and checkpoint storage release with their owners.
+Dominator storage, final raw copies and annotation, resolution, layout admission
+and Forest payload/index ownership remain separate work. Compilation, behavioral
+and resource qualification remain pending normal verification.
+
 Class-run certificates retain their logical position in the existing absolute
 cursor. Repeated hits update only that cursor; every native boundary restores
 physical `pos` and `reach` before position reads, thread movement or mutation. Single

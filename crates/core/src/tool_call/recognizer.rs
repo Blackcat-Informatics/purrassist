@@ -84,8 +84,8 @@ use super::ir::{
 use super::toolset::ToolSet;
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchMap,
-    ScratchMeter, ScratchVec, SourceSpan, StopReason,
+    Evidence, Governor, Inference, InferenceKind, Loss, Resource, ScratchCharge, ScratchLease,
+    ScratchMap, ScratchMeter, ScratchVec, SourceSpan, StopReason,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
@@ -1370,54 +1370,63 @@ fn same_example_reading(
         return Ok(false);
     }
     for (left, right) in left.iter().zip(right) {
-        governor.charge(Resource::Work, 96)?;
-        let same = match (left, right) {
-            (Segment::Call(left), Segment::Call(right))
-            | (Segment::Result(left), Segment::Result(right)) => {
-                same_example_call(left, right, governor)?
-            }
-            (Segment::Reasoning(left), Segment::Reasoning(right)) => {
-                admit_example_edits(&left.edits, governor)?;
-                admit_example_edits(&right.edits, governor)?;
-                if left.span != right.span
-                    || left.text != right.text
-                    || left.closure != right.closure
-                    || left.edits != right.edits
-                    || left.embedded.len() != right.embedded.len()
-                {
-                    return Ok(false);
-                }
-                for (left, right) in left.embedded.iter().zip(&right.embedded) {
-                    if !same_example_call(left, right, governor)? {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            (
-                Segment::Rejected {
-                    dialect: left_dialect,
-                    ..
-                },
-                Segment::Rejected {
-                    dialect: right_dialect,
-                    ..
-                },
-            ) => {
-                governor.charge(
-                    Resource::Work,
-                    size(left_dialect.name().len().min(right_dialect.name().len())),
-                )?;
-                left == right
-            }
-            (Segment::Content(left), Segment::Content(right)) => left == right,
-            _ => false,
-        };
-        if !same {
+        if !same_recognized_segment(left, right, governor)? {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// Exact segment equality shared by example normalization and borrowed paths.
+/// Derived argument/derivation caches stay outside equality, as in `Segment::eq`.
+fn same_recognized_segment(
+    left: &Segment,
+    right: &Segment,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(Resource::Work, 96)?;
+    Ok(match (left, right) {
+        (Segment::Call(left), Segment::Call(right))
+        | (Segment::Result(left), Segment::Result(right)) => {
+            same_example_call(left, right, governor)?
+        }
+        (Segment::Reasoning(left), Segment::Reasoning(right)) => {
+            admit_example_edits(&left.edits, governor)?;
+            admit_example_edits(&right.edits, governor)?;
+            if left.span != right.span
+                || left.text != right.text
+                || left.closure != right.closure
+                || left.edits != right.edits
+                || left.embedded.len() != right.embedded.len()
+            {
+                return Ok(false);
+            }
+            for (left, right) in left.embedded.iter().zip(&right.embedded) {
+                if !same_example_call(left, right, governor)? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
+        (
+            Segment::Rejected {
+                dialect: left_dialect,
+                ..
+            },
+            Segment::Rejected {
+                dialect: right_dialect,
+                ..
+            },
+        ) => {
+            governor.charge(
+                Resource::Work,
+                size(left_dialect.name().len().min(right_dialect.name().len())),
+            )?;
+            left == right
+        }
+        (Segment::Content(left), Segment::Content(right)) => left == right,
+        _ => false,
+    })
 }
 
 fn same_example_call(
@@ -3222,6 +3231,174 @@ struct BuiltReading {
     proofs: PathProof,
 }
 
+/// A normalized path item; stored payloads remain owned by the immutable turn.
+enum PlannedSegment<'t> {
+    Content(Range<usize>),
+    Stored(&'t Segment),
+}
+
+impl ScratchCharge for PlannedSegment<'_> {
+    const CHARGE: usize = {
+        assert!(core::mem::size_of::<Self>() <= 32);
+        32
+    };
+}
+
+impl PlannedSegment<'_> {
+    fn same(&self, other: &Self, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 4)?;
+        match (self, other) {
+            (Self::Content(left), Self::Content(right)) => Ok(left == right),
+            (Self::Stored(left), Self::Stored(right)) => {
+                if core::ptr::eq(*left, *right) {
+                    Ok(true)
+                } else {
+                    same_recognized_segment(left, right, governor)
+                }
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn materialize(self) -> Segment {
+        match self {
+            Self::Content(span) => Segment::Content(span),
+            Self::Stored(segment) => segment.clone(),
+        }
+    }
+}
+
+/// Discovery owns metadata and proofs, never a speculative raw-segment copy.
+struct PlannedReading<'t> {
+    segments: ScratchVec<PlannedSegment<'t>>,
+    cost: u64,
+    proofs: PathProof,
+}
+
+impl ScratchCharge for PlannedReading<'_> {
+    const CHARGE: usize = {
+        const BYTES: usize =
+            <ScratchVec<PlannedSegment<'static>>>::CHARGE + <u64>::CHARGE + PathProof::CHARGE;
+        assert!(core::mem::size_of::<Self>() <= BYTES);
+        BYTES
+    };
+}
+
+impl<'t> PlannedReading<'t> {
+    fn push(
+        &mut self,
+        segment: PlannedSegment<'t>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 4)?;
+        if let (Some(PlannedSegment::Content(last)), PlannedSegment::Content(next)) =
+            (self.segments.as_mut_slice().last_mut(), &segment)
+            && last.end == next.start
+        {
+            last.end = next.end;
+            return Ok(());
+        }
+        crate::contract::push_scratch(&mut self.segments, segment, governor)
+    }
+
+    fn same(&self, other: &Self, governor: &mut Governor) -> Result<bool, StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if self.segments.len() != other.segments.len() {
+            return Ok(false);
+        }
+        for (left, right) in self.segments.iter().zip(other.segments.iter()) {
+            if !left.same(right, governor)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Only admitted, distinct plans enter the existing owned public IR path.
+    fn materialize(self, governor: &mut Governor) -> Result<BuiltReading, StopReason> {
+        governor.charge(Resource::Work, size(self.segments.len()))?;
+        let mut segments = Vec::with_capacity(self.segments.len());
+        let (planned, _planned_owner) = self.segments.into_owned_parts();
+        for segment in planned {
+            segments.push(segment.materialize());
+        }
+        governor.check()?;
+        Ok(BuiltReading {
+            segments,
+            cost: self.cost,
+            proofs: self.proofs,
+        })
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<(u32, usize)>() <= <(u32, usize)>::CHARGE);
+
+/// Covers aggregate handles outside their vectors' separately charged slots.
+/// One owner spans discovery and serial materialization, including an incoming
+/// plan, transferred iterators and the transient owned reading record.
+const PATH_METADATA_BYTES: u64 = 512;
+
+/// The plan table drops its physical storage before the metadata reservation.
+struct PathReadings<'t> {
+    readings: ScratchVec<PlannedReading<'t>>,
+    metadata: ScratchLease,
+}
+
+impl<'t> PathReadings<'t> {
+    fn new(governor: &mut Governor) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(PATH_METADATA_BYTES)?;
+        Ok(Self {
+            readings: ScratchVec::new(governor),
+            metadata,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.readings.len()
+    }
+
+    fn pop(&mut self) -> Option<PlannedReading<'t>> {
+        self.readings.pop()
+    }
+
+    /// Keep both reservations until the consuming iterator's buffers drop.
+    fn into_owned_parts(self) -> (Vec<PlannedReading<'t>>, ScratchLease) {
+        let (readings, storage) = self.readings.into_owned_parts();
+        let mut metadata = self.metadata;
+        metadata.absorb(storage);
+        (readings, metadata)
+    }
+}
+
+const _: () = {
+    // The returned table handle, two DFS handles and an incoming plan coexist.
+    assert!(
+        core::mem::size_of::<(
+            PathReadings<'static>,
+            ScratchVec<u32>,
+            ScratchVec<(u32, usize)>,
+            PlannedReading<'static>,
+        )>() as u64
+            <= PATH_METADATA_BYTES
+    );
+    // Include all transfer/materialization handles conservatively, even where
+    // moving between representations means they need not coexist physically.
+    assert!(
+        core::mem::size_of::<(
+            PathReadings<'static>,
+            Vec<PlannedReading<'static>>,
+            ScratchLease,
+            std::vec::IntoIter<PlannedReading<'static>>,
+            PlannedReading<'static>,
+            Vec<Segment>,
+            std::vec::IntoIter<PlannedSegment<'static>>,
+            ScratchLease,
+            BuiltReading,
+        )>() as u64
+            <= PATH_METADATA_BYTES
+    );
+};
+
 /// Builds the factorized pieces and their derivations.
 struct Builder<'t> {
     turn: &'t Turn,
@@ -3234,7 +3411,7 @@ struct Builder<'t> {
     example_regions: Option<ExampleRegions>,
 }
 
-impl Builder<'_> {
+impl<'t> Builder<'t> {
     fn predecessors(&self, node: u32) -> [Option<u32>; 2] {
         let TurnNode { prev, kind, .. } = self.turn.nodes[node as usize];
         match kind {
@@ -3264,78 +3441,131 @@ impl Builder<'_> {
         Ok(match kind {
             TurnKind::Content(start) => (Segment::Content(start..end), 0, None),
             TurnKind::Stored(index, cost) => {
-                let proof = if self.turn.failure_proofs.is_empty() {
-                    None
-                } else {
-                    governor.charge(
-                        Resource::Work,
-                        u64::from(self.turn.failure_proofs.len().bit_width() + 1)
-                            .saturating_add(24),
-                    )?;
-                    self.turn.failure_proofs.get(&index).copied()
-                };
+                let proof = self.stored_proof(index, governor)?;
                 (self.turn.store[index as usize].clone(), cost, proof)
             }
             TurnKind::Root | TurnKind::Pack(_) => unreachable!("not a segment"),
         })
     }
 
+    fn stored_proof(
+        &self,
+        index: u32,
+        governor: &mut Governor,
+    ) -> Result<Option<Certificate>, StopReason> {
+        if self.turn.failure_proofs.is_empty() {
+            return Ok(None);
+        }
+        governor.charge(
+            Resource::Work,
+            u64::from(self.turn.failure_proofs.len().bit_width() + 1).saturating_add(24),
+        )?;
+        Ok(self.turn.failure_proofs.get(&index).copied())
+    }
+
     fn path_reading(
         &self,
         path: &[u32],
         governor: &mut Governor,
-    ) -> Result<BuiltReading, StopReason> {
-        let mut reading = BuiltReading {
-            segments: Vec::with_capacity(path.len()),
+    ) -> Result<PlannedReading<'t>, StopReason> {
+        let mut reading = PlannedReading {
+            segments: ScratchVec::new(governor),
             cost: 0,
             proofs: PathProof::new(governor),
         };
+        let turn = self.turn;
         for &step in path.iter().rev() {
-            let (segment, cost, proof) = self.segment(step, governor)?;
+            governor.charge(Resource::Work, 1)?;
+            let TurnNode { end, kind, .. } = turn.nodes[step as usize];
+            let (segment, cost, proof) = match kind {
+                TurnKind::Content(start) => (PlannedSegment::Content(start..end), 0, None),
+                TurnKind::Stored(index, cost) => {
+                    let segment = &turn.store[index as usize];
+                    let planned = match segment {
+                        Segment::Content(span) => PlannedSegment::Content(span.clone()),
+                        _ => PlannedSegment::Stored(segment),
+                    };
+                    (planned, cost, self.stored_proof(index, governor)?)
+                }
+                TurnKind::Root | TurnKind::Pack(_) => unreachable!("not a segment"),
+            };
             reading.cost = reading.cost.saturating_add(cost);
             let index = reading.segments.len();
-            push_merged(&mut reading.segments, segment);
+            reading.push(segment, governor)?;
             reading.proofs.push(index, proof, governor)?;
         }
         Ok(reading)
     }
 
-    /// Every distinct segmentation from `stop` to `node`.
+    /// Admit every distinct segmentation without cloning its stored payloads.
     fn paths(
         &self,
         node: u32,
         stop: u32,
         governor: &mut Governor,
-    ) -> Result<Vec<BuiltReading>, StopReason> {
-        let mut readings: Vec<BuiltReading> = Vec::new();
-        let mut stack = vec![(node, Vec::<u32>::new())];
-        while let Some((current, mut path)) = stack.pop() {
+    ) -> Result<PathReadings<'t>, StopReason> {
+        let mut readings = PathReadings::new(governor)?;
+        let mut path = ScratchVec::new(governor);
+        let mut stack = ScratchVec::new(governor);
+        crate::contract::push_scratch(&mut stack, (node, 0_usize), governor)?;
+        while let Some((current, depth)) = stack.pop() {
             governor.charge(Resource::Work, K_CAPTURE)?;
+            if depth > path.len() {
+                return Err(StopReason::InvalidInput(
+                    crate::contract::format_output_governed(
+                        format_args!(
+                            "recognizer path checkpoint {depth} exceeds retained prefix {}",
+                            path.len()
+                        ),
+                        governor,
+                    )?,
+                ));
+            }
+            governor.charge(Resource::Work, size(path.len() - depth))?;
+            while path.len() > depth {
+                let _ = path.pop();
+            }
             if current == stop {
                 let reading = self.path_reading(&path, governor)?;
-                if let Some(known) = readings
-                    .iter_mut()
-                    .find(|known| known.segments == reading.segments)
-                {
-                    known.proofs.intersect(&reading.proofs, governor)?;
+                let mut duplicate = None;
+                for (index, known) in readings.readings.iter().enumerate() {
+                    governor.charge(Resource::Work, 1)?;
+                    if known.same(&reading, governor)? {
+                        duplicate = Some(index);
+                        break;
+                    }
+                }
+                if let Some(index) = duplicate {
+                    readings.readings.as_mut_slice()[index]
+                        .proofs
+                        .intersect(&reading.proofs, governor)?;
                 } else {
                     governor.charge(Resource::Candidates, 1)?;
-                    readings.push(reading);
+                    crate::contract::push_scratch(&mut readings.readings, reading, governor)?;
                 }
                 continue;
             }
             match self.turn.nodes[current as usize].kind {
                 TurnKind::Pack(other) => {
-                    stack.push((other, path.clone()));
-                    stack.push((self.turn.nodes[current as usize].prev, path));
+                    crate::contract::push_scratch(&mut stack, (other, depth), governor)?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        (self.turn.nodes[current as usize].prev, depth),
+                        governor,
+                    )?;
                 }
                 TurnKind::Content(_) | TurnKind::Stored(..) => {
-                    path.push(current);
-                    stack.push((self.turn.nodes[current as usize].prev, path));
+                    crate::contract::push_scratch(&mut path, current, governor)?;
+                    crate::contract::push_scratch(
+                        &mut stack,
+                        (self.turn.nodes[current as usize].prev, path.len()),
+                        governor,
+                    )?;
                 }
                 TurnKind::Root => {}
             }
         }
+        governor.check()?;
         Ok(readings)
     }
 
@@ -3354,17 +3584,19 @@ impl Builder<'_> {
                     let stop = self.dominator(node, governor)?;
                     let mut readings = self.paths(node, stop, governor)?;
                     if readings.len() == 1 {
-                        let reading = readings.pop().expect("one reading");
+                        let reading = readings.pop().expect("one reading").materialize(governor)?;
                         for (index, segment) in reading.segments.into_iter().enumerate().rev() {
                             reverse_proofs
                                 .shared(reading.proofs.get(index, governor)?, governor)?;
                             reversed.push(Piece::Segment(segment));
                         }
                     } else {
+                        let (readings, _readings_owner) = readings.into_owned_parts();
                         let mut derivations = Vec::with_capacity(readings.len());
                         let mut options = Vec::with_capacity(readings.len());
                         let mut proofs = ScratchVec::new(governor);
                         for reading in readings {
+                            let reading = reading.materialize(governor)?;
                             derivations.push(Derivation::new(Digest::of(b""), reading.cost));
                             options.push(reading.segments);
                             if active {
