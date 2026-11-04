@@ -4643,6 +4643,7 @@ struct Table<'s> {
     grammar: usize,
     kind: ProductionKind,
     program: &'s Program,
+    /// A ClassRun may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
     attempts: ScratchVec<Attempt>,
     trails: Vec<Trail>,
@@ -5334,6 +5335,7 @@ impl<'s> Engine<'s> {
                     &mut self.class_runs,
                     &mut self.class_run_count,
                     table,
+                    &mut self.tables[table].threads,
                     governor,
                 )?;
             }
@@ -5394,6 +5396,7 @@ impl<'s> Engine<'s> {
         if class_candidate && self.reuse_class_run(table, byte, at, governor)? {
             return Ok(());
         }
+        // A miss consumed its cursor before this pre-split thread movement.
         {
             let threads = &mut self.tables[table].threads;
             self.stack.clear();
@@ -7308,6 +7311,7 @@ impl<'s> Engine<'s> {
             .tables
             .iter()
             .flat_map(|table| table.threads.as_slice().iter())
+            // A lazy Class cohort has no Fence end or position to inspect.
             .filter_map(|thread| match thread.sub {
                 Sub::Fence { end, .. } => Some(end),
                 _ => None,

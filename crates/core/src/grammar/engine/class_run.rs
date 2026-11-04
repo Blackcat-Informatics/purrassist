@@ -3,13 +3,14 @@
 
 //! Reuse an unchanged, uncommitted ASCII class step after ordinary settlement.
 
-use super::{Attempt, Engine, Event, FailureEnd, HistoryEvidence, Inst, Sub, Table};
+use super::{Attempt, Engine, Event, FailureEnd, HistoryEvidence, Inst, Sub, Table, Thread};
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason, invalid_input};
 use crate::tool_call::ProductionKind;
 
 /// The table's current settled vector already proves this exact self-loop.
 /// Every mutator consumes the proof before changing that vector or its owner.
+/// `next_at` is the cohort's logical pos/reach until that consumption.
 #[derive(Clone, Copy)]
 pub(super) struct ClassRun {
     byte: u8,
@@ -48,17 +49,66 @@ pub(super) fn invalidate(
     slots: &mut ScratchVec<Option<ClassRun>>,
     occupied: &mut usize,
     table: usize,
+    threads: &mut ScratchVec<Thread>,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
     if *occupied == 0 {
         return Ok(());
     }
+    // One bounded occupancy/slot metadata validation and probe.
     governor.charge(Resource::Work, 1)?;
-    if slots[table].is_some() {
-        governor.charge(Resource::Work, 2)?;
-        slots.as_mut_slice()[table] = None;
-        *occupied -= 1;
+    if *occupied > slots.len() {
+        return Err(invalid_input("class run occupancy exceeds its slot count"));
     }
+    let slot = slots
+        .as_mut_slice()
+        .get_mut(table)
+        .ok_or_else(|| invalid_input("class run table has no proof slot"))?;
+    if slot.is_some() {
+        consume(slot, occupied, threads, governor)?;
+    }
+    Ok(())
+}
+
+/// The caller admits the metadata census before inspecting this subject.
+fn store_work(threads: &[Thread], governor: &mut Governor) -> Result<u64, StopReason> {
+    if threads.is_empty() {
+        return Err(invalid_input("class run proof has an empty subject"));
+    }
+    u64::try_from(threads.len())
+        .ok()
+        .and_then(|count| count.checked_mul(2))
+        .ok_or_else(|| governor.stop_resource(Resource::Work))
+}
+
+/// One infallible store pass, reached only after complete Work admission.
+fn materialize(threads: &mut [Thread], retained: ClassRun) {
+    for thread in threads {
+        thread.pos = retained.next_at;
+        thread.reach = retained.next_at;
+    }
+}
+
+/// A known occupied slot is consumed without a second cache probe.
+fn consume(
+    slot: &mut Option<ClassRun>,
+    occupied: &mut usize,
+    threads: &mut ScratchVec<Thread>,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    // Subject/count validation and fee arithmetic precede all mutation.
+    governor.charge(Resource::Work, 2)?;
+    let retained = slot.ok_or_else(|| invalid_input("class run consumption lost its proof"))?;
+    if *occupied == 0 {
+        return Err(invalid_input("class run consumption has zero occupancy"));
+    }
+    let work = store_work(threads, governor)?
+        .checked_add(2)
+        .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+    governor.charge(Resource::Work, work)?;
+    materialize(threads.as_mut_slice(), retained);
+    *slot = None;
+    *occupied -= 1;
     Ok(())
 }
 
@@ -76,6 +126,7 @@ impl Engine<'_> {
             &mut self.class_runs,
             &mut self.class_run_count,
             table,
+            &mut self.tables[table].threads,
             governor,
         )
     }
@@ -85,11 +136,56 @@ impl Engine<'_> {
         if self.class_run_count == 0 {
             return Ok(());
         }
-        governor.charge(
-            Resource::Work,
-            size(self.class_runs.len()).saturating_add(1),
-        )?;
-        self.class_runs.as_mut_slice().fill(None);
+        // One shape check, then one metadata census. No cohort is changed
+        // until the complete second pass has also been admitted.
+        governor.charge(Resource::Work, 1)?;
+        let count = self.class_runs.len();
+        let occupied = self.class_run_count;
+        if count != self.tables.len() || occupied > count {
+            return Err(invalid_input(
+                "class run slot/occupancy metadata is inconsistent",
+            ));
+        }
+        let census = size(occupied)
+            .checked_mul(3)
+            .and_then(|work| work.checked_add(size(count)))
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        governor.charge(Resource::Work, census)?;
+        let mut seen = 0;
+        let mut stores = 0_u64;
+        for (slot, table) in self.class_runs.iter().zip(&self.tables) {
+            if slot.is_some() {
+                if seen == occupied {
+                    return Err(invalid_input("class run occupancy omits a proof"));
+                }
+                stores = stores
+                    .checked_add(store_work(&table.threads, governor)?)
+                    .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+                seen = seen
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_input("class run proof count overflow"))?;
+            }
+        }
+        if seen != occupied {
+            return Err(invalid_input("class run occupancy counts a missing proof"));
+        }
+        let mutation = size(count)
+            .checked_add(stores)
+            .and_then(|work| work.checked_add(size(occupied)))
+            .and_then(|work| work.checked_add(1))
+            .ok_or_else(|| governor.stop_resource(Resource::Work))?;
+        governor.charge(Resource::Work, mutation)?;
+        for (slot, table) in self
+            .class_runs
+            .as_mut_slice()
+            .iter_mut()
+            .zip(&mut self.tables)
+        {
+            if let Some(retained) = *slot {
+                materialize(table.threads.as_mut_slice(), retained);
+                *slot = None;
+            }
+        }
         self.class_run_count = 0;
         Ok(())
     }
@@ -106,34 +202,32 @@ impl Engine<'_> {
         if self.class_run_count == 0 {
             return Ok(false);
         }
+        // One bounded occupancy/slot metadata validation and probe.
         governor.charge(Resource::Work, 1)?;
+        if self.class_run_count > self.class_runs.len() {
+            return Err(invalid_input("class run occupancy exceeds its slot count"));
+        }
         let slot = &mut self.class_runs.as_mut_slice()[table];
         let Some(retained) = slot else {
             return Ok(false);
         };
         governor.charge(Resource::Work, 2)?;
         if retained.byte != byte || retained.next_at != at {
-            // This lookup already established occupancy; do not probe again.
-            governor.charge(Resource::Work, 2)?;
-            *slot = None;
-            self.class_run_count -= 1;
+            // step_table moves threads before split: restore them here.
+            consume(
+                slot,
+                &mut self.class_run_count,
+                &mut self.tables[table].threads,
+                governor,
+            )?;
             return Ok(false);
         }
-        // The ordinary queue would advance pos/reach and keep stall at zero.
-        // No outgoing state was produced: the next VM use clears its own Out.
-        // Admit both thread stores, next-position computation and cursor write
-        // before advancing anything; retain the proof slot in place.
-        governor.charge(
-            Resource::Work,
-            size(self.tables[table].threads.len())
-                .saturating_mul(2)
-                .saturating_add(2),
-        )?;
-        let next = at + 1;
-        for thread in self.tables[table].threads.as_mut_slice() {
-            thread.pos = next;
-            thread.reach = next;
-        }
+        // The frozen cohort keeps every phase/history field. Its cursor alone
+        // advances; consumption restores physical positions before native use.
+        governor.charge(Resource::Work, 2)?;
+        let next = at
+            .checked_add(1)
+            .ok_or_else(|| invalid_input("class run position overflow"))?;
         retained.next_at = next;
         Ok(true)
     }

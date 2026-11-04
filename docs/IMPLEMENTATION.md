@@ -2,6 +2,14 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Class-run certificates retain their logical position in the existing absolute
+cursor. Repeated hits update only that cursor; every native boundary restores
+physical `pos` and `reach` before position reads, thread movement or mutation. Single
+and global materialization admit all stores before changing any proof or
+subject. All original PCs, phases, histories, anchors and qualification guards
+remain unchanged, with no new owner or layout field. Chunk returns do not flush
+cursors. Runtime and resource qualification remain pending normal verification.
+
 Unopened failure-header selections defer only negative persistence until actual
 repair and resynchronization finish. Six empty whole-table owner sources prove
 terminality; otherwise the same selected key retains sticky absence before a

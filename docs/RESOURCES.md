@@ -250,28 +250,49 @@ call tables with an immutable argument anchor, either ungrouped or carrying a
 nonempty initial-Class proof. Grouped admission checks the first PC after the
 length guard and checks every PC during the full thread proof. An occupancy count
 skips slot probes and reset sweeps when every certificate is empty. Reuse compares
-the exact byte and absolute input position, then admits both thread-position stores
-and the retained cursor update before advancing any thread. The proved zero stall
-is unchanged, and the next ordinary VM step clears its own outgoing vectors.
+the exact byte and absolute input position, then admits only a checked cursor
+advance. The existing absolute cursor holds the cohort's logical `pos` and
+`reach`; their physical thread fields may lag while every other field stays
+unchanged. A hit performs no thread scan or position stores. The proved zero
+stall is unchanged, and the next ordinary VM step clears its own outgoing vectors.
 The retained proof replaces the ordinary advance, merge, commit and settle passes
 and their class-cache queries for that unchanged step. Input buffering, opener
 admission, line context, global markers and collection still run normally. Any new
 attempt, including directly appended opener threads, forces ordinary processing.
 
-Ordinary table processing invalidates a mismatched proof before mutation; new
-attempt admission invalidates before either opener path changes its subject.
-VM borrowing, external stops, abandonment, end-of-input handling, length cuts and
-arena reset invalidate their affected proofs. Absolute positions survive source-window relocation; saved
+Every proof consumption first materializes all subject `pos` and `reach` fields
+to that table's saved absolute cursor, then clears the proof. A mismatch does
+this before ordinary processing moves threads to its stack, and new attempt
+admission does it before either opener path changes its subject. VM borrowing,
+external stops, abandonment, end-of-input handling, length cuts and arena reset
+also materialize before native reads, copies or mutations. Global retirement
+uses two metadata passes and admits all materialization before any thread or
+proof changes. A refused admission leaves the cursors authoritative; native
+processing does not continue. Dropping a failed or unused engine needs no
+materialization because destruction never observes semantic thread positions.
+Absolute positions survive source-window relocation; saved
 self-loop facts remain valid when another table replaces a shared query-cache row.
 The proof keeps no thread snapshot, parsed value or source pointer. Resource
 refusal stays explicit. Runtime savings and applicability to particular workloads
 have not been measured for this source change.
 
-For a hit over T settled threads, cache work is exactly `2 * T + 5`: one slot
-probe, two key comparisons, two position stores per thread, the next-position
-computation and cursor write. A populated-key miss costs five Work units before
-ordinary processing. An empty slot costs one probe only while another proof is
-occupied; invalidating a populated slot costs three. Ordinary eligible processing
+Harmless observations of vector emptiness, immutable phases, Attempt starts and
+the held-report floor do not materialize positions. The floor reads Fence ends,
+never a Class position. Chunk returns and digest updates do not flush cursors;
+the same bytes, native boundaries and final stop retain identical charges under
+every chunking. All twelve source Class PCs remain represented separately in the
+long Qwen payload; the optimization neither merges their alternatives nor
+changes native anchors. No new owner field, heap allocation or portable layout
+charge is introduced.
+
+For a hit over T settled threads, cache work is exactly five: one occupancy/slot
+metadata validation and probe, two key comparisons, checked next-position
+computation and cursor write. Consuming a populated proof costs `2 * T + 5`:
+one occupancy/slot metadata validation and probe, two subject/count and fee
+checks, two position stores per thread, and slot/count writes. A populated-key
+miss reuses that metadata validation and probe and adds the two key comparisons,
+for `2 * T + 7` before ordinary processing. An empty slot costs one probe only
+while another proof is occupied. Ordinary eligible processing
 also pays admission: one for the ASCII guard, five for the first-thread/position/
 length guard, five for recent-source position and suffix bounds, then one for
 each of the one to eight actual source-byte probes. Only a complete repeat
@@ -283,13 +304,18 @@ Grouped admission adds one early mask lookup and one per inspected thread, for
 After the length guard, alternating bytes stop after two source probes and
 paired-byte churn after two or three; their admission fees are 13 or 14 Work
 units before any residual empty-slot probes, plus the grouped early lookup.
-Runs of exactly eight copies can
-still pay one complete admission without a hit, followed by a five-unit key miss
-when the byte changes. A repeat ending before eight copies cannot reach the
+Runs of exactly eight copies can still pay one complete admission without a hit,
+followed by the populated miss and materialization fee when the byte changes.
+A repeat ending before eight copies cannot reach the
 expensive proof, but still pays the short-circuit qualifier's actual probes.
 An eligible normal VM borrow can add one empty-slot probe while another table
-owns a proof. Nonempty bulk invalidation costs one per table slot plus one count
-write; empty occupancy performs no sweep. Initialization still admits every slot.
+owns a proof. For N slots, K occupied and C total subject threads, nonempty bulk
+invalidation first admits `N + 3 * K + 1` for shape/occupancy validation and the
+metadata census with checked store totals. It then admits `N + 2 * C + K + 1`
+before its mutation pass: slot probes, two position stores per subject thread,
+occupied slot clears and the count reset. Total Work is
+`2 * N + 4 * K + 2 + 2 * C`; empty occupancy performs no sweep. Initialization
+still admits every slot.
 Short or changing runs, refused admissions and unrelated live proofs can add
 Work without a later hit; these fees are part of any future workload comparison.
 The grouped extension predicts a benefit for long initial name/type runs but has
