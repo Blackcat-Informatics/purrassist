@@ -3866,17 +3866,20 @@ impl<'s> Recognizer<'s> {
         stop: GenerationStop,
         governor: &mut Governor,
     ) -> Result<RecognizedTurn, StopReason> {
-        self.finish_over(stop, None, governor)
+        self.finish_over(stop, None, PathAdmission::Native, governor)
     }
 
     /// [`Self::finish`], given the whole `output` when the caller holds it:
     /// a rejected attempt's markup then extends as far as recovery reads it
     /// (`RejectedCall::span`) when fences inside it are kept out of the
     /// prose context; without it, the span its grammar read is used.
+    /// Recovery admits whole-message candidates after semantic framing folds;
+    /// standalone recognition admits the native paths it publishes here.
     pub(crate) fn finish_over(
         mut self,
         stop: GenerationStop,
         output: Option<&[u8]>,
+        path_admission: PathAdmission,
         governor: &mut Governor,
     ) -> Result<RecognizedTurn, StopReason> {
         if let Some(reason) = self.failed.take() {
@@ -3913,6 +3916,7 @@ impl<'s> Recognizer<'s> {
             context: &self.context,
             len: end,
             output,
+            path_admission,
             example_regions: None,
         };
         let (pieces, failure_proofs) = builder.pieces(last, governor)?;
@@ -3961,6 +3965,14 @@ impl<'s> Recognizer<'s> {
 
 /// The fenced and inline regions shared by normalization and attempt reporting.
 type ExampleRegions = (Vec<Range<usize>>, Vec<Range<usize>>);
+
+/// The selection boundary that owns admission of distinct segmentations.
+pub(crate) enum PathAdmission {
+    /// Native recognition publishes these paths directly.
+    Native,
+    /// Recovery folds equivalent resolved framing before its product gate.
+    Resolved,
+}
 
 struct BuiltReading {
     segments: Vec<Segment>,
@@ -4051,7 +4063,8 @@ impl<'t> PlannedReading<'t> {
         Ok(true)
     }
 
-    /// Only admitted, distinct plans enter the existing owned public IR path.
+    /// Distinct plans enter the existing owned IR path under their caller's
+    /// admission purpose; discovery storage and work are always governed.
     fn materialize(self, governor: &mut Governor) -> Result<BuiltReading, StopReason> {
         governor.charge(Resource::Work, size(self.segments.len()))?;
         let mut segments = Vec::with_capacity(self.segments.len());
@@ -4115,6 +4128,7 @@ const _: () = {
             ScratchVec<u32>,
             ScratchVec<(u32, usize)>,
             PlannedReading<'static>,
+            PathAdmission,
         )>() as u64
             <= PATH_METADATA_BYTES
     );
@@ -4131,6 +4145,7 @@ const _: () = {
             std::vec::IntoIter<PlannedSegment<'static>>,
             ScratchLease,
             BuiltReading,
+            PathAdmission,
         )>() as u64
             <= PATH_METADATA_BYTES
     );
@@ -4145,6 +4160,7 @@ struct Builder<'t> {
     len: usize,
     /// The whole output, when the caller holds it.
     output: Option<&'t [u8]>,
+    path_admission: PathAdmission,
     example_regions: Option<ExampleRegions>,
 }
 
@@ -4234,7 +4250,9 @@ impl<'t> Builder<'t> {
         Ok(reading)
     }
 
-    /// Admit every distinct segmentation without cloning its stored payloads.
+    /// Discover distinct segmentations without cloning stored payloads.
+    /// Native publication admits them here; recovery admits the final product
+    /// after its source-preserving semantic framing folds.
     fn paths(
         &self,
         node: u32,
@@ -4277,7 +4295,9 @@ impl<'t> Builder<'t> {
                         .proofs
                         .intersect(&reading.proofs, governor)?;
                 } else {
-                    governor.charge(Resource::Candidates, 1)?;
+                    if matches!(self.path_admission, PathAdmission::Native) {
+                        governor.charge(Resource::Candidates, 1)?;
+                    }
                     crate::contract::push_scratch(&mut readings.readings, reading, governor)?;
                 }
                 continue;

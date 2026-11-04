@@ -791,16 +791,16 @@ impl<'s> Step<'_, 's> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if thread.ownership & 1 != 0 {
-            governor.charge(
-                Resource::Work,
-                size(self.program.openers.len()).saturating_add(1),
-            )?;
-            if !self.program.openers.contains(&thread.pc)
-                || !matches!(
-                    thread.sub,
-                    Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
-                )
-            {
+            // Direct seeds name an opener, and every PC-changing closure
+            // classifies membership before publishing its terminal. Repairs
+            // either retain that PC or explicitly enter candidate ownership;
+            // equal-PC merging preserves the implication. Only the submode
+            // may have changed without another closure (for example respelling).
+            governor.charge(Resource::Work, 1)?;
+            if !matches!(
+                thread.sub,
+                Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)
+            ) {
                 thread.ownership = 2;
             }
         }
@@ -2616,19 +2616,23 @@ impl<'s> Step<'_, 's> {
         pc: u32,
         governor: &mut Governor,
     ) -> Result<u8, StopReason> {
-        Ok(if ownership & 1 != 0 {
-            governor.charge(
-                Resource::Work,
-                size(self.program.openers.len()).saturating_add(1),
-            )?;
-            if self.program.openers.contains(&pc) {
-                ownership
-            } else {
-                2
+        if ownership & 1 == 0 {
+            return Ok(2);
+        }
+        governor.charge(Resource::Work, 1)?;
+        // epsilon_closure prepares sorted, unique PCs. Admit only the probes
+        // needed to classify this new terminal, once at its closure boundary.
+        let (mut low, mut high) = (0, self.program.openers.len());
+        while low < high {
+            governor.charge(Resource::Work, 1)?;
+            let middle = low + (high - low) / 2;
+            match self.program.openers[middle].cmp(&pc) {
+                core::cmp::Ordering::Less => low = middle + 1,
+                core::cmp::Ordering::Greater => high = middle,
+                core::cmp::Ordering::Equal => return Ok(ownership),
             }
-        } else {
-            2
-        })
+        }
+        Ok(2)
     }
 
     /// Follow every input-free transition from `pc` at offset `at`.

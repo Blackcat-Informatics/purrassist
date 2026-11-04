@@ -143,7 +143,9 @@ use super::StreamEvent;
 use super::adapter::{consulted_by_repair, reshaping};
 use super::emit::{self, Emission, EmitTarget};
 use super::failed_prefix::{FailureChoice, FailureProofs};
-use super::recognizer::{ContinuationFrontier, edit_entries, escaped, same_source_tree};
+use super::recognizer::{
+    ContinuationFrontier, PathAdmission, edit_entries, escaped, same_source_tree,
+};
 use super::resolve::loss_kind;
 use super::resolve::resolve_traced;
 use super::stream::EventCursor;
@@ -3150,6 +3152,13 @@ struct IntakeSetup<'s> {
     forced: Option<String>,
 }
 
+/// Publication proof produced only by a successful captured and interpreted byte.
+/// Its boundary replaces the ordinary cutoff scalar in the publication phase.
+struct CompletedByte {
+    utf8: usize,
+}
+const _: () = assert!(core::mem::size_of::<CompletedByte>() == core::mem::size_of::<usize>());
+
 struct RecognizedInput {
     turn: super::RecognizedTurn,
     encoding: CallLedger,
@@ -3340,58 +3349,18 @@ impl<'s> RecoveryIntake<'s> {
                 continue;
             }
             if self.failed.is_none()
-                && let Err(reason) = self
-                    .interpret_byte(byte, governor)
-                    .and_then(|()| self.report_progress(governor, progress, content))
+                && let Err(reason) = self.interpret_byte(byte, governor).and_then(|completed| {
+                    self.report_progress(completed, governor, progress, content)
+                })
             {
                 self.abandon(reason, governor);
             }
         }
     }
 
-    /// Certify the current UTF-8 publication boundary from this completed byte.
-    fn certified_source_boundary(&self, governor: &mut Governor) -> Result<usize, StopReason> {
-        // Source snapshot, recognizer snapshot, and pending encoding tuple.
-        governor.charge(Resource::Work, 3)?;
-        let captured = self
-            .capture
-            .as_ref()
-            .ok_or_else(|| invalid_input("encoding boundary has no admitted source"))?
-            .bytes
-            .len();
-        let recognized = self
-            .setup
-            .as_ref()
-            .ok_or_else(|| invalid_input("encoding boundary has no live recognizer"))?
-            .recognizer
-            .fed();
-        if captured != self.received || recognized != self.received {
-            return Err(invalid_input(
-                "encoding boundary uses a different source snapshot",
-            ));
-        }
-        let boundary = if self.encoding.len == 0 {
-            self.received
-        } else {
-            if self.encoding.len > 3
-                || self.encoding.start.checked_add(self.encoding.len) != Some(self.received)
-            {
-                return Err(invalid_input(
-                    "pending encoding does not end at the source snapshot",
-                ));
-            }
-            // A successful encoding step leaves only a viable incomplete scalar;
-            // its first byte cannot lie inside an earlier complete scalar.
-            self.encoding.start
-        };
-        if boundary > self.received {
-            return Err(invalid_input("encoding boundary exceeds admitted source"));
-        }
-        Ok(boundary)
-    }
-
     fn report_progress(
         &mut self,
+        completed: CompletedByte,
         governor: &mut Governor,
         progress: &mut impl FnMut(ContinuationFrontier),
         content: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
@@ -3402,7 +3371,7 @@ impl<'s> RecoveryIntake<'s> {
             .expect("live interpretation owns a recognizer")
             .recognizer
             .continuation_frontier();
-        let utf8 = self.certified_source_boundary(governor)?;
+        let utf8 = completed.utf8;
         let prefix = frontier.prefix_end.min(utf8);
         frontier.prefix_end =
             self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix, governor)?;
@@ -3511,7 +3480,9 @@ impl<'s> RecoveryIntake<'s> {
         let normalized = if end == certified {
             end
         } else if let Some((_, normalized)) = cached.filter(|(raw, _)| *raw == end) {
-            normalized
+            // This exact coordinate was validated before it entered the cache.
+            // Source appends cannot alter its scalar boundary.
+            return Ok(normalized);
         } else {
             self.source_boundary(end, governor)?
         };
@@ -3560,13 +3531,30 @@ impl<'s> RecoveryIntake<'s> {
         push_scratch(&mut capture.bytes, byte, governor)
     }
 
-    fn interpret_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
+    fn interpret_byte(
+        &mut self,
+        byte: u8,
+        governor: &mut Governor,
+    ) -> Result<CompletedByte, StopReason> {
         self.encoding.step(byte, self.received - 1, governor)?;
         self.setup
             .as_mut()
             .expect("healthy intake owns a recognizer")
             .recognizer
-            .push(core::slice::from_ref(&byte), governor)
+            .push(core::slice::from_ref(&byte), governor)?;
+        // The sole healthy path appends exactly one captured byte, then advances
+        // encoding and recognition once. All three cursors start at zero; any
+        // failure abandons interpretation before publication can resume.
+        // Encoding leaves either no pending bytes or one viable incomplete
+        // scalar ending at received, including after malformed-subpart removal.
+        governor.charge(Resource::Work, 1)?;
+        Ok(CompletedByte {
+            utf8: if self.encoding.len == 0 {
+                self.received
+            } else {
+                self.encoding.start
+            },
+        })
     }
 
     fn recognize(
@@ -3599,7 +3587,12 @@ impl<'s> RecoveryIntake<'s> {
             policies,
         };
         let encoding = recovery.encoding(self.encoding.invalid.as_slice(), governor)?;
-        let turn = recognizer.finish_over(request.stop.clone(), Some(output), governor)?;
+        let turn = recognizer.finish_over(
+            request.stop.clone(),
+            Some(output),
+            PathAdmission::Resolved,
+            governor,
+        )?;
         Ok(RecognizedInput {
             turn,
             encoding,

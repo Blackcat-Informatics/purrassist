@@ -6,16 +6,19 @@ Turn-path discovery retains normalized Content ranges and immutable stored
 Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
 preserve branch order without copying each prefix. Exact governed equality keeps
 the first equal plan and intersects its failure proofs in discovery order. Each
-distinct plan crosses the existing Candidate gate before its public IR is
-materialized. One bounded descriptor owner covers discovery handles, an incoming
+distinct native plan crosses the Candidate gate before standalone recognition
+publishes its IR. Recovery discovers those paths under the same Work, ScratchBytes
+and cancellation authority, then admits its whole-message candidate product after
+source-preserving semantic framing folds. Resolver candidate charges remain separate.
+One bounded descriptor owner covers discovery handles, an incoming
 plan and serial materialization; backing buffers retain their separate owners.
 Plan, path and checkpoint storage release with their owners.
 Dominator storage, final raw copies and annotation, resolution, layout admission
 and Forest payload/index ownership remain separate work. Compilation, behavioral
 and resource qualification remain pending normal verification.
 
-Class-run certificates retain their logical position in the existing absolute
-cursor. Repeated hits update only that cursor; every native boundary restores
+Class-run certificates use the engine's shared absolute cursor at completed byte
+boundaries. Repeated hits retain their proof; every native boundary restores
 physical `pos` and `reach` before position reads, thread movement or mutation. Single
 and global materialization admit all stores before changing any proof or
 subject. All original PCs, phases, histories, anchors and qualification guards
@@ -541,6 +544,22 @@ required. Actual hit work removes the deleted comparison, addition and store;
 slot and cursor-handoff metadata stays admitted. Existing long-name, Unicode,
 chunk, refusal and budget cases cover these paths. Runtime savings and original
 fixed-budget success remain pending automatic CI.
+
+Healthy source publication now receives a completed-byte UTF-8 boundary only after
+capture, encoding and recognition have all succeeded. Their private cursors start
+at zero and advance once on the sole healthy byte path; refusal abandons that path.
+This removes repeated snapshot reads while preserving malformed-subpart boundaries.
+Exact source-cutoff cache hits reuse their already validated result without writing
+the identical entry again. Boundary choice and cache probes retain their actual Work
+admission, with no retained owner or buffer added.
+
+Literal thread construction and PC-changing closures now establish opener membership
+once. Byte steps retain the necessary submode check without repeating a linear
+opener search. Closure classification probes the compiler's sorted, unique opener
+PCs by governed binary search. Repair and equal-PC merge transitions preserve the
+membership implication; genuine opener completion checks remain unchanged. These
+changes remove computation without changing parser anchors or resource limits.
+Compilation, runtime savings and fixed-budget acceptance remain pending automatic CI.
 
 ## Shared contracts
 

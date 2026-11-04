@@ -1255,11 +1255,15 @@ impl<'s> ToolCallStream<'s> {
     /// Bytes still owned by lexical prefixes or UTF-8 boundaries, excluding
     /// candidate coverage. Reading this cached count allocates and charges nothing.
     /// A shared cancellation request is observed at the next mutable operation.
+    /// This literal-leading dialect holds an incomplete scalar as encoding carry:
     ///
     /// ```
-    /// use purrassist_core::{Budget, tool_call::{ToolSet, ToolRecoveryRequest}};
+    /// use purrassist_core::{Budget, Governor};
+    /// use purrassist_core::tool_call::{DialectId, DialectSet, ToolSet, ToolRecoveryRequest};
     /// let tools = ToolSet::compile([], Budget::default()).unwrap();
-    /// let mut stream = tools.stream(ToolRecoveryRequest::default());
+    /// let dialects = DialectSet::new([DialectId::Qwen3CoderXml],
+    ///     &mut Governor::new(Budget::default())).unwrap();
+    /// let mut stream = tools.stream_with_dialects(ToolRecoveryRequest::default(), &dialects);
     /// let _ = stream.feed_collect(&[0xf0, 0x9f, 0x98]);
     /// assert_eq!(stream.held_bytes(), 3);
     /// ```
@@ -1273,11 +1277,16 @@ impl<'s> ToolCallStream<'s> {
     /// alone is excluded. Late discriminators and open reasoning can grow this
     /// count without a fixed bound. Refusal or explicit cancellation disposes
     /// these owners. Reading the cache allocates and charges nothing.
+    /// Class-leading projections can own plain text before their discriminator;
+    /// a literal-leading dialect leaves text without an opener outside candidates:
     ///
     /// ```
-    /// use purrassist_core::{Budget, tool_call::{ToolSet, ToolRecoveryRequest}};
+    /// use purrassist_core::{Budget, Governor};
+    /// use purrassist_core::tool_call::{DialectId, DialectSet, ToolSet, ToolRecoveryRequest};
     /// let tools = ToolSet::compile([], Budget::default()).unwrap();
-    /// let mut stream = tools.stream(ToolRecoveryRequest::default());
+    /// let dialects = DialectSet::new([DialectId::Qwen3CoderXml],
+    ///     &mut Governor::new(Budget::default())).unwrap();
+    /// let mut stream = tools.stream_with_dialects(ToolRecoveryRequest::default(), &dialects);
     /// let _ = stream.feed_collect(b"plain content");
     /// assert_eq!(stream.candidate_bytes(), 0);
     /// ```
