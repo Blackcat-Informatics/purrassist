@@ -47,8 +47,11 @@ const _: () =
 const EVENT_BYTES: u64 = 512;
 const _: () = assert!(4 * core::mem::size_of::<StreamEvent>() as u64 <= EVENT_BYTES);
 
-/// Lexical byte ordering for the compile-time operator index.
+/// Byte length, then lexical byte ordering for the compile-time operator index.
 const fn operator_id_precedes(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return left.len() < right.len();
+    }
     let left = left.as_bytes();
     let right = right.as_bytes();
     let mut at = 0;
@@ -85,12 +88,35 @@ fn revision_operator(
     id: &str,
     governor: &mut Governor,
 ) -> Result<Option<EditOperator>, StopReason> {
+    const CONTROL_BYTES: u64 = 96;
+    const _: () = assert!(
+        core::mem::size_of::<(
+            ScratchLease,
+            &'static str,
+            &'static crate::grammar::edit::OperatorRule,
+            [usize; 4],
+            u64,
+            core::cmp::Ordering,
+            bool,
+        )>() as u64
+            <= CONTROL_BYTES
+    );
+    let _controls = governor.lease_scratch(CONTROL_BYTES)?;
     let comparison = size(id.len()).saturating_add(1);
     let (mut low, mut high) = (0, OPERATOR_ID_ORDER.len());
     while low < high {
         let middle = low + (high - low) / 2;
-        governor.charge(Resource::Work, comparison)?;
-        if OPERATORS[OPERATOR_ID_ORDER[middle]].id < id {
+        let candidate = OPERATORS[OPERATOR_ID_ORDER[middle]].id;
+        governor.charge(Resource::Work, 1)?;
+        let precedes = match candidate.len().cmp(&id.len()) {
+            core::cmp::Ordering::Less => true,
+            core::cmp::Ordering::Greater => false,
+            core::cmp::Ordering::Equal => {
+                governor.charge(Resource::Work, comparison)?;
+                candidate < id
+            }
+        };
+        if precedes {
             low = middle + 1;
         } else {
             high = middle;
@@ -99,8 +125,12 @@ fn revision_operator(
     let Some(&ordinal) = OPERATOR_ID_ORDER.get(low) else {
         return Ok(None);
     };
-    governor.charge(Resource::Work, comparison)?;
     let operator = &OPERATORS[ordinal];
+    governor.charge(Resource::Work, 1)?;
+    if operator.id.len() != id.len() {
+        return Ok(None);
+    }
+    governor.charge(Resource::Work, comparison)?;
     Ok((operator.id == id).then_some(operator.operator))
 }
 

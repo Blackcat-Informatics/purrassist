@@ -2,6 +2,13 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Accepted implementation contract
 
+Revision lookup orders its existing compile-time operator index by byte length,
+then lexical identifier. Runtime search compares lengths before scanning text;
+only equal lengths require the original full identifier comparison. Stable
+ordinals preserve the first registry match for duplicate IDs. Query controls
+retain a typed scratch owner, and each performed comparison admits its work.
+Runtime and resource qualification remain pending automatic CI.
+
 A failed header with one immutable predecessor chain replays the same capture
 transformer from root to tip without constructing a sparse summary map. Every
 history node is checked before replay; unsupported histories retain the same

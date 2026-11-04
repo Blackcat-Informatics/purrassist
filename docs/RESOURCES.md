@@ -1649,16 +1649,18 @@ serialized diagnostic text are parsed to reconstruct edits. Revisions created
 by semantic search still need structured transformation records at their
 production sites; this native route does not fabricate their missing payloads.
 
-Revision rule lookup uses a static ordinal index sorted at compile time from
-the operator registry. Equal identifiers keep their original registry order,
-so the first matching operator remains the same. An explicit lower-bound loop
-halves its exclusive search interval on every comparison. Each string comparison
-admits the queried identifier's byte length plus one Work before it runs,
-including the final equality check when an indexed entry exists. A lookup uses
-at most the registry count's bit width plus one comparisons: at most seven
-for the current 47 operators. This index adds no heap storage and preserves
-evidence and event order; these source bounds do not establish where the
-restarted DeepSeek workload exhausts or whether it fits its Work budget.
+Revision rule lookup uses a static ordinal index sorted at compile time by
+identifier byte length, then lexical bytes. Equal identifiers keep their original
+registry order, so the first matching operator remains the same. An explicit
+lower-bound loop halves its exclusive search interval on every probe. Each
+length comparison admits one Work; only equal lengths require a string comparison,
+which retains the queried identifier's byte length plus one Work. The final
+indexed entry also passes a length check before full equality. A lookup has at
+most the registry count's bit width plus one stages: at most seven for the current
+48 operators, with a length and possible string comparison per stage. The static
+index adds no heap storage; query controls retain a typed 96-byte scratch lease.
+Evidence and event order are preserved. These source bounds do not establish
+whether the remaining workloads fit their Work budgets.
 
 Packed ambiguity and grouped attempts can hold this conservative frontier even
 when later recovery would fold their meanings together. Proving the longest
