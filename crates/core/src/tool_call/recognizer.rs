@@ -3353,7 +3353,7 @@ impl<'t> PathReadings<'t> {
         })
     }
 
-    fn len(&self) -> usize {
+    const fn len(&self) -> usize {
         self.readings.len()
     }
 
