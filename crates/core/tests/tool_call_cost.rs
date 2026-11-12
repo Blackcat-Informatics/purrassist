@@ -325,7 +325,7 @@ fn busy_turn_resolves_every_call_under_sized() {
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(preset.outcome, Outcome::Unresolved);
-    // This branch's full pass over this turn costs 1,315,123 work, more than
+    // This branch's full pass over this turn costs 1,252,779 work, more than
     // the fixed preset's 1,000,000 work limit, so the preset stops on Work;
     // main's full pass over the same turn costs 951,127.
     assert_eq!(

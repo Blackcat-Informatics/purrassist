@@ -1957,7 +1957,7 @@ only contested spans differ in that layout therefore charges no candidate
 however many follow one another (`hermes-stripped` alone resolves 16 calls
 under `Exact`; measured on this branch with one call per line, the first call
 count that stops on `BudgetExceeded(Work)` under `Exact` is 25 for
-`hermes-stripped` and 32 for native Hermes). Dialects with other documented readings keep them:
+`hermes-stripped` and 33 for native Hermes). Dialects with other documented readings keep them:
 `harmony-stripped.v1` charges its documented candidates, and
 `deepseek-v3-stripped.v1` charges one for two to four calls
 (`tool_call_recover::exact_effort_accepts_canonical_markup`). The derivation is
@@ -1974,7 +1974,7 @@ stray `<tool_call>` contested by GLM, Hermes and Qwen. The sizing count is
 one Qwen occurrence for each of 64 `<function=` tokens, and 128 `function`
 occurrences in the stripped DeepSeek allow-list. Sizing includes occurrences
 where runtime framing forbids an attempt. On this branch the full pass over
-the 64-call busy turn costs 1,315,123 work, more than the unmodified
+the 64-call busy turn costs 1,252,779 work, more than the unmodified
 `Effort::Standard` preset's 1,000,000 work limit, so the preset exhausts
 explicitly on `Work`; main's full pass over the same turn costs 951,127 and
 fits that limit. With the sized work limit

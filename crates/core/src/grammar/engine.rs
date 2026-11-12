@@ -6331,7 +6331,6 @@ impl<'s> Engine<'s> {
                 return Ok(());
             }
             let mut owned = (None, None);
-            governor.charge(Resource::Work, size(live.len()))?;
             if candidate_only {
                 // The ordinary transition cannot restore a lexical bit. A
                 // new seed invalidates this proof before reaching this merge.
