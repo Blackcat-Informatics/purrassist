@@ -270,10 +270,24 @@ def tracked_markdown(root):
                   if name and not name.startswith(MARKDOWN_ATTRIBUTION_EXEMPT))
 
 
+# Upstream licence texts are byte-pinned in vendor/dependencies.json, so they cannot carry a
+# header; each one is attributed by a REUSE-style `<name>.license` sidecar instead.
+VENDOR_LICENSE_PREFIX = 'vendor/licenses/'
+
+
 def check_markdown_attribution(root, names):
-    """Report each named Markdown file that lacks the SPDX header."""
-    return [f'{name}: missing attribution' for name in names
-            if not has_attribution((root / name).read_text(encoding='utf-8'))]
+    """Report each named Markdown file that lacks the SPDX header, or, under vendor/licenses/,
+    whose `<name>.license` sidecar lacks the SPDX tags."""
+    errors = []
+    for name in names:
+        if name.startswith(VENDOR_LICENSE_PREFIX):
+            sidecar = root / f'{name}.license'
+            attributed = sidecar.is_file() and has_attribution(sidecar.read_text(encoding='utf-8'))
+        else:
+            attributed = has_attribution((root / name).read_text(encoding='utf-8'))
+        if not attributed:
+            errors.append(f'{name}: missing attribution')
+    return errors
 
 
 # Binary artifacts cannot carry a comment header, so each one is attributed by a

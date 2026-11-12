@@ -299,6 +299,15 @@ class MarkdownAttribution(unittest.TestCase):
         self.write('C.md', '<!-- SPDX-License-Identifier: MIT -->\n# C\n')
         self.assertEqual(len(AUDIT.check_markdown_attribution(self.root, ['C.md'])), 1)
 
+    def test_vendored_licence_needs_a_sidecar(self):
+        name = 'vendor/licenses/x/1-LICENSE.md'
+        self.write(name, '# upstream text with no header\n')
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name]),
+                         [f'{name}: missing attribution'])
+        self.write(f'{name}.license', 'SPDX-FileCopyrightText: Contributors to the W3C\n'
+                                       'SPDX-License-Identifier: LicenseRef-W3C-Document\n')
+        self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name]), [])
+
     def test_tracked_markdown_is_the_git_index_minus_test_data(self):
         subprocess.run(['git', 'init', '--quiet'], cwd=self.root, check=True)
         for name in ['README.md', 'docs/A.md', 'crates/core/tests/data/x/README.md', 'untracked.md']:
