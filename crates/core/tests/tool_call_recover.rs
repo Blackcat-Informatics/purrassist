@@ -3202,7 +3202,8 @@ fn pythonic_arguments_faulting_at_the_end_of_output_do_not_swallow_what_follows(
     let rejected = &calls.rejected[0];
     assert_eq!(rejected.reason, Rejection::Malformed { at: 53 });
     assert_eq!(rejected.span, 22..53);
-    assert_eq!(calls.content, [53..input.len()]);
+    assert_eq!(calls.content.len(), 1);
+    assert_eq!(calls.content[0], 53..input.len());
 }
 
 /// Fuzz regression (`scripts/fuzz.py --target tool-call`): a rejected result
