@@ -3168,6 +3168,44 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
     }
 }
 
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`): a Pythonic call
+/// whose arguments fault inside a string and run on to the end of the output
+/// with no `)` fails where the arguments stopped decoding (F4). Its bytes
+/// after the fault, which hold the next call and the list's `]` as text of an
+/// unclosed string, are not shown to be its markup and stay content; a
+/// configuration that merely skipped the whole output as dropped text before
+/// a token it then lacked shows no end either.
+#[test]
+fn pythonic_arguments_faulting_at_the_end_of_output_do_not_swallow_what_follows() {
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string()),
+            ToolDefinition::new("list_dir")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string()),
+        ],
+        Budget::default(),
+    )
+    .expect("tools");
+    let input =
+        "[read_file(path=\"a\"), list_dir(path=\".ead_file(path=\"a\"), list_dir(path=\".\")]";
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+        panic!("one reading expected");
+    };
+    assert_eq!(calls.rejected.len(), 1);
+    let rejected = &calls.rejected[0];
+    assert_eq!(rejected.reason, Rejection::Malformed { at: 53 });
+    assert_eq!(rejected.span, 22..53);
+    assert_eq!(calls.content, [53..input.len()]);
+}
+
 /// S3: a call recovered inside a broken wrapper is kept, and the wrapper's
 /// rejected attempt covers it: its raw text is the whole wrapper, closer
 /// included, and no wrapper token is left as content, in every reading.
