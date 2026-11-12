@@ -1202,6 +1202,10 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
         // without its closer runs to where the next call's opener begins),
         // read or rejected: an attempt begins only at an opener of its
         // dialect, so either shows that opener begins exactly there.
+        // The turn may read that next call in another dialect that shares
+        // the opener's text (a resolved segment, not an attempt of this
+        // dialect): the opener of this dialect still begins exactly at the
+        // segment that starts there.
         let next_call = calls
             .calls
             .iter()
@@ -1209,7 +1213,18 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
             || calls
                 .rejected
                 .iter()
-                .any(|other| other.span.start == end && other.dialect.as_ref() == Some(dialect));
+                .any(|other| other.span.start == end && other.dialect.as_ref() == Some(dialect))
+            || (calls
+                .calls
+                .iter()
+                .map(|call| &call.span)
+                .chain(calls.rejected.iter().map(|other| &other.span))
+                .any(|span| span.start == end)
+                && grammar
+                    .call_ends()
+                    .iter()
+                    .flat_map(purrassist_core::grammar::CallEnd::openers)
+                    .any(|opener| opener.len() > 1 && output[end..].starts_with(opener)));
         // T6: or to an opening reasoning marker that cut a literal of its
         // dialect the attempt had begun (see `cut_by_marker`).
         let cut = cut_by_marker(
