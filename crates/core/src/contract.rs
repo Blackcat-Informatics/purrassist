@@ -689,6 +689,8 @@ pub(crate) fn reserve_failure(error: &TryReserveError) -> StopReason {
 /// covers the vector's own backing buffer: an element that owns further heap
 /// memory (a `String` inside a `ScratchVec<String>`, for example) must be
 /// charged separately before it is constructed.
+/// Dropping the vector destroys its payloads and backing buffer before releasing
+/// the buffer's reservation.
 ///
 /// ```
 /// use purrassist_core::{Budget, Governor, ScratchVec};
@@ -930,6 +932,7 @@ const _: () = assert!(core::mem::size_of::<ScratchVec<u8>>() <= 40);
 
 impl<T> Drop for ScratchVec<T> {
     fn drop(&mut self) {
+        drop(mem::take(&mut self.inner));
         let _ = self.meter.release(self.reserved);
     }
 }
@@ -1069,6 +1072,7 @@ const _: () = assert!(core::mem::size_of::<ScratchString>() <= 40);
 
 impl Drop for ScratchString {
     fn drop(&mut self) {
+        drop(mem::take(&mut self.inner));
         let _ = self.meter.release(self.reserved);
     }
 }
@@ -1958,6 +1962,49 @@ mod tests {
         // whole (tiny) budget succeeds only if nothing leaked.
         let remaining = governor.limits().scratch_bytes;
         assert_eq!(governor.charge(Resource::ScratchBytes, remaining), Ok(()));
+    }
+
+    #[test]
+    fn scratch_vec_keeps_storage_admitted_while_payloads_drop() {
+        use core::cell::Cell;
+
+        const RESERVATION: u64 = 1024;
+        struct Payload<'a> {
+            meter: super::ScratchMeter,
+            refused: &'a Cell<bool>,
+        }
+        impl super::ScratchCharge for Payload<'_> {
+            const CHARGE: usize = 16;
+        }
+        impl Drop for Payload<'_> {
+            fn drop(&mut self) {
+                let reservation = self.meter.charge(RESERVATION);
+                self.refused.set(matches!(
+                    &reservation,
+                    Err(StopReason::BudgetExceeded(Resource::ScratchBytes))
+                ));
+                if reservation.is_ok() {
+                    self.meter.release(RESERVATION).unwrap();
+                }
+            }
+        }
+
+        let governor = Governor::new(Budget {
+            scratch_bytes: RESERVATION,
+            ..Budget::default()
+        });
+        let refused = Cell::new(false);
+        let meter = governor.scratch_meter();
+        let mut values = super::ScratchVec::new(&governor);
+        values
+            .push(Payload {
+                meter: meter.clone(),
+                refused: &refused,
+            })
+            .unwrap();
+        drop(values);
+        assert!(refused.get());
+        assert_eq!(meter.0.live.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     #[test]
