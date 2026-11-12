@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Main's `make check` hygiene step fails at 961b824 (merge of #174) with four errors from `scripts/check-repository.py`:\n\n    vendor/licenses/purrdf-4.0.2/third-party/csvw/1-LICENSE.md: missing attribution\n    vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/4-LICENSE.md: missing attribution\n    vendor/licenses/purrdf-4.0.2/third-party/rdfc/1-LICENSE.md: missing attribution\n    vendor/licenses/purrdf-4.0.2/third-party/shacl/1-LICENSE.md: missing attribution\n\nEvidence: the four upstream notices were added by #174 (commit 43da578); they are absent at b9c3d8c, the commit whose hosted Ubuntu job (run 43237133448) passed the checker. Local run of the checker on a detached copy of origin/main at 961b824 exits 1 with these four lines.\n\nCause: the checker requires SPDX headers on tracked Markdown, which upstream W3C/MIT notice text cannot carry without altering its bytes and its pinned digest.\n\nAcceptance: a REUSE-style `<name>.license` sidecar beside each of the four files carrying the SPDX tags, identifiers read from the upstream text; the checker reads it; a test shows that a vendored licence with no sidecar still fails; `check-repository.py` and `test-repository-audit.py` pass on main.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-12T16:18:53Z",
+  "labels": [],
+  "milestone": null,
+  "number": 181,
+  "state": "OPEN",
+  "title": "Main hygiene is red since #174: four vendored PurRDF notices have no attribution",
+  "updatedAt": "2026-11-12T16:18:53Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/181"
+}
