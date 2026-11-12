@@ -4535,6 +4535,13 @@ pub(crate) struct Attempt {
     pub(crate) closed: Option<usize>,
 }
 
+/// Whether `attempt` read its opener and reads on without a completion: only
+/// such an attempt holds another table's report at its opener
+/// ([`Engine::defer`]).
+const fn reads_on(attempt: &Attempt) -> bool {
+    attempt.opened && !attempt.completed
+}
+
 /// Where a rejected attempt's span ends at the end of output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FailureEnd {
@@ -4662,10 +4669,9 @@ impl Event {
 struct Table<'s> {
     grammar: usize,
     kind: ProductionKind,
-    /// A derived dialect's result program is its parent's, unchanged. When
-    /// the parent is in the same set its table reads every result, so this
-    /// one never opens an attempt.
-    shadowed: bool,
+    /// How many of `attempts` have read their opener and not yet completed:
+    /// only these hold a deferred end (see [`Engine::release_deferred`]).
+    reading: usize,
     program: &'s Program,
     /// A `ClassRun` may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
@@ -5077,9 +5083,6 @@ pub(crate) struct Engine<'s> {
     class_runs: ScratchVec<Option<class_run::ClassRun>>,
     /// Empty occupancy skips invalidation probes and whole-slot reset sweeps.
     class_run_count: usize,
-    /// The tables holding at least one live attempt: held reports are swept
-    /// against these alone, so an idle dialect adds nothing to a sweep.
-    attempt_tables: usize,
     grammars: ScratchVec<GrammarRuntime<'s>>,
     buffer: ScratchVec<u8>,
     base: usize,
@@ -5152,7 +5155,6 @@ impl<'s> Engine<'s> {
         let mut protocol_fences = false;
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
-            let parent_present = dialect.parent_in(dialects);
             protocol_fences |= grammar.protocol_fences();
             let dfas = (0..grammar.classes.len()).map(|_| None).collect();
             let mut class_steps = ScratchVec::new(governor);
@@ -5176,7 +5178,7 @@ impl<'s> Engine<'s> {
                 tables.push(Table {
                     grammar: index,
                     kind,
-                    shadowed: kind == ProductionKind::Result && parent_present,
+                    reading: 0,
                     program,
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
@@ -5196,7 +5198,6 @@ impl<'s> Engine<'s> {
             failure_headers: ScratchMap::new(governor),
             class_runs,
             class_run_count: 0,
-            attempt_tables: 0,
             grammars,
             protocol_fences,
             buffer: ScratchVec::new(governor),
@@ -5342,9 +5343,6 @@ impl<'s> Engine<'s> {
         at: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        if self.tables[table].shadowed {
-            return Ok(());
-        }
         let program = self.tables[table].program;
         let mut spawned = None;
         let line_blank = self.line_blank;
@@ -5374,7 +5372,6 @@ impl<'s> Engine<'s> {
             }
             let id = self.next_attempt;
             self.next_attempt += 1;
-            let first_attempt = self.tables[table].attempts.is_empty();
             self.tables[table].attempts.push(Attempt {
                 id,
                 start: at,
@@ -5386,7 +5383,6 @@ impl<'s> Engine<'s> {
                 stuck: false,
                 closed: None,
             })?;
-            self.attempt_tables += usize::from(first_attempt);
             let thread = Thread {
                 pc: program.start,
                 sub: Sub::Lit(0),
@@ -5940,11 +5936,16 @@ impl<'s> Engine<'s> {
             self.grammars[self.tables[table].grammar].dialect == DialectId::MistralV3;
         let mut latest = None;
         for (attempt, position) in opened {
-            let attempts = self.tables[table].attempts.as_mut_slice();
-            if let Some(record) = attempts.iter_mut().find(|record| record.id == attempt)
+            let entry = &mut self.tables[table];
+            if let Some(record) = entry
+                .attempts
+                .as_mut_slice()
+                .iter_mut()
+                .find(|record| record.id == attempt)
                 && !record.opened
             {
                 record.opened = true;
+                entry.reading += usize::from(reads_on(record));
                 self.newest_open = self.newest_open.max(record.start);
                 latest = latest.max(Some(record.start));
                 governor.charge(Resource::Work, size(self.out.headers.len()))?;
@@ -6621,12 +6622,11 @@ impl<'s> Engine<'s> {
                 self.take_boundary(table, record.id);
                 self.forget_failure_header(record.id, governor)?;
             }
-            let attempts = self.tables[table].attempts.as_mut_slice();
+            let entry = &mut self.tables[table];
+            entry.reading -= usize::from(reads_on(&entry.attempts.as_slice()[index]));
+            let attempts = entry.attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
-            self.tables[table].attempts.pop();
-            if self.tables[table].attempts.is_empty() {
-                self.attempt_tables -= 1;
-            }
+            entry.attempts.pop();
             retired = true;
         }
         // Only an attempt that ended can release a held report.
@@ -6690,17 +6690,35 @@ impl<'s> Engine<'s> {
         if self.deferred.is_empty() && self.whole.is_empty() {
             return Ok(());
         }
-        governor.charge(
-            Resource::Work,
-            size(self.deferred.len() + self.whole.len()).saturating_mul(size(self.attempt_tables)),
-        )?;
-        let reading = |tables: &[Table<'_>], start: usize| {
-            tables.iter().any(|entry| {
-                entry
+        debug_assert!(
+            self.tables.iter().all(|table| table.reading
+                == table
                     .attempts
                     .as_slice()
                     .iter()
-                    .any(|live| live.opened && !live.completed && live.start == start)
+                    .filter(|live| reads_on(live))
+                    .count()),
+            "each table's `reading` counts exactly its attempts that read on",
+        );
+        // Only an attempt that read its opener and has not completed holds a
+        // report (`reads_on`); a table without one is passed over unread. The
+        // charge is a proxy for the sweep, not its step count: one unit per
+        // held end and table that holds such an attempt. The attempts compared
+        // within such a table and the per-table check are not charged
+        // separately.
+        let reading_tables = self.tables.iter().filter(|table| table.reading > 0).count();
+        governor.charge(
+            Resource::Work,
+            size(self.deferred.len() + self.whole.len()).saturating_mul(size(reading_tables)),
+        )?;
+        let reading = |tables: &[Table<'_>], start: usize| {
+            tables.iter().any(|entry| {
+                entry.reading > 0
+                    && entry
+                        .attempts
+                        .as_slice()
+                        .iter()
+                        .any(|live| reads_on(live) && live.start == start)
             })
         };
         let mut index = 0;
@@ -7629,8 +7647,10 @@ impl<'s> Engine<'s> {
                 return Ok(());
             }
         };
+        let was_reading = reads_on(record);
         record.completed = true;
         let start = record.start;
+        self.tables[table].reading -= usize::from(was_reading);
         chained.table = index_u32(table);
         chained.attempt = thread.attempt;
         chained.at = thread.pos;
@@ -7777,12 +7797,15 @@ impl<'s> Engine<'s> {
             .expect("completing attempt is live");
         match segmentations {
             Ok(segmentations) => {
+                let was_reading = reads_on(record);
                 record.completed = true;
+                let start = record.start;
+                self.tables[table].reading -= usize::from(was_reading);
                 // It ends whole: a held report at its opener is outread now,
                 // and no longer waits for it (see `Self::defer`).
-                if !self.whole.contains(&record.start) {
+                if !self.whole.contains(&start) {
                     governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
-                    self.whole.push(record.start);
+                    self.whole.push(start);
                 }
                 let grouped = self.tables[table].program.grouped;
                 let charged = if segmentations.len() == 1 { charged } else { 0 };
@@ -7937,6 +7960,14 @@ impl<'s> Engine<'s> {
                 size(table.threads.len() + table.attempts.len() + table.trails.len()),
             )?;
             keep(&mut table.threads, |thread| thread.attempt != attempt);
+            if let Some(record) = table
+                .attempts
+                .as_slice()
+                .iter()
+                .find(|record| record.id == attempt)
+            {
+                table.reading -= usize::from(reads_on(record));
+            }
             keep(&mut table.attempts, |record| record.id != attempt);
             governor.charge(
                 Resource::Work,
@@ -8005,10 +8036,8 @@ impl<'s> Engine<'s> {
                 self.settle(table, end, Some(generation), governor)?;
             }
             self.tables[table].threads.clear();
-            if !self.tables[table].attempts.is_empty() {
-                self.attempt_tables -= 1;
-            }
             self.tables[table].attempts.clear();
+            self.tables[table].reading = 0;
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();
             let written = core::mem::take(&mut self.tables[table].written);

@@ -3465,9 +3465,14 @@ const PATH_METADATA_BYTES: u64 = 512;
 /// The plan table drops its physical storage before the metadata reservation.
 struct PathReadings<'t> {
     readings: ScratchVec<PlannedReading<'t>>,
-    /// How many of `readings` were admitted as layout framings of another
-    /// (see [`Builder::layout_framing`]), without a candidate.
+    /// How many of `readings` were admitted without a candidate: the layout
+    /// framings of the first (see [`Builder::layout_framing`]) and, when
+    /// every other reading is one, the first itself.
     layouts: usize,
+    /// Whether the first reading's candidate is still uncharged: it is due
+    /// once a reading that is not a layout framing of it is admitted, or
+    /// when it stays the only reading.
+    first_uncharged: bool,
     metadata: ScratchLease,
 }
 
@@ -3477,6 +3482,7 @@ impl<'t> PathReadings<'t> {
         Ok(Self {
             readings: ScratchVec::new(governor),
             layouts: 0,
+            first_uncharged: false,
             metadata,
         })
     }
@@ -3546,6 +3552,12 @@ struct Builder<'t> {
 }
 
 impl<'t> Builder<'t> {
+    /// Whether the caller folds the layout framings of one invocation and
+    /// the whole output is at hand to compare their margins.
+    const fn folds_layout(&self) -> bool {
+        self.fold_layout && self.output.is_some()
+    }
+
     /// Whether `reading` only moves the optional layout of marker-suppressed
     /// call frames of the first segmentation admitted. Removing markers can
     /// leave layout as either call framing or content; when the caller folds
@@ -3558,7 +3570,7 @@ impl<'t> Builder<'t> {
         governor: &mut Governor,
     ) -> Result<bool, StopReason> {
         let (true, Some(output), Some(first)) =
-            (self.fold_layout, self.output, readings.readings.first())
+            (self.folds_layout(), self.output, readings.readings.first())
         else {
             return Ok(false);
         };
@@ -3697,9 +3709,16 @@ impl<'t> Builder<'t> {
                         .proofs
                         .intersect(&reading.proofs, governor)?;
                 } else {
-                    if self.layout_framing(&readings, &reading, governor)? {
+                    if readings.readings.is_empty() && self.folds_layout() {
+                        // Charged once a reading that is not a layout
+                        // framing of it is admitted, or when it stays alone.
+                        readings.first_uncharged = true;
+                    } else if self.layout_framing(&readings, &reading, governor)? {
                         readings.layouts += 1;
                     } else {
+                        if core::mem::take(&mut readings.first_uncharged) {
+                            governor.charge(Resource::Candidates, 1)?;
+                        }
                         governor.charge(Resource::Candidates, 1)?;
                     }
                     crate::contract::push_scratch(&mut readings.readings, reading, governor)?;
@@ -3724,6 +3743,16 @@ impl<'t> Builder<'t> {
                     )?;
                 }
                 TurnKind::Root => {}
+            }
+        }
+        if core::mem::take(&mut readings.first_uncharged) {
+            if readings.layouts == 0 {
+                governor.charge(Resource::Candidates, 1)?;
+            } else {
+                // Every other reading only moves the optional layout of the
+                // first: the choice is one invocation when recovery folds it,
+                // and the first is charged with them only when it does not.
+                readings.layouts += 1;
             }
         }
         governor.check()?;

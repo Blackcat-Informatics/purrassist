@@ -1358,9 +1358,13 @@ contested span that recover the same calls before it enumerates
 whole-message readings, so such spans add readings instead of multiplying
 them. A segmentation that only moves the optional layout a suppressed
 marker left (whitespace inside or beside a marker-suppressed call's frame)
-is no further segmentation when recovery folds it into one maximal framing:
-it is charged only when the fold keeps it, as under a strict tool choice, so
-canonical marker-suppressed markup resolves under `Exact`. The derivation is
+is no further segmentation when recovery folds it into one maximal framing.
+A contested span whose segmentations differ only in that layout is one
+invocation and charges no candidate; its segmentations are charged only when
+the fold keeps them, as under a strict tool choice. Canonical
+marker-suppressed calls therefore charge no candidate however many follow
+one another, and resolve under `Exact` within its work limit
+(`tool_call_recover::exact_effort_accepts_canonical_markup`). The derivation is
 saturating and deterministic; every other limit is
 the preset's, so repair search stays bounded by the effort, and readings
 that genuinely multiply (a call with many repeated parameters) still exhaust

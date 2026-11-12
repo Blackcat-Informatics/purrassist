@@ -4479,13 +4479,18 @@ impl Recovery<'_> {
             layouts,
         } = *proofs;
         let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
-        // Layout framings were admitted without a candidate. A choice that
+        // Layout framings were admitted without a candidate, and so was the
+        // first reading of a choice that holds nothing else. A choice that
         // folds to one option was one invocation; any other choice charges
-        // them now, as a further segmentation. A turn whose every choice is
+        // them now, as further segmentations. A turn whose every choice is
         // such a framing alone has one reading, as a turn without choices.
         let mut unfolded = layouts.iter().fold(0_u64, |total, &(_, count)| {
             total.saturating_add(size(count))
         });
+        // Recognition records the choices from the last to the first: the
+        // choices below are visited in the opposite order.
+        debug_assert!(layouts.windows(2).all(|pair| pair[0].0 > pair[1].0));
+        let mut pending = layouts.iter().rev().peekable();
         let mut contested = false;
         for (index, piece) in turn.pieces.iter().enumerate() {
             if let ResolvedPiece::Choice(choice) = piece {
@@ -4507,18 +4512,23 @@ impl Recovery<'_> {
                     &FailureChoice::new(failure_proofs, index, &choice.span, governor)?,
                     governor,
                 )?;
-                let framings = if layouts.is_empty() {
-                    0
-                } else {
-                    governor.charge(Resource::Work, size(layouts.len()))?;
-                    layouts
-                        .iter()
-                        .find(|&&(start, _)| start == choice.span.start)
-                        .map_or(0, |&(_, count)| count)
-                };
+                let mut framings = 0;
+                while let Some(&&(start, count)) = pending.peek() {
+                    governor.charge(Resource::Work, 1)?;
+                    if start > choice.span.start {
+                        break;
+                    }
+                    pending.next();
+                    if start == choice.span.start {
+                        framings = count;
+                        break;
+                    }
+                }
                 if framings > 0 && folds.len() == 1 {
                     unfolded = unfolded.saturating_sub(size(framings));
-                    contested |= framings + 1 < choice.readings.len();
+                    // A reading charged at admission is a segmentation of
+                    // its own: the product is charged as before.
+                    contested |= framings < choice.readings.len();
                 } else {
                     contested = true;
                 }

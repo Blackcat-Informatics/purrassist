@@ -1065,9 +1065,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:f9349faced392479323869e47e5dc56443e49f0308ea2d23a4418596199d4abb";
+    "sha256:7475b02f95aaa8cac27e5d26ccade3282ac89f441498d9357f7110b7106ade6d";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:52724df20a1d4248591faebed151c09c1656caa008dfef4e4cf8d4cefaf85b5b";
+    "sha256:22f3f8338ad2695b8057db4f73336be395ed8bfe336fb5c9e22bb2d92bead7bc";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:55a8da23f2eef1eaf5c112d6006ce801576cd7ba661998e84969334729c8def6";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
@@ -2739,9 +2739,81 @@ fn motivating_case_closers_only() {
 // The 1 MiB budget assertions (C4) live in `tool_call_cost.rs`
 // (`one_mib_argument_fits_published_budget`), with the published cost bound.
 
+/// Canonical markup resolves under the exact preset (one candidate). For a
+/// marker-suppressed dialect this includes many calls: the layout between
+/// two calls is either call framing or content, and a span whose readings
+/// differ only in that layout is one invocation once recovery folds it, so
+/// it charges no candidate however many calls follow one another
+/// (`docs/RESOURCES.md`, "Budgets for large outputs and busy turns").
 #[test]
 fn exact_effort_accepts_canonical_markup() {
     assert_anchor_fixtures_resolve(Effort::Exact, &DialectId::BUILT_IN, false);
+    let tools = compile([ToolDefinition::new("f").param("text", Param::string())]);
+    for separator in ["\n", "\n\n"] {
+        for count in [3, 8, 16] {
+            let output = (0..count)
+                .map(|index| format!(r#"{{"name":"f","arguments":{{"text":"c{index}"}}}}"#))
+                .collect::<Vec<_>>()
+                .join(separator);
+            let result = tools.recover(
+                output.as_bytes(),
+                &ToolRecoveryRequest::new(Effort::Exact),
+                &set(&[DialectId::HermesStripped]),
+            );
+            let Outcome::Resolved(calls) = &result.outcome else {
+                panic!(
+                    "{count} calls by {separator:?}: {:?}",
+                    result.receipt.stopped
+                )
+            };
+            assert_eq!(calls.calls.len(), count, "{separator:?}");
+            assert_eq!(result.receipt.usage.candidates, 0, "{count} {separator:?}");
+        }
+    }
+}
+
+/// The single maximal framing of a marker-suppressed call applies only
+/// without strict tool-choice constraints (`hermes-stripped.v1.md`): under
+/// a strict forced choice, the multiple-calls anchor keeps both framings of
+/// its first call as alternatives, each a charged candidate, while the
+/// same turn without the constraint is one reading that charges none.
+#[test]
+fn strict_tool_choice_keeps_layout_framings() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/tool-calls/conformance/hermes-stripped.v1/multiple-calls.json");
+    let document = json::parse(&std::fs::read_to_string(&path).expect("fixture")).expect("json");
+    let markup = string_member(&document, "markup").expect("markup");
+    let tools = ToolSet::from_openai(
+        &document.get("tools").expect("tools").to_json(),
+        Budget::default(),
+    )
+    .expect("fixture tools");
+    let dialects = set(&[DialectId::HermesStripped]);
+    let strict = ToolRecoveryRequest::new(Effort::Standard).tool_choice(ToolChoice::ForcedStrict(
+        StrictForced {
+            name: "f".into(),
+            exactly_one: false,
+            allow_content: false,
+            allow_reasoning: true,
+        },
+    ));
+    let result = tools.recover(markup.as_bytes(), &strict, &dialects);
+    let Outcome::Ambiguous(readings) = &result.outcome else {
+        panic!("{:#?}", result.outcome)
+    };
+    assert_eq!(readings.len(), 2);
+    // Two segmentations at admission, then the two whole readings.
+    assert_eq!(result.receipt.usage.candidates, 4);
+    let folded = tools.recover(
+        markup.as_bytes(),
+        &ToolRecoveryRequest::new(Effort::Standard),
+        &dialects,
+    );
+    assert!(
+        matches!(folded.outcome, Outcome::Resolved(_)),
+        "{folded:#?}"
+    );
+    assert_eq!(folded.receipt.usage.candidates, 0);
 }
 
 /// The default request allows every built-in dialect: under the exact
