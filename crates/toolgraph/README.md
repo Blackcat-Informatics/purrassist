@@ -6,9 +6,9 @@ Pure Rust validation for caller-owned tool-graph vocabulary, loss-profile and
 MCP context fragments and [AppArmor](https://apparmor.net/) glob words, with exact output byte bounds. No vocabulary
 namespace is supplied implicitly.
 
-This workspace crate is unpublished while its required upstream APIs use an
-exact Git revision. Facade/host integration and registry-resolvable packaging
-remain part of the complete graph-loader delivery. The existing release set
+This workspace crate is unpublished. It depends on the released `purrdf-core`
+and `purrdf-shapes` crates at exactly `=4`. Facade/host integration and
+registry-resolvable packaging remain part of the complete graph-loader delivery. The existing release set
 retains its registry-resolvable dependencies.
 
 Run the executable caller example with
@@ -58,9 +58,9 @@ and complete projection ledgers remain under #36 and #47. Tool-result byte limit
 remain the separate `OutputByteLimit` contract.
 
 The direct `plain_tool_schemas` example adopts the supported upstream profile of
-`purrdf_shapes::json_schema::compile_tool_arguments` at
-`742bbbfbe2240e1fc6f178badd049420753ef358` (`PurRDF` #788 / PR #806 and
-numeric prerequisite #885 / PR #888).
+`purrdf_shapes::json_schema::compile_tool_arguments` from the released
+`purrdf-shapes` 4 series (`PurRDF` #788 / PR #806 and numeric prerequisite
+#885 / PR #888).
 Run `cargo run -p purrassist-toolgraph --example plain_tool_schemas` to compile
 the four worked input/output schemas and validate bare instances and invalid
 neighbors with the full first-party core validator. Focused tests cover nested

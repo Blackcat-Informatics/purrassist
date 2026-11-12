@@ -4305,6 +4305,16 @@ struct Recovery<'a> {
     policies: Policies,
 }
 
+/// What recognition proved about a turn's choices, for [`Recovery::readings`].
+#[derive(Clone, Copy)]
+struct TurnProofs<'a> {
+    /// The failure-frame proofs of each choice.
+    failures: &'a FailureProofs,
+    /// Each choice start holding layout framings admitted without a
+    /// candidate, and their number (`RecognizedTurn::take_layouts`).
+    layouts: &'a [(usize, usize)],
+}
+
 impl Recovery<'_> {
     fn run(&self, governor: &mut Governor) -> Result<Done, StopReason> {
         let readings = self.recognized(governor)?;
@@ -4348,23 +4358,45 @@ impl Recovery<'_> {
         let mut recognizer =
             Recognizer::with_tools(self.dialects, self.tools, self.request.reasoning, governor)?;
         recognizer.push(self.output, governor)?;
-        let mut turn =
-            recognizer.finish_over(self.request.stop.clone(), Some(self.output), governor)?;
+        // Only a marker-suppressed grammar leaves layout that can be either
+        // call framing or content.
+        let projected = self
+            .dialects
+            .dialects()
+            .iter()
+            .any(|dialect| dialect.grammar().is_derived());
+        let mut turn = recognizer.finish_over(
+            self.request.stop.clone(),
+            Some(self.output),
+            projected && self.folds_layout(),
+            governor,
+        )?;
         let resolved = resolve_forest(self.tools, &turn, &self.policies, governor)?;
         let attempted = turn.rejected_attempts().to_vec();
         let failure_proofs = turn.take_failure_proofs(governor);
+        let layouts = turn.take_layouts(governor);
         failure_proofs.validate(&resolved, governor)?;
         drop(turn);
         let readings = self.readings(
             &resolved,
             &encoding,
             &attempted,
-            &failure_proofs,
+            &TurnProofs {
+                failures: &failure_proofs,
+                layouts: &layouts,
+            },
             forced.as_deref(),
             governor,
         )?;
         drop(resolved);
         Ok(readings)
+    }
+
+    /// Whether equivalent optional-layout framings of a marker-suppressed
+    /// invocation fold into one ([`fold_options`]): strict tool-choice
+    /// constraints retain them as alternatives.
+    const fn folds_layout(&self) -> bool {
+        !matches!(self.request.tool_choice, ToolChoice::ForcedStrict(_))
     }
 
     /// The `tool_call.input.invalid-utf8` losses of the output.
@@ -4438,11 +4470,28 @@ impl Recovery<'_> {
         turn: &ResolvedTurn,
         encoding: &CallLedger,
         attempted: &[(usize, DialectId)],
-        failure_proofs: &FailureProofs,
+        proofs: &TurnProofs<'_>,
         forced: Option<&str>,
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
+        let TurnProofs {
+            failures: failure_proofs,
+            layouts,
+        } = *proofs;
         let mut choices: Vec<Vec<Fold<'_>>> = Vec::new();
+        // Layout framings were admitted without a candidate, and so was the
+        // first reading of a choice that holds nothing else. A choice that
+        // folds to one option was one invocation; any other choice charges
+        // them now, as further segmentations. A turn whose every choice is
+        // such a framing alone has one reading, as a turn without choices.
+        let mut unfolded = layouts.iter().fold(0_u64, |total, &(_, count)| {
+            total.saturating_add(size(count))
+        });
+        // Recognition records the choices from the last to the first: the
+        // choices below are visited in the opposite order.
+        debug_assert!(layouts.windows(2).all(|pair| pair[0].0 > pair[1].0));
+        let mut pending = layouts.iter().rev().peekable();
+        let mut contested = false;
         for (index, piece) in turn.pieces.iter().enumerate() {
             if let ResolvedPiece::Choice(choice) = piece {
                 let next = match turn.pieces.get(index + 1) {
@@ -4455,17 +4504,41 @@ impl Recovery<'_> {
                     Some(ResolvedPiece::Segment(ResolvedSegment::Call(call))) => Some(&**call),
                     _ => None,
                 };
-                choices.push(fold_options(
+                let folds = fold_options(
                     &choice.readings,
                     self.output,
                     following,
-                    !matches!(self.request.tool_choice, ToolChoice::ForcedStrict(_)),
+                    self.folds_layout(),
                     &FailureChoice::new(failure_proofs, index, &choice.span, governor)?,
                     governor,
-                )?);
+                )?;
+                let mut framings = 0;
+                while let Some(&&(start, count)) = pending.peek() {
+                    governor.charge(Resource::Work, 1)?;
+                    if start > choice.span.start {
+                        break;
+                    }
+                    pending.next();
+                    if start == choice.span.start {
+                        framings = count;
+                        break;
+                    }
+                }
+                if framings > 0 && folds.len() == 1 {
+                    unfolded = unfolded.saturating_sub(size(framings));
+                    // A reading charged at admission is a segmentation of
+                    // its own: the product is charged as before.
+                    contested |= framings < choice.readings.len();
+                } else {
+                    contested = true;
+                }
+                choices.push(folds);
             }
         }
-        if !choices.is_empty() {
+        if unfolded > 0 {
+            governor.charge(Resource::Candidates, unfolded)?;
+        }
+        if contested {
             // Every reading is admitted before any is built: a product over
             // the budget is exhaustion, never a truncated list.
             let product = choices.iter().fold(1_u64, |product, folds| {

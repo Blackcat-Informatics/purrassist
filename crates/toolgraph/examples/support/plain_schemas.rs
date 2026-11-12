@@ -9,7 +9,7 @@
 //! Source/profile preparation is caller-owned; there is no graph loader here.
 
 use purrdf_shapes::json_schema::{
-    Namespaces, ToolArgumentProfile, ToolFieldBinding, ToolSchemaLimits,
+    NamespaceError, Namespaces, ToolArgumentProfile, ToolFieldBinding, ToolSchemaLimits,
 };
 
 pub(crate) const PREFIXES: &str = r"
@@ -37,7 +37,7 @@ pub(crate) const LIMITS: ToolSchemaLimits = ToolSchemaLimits {
     nodes: 1_000_000,
 };
 
-pub(crate) fn namespaces() -> Result<Namespaces, String> {
+pub(crate) fn namespaces() -> Result<Namespaces, NamespaceError> {
     Namespaces::new("ex", &[("ex".into(), "https://example.org/tools/".into())])
 }
 

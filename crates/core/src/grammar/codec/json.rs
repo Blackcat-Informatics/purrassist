@@ -317,7 +317,7 @@ impl Codec for JsonCodec {
         context: CodecContext<'_>,
         governor: &mut Governor,
     ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
-        let (decoded, invalid) = self.decode(end, governor)?;
+        let (decoded, invalid, retained) = self.decode(end, governor)?;
         let (mut tree, mut edits) = match decoded {
             Decoded::Fault(fault) => (ArgTree::unresolved(fault, span.clone()), Vec::new()),
             Decoded::Value { node, edits, .. } => {
@@ -333,6 +333,10 @@ impl Codec for JsonCodec {
             edits.sort_by_key(|edit| (edit.span.start, edit.span.end));
         }
         tree.tool = context.shape.map(|shape| shape.tool.clone());
+        // The parser's charge for the value's storage and the tree's own
+        // charge (below) account the same memory, which the tree now owns:
+        // hold it once.
+        governor.release_scratch(retained)?;
         value(tree, edits, governor)
     }
 }
@@ -441,12 +445,14 @@ impl JsonCodec {
     /// ended as `end` says.
     ///
     /// Also returns the malformed UTF-8 runs read as U+FFFD (a final
-    /// character cut off by a length stop is dropped, not replaced).
+    /// character cut off by a length stop is dropped, not replaced), and the
+    /// scratch the parser still holds for the value's storage (see
+    /// [`IncrementalRecovery::finish_retained`]).
     fn decode(
         mut self,
         end: CodecEnd,
         governor: &mut Governor,
-    ) -> Result<(Decoded, Vec<InvalidRun>), StopReason> {
+    ) -> Result<(Decoded, Vec<InvalidRun>, u64), StopReason> {
         if !self.stalled
             && let Some(at) = self.utf8.malformed(end)
         {
@@ -454,30 +460,37 @@ impl JsonCodec {
             self.replace(at, held, governor)?;
         }
         let invalid = core::mem::take(&mut self.invalid);
-        Ok((self.decode_value(governor)?, invalid))
+        let (decoded, retained) = self.decode_value(governor)?;
+        Ok((decoded, invalid, retained))
     }
 
-    fn decode_value(self, governor: &mut Governor) -> Result<Decoded, StopReason> {
+    fn decode_value(self, governor: &mut Governor) -> Result<(Decoded, u64), StopReason> {
         if let Some(fault) = self.fault {
-            return Ok(Decoded::Fault(fault));
+            return Ok((Decoded::Fault(fault), 0));
         }
         let before = self.parser.edit_count();
         let stop = self.parser.position();
         let fault_at = self.parser.fault_at();
-        match self.parser.finish(governor) {
-            Ok((node, _, edits)) => {
+        match self.parser.finish_retained(governor) {
+            Ok((node, _, edits, retained)) => {
                 let incomplete = edits[before..]
                     .iter()
                     .any(|edit| edit.rule != "json.syntax.comment");
-                Ok(Decoded::Value {
-                    node,
-                    edits,
-                    incomplete,
-                })
+                Ok((
+                    Decoded::Value {
+                        node,
+                        edits,
+                        incomplete,
+                    },
+                    retained,
+                ))
             }
-            Err(StopReason::InvalidInput(_)) => Ok(Decoded::Fault(ArgumentFault::InvalidJson {
-                at: fault_at.unwrap_or(stop),
-            })),
+            Err(StopReason::InvalidInput(_)) => Ok((
+                Decoded::Fault(ArgumentFault::InvalidJson {
+                    at: fault_at.unwrap_or(stop),
+                }),
+                0,
+            )),
             Err(reason) => Err(reason),
         }
     }
@@ -506,7 +519,7 @@ impl JsonCodec {
         } else {
             end
         };
-        let (decoded, invalid) = codec.decode(end, governor)?;
+        let (decoded, invalid, _) = codec.decode(end, governor)?;
         let edits = invalid_edits(&invalid, bytes, at, governor)?;
         Ok((decoded, stop, edits))
     }

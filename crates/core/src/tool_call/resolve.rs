@@ -1494,7 +1494,9 @@ impl<'a> Resolver<'a> {
                 blocker: Some(blocker),
             }
         };
-        governor.charge(Resource::ScratchBytes, raw.arguments.root.estimated_bytes())?;
+        // A reading that stays unresolved copies the arguments (`unresolved`
+        // above); each such copy is charged where it is made.
+        let copied = raw.arguments.root.estimated_bytes();
         let exact = raw
             .name
             .as_ref()
@@ -1514,7 +1516,7 @@ impl<'a> Resolver<'a> {
                 String::new(),
                 governor,
             )?;
-            governor.charge(Resource::ScratchBytes, READING_BYTES)?;
+            governor.charge(Resource::ScratchBytes, READING_BYTES.saturating_add(copied))?;
             return Ok(vec![unresolved(UnresolvedReason::Truncated, exact, ledger)]);
         }
         let incomplete = (raw.closure == Closure::Unterminated)
@@ -1548,6 +1550,7 @@ impl<'a> Resolver<'a> {
             )?;
             let (tool, change) = match target {
                 Target::Blocked(reason) => {
+                    governor.charge(Resource::ScratchBytes, copied)?;
                     readings.push(unresolved(early.clone().unwrap_or(reason), None, ledger));
                     continue;
                 }
@@ -1559,6 +1562,7 @@ impl<'a> Resolver<'a> {
                 ledger.record(rule, evidence, String::new(), value, governor)?;
             }
             if let Some(reason) = early.clone() {
+                governor.charge(Resource::ScratchBytes, copied)?;
                 let mut reading = unresolved(reason, Some(tool), ledger);
                 reading.cost = cost;
                 readings.push(reading);
