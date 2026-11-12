@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 172,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/172-pin-the-released-purrdf-crates-at-4",
+  "branch": "paudley/172-pin-the-released-purrdf-crates-at-4",
+  "slug": "pin-the-released-purrdf-crates-at-4",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/172-pin-the-released-purrdf-crates-at-4/.stage/pin-the-released-purrdf-crates-at-4",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "ffee73d4dde2d02c77569a41a2e3c85a341b1025",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/172-pin-the-released-purrdf-crates-at-4",
+    "branch:paudley/172-pin-the-released-purrdf-crates-at-4",
+    "ignored:3 files (3 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer caches into /home/paudley/Active/purrassist/.worktrees/172-pin-the-released-purrdf-crates-at-4 plus 0 dependency units from 0 other checkouts in 0.9s; 2118 unchanged files keep their built mtimes; 44 other files take the seed time and rebuild; 0 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/172-pin-the-released-purrdf-crates-at-4/.stage/pin-the-released-purrdf-crates-at-4",
+    "issue:/home/paudley/Active/purrassist/.worktrees/172-pin-the-released-purrdf-crates-at-4/.stage/pin-the-released-purrdf-crates-at-4/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-11T18:02:01-0600",
+  "seed_error": ""
+}

@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "purrdf 4.0.1 is released on crates.io, and gmeow-ontology now pins the registry purrdf crates at \"=4\" (main `7a9e9fc173`, #2672). rust-agentic-foundations is making the same move.\n\npurrassist main (`ffee73d4`) still depends on purrdf-core and purrdf-shapes by git at `742bbbfbe` (3.x), and open PR #171 moves them to git `511f8af`, not to the release.\n\nRequest: depend on the registry purrdf crates at \"=4\" (lock resolving 4.0.1), with no git source for purrdf, so that downstream workspaces that also use gmeow-ontology resolve a single purrdf major.\n\nAcceptance: `cargo tree -d` in a consumer using purrassist-core together with gmeow-ontology at \"=4\" shows no purrdf 3, and purrassist's own checks pass on 4.0.1.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-08T23:52:31Z",
+  "labels": [],
+  "milestone": null,
+  "number": 172,
+  "state": "OPEN",
+  "title": "Pin the released purrdf crates at \"=4\"",
+  "updatedAt": "2026-11-08T23:52:31Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/172"
+}
