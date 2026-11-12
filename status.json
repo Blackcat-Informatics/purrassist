@@ -1,0 +1,168 @@
+{
+  "issue": 175,
+  "pr_number": 176,
+  "branch": "paudley/175-repair-the-red-verify-run-on-main-at",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at",
+  "observed_at": "2026-11-12T04:19:58.178363+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_fail",
+      "message": "CI state is fail"
+    }
+  ],
+  "unavailable": [
+    {
+      "source": "ci_logs",
+      "reason": "one or more failed-job logs unavailable; see inventory"
+    }
+  ],
+  "next_actions": [
+    "Inspect saved failed-job excerpts"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "ffee73d4dde2d02c77569a41a2e3c85a341b1025",
+    "headRefName": "paudley/175-repair-the-red-verify-run-on-main-at",
+    "headRefOid": "2b2657d67615c7eaec7c2bb6fb2e0e7d286399cd",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 176,
+    "state": "OPEN",
+    "title": "Restore the published recovery work cost after the stripped dialects",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/176"
+  },
+  "checks": {
+    "state": "fail",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896898",
+        "name": "native (ubuntu-24.04)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896550",
+        "name": "release-gate",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896575",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896585",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896614",
+        "name": "corpus",
+        "state": "FAILURE"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896286",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896527",
+        "name": "qualification",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896631",
+        "name": "native (macos-14)",
+        "state": "CANCELLED"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "2b2657d67615c7eaec7c2bb6fb2e0e7d286399cd",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "2b2657d67615c7eaec7c2bb6fb2e0e7d286399cd",
+    "branch": "paudley/175-repair-the-red-verify-run-on-main-at",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 176,
+    "jobs": [
+      {
+        "name": "corpus",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896614",
+        "path": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/ci-logs/github-job-130964896614.log",
+        "excerpt": [
+          "170: 2026-11-12T04:07:51.5834683Z ",
+          "171: 2026-11-12T04:07:51.5834892Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.87s",
+          "172: 2026-11-12T04:07:51.5835177Z ",
+          "173: 2026-11-12T04:07:51.5912120Z      Running tests/corruption_oracle.rs (target/debug/build/purrassist-core/53e853f76407305f/out/corruption_oracle-53e853f76407305f)",
+          "177: 2026-11-12T04:07:51.7171601Z ",
+          "178: 2026-11-12T04:07:51.7171816Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+          "179: 2026-11-12T04:07:51.7172091Z ",
+          "180: 2026-11-12T04:07:51.7176098Z      Running tests/markdown_corpus.rs (target/debug/build/purrassist-core/83b22452cb911fef/out/markdown_corpus-83b22452cb911fef)",
+          "186: 2026-11-12T04:07:51.7305358Z ",
+          "187: 2026-11-12T04:07:51.7305665Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "188: 2026-11-12T04:07:51.7306101Z ",
+          "189: 2026-11-12T04:07:51.7308719Z      Running tests/matching_oracle.rs (target/debug/build/purrassist-core/8319d771219606ba/out/matching_oracle-8319d771219606ba)",
+          "196: 2026-11-12T04:07:52.3003227Z ",
+          "197: 2026-11-12T04:07:52.3003582Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s",
+          "198: 2026-11-12T04:07:52.3003968Z ",
+          "199: 2026-11-12T04:07:52.3006229Z      Running tests/pattern_corpus.rs (target/debug/build/purrassist-core/8ce4f49095c35fb7/out/pattern_corpus-8ce4f49095c35fb7)",
+          "206: 2026-11-12T04:09:08.6105009Z ",
+          "207: 2026-11-12T04:09:08.6105412Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 76.31s",
+          "208: 2026-11-12T04:09:08.6105860Z ",
+          "209: 2026-11-12T04:09:08.6132037Z      Running tests/schema_conformance.rs (target/debug/build/purrassist-core/c26c0a2f9eaef859/out/schema_conformance-c26c0a2f9eaef859)",
+          "217: 2026-11-12T04:09:08.7031756Z ",
+          "218: 2026-11-12T04:09:08.7032081Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+          "219: 2026-11-12T04:09:08.7032502Z ",
+          "220: 2026-11-12T04:09:08.7036108Z      Running tests/tool_call_scale.rs (target/debug/build/purrassist-core/4e7bce20378b4209/out/tool_call_scale-4e7bce20378b4209)",
+          "226: 2026-11-12T04:10:08.7120411Z test one_mib_dense_markup_fits_published_budget has been running for over 60 seconds",
+          "227: 2026-11-12T04:10:21.4336570Z test one_mib_dense_markup_fits_published_budget ... FAILED",
+          "228: 2026-11-12T04:10:24.1326122Z test one_mib_argument_work_bound ... ok",
+          "229: 2026-11-12T04:10:29.6535512Z test one_mib_argument_fits_published_budget ... FAILED",
+          "230: 2026-11-12T04:10:29.6535939Z ",
+          "231: 2026-11-12T04:10:29.6536160Z failures:",
+          "(6 further error matches; see saved log)"
+        ]
+      },
+      {
+        "name": "native (macos-14)",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896631",
+        "path": "/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/ci-logs/github-job-130964896631.log",
+        "error": "Log download failed (exit 1): gh: HTTP 404\n"
+      }
+    ],
+    "ok": false,
+    "summary": "# PR #176 failed CI logs\n\n## corpus\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896614\n\n/home/paudley/Active/purrassist/.worktrees/175-repair-the-red-verify-run-on-main-at/.stage/repair-the-red-verify-run-on-main-at/ci-logs/github-job-130964896614.log\n170: 2026-11-12T04:07:51.5834683Z \n171: 2026-11-12T04:07:51.5834892Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.87s\n172: 2026-11-12T04:07:51.5835177Z \n173: 2026-11-12T04:07:51.5912120Z      Running tests/corruption_oracle.rs (target/debug/build/purrassist-core/53e853f76407305f/out/corruption_oracle-53e853f76407305f)\n177: 2026-11-12T04:07:51.7171601Z \n178: 2026-11-12T04:07:51.7171816Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s\n179: 2026-11-12T04:07:51.7172091Z \n180: 2026-11-12T04:07:51.7176098Z      Running tests/markdown_corpus.rs (target/debug/build/purrassist-core/83b22452cb911fef/out/markdown_corpus-83b22452cb911fef)\n186: 2026-11-12T04:07:51.7305358Z \n187: 2026-11-12T04:07:51.7305665Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n188: 2026-11-12T04:07:51.7306101Z \n189: 2026-11-12T04:07:51.7308719Z      Running tests/matching_oracle.rs (target/debug/build/purrassist-core/8319d771219606ba/out/matching_oracle-8319d771219606ba)\n196: 2026-11-12T04:07:52.3003227Z \n197: 2026-11-12T04:07:52.3003582Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s\n198: 2026-11-12T04:07:52.3003968Z \n199: 2026-11-12T04:07:52.3006229Z      Running tests/pattern_corpus.rs (target/debug/build/purrassist-core/8ce4f49095c35fb7/out/pattern_corpus-8ce4f49095c35fb7)\n206: 2026-11-12T04:09:08.6105009Z \n207: 2026-11-12T04:09:08.6105412Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 76.31s\n208: 2026-11-12T04:09:08.6105860Z \n209: 2026-11-12T04:09:08.6132037Z      Running tests/schema_conformance.rs (target/debug/build/purrassist-core/c26c0a2f9eaef859/out/schema_conformance-c26c0a2f9eaef859)\n217: 2026-11-12T04:09:08.7031756Z \n218: 2026-11-12T04:09:08.7032081Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s\n219: 2026-11-12T04:09:08.7032502Z \n220: 2026-11-12T04:09:08.7036108Z      Running tests/tool_call_scale.rs (target/debug/build/purrassist-core/4e7bce20378b4209/out/tool_call_scale-4e7bce20378b4209)\n226: 2026-11-12T04:10:08.7120411Z test one_mib_dense_markup_fits_published_budget has been running for over 60 seconds\n227: 2026-11-12T04:10:21.4336570Z test one_mib_dense_markup_fits_published_budget ... FAILED\n228: 2026-11-12T04:10:24.1326122Z test one_mib_argument_work_bound ... ok\n229: 2026-11-12T04:10:29.6535512Z test one_mib_argument_fits_published_budget ... FAILED\n230: 2026-11-12T04:10:29.6535939Z \n231: 2026-11-12T04:10:29.6536160Z failures:\n(6 further error matches; see saved log)\n\n## native (macos-14)\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/43152543449/job/130964896631\n\nLOG UNAVAILABLE: Log download failed (exit 1): gh: HTTP 404\n\n\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}
