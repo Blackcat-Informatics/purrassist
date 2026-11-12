@@ -8,38 +8,40 @@ edit distances, phonetics, recovery search, and receipts are first-party Rust.
 
 The unpublished `purrassist-toolgraph` foundation uses `purrdf-core` for native
 IRI validation and the shared loss registry, and `purrdf-shapes` for its shared
-namespace table, FnO reader and public plain argument-schema compiler. Both use
-exact Git revision `742bbbfbe2240e1fc6f178badd049420753ef358` of the public
-PurRDF repository. This retains the plain profile from upstream issue #788 / PR
-#806 and adopts numeric projection from upstream issue #885 / merged PR #888.
-Default and all-feature metadata at adoption contain the same 99 package
-identities as the previous pin: all 19 PurRDF Git packages change source
-revision, with no registry package/version or core dependency drift. The
-registered name/version baseline therefore stays unchanged. License notices
-remain byte-identical; their existing `purrdf-2ed9845` storage paths are retained,
-while each package's source registration identifies the adopted revision.
+namespace table, FnO reader and public plain argument-schema compiler. Both are
+registry dependencies pinned exactly at `=4` in the workspace manifest; the
+lock resolves 4.0.2. No Git source or `[patch]` entry remains, so a workspace
+that also depends on another crate pinned at `=4` resolves a single PurRDF major.
+The move from the earlier Git revision replaces the 19 PurRDF Git packages with
+20 registry packages: `purrdf-zstd` is new and replaces the registry
+`structured-zstd`, `visual-hashing`, `fastrand` and `once_cell` packages.
+`wasm-bindgen` and its three companion crates move from 0.2.129 to 0.2.130. The
+registered name/version baseline and `vendor/dependencies.json` record exactly
+this change. The license texts retained under `vendor/licenses/purrdf-4.0.2/` are
+byte-identical copies of the grants published inside the 4.0.2 crates; the
+crates' own NOTICE and CC-BY-4.0 files are not retained.
 The numeric compiler shares upstream's exact XSD arithmetic and records the
 original SHACL representability check for unrestricted IEEE domains; it adds no
 dependency to the core.
-The graph crate's resolved all-target normal/build closure contains 19 PurRDF
-packages, 53 registry packages and the first-party core. This revision update
-adds no package identity to the workspace inventory. Every resolved
+The graph crate's resolved all-target normal/build closure contains the 20 PurRDF
+packages, registry packages and the first-party core. Every resolved
 package and its shortest dependency path is registered in
 `vendor/dependencies.json` and `scripts/data/dependency-baseline.json`, with
 byte-preserved license notices under `vendor/licenses/`.
 
-The three PurRDF first-party grants are retained alongside Unicode-3.0 notices
-for embedded Unicode data. The lexical crate additionally retains the original
-libyaml/unsafe-libyaml MIT and WHATWG BSD notices for its incorporated emitter
-rules and character-reference data. `r-efi`'s `AUTHORS` file contains its original
+The three PurRDF first-party grants are retained alongside each crate's own
+third-party notices: Unicode-3.0 for embedded Unicode data, the inherited
+hashbrown, libyaml/unsafe-libyaml, WHATWG, W3C, ICU and structured-zstd notices,
+and the CC-BY-4.0 word-list grant, as listed in each published crate's
+`licenses/inventory.json`. `r-efi`'s `AUTHORS` file contains its original
 MIT permission and copyright notice and is retained verbatim. These inherited
 notices are not replaced by the local first-party licenses.
 
-The graph crate stays outside the publishable release set until upstream's
-registry source contains the required APIs and packaging is qualified. The
-six existing release packages do not yet link it. The loader delivery retains
-facade/host integration and registry-resolvable packaging acceptance; no registry
-release or publication is claimed by Git-pinned workspace compilation.
+The graph crate stays outside the publishable release set until packaging is
+qualified. The six existing release packages do not yet link it. The loader
+delivery retains facade/host integration and registry-resolvable packaging
+acceptance; no registry release or publication is claimed by workspace
+compilation.
 
 `purrassist-derive`, the procedural-macro crate behind
 `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`, also has no third-party

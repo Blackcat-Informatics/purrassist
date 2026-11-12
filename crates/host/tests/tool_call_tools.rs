@@ -155,7 +155,9 @@ fn busy_turn_resolves_every_call_by_default() {
         actual
             .pointer("/receipt/budget/candidates")
             .map(Node::to_json),
-        Some((128 + 16 * 576).to_string())
+        // 448 native openers plus 128 line-start name openers of the derived
+        // marker-suppressed dialects (see `busy_turn_resolves_every_call_under_sized`).
+        Some((128 + 16 * (448 + 2 * 64)).to_string())
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1151,6 +1153,7 @@ fn gemma_and_unparsed_markup_over_mcp() {
     let rejected = node
         .pointer("/value/rejected/0")
         .expect("a rejected attempt");
+    // The detected family has one built-in dialect (`MarkupFamily::dialect`).
     assert_eq!(
         rejected.get("dialect").map(Node::to_json).as_deref(),
         Some("\"kimi-k2-stripped.v1\"")

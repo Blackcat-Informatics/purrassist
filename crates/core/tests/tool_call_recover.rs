@@ -1358,9 +1358,9 @@ fn deterministic_pinned_digest() {
 }
 
 const PINNED_DIGEST: &str =
-    "sha256:172f515ff8fef9fb47835033ce1dd4085c4b1840ecc3bfebfb32efec68635c01";
+    "sha256:8b2ce8b5352d3a48e02b0621569704f4f78c3424869daf21570a7fce9fb26b9b";
 const PINNED_PREFIX_DIGEST: &str =
-    "sha256:9fa2545e6ef7e38be2410c7dc30f243c5058a52b39c887a31df4f3fd4fc87af0";
+    "sha256:cc13ceafb9b57658a2d0a20d75ab0b8f5ace62c30fefb9b6e09a57128c990729";
 const PINNED_AMBIGUOUS_DIGEST: &str =
     "sha256:cce5686deea98b64a30fc8267c02346ac125c0cd1e9f2d55b85bf75166952400";
 const PINNED_PREFIX_AMBIGUOUS_DIGEST: &str =
@@ -3037,9 +3037,81 @@ fn motivating_case_closers_only() {
 // The 1 MiB budget assertions (C4) live in `tool_call_cost.rs`
 // (`one_mib_argument_fits_published_budget`), with the published cost bound.
 
+/// Canonical markup resolves under the exact preset (one candidate). For a
+/// marker-suppressed dialect this includes many calls: the layout between
+/// two calls is either call framing or content, and a span whose readings
+/// differ only in that layout is one invocation once recovery folds it, so
+/// it charges no candidate however many calls follow one another
+/// (`docs/RESOURCES.md`, "Budgets for large outputs and busy turns").
 #[test]
 fn exact_effort_accepts_canonical_markup() {
     assert_anchor_fixtures_resolve(Effort::Exact, &DialectId::BUILT_IN, false);
+    let tools = compile([ToolDefinition::new("f").param("text", Param::string())]);
+    for separator in ["\n", "\n\n"] {
+        for count in [3, 8, 16] {
+            let output = (0..count)
+                .map(|index| format!(r#"{{"name":"f","arguments":{{"text":"c{index}"}}}}"#))
+                .collect::<Vec<_>>()
+                .join(separator);
+            let result = tools.recover(
+                output.as_bytes(),
+                &ToolRecoveryRequest::new(Effort::Exact),
+                &set(&[DialectId::HermesStripped]),
+            );
+            let Outcome::Resolved(calls) = &result.outcome else {
+                panic!(
+                    "{count} calls by {separator:?}: {:?}",
+                    result.receipt.stopped
+                )
+            };
+            assert_eq!(calls.calls.len(), count, "{separator:?}");
+            assert_eq!(result.receipt.usage.candidates, 0, "{count} {separator:?}");
+        }
+    }
+}
+
+/// The single maximal framing of a marker-suppressed call applies only
+/// without strict tool-choice constraints (`hermes-stripped.v1.md`): under
+/// a strict forced choice, the multiple-calls anchor keeps both framings of
+/// its first call as alternatives, each a charged candidate, while the
+/// same turn without the constraint is one reading that charges none.
+#[test]
+fn strict_tool_choice_keeps_layout_framings() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/tool-calls/conformance/hermes-stripped.v1/multiple-calls.json");
+    let document = json::parse(&std::fs::read_to_string(&path).expect("fixture")).expect("json");
+    let markup = string_member(&document, "markup").expect("markup");
+    let tools = ToolSet::from_openai(
+        &document.get("tools").expect("tools").to_json(),
+        Budget::default(),
+    )
+    .expect("fixture tools");
+    let dialects = set(&[DialectId::HermesStripped]);
+    let strict = ToolRecoveryRequest::new(Effort::Standard).tool_choice(ToolChoice::ForcedStrict(
+        StrictForced {
+            name: "f".into(),
+            exactly_one: false,
+            allow_content: false,
+            allow_reasoning: true,
+        },
+    ));
+    let result = tools.recover(markup.as_bytes(), &strict, &dialects);
+    let Outcome::Ambiguous(readings) = &result.outcome else {
+        panic!("{:#?}", result.outcome)
+    };
+    assert_eq!(readings.len(), 2);
+    // Two segmentations at admission, then the two whole readings.
+    assert_eq!(result.receipt.usage.candidates, 4);
+    let folded = tools.recover(
+        markup.as_bytes(),
+        &ToolRecoveryRequest::new(Effort::Standard),
+        &dialects,
+    );
+    assert!(
+        matches!(folded.outcome, Outcome::Resolved(_)),
+        "{folded:#?}"
+    );
+    assert_eq!(folded.receipt.usage.candidates, 0);
 }
 
 /// The default request allows every built-in dialect: under the exact
@@ -3392,6 +3464,85 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
             assert_eq!(calls.content[0], at..input.len(), "{input:?}");
         }
     }
+}
+
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`): a Pythonic call
+/// whose arguments fault and run on to the end of the output with no `)`
+/// fails where the value stopped decoding (F4). The string closes at 52; the
+/// fault is the bare `a` at 53. Its bytes after the fault, which hold the
+/// next call and the list's `]` as text of an unclosed string, are not shown
+/// to be its markup and stay content.
+#[test]
+fn pythonic_arguments_faulting_at_the_end_of_output_do_not_swallow_what_follows() {
+    let tools = ToolSet::compile(
+        [
+            ToolDefinition::new("read_file")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string()),
+            ToolDefinition::new("list_dir")
+                .effects(Effects::ReadOnly)
+                .param("path", Param::string()),
+        ],
+        Budget::default(),
+    )
+    .expect("tools");
+    let input =
+        "[read_file(path=\"a\"), list_dir(path=\".ead_file(path=\"a\"), list_dir(path=\".\")]";
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+        panic!("one reading expected");
+    };
+    assert_eq!(calls.rejected.len(), 1);
+    let rejected = &calls.rejected[0];
+    assert_eq!(rejected.reason, Rejection::Malformed { at: 53 });
+    assert_eq!(rejected.span, 22..53);
+    assert_eq!(calls.content.len(), 1);
+    assert_eq!(calls.content[0], 53..input.len());
+}
+
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`): a rejected result
+/// attempt fails at most one literal spelling past its span's end, and the
+/// literals of a dialect's result production are among the spellings
+/// `call_literals` lists. Here the Mistral v11 result's content stops at a
+/// second `[TOOL_CONTENT]`, where its `[/TOOL_RESULTS]` closer is due: the
+/// closer matches its `[` and fails one byte in, past the span's end.
+#[test]
+fn rejected_result_fails_within_the_literals_the_dialect_lists() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("read_file")
+            .effects(Effects::ReadOnly)
+            .param("path", Param::string())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let input = "[TOOL_RESULTS]a1B2c3D4e[TOOL_CONTENT]e[TOOL_CONTENT]ok[/TOOL_RESULTS]]]";
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+        panic!("one reading expected");
+    };
+    let mut checked = 0;
+    for rejected in &calls.rejected {
+        let (Rejection::Malformed { at }, Some(dialect)) = (rejected.reason, &rejected.dialect)
+        else {
+            continue;
+        };
+        let longest = dialect.grammar().call_literals()[0].len();
+        assert!(
+            at <= rejected.span.end + longest,
+            "{:?} fails at {at}, past the {longest}-byte literals of {dialect:?}",
+            rejected.span
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "a result attempt is rejected");
 }
 
 /// S3: a call recovered inside a broken wrapper is kept, and the wrapper's

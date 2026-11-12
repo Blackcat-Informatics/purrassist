@@ -11,7 +11,7 @@ pub use profile::{
 use std::fmt;
 
 use purrdf_core::{loss::LossProfile, parse_iri, terminals};
-use purrdf_shapes::json_schema::Namespaces;
+use purrdf_shapes::json_schema::{NamespaceError, Namespaces};
 
 /// Complete versioned term set from the tool-graph vocabulary.
 ///
@@ -181,7 +181,7 @@ pub enum VocabularyError {
         code: &'static str,
     },
     /// Upstream namespace construction refused an already checked table.
-    NamespaceConstruction(String),
+    NamespaceConstruction(NamespaceError),
 }
 
 impl fmt::Display for VocabularyError {
@@ -202,7 +202,14 @@ impl fmt::Display for VocabularyError {
     }
 }
 
-impl std::error::Error for VocabularyError {}
+impl std::error::Error for VocabularyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NamespaceConstruction(cause) => Some(cause),
+            _ => None,
+        }
+    }
+}
 
 /// A validated complete caller-owned vocabulary, with one shared namespace table.
 ///

@@ -821,3 +821,37 @@ fn harmony_complete_calls_rank_before_preserved_lossy_tail_alternatives() {
         "lossy competitor keeps source, ledger and higher rank cost: {result:?}"
     );
 }
+
+/// Scratch stays balanced for repeated marker-suppressed calls: a turn cut by
+/// a length stop, whose calls a stripped dialect reads without markers,
+/// materializes its parts without releasing scratch it never retained. The
+/// materialization window once counted transient charges as retained and
+/// released them, which ended recovery with an unbalanced scratch reservation
+/// as soon as no leaked slot charge covered the difference.
+#[test]
+fn length_stop_over_repeated_stripped_calls_keeps_scratch_balanced() {
+    let tools = ToolSet::from_openai(
+        r#"[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"text":{"type":"string"}}}}},{"type":"function","function":{"name":"g","parameters":{"type":"object","properties":{"text":{"type":"string"}}}}}]"#,
+        Budget::default(),
+    )
+    .expect("tools");
+    let input = "Sure.\nf{\"text\":\"first\"}\ng{\"text\":\"second\"}\nDone.";
+    let set = set([DialectId::MistralV11Stripped]);
+    let request =
+        ToolRecoveryRequest::sized_for(purrassist_core::Effort::Standard, input.as_bytes(), &set)
+            .stop(GenerationStop::Length);
+    let result = tools.recover(input.as_bytes(), &request, &set);
+    assert_eq!(
+        result.receipt.stopped,
+        purrassist_core::StopReason::Completed
+    );
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
+        panic!("{:?}", result.outcome)
+    };
+    let names: Vec<_> = calls
+        .calls
+        .iter()
+        .map(|call| call.tool.as_deref())
+        .collect();
+    assert_eq!(names, [Some("f"), Some("g")]);
+}

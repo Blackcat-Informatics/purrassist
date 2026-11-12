@@ -1947,7 +1947,20 @@ a busy one; the opener term grows with the calls and keeps every limit
 finite and linear in `n` (`m ≤ n`). Recovery folds the segmentations of a
 contested span that recover the same calls before it enumerates
 whole-message readings, so such spans add readings instead of multiplying
-them. The derivation is saturating and deterministic; every other limit is
+them. A segmentation that only moves the optional layout a suppressed
+marker left (whitespace inside or beside a marker-suppressed call's frame)
+is no further segmentation when recovery folds it into one maximal framing.
+A contested span whose segmentations differ only in that layout is one
+invocation and charges no candidate; its segmentations are charged only when
+the fold keeps them, as under a strict tool choice. A run of calls whose
+only contested spans differ in that layout therefore charges no candidate
+however many follow one another (`hermes-stripped` alone resolves 16 calls
+under `Exact`; its work limit stops it from about 22 calls, against about 60
+for native Hermes). Dialects with other documented readings keep them:
+`harmony-stripped.v1` charges its documented candidates, and
+`deepseek-v3-stripped.v1` charges one for two to four calls
+(`tool_call_recover::exact_effort_accepts_canonical_markup`). The derivation is
+saturating and deterministic; every other limit is
 the preset's, so repair search stays bounded by the effort, and readings
 that genuinely multiply (a call with many repeated parameters) still exhaust
 as `BudgetExceeded(Candidates)`.
@@ -1959,8 +1972,10 @@ stray `<tool_call>` contested by GLM, Hermes and Qwen. The sizing count is
 `m = 576`: three dialect occurrences for each of 128 `<tool_call>` tokens,
 one Qwen occurrence for each of 64 `<function=` tokens, and 128 `function`
 occurrences in the stripped DeepSeek allow-list. Sizing includes occurrences
-where runtime framing forbids an attempt. The unmodified `Effort::Standard`
-preset (128 candidates) exhausts explicitly, and
+where runtime framing forbids an attempt. Whole-message candidates are
+admitted after contested spans fold, so the unmodified `Effort::Standard`
+preset exhausts explicitly at its work limit first; with the sized work limit
+its 128 candidates exhaust `Candidates`, and
 `sized(Effort::Standard, output)` (128 + 16 · 576 = 9,344 candidates)
 recovers every call `Resolved`, charging 193 candidates.
 `tool_call_cost::per_call_competition_scales_with_calls` does the same for

@@ -5445,6 +5445,7 @@ impl Recovery<'_> {
         governor: &mut Governor,
     ) -> Result<Vec<Reading>, StopReason> {
         let mut choices = ScratchVec::new(governor);
+        let mut contested = false;
         for (piece, value) in turn.pieces.iter().enumerate() {
             if let ResolvedPiece::Choice(choice) = value {
                 let next = match turn.pieces.get(piece + 1) {
@@ -5457,7 +5458,7 @@ impl Recovery<'_> {
                     Some(ResolvedPiece::Segment(ResolvedSegment::Call(call))) => Some(&**call),
                     _ => None,
                 };
-                let options = fold_options(
+                let (options, layout_only) = fold_options(
                     &choice.readings,
                     piece,
                     trace,
@@ -5468,6 +5469,7 @@ impl Recovery<'_> {
                     governor,
                 )?;
                 admit_native_paths(&options, governor)?;
+                contested |= !layout_only;
                 push_scratch(&mut choices, options, governor)?;
             }
         }
@@ -5476,7 +5478,9 @@ impl Recovery<'_> {
         let product = choices.iter().fold(1_u64, |product, folds| {
             product.saturating_mul(size(folds.len()))
         });
-        if !choices.is_empty() {
+        // A turn whose every choice only moves optional layout is one
+        // invocation and charges no candidate, however many calls it holds.
+        if contested {
             governor.charge(Resource::Candidates, product)?;
         }
         governor.charge(Resource::Work, 1)?;
@@ -7099,7 +7103,7 @@ fn fold_options<'t>(
     prefer_native_json: bool,
     failures: &FailureChoice<'_>,
     governor: &mut Governor,
-) -> Result<ScratchVec<Fold<'t>>, StopReason> {
+) -> Result<(ScratchVec<Fold<'t>>, bool), StopReason> {
     // Each group: its member indices, in option order.
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for (index, option) in options.iter().enumerate() {
@@ -7162,9 +7166,11 @@ fn fold_options<'t>(
     // determine whether the native object and its enclosing projection meet.
     // Strict choices retain both readings because native exterior content
     // can affect an allow_content=false check.
-    if prefer_native_json {
-        fold_dominated(&mut folds, output, following, governor)?;
-    }
+    let absorbed = if prefer_native_json {
+        fold_dominated(&mut folds, output, following, governor)?
+    } else {
+        Absorbed::default()
+    };
     // The readings' order is the order of the kept segmentations.
     governor.charge(
         Resource::Work,
@@ -7179,7 +7185,20 @@ fn fold_options<'t>(
     }
     governor.charge(Resource::Work, size(ordered.len()))?;
     ordered.as_mut_slice().reverse();
-    Ok(ordered)
+    // The choice was one invocation whose segmentations differed only in the
+    // optional layout a suppressed marker left: it is no contested span.
+    let layout_only =
+        absorbed.layout && !absorbed.other && ordered.len() == 1 && ordered[0].native_paths == 1;
+    Ok((ordered, layout_only))
+}
+
+/// Which proofs removed the dominated options of one choice.
+#[derive(Clone, Copy, Default)]
+struct Absorbed {
+    /// Some option was removed because it only moves optional layout.
+    layout: bool,
+    /// Some option was removed by another proof.
+    other: bool,
 }
 
 /// Transfer every proven dominated option's evidence before removing its owner.
@@ -7188,32 +7207,38 @@ fn fold_dominated(
     output: &[u8],
     following: Option<&ResolvedCall>,
     governor: &mut Governor,
-) -> Result<(), StopReason> {
+) -> Result<Absorbed, StopReason> {
+    let mut absorbed = Absorbed::default();
     for projected in (0..folds.len()).rev() {
         if !folds[projected].1.facts.attempts.is_empty() {
             continue;
         }
         let mut native = None;
+        let mut by_layout = false;
         for index in 0..folds.len() {
-            if index != projected
-                && folds[index].1.facts.attempts.is_empty()
-                && (projected_layout_dominates(
+            if index == projected || !folds[index].1.facts.attempts.is_empty() {
+                continue;
+            }
+            by_layout = projected_layout_dominates(
+                folds[index].1.segments,
+                folds[projected].1.segments,
+                output,
+                governor,
+            )?;
+            if by_layout
+                || native_json_dominates(
                     folds[index].1.segments,
                     folds[projected].1.segments,
                     output,
                     governor,
-                )? || native_json_dominates(
-                    folds[index].1.segments,
-                    folds[projected].1.segments,
-                    output,
-                    governor,
-                )? || native_llama_boundary_dominates(
+                )?
+                || native_llama_boundary_dominates(
                     folds[index].1.segments,
                     folds[projected].1.segments,
                     following,
                     output,
                     governor,
-                )?)
+                )?
             {
                 native = Some(index);
                 break;
@@ -7222,6 +7247,8 @@ fn fold_dominated(
         let Some(native) = native else {
             continue;
         };
+        absorbed.layout |= by_layout;
+        absorbed.other |= !by_layout;
         // The proof established the same ordered source-anchored calls.
         // Check complete row alignment and transfer correlations before
         // removing either owner; allocation refusal leaves both owned.
@@ -7237,7 +7264,7 @@ fn fold_dominated(
         folds.as_mut_slice()[projected..].rotate_left(1);
         drop(folds.pop().expect("dominated fold was just read"));
     }
-    Ok(())
+    Ok(absorbed)
 }
 
 /// Eligibility is decided against the complete group before ordinary ranking.

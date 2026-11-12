@@ -154,18 +154,17 @@ pub struct SyntaxEdit {
 fn reserve_one<T: ScratchCharge>(
     values: &mut Vec<T>,
     governor: &mut Governor,
-) -> Result<(), StopReason> {
+) -> Result<u64, StopReason> {
     if values.len() == values.capacity() {
         let capacity = values.capacity().saturating_mul(2).max(4);
-        governor.charge(
-            Resource::ScratchBytes,
-            size((capacity - values.capacity()).saturating_mul(T::CHARGE)),
-        )?;
+        let charged = size((capacity - values.capacity()).saturating_mul(T::CHARGE));
+        governor.charge(Resource::ScratchBytes, charged)?;
         values
             .try_reserve_exact(capacity - values.len())
             .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+        return Ok(charged);
     }
-    Ok(())
+    Ok(0)
 }
 
 /// Append one scalar, charging doubled capacity before growing `output`.
@@ -173,18 +172,20 @@ fn push_char(
     output: &mut String,
     character: char,
     governor: &mut Governor,
-) -> Result<(), StopReason> {
+) -> Result<u64, StopReason> {
+    let mut charged = 0;
     if output.len() + character.len_utf8() > output.capacity() {
         let capacity = (output.capacity().saturating_mul(2))
             .max(output.len() + character.len_utf8())
             .max(8);
-        governor.charge(Resource::ScratchBytes, size(capacity - output.capacity()))?;
+        charged = size(capacity - output.capacity());
+        governor.charge(Resource::ScratchBytes, charged)?;
         output
             .try_reserve_exact(capacity - output.len())
             .map_err(|_| StopReason::BudgetExceeded(Resource::ScratchBytes))?;
     }
     output.push(character);
-    Ok(())
+    Ok(charged)
 }
 
 /// A JSON value occurrence with an optional original byte span.

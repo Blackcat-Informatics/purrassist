@@ -325,17 +325,48 @@ fn busy_turn_resolves_every_call_under_sized() {
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(preset.outcome, Outcome::Unresolved);
+    // Whole-message candidates are admitted after the contested spans fold,
+    // so the fixed preset's work limit is reached first.
     assert_eq!(
         preset.receipt.stopped,
-        StopReason::BudgetExceeded(Resource::Candidates),
+        StopReason::BudgetExceeded(Resource::Work),
         "{preset:#?}"
     );
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
+    // The native dialects open 448 times (the doc comment above); each
+    // derived marker-suppressed dialect that opens a call at a line-start
+    // name adds its own openers: two per call (the parameter-value line and
+    // the path line), 128 in all.
+    let native = DialectSet::new(
+        DialectId::BUILT_IN
+            .iter()
+            .filter(|dialect| !dialect.grammar().is_derived())
+            .cloned(),
+        &mut purrassist_core::Governor::new(Budget::default()),
+    )
+    .expect("native dialects");
+    let native_openers = native.call_openers(output.as_bytes());
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    assert_eq!(openers, 576);
+    assert_eq!(native_openers, 448);
+    assert_eq!(openers - native_openers, 2 * 64);
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
-    assert_eq!(request.budget.candidates, 128 + 16 * 576);
+    assert_eq!(request.budget.candidates, 128 + 16 * openers);
+    // The preset's 128 candidates alone are not enough: with the work the
+    // sized request allows, the candidate limit is what stops it.
+    let mut preset_candidates = ToolRecoveryRequest::new(Effort::Standard);
+    preset_candidates.budget.work = request.budget.work;
+    let limited = tools.recover(
+        output.as_bytes(),
+        &preset_candidates,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
+    assert_eq!(limited.outcome, Outcome::Unresolved);
+    assert_eq!(
+        limited.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::Candidates),
+        "{limited:#?}"
+    );
     let result = tools.recover(
         output.as_bytes(),
         &request,

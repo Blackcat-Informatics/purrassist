@@ -2223,7 +2223,22 @@ impl<'s> Step<'_, 's> {
                     });
                 }
                 Err(Finished::Fault(fault)) => {
-                    return Self::fail(out, thread, thread.pos, rejection(fault));
+                    let reason = rejection(fault);
+                    // A body delimited by a closer is call markup to the
+                    // closer, however it decodes. A body that ran to the end
+                    // of input has no closer to show its bytes after the
+                    // fault are the call's, so the attempt fails where the
+                    // value stopped decoding, as for an unread value.
+                    let at = match (how, reason) {
+                        (
+                            CodecEnd::EndOfInput | CodecEnd::Truncated,
+                            Rejection::Malformed { at }
+                            | Rejection::InvalidUtf8 { at }
+                            | Rejection::PythonicPositionalRejected { at },
+                        ) => at.clamp(thread.entry, thread.pos),
+                        _ => thread.pos,
+                    };
+                    return Self::fail(out, thread, at, reason);
                 }
             }
         }

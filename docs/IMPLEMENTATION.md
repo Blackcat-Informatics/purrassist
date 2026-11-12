@@ -203,6 +203,10 @@ dequeue validates the fixed tracking mode before mutation. Prepared intake keeps
 both indexes and all terminal owner checks. Payload admissions, dispatch order
 and refusal cleanup remain separate. Runtime qualification is pending CI.
 
+Scratch vectors and strings destroy their owned payloads and backing buffers
+before releasing the buffers' reservations. A payload destructor therefore sees
+its enclosing storage still admitted.
+
 Turn-path discovery retains normalized Content ranges and immutable stored
 Segment borrows in governed temporary plans. One DFS path and prefix checkpoints
 preserve branch order without copying each prefix. Exact governed equality keeps

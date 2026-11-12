@@ -2883,7 +2883,7 @@ fn compile_policy(
     )?;
     let joint_captures = source.joint_layouts(&programs[0], &classes, &mut layouts, governor)?;
     let call_ends = call_ends(&programs[0], &literals, &literal_tables, governor)?;
-    let call_literals = call_literals(&programs[0], &literals, &literal_tables, governor)?;
+    let call_literals = call_literals(&programs, &literals, &literal_tables, governor)?;
     // An optional-id grammar reads model-added ids absent from its markup.
     let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id, governor)?;
     let call_markup = call_markup(&call_ends, governor)?;
@@ -3145,15 +3145,16 @@ fn reach_back(
 }
 
 /// Every spelling (canonical, declared variant, confusable) of every
-/// literal the `call` program matches, longest first, without repeats.
+/// literal the `call` and `result` programs match, longest first, without
+/// repeats: a rejected attempt of either production never splits one.
 fn call_literals(
-    program: &Program,
+    programs: &[Program],
     literals: &[Literal],
     tables: &[LiteralTables],
     governor: &mut Governor,
 ) -> Result<ByteList, GrammarError> {
     let mut lits = ScratchVec::new(governor);
-    for inst in &program.insts {
+    for inst in programs.iter().flat_map(|program| &program.insts) {
         governor.charge(Resource::Work, 1)?;
         if let Inst::Lit { lit, .. } = *inst {
             include_id(&mut lits, lit, governor)?;
@@ -3720,7 +3721,7 @@ result = "<r>"; declaration = "<d>";"#;
             g,
         )?;
         let literals = call_literals(
-            &grammar.programs[0],
+            &grammar.programs,
             &grammar.literals,
             &grammar.literal_tables,
             g,

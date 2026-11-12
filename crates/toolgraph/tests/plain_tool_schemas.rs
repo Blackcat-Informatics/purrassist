@@ -314,9 +314,25 @@ fn legacy_jsonld_schema_and_openapi_goldens_from_previous_pin_are_unchanged() {
         ontology.as_ref(),
         SchemaSurfaceMode::ShapedOnly,
     );
-    let compiled = compile_schema(&request).expect("original public JSON-LD compiler");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    let compiled =
+        compile_schema(&request, &mut control).expect("original public JSON-LD compiler");
     assert_eq!(compiled.compiled.schema_json, legacy::SCHEMA);
-    assert_eq!(compiled.compiled.openapi_json, legacy::OPENAPI);
+    // The OpenAPI `info.version` is the upstream release that emitted the
+    // document; every other line must stay byte-identical across releases.
+    assert_eq!(
+        without_emitter_version(&compiled.compiled.openapi_json),
+        without_emitter_version(legacy::OPENAPI)
+    );
+}
+
+fn without_emitter_version(document: &str) -> String {
+    document
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("\"version\": \""))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[expect(

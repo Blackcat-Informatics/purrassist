@@ -1311,9 +1311,10 @@ impl CompiledGrammar {
     }
 
     /// Every spelling (canonical, declared closer variant, confusable) of
-    /// every literal the `call` production matches, longest first. A
-    /// rejected attempt's span never ends inside one of them that began
-    /// in the span. The returned slice borrows read-only retained owners;
+    /// every literal the `call` and `result` productions match, longest
+    /// first. A rejected attempt's span never ends inside one of them that
+    /// began in the span, and its failure lies at most this long past the
+    /// span's end. The returned slice borrows read-only retained owners;
     /// it does not allocate or clone their compiler admission.
     ///
     /// ```
