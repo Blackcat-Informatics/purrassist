@@ -3205,6 +3205,47 @@ fn pythonic_arguments_faulting_at_the_end_of_output_do_not_swallow_what_follows(
     assert_eq!(calls.content, [53..input.len()]);
 }
 
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`): a rejected result
+/// attempt fails at most one literal spelling past its span's end, and the
+/// literals of a dialect's result production are among the spellings
+/// `call_literals` lists. Here the Mistral v11 result's content stops at a
+/// second `[TOOL_CONTENT]`, where its `[/TOOL_RESULTS]` closer is due: the
+/// closer matches its `[` and fails one byte in, past the span's end.
+#[test]
+fn rejected_result_fails_within_the_literals_the_dialect_lists() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("read_file")
+            .effects(Effects::ReadOnly)
+            .param("path", Param::string())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let input = "[TOOL_RESULTS]a1B2c3D4e[TOOL_CONTENT]e[TOOL_CONTENT]ok[/TOOL_RESULTS]]]";
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+        panic!("one reading expected");
+    };
+    let mut checked = 0;
+    for rejected in &calls.rejected {
+        let (Rejection::Malformed { at }, Some(dialect)) = (rejected.reason, &rejected.dialect)
+        else {
+            continue;
+        };
+        let longest = dialect.grammar().call_literals()[0].len();
+        assert!(
+            at <= rejected.span.end + longest,
+            "{:?} fails at {at}, past the {longest}-byte literals of {dialect:?}",
+            rejected.span
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "a result attempt is rejected");
+}
+
 /// S3: a call recovered inside a broken wrapper is kept, and the wrapper's
 /// rejected attempt covers it: its raw text is the whole wrapper, closer
 /// included, and no wrapper token is left as content, in every reading.
