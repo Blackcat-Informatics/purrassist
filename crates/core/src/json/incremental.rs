@@ -282,6 +282,9 @@ pub struct IncrementalRecovery {
     /// Where the input became unrecoverable when that is before the
     /// character that showed it (a bare word that is no key: its start).
     fault_at: Option<usize>,
+    /// The scratch charged for the storage the value's strings, members and
+    /// items grew into (see [`Self::finish_retained`]).
+    retained: u64,
 }
 
 /// A partially decoded UTF-8 scalar.
@@ -582,6 +585,7 @@ impl IncrementalRecovery {
             colon_keys: false,
             bare_key: None,
             fault_at: None,
+            retained: 0,
         }
     }
 
@@ -757,9 +761,21 @@ impl IncrementalRecovery {
     /// assert!(edits.iter().any(|edit| edit.rule == "json.syntax.string" && edit.guessed));
     /// ```
     pub fn finish(
-        mut self,
+        self,
         governor: &mut Governor,
     ) -> Result<(Node, usize, Vec<SyntaxEdit>), StopReason> {
+        let (node, consumed, edits, _) = self.finish_retained(governor)?;
+        Ok((node, consumed, edits))
+    }
+
+    /// [`Self::finish`], also returning the scratch the parser charged for
+    /// the storage its strings, members and items grew into. That charge
+    /// stays held after `finish` (the value is retained); a caller that
+    /// accounts the finished value itself releases it, once, when it does.
+    pub(crate) fn finish_retained(
+        mut self,
+        governor: &mut Governor,
+    ) -> Result<(Node, usize, Vec<SyntaxEdit>, u64), StopReason> {
         if let Some(reason) = self.failed.take() {
             return Err(reason);
         }
@@ -772,6 +788,7 @@ impl IncrementalRecovery {
             node,
             self.position - self.base,
             core::mem::take(&mut self.edits),
+            self.retained,
         ))
     }
 
@@ -1287,14 +1304,14 @@ impl IncrementalRecovery {
         };
         if frame.object {
             let (key, key_span) = frame.key.take().expect("a member key precedes its value");
-            reserve_one(&mut frame.members, governor)?;
+            self.retained += reserve_one(&mut frame.members, governor)?;
             frame.members.push(Member {
                 key,
                 key_span: Some(key_span),
                 value: node,
             });
         } else {
-            reserve_one(&mut frame.items, governor)?;
+            self.retained += reserve_one(&mut frame.items, governor)?;
             frame.items.push(node);
         }
         self.mode = Mode::Space(After::Separator);
@@ -1428,13 +1445,13 @@ impl IncrementalRecovery {
             (Escape::None, Some(plain)) => {
                 self.consume(plain, at, governor)?;
                 text.canonical &= !needs_escape(plain);
-                push_char(&mut text.value, plain, governor)?;
+                self.retained += push_char(&mut text.value, plain, governor)?;
                 Flow::Next
             }
             (Escape::Backslash(start), Some(escaped)) => {
                 self.consume(escaped, at, governor)?;
                 if escaped == text.quote && text.quote != '"' {
-                    push_char(&mut text.value, escaped, governor)?;
+                    self.retained += push_char(&mut text.value, escaped, governor)?;
                     text.escape = Escape::None;
                 } else {
                     text.slice.push(escaped);
@@ -1512,11 +1529,12 @@ impl IncrementalRecovery {
         let source = slice.as_str();
         if let Some(decoded) = decode_escape(source) {
             text.canonical &= is_canonical_escape(source, decoded);
-            return push_char(&mut text.value, decoded, governor);
+            self.retained += push_char(&mut text.value, decoded, governor)?;
+            return Ok(());
         }
         text.canonical = false;
         for character in source.chars() {
-            push_char(&mut text.value, character, governor)?;
+            self.retained += push_char(&mut text.value, character, governor)?;
         }
         let replacement = quoted(source, governor)?;
         self.edit(
@@ -1565,14 +1583,14 @@ impl IncrementalRecovery {
             if let Some(node) = child.take() {
                 if frame.object {
                     let (key, key_span) = frame.key.take().unwrap_or_default();
-                    reserve_one(&mut frame.members, governor)?;
+                    self.retained += reserve_one(&mut frame.members, governor)?;
                     frame.members.push(Member {
                         key,
                         key_span: Some(key_span),
                         value: node,
                     });
                 } else {
-                    reserve_one(&mut frame.items, governor)?;
+                    self.retained += reserve_one(&mut frame.items, governor)?;
                     frame.items.push(node);
                 }
             }
