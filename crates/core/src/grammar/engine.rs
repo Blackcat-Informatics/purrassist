@@ -2327,13 +2327,21 @@ impl<'s> Step<'_, 's> {
         if self.retained_name_prefix(hist, segment.unwrap_or(start)..name.start, governor)? {
             return Ok(true);
         }
-        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
-        let bytes = self.bytes(name);
-        if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
+        // A name longer than every declared literal cannot be one: the lookup
+        // is skipped rather than charged per byte of a long plain word.
+        let comparable = name.len().min(tools.longest_literal().saturating_add(1));
+        governor.charge(Resource::Work, size(comparable).saturating_mul(K_CODEC))?;
+        let bytes = self.bytes(name.clone());
+        if name.len() <= tools.longest_literal()
+            && core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some())
+        {
             return Ok(true);
         }
         for &relation in &self.grammar.joint_captures {
-            let boundaries = super::partition::boundaries(self.grammar, relation, bytes, governor)?;
+            // The split points are needed only once a declared name or alias
+            // is a prefix of the written name: a plain word that no declared
+            // name begins never pays for them.
+            let mut boundaries = None;
             for tool in tools.tools() {
                 for candidate in
                     core::iter::once(tool.name()).chain(tool.aliases().iter().map(String::as_str))
@@ -2342,8 +2350,20 @@ impl<'s> Step<'_, 's> {
                         Resource::Work,
                         size(candidate.len().min(bytes.len())).saturating_add(65),
                     )?;
-                    if bytes.starts_with(candidate.as_bytes())
-                        && boundaries.binary_search(&candidate.len()).is_ok()
+                    if !bytes.starts_with(candidate.as_bytes()) {
+                        continue;
+                    }
+                    if boundaries.is_none() {
+                        boundaries = Some(super::partition::boundaries(
+                            self.grammar,
+                            relation,
+                            bytes,
+                            governor,
+                        )?);
+                    }
+                    if boundaries
+                        .as_ref()
+                        .is_some_and(|found| found.binary_search(&candidate.len()).is_ok())
                     {
                         // This is admission evidence only. Expansion still
                         // retains every original source-valid partition.
@@ -4515,6 +4535,13 @@ pub(crate) struct Attempt {
     pub(crate) closed: Option<usize>,
 }
 
+/// Whether `attempt` read its opener and reads on without a completion: only
+/// such an attempt holds another table's report at its opener
+/// ([`Engine::defer`]).
+const fn reads_on(attempt: &Attempt) -> bool {
+    attempt.opened && !attempt.completed
+}
+
 /// Where a rejected attempt's span ends at the end of output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FailureEnd {
@@ -4642,6 +4669,9 @@ impl Event {
 struct Table<'s> {
     grammar: usize,
     kind: ProductionKind,
+    /// How many of `attempts` have read their opener and not yet completed:
+    /// only these hold a deferred end (see [`Engine::release_deferred`]).
+    reading: usize,
     program: &'s Program,
     /// A `ClassRun` may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
@@ -5148,6 +5178,7 @@ impl<'s> Engine<'s> {
                 tables.push(Table {
                     grammar: index,
                     kind,
+                    reading: 0,
                     program,
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
@@ -5905,11 +5936,16 @@ impl<'s> Engine<'s> {
             self.grammars[self.tables[table].grammar].dialect == DialectId::MistralV3;
         let mut latest = None;
         for (attempt, position) in opened {
-            let attempts = self.tables[table].attempts.as_mut_slice();
-            if let Some(record) = attempts.iter_mut().find(|record| record.id == attempt)
+            let entry = &mut self.tables[table];
+            if let Some(record) = entry
+                .attempts
+                .as_mut_slice()
+                .iter_mut()
+                .find(|record| record.id == attempt)
                 && !record.opened
             {
                 record.opened = true;
+                entry.reading += usize::from(reads_on(record));
                 self.newest_open = self.newest_open.max(record.start);
                 latest = latest.max(Some(record.start));
                 governor.charge(Resource::Work, size(self.out.headers.len()))?;
@@ -6586,9 +6622,11 @@ impl<'s> Engine<'s> {
                 self.take_boundary(table, record.id);
                 self.forget_failure_header(record.id, governor)?;
             }
-            let attempts = self.tables[table].attempts.as_mut_slice();
+            let entry = &mut self.tables[table];
+            entry.reading -= usize::from(reads_on(&entry.attempts.as_slice()[index]));
+            let attempts = entry.attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
-            self.tables[table].attempts.pop();
+            entry.attempts.pop();
             retired = true;
         }
         // Only an attempt that ended can release a held report.
@@ -6652,17 +6690,35 @@ impl<'s> Engine<'s> {
         if self.deferred.is_empty() && self.whole.is_empty() {
             return Ok(());
         }
-        governor.charge(
-            Resource::Work,
-            size(self.deferred.len() + self.whole.len()).saturating_mul(size(self.tables.len())),
-        )?;
-        let reading = |tables: &[Table<'_>], start: usize| {
-            tables.iter().any(|entry| {
-                entry
+        debug_assert!(
+            self.tables.iter().all(|table| table.reading
+                == table
                     .attempts
                     .as_slice()
                     .iter()
-                    .any(|live| live.opened && !live.completed && live.start == start)
+                    .filter(|live| reads_on(live))
+                    .count()),
+            "each table's `reading` counts exactly its attempts that read on",
+        );
+        // Only an attempt that read its opener and has not completed holds a
+        // report (`reads_on`); a table without one is passed over unread. The
+        // charge is a proxy for the sweep, not its step count: one unit per
+        // held end and table that holds such an attempt. The attempts compared
+        // within such a table and the per-table check are not charged
+        // separately.
+        let reading_tables = self.tables.iter().filter(|table| table.reading > 0).count();
+        governor.charge(
+            Resource::Work,
+            size(self.deferred.len() + self.whole.len()).saturating_mul(size(reading_tables)),
+        )?;
+        let reading = |tables: &[Table<'_>], start: usize| {
+            tables.iter().any(|entry| {
+                entry.reading > 0
+                    && entry
+                        .attempts
+                        .as_slice()
+                        .iter()
+                        .any(|live| reads_on(live) && live.start == start)
             })
         };
         let mut index = 0;
@@ -7591,8 +7647,10 @@ impl<'s> Engine<'s> {
                 return Ok(());
             }
         };
+        let was_reading = reads_on(record);
         record.completed = true;
         let start = record.start;
+        self.tables[table].reading -= usize::from(was_reading);
         chained.table = index_u32(table);
         chained.attempt = thread.attempt;
         chained.at = thread.pos;
@@ -7739,12 +7797,15 @@ impl<'s> Engine<'s> {
             .expect("completing attempt is live");
         match segmentations {
             Ok(segmentations) => {
+                let was_reading = reads_on(record);
                 record.completed = true;
+                let start = record.start;
+                self.tables[table].reading -= usize::from(was_reading);
                 // It ends whole: a held report at its opener is outread now,
                 // and no longer waits for it (see `Self::defer`).
-                if !self.whole.contains(&record.start) {
+                if !self.whole.contains(&start) {
                     governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)?;
-                    self.whole.push(record.start);
+                    self.whole.push(start);
                 }
                 let grouped = self.tables[table].program.grouped;
                 let charged = if segmentations.len() == 1 { charged } else { 0 };
@@ -7899,6 +7960,14 @@ impl<'s> Engine<'s> {
                 size(table.threads.len() + table.attempts.len() + table.trails.len()),
             )?;
             keep(&mut table.threads, |thread| thread.attempt != attempt);
+            if let Some(record) = table
+                .attempts
+                .as_slice()
+                .iter()
+                .find(|record| record.id == attempt)
+            {
+                table.reading -= usize::from(reads_on(record));
+            }
             keep(&mut table.attempts, |record| record.id != attempt);
             governor.charge(
                 Resource::Work,
@@ -7968,6 +8037,7 @@ impl<'s> Engine<'s> {
             }
             self.tables[table].threads.clear();
             self.tables[table].attempts.clear();
+            self.tables[table].reading = 0;
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();
             let written = core::mem::take(&mut self.tables[table].written);

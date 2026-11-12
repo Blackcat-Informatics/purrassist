@@ -308,9 +308,10 @@ fn busy_turn(calls: usize) -> String {
 /// every call needs a markup repair, with a contested stray opener after
 /// each, exhausts the fixed `Effort::Standard` preset explicitly, and is
 /// recovered with every call `Resolved` under `ToolRecoveryRequest::sized`:
-/// `⌈128 / 8⌉ = 16` candidates for each of its 448 openers (64 calls, each
-/// opened at `<tool_call>` by three dialects and at `<function=` by one, and 64
-/// stray lines, each opened by three dialects). Competing segmentations of
+/// `⌈128 / 8⌉ = 16` candidates for each of its openers: 448 native ones (64
+/// calls, each opened at `<tool_call>` by three dialects and at `<function=`
+/// by one, and 64 stray lines, each opened by three dialects) plus 128 line-start
+/// name openers of the derived marker-suppressed dialects. Competing segmentations of
 /// the stray lines that recover the same calls are folded per span, so the
 /// readings charged grow with the calls instead of doubling per call.
 #[test]
@@ -329,10 +330,24 @@ fn busy_turn_resolves_every_call_under_sized() {
     );
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
+    // The native dialects open 448 times (the doc comment above); each
+    // derived marker-suppressed dialect that opens a call at a line-start
+    // name adds its own openers: two per call (the parameter-value line and
+    // the path line), 128 in all.
+    let native = DialectSet::new(
+        DialectId::BUILT_IN
+            .iter()
+            .filter(|dialect| !dialect.grammar().is_derived())
+            .cloned(),
+        &mut purrassist_core::Governor::new(Budget::default()),
+    )
+    .expect("native dialects");
+    let native_openers = native.call_openers(output.as_bytes());
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    assert_eq!(openers, 448);
+    assert_eq!(native_openers, 448);
+    assert_eq!(openers - native_openers, 2 * 64);
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
-    assert_eq!(request.budget.candidates, 128 + 16 * 448);
+    assert_eq!(request.budget.candidates, 128 + 16 * openers);
     let result = tools.recover(
         output.as_bytes(),
         &request,
