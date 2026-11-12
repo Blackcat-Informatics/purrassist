@@ -1361,9 +1361,13 @@ marker left (whitespace inside or beside a marker-suppressed call's frame)
 is no further segmentation when recovery folds it into one maximal framing.
 A contested span whose segmentations differ only in that layout is one
 invocation and charges no candidate; its segmentations are charged only when
-the fold keeps them, as under a strict tool choice. Canonical
-marker-suppressed calls therefore charge no candidate however many follow
-one another, and resolve under `Exact` within its work limit
+the fold keeps them, as under a strict tool choice. A run of calls whose
+only contested spans differ in that layout therefore charges no candidate
+however many follow one another (`hermes-stripped` alone resolves 16 calls
+under `Exact`; its work limit stops it from about 22 calls, against about 60
+for native Hermes). Dialects with other documented readings keep them:
+`harmony-stripped.v1` charges its documented candidates, and
+`deepseek-v3-stripped.v1` charges one for two to four calls
 (`tool_call_recover::exact_effort_accepts_canonical_markup`). The derivation is
 saturating and deterministic; every other limit is
 the preset's, so repair search stays bounded by the effort, and readings
