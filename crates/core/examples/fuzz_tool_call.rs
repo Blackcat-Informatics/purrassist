@@ -1117,6 +1117,37 @@ fn read_spans(
     spans
 }
 
+/// T4/T5: whether a rejected attempt of `dialect` ends at `end` where the
+/// next call of its attempt begins (a skipped call left without its closer
+/// runs to where the next call's opener begins), read or rejected: an attempt
+/// begins only at an opener of its dialect, so either shows that opener begins
+/// exactly there. The turn may read that next call in another dialect that
+/// shares the opener's text (a resolved segment, not an attempt of this
+/// dialect): the opener of this dialect still begins exactly at the segment
+/// that starts there.
+fn begins_next_call(output: &[u8], calls: &ToolCalls, dialect: &DialectId, end: usize) -> bool {
+    calls
+        .calls
+        .iter()
+        .any(|call| call.span.start == end && &call.dialect == dialect)
+        || calls
+            .rejected
+            .iter()
+            .any(|other| other.span.start == end && other.dialect.as_ref() == Some(dialect))
+        || (calls
+            .calls
+            .iter()
+            .map(|call| &call.span)
+            .chain(calls.rejected.iter().map(|other| &other.span))
+            .any(|span| span.start == end)
+            && dialect
+                .grammar()
+                .call_ends()
+                .iter()
+                .flat_map(purrassist_core::grammar::CallEnd::openers)
+                .any(|opener| opener.len() > 1 && output[end..].starts_with(opener)))
+}
+
 /// F4: recovery never moves bytes that are not shown to be call markup
 /// from content into a rejected attempt. A parser's rejected attempt may
 /// run past where its grammar failed (the furthest the recognizer read an
@@ -1198,18 +1229,8 @@ fn check_rejected_extension(output: &[u8], calls: &ToolCalls, read: &[(Range<usi
             .flat_map(purrassist_core::grammar::CallEnd::call_closers)
             .filter(|closer| closer.len() > 1)
             .any(|closer| ends_with_slip(&rejected.raw, closer));
-        // T4/T5: or to the next call of its attempt (a skipped call left
-        // without its closer runs to where the next call's opener begins),
-        // read or rejected: an attempt begins only at an opener of its
-        // dialect, so either shows that opener begins exactly there.
-        let next_call = calls
-            .calls
-            .iter()
-            .any(|call| call.span.start == end && &call.dialect == dialect)
-            || calls
-                .rejected
-                .iter()
-                .any(|other| other.span.start == end && other.dialect.as_ref() == Some(dialect));
+        // T4/T5: or to the next call of its attempt (see `begins_next_call`).
+        let next_call = begins_next_call(output, calls, dialect, end);
         // T6: or to an opening reasoning marker that cut a literal of its
         // dialect the attempt had begun (see `cut_by_marker`).
         let cut = cut_by_marker(
