@@ -17,8 +17,9 @@ The move from the earlier Git revision replaces the 19 PurRDF Git packages with
 `structured-zstd`, `visual-hashing`, `fastrand` and `once_cell` packages.
 `wasm-bindgen` and its three companion crates move from 0.2.129 to 0.2.130. The
 registered name/version baseline and `vendor/dependencies.json` record exactly
-this change. License notices are the files published inside the 4.0.2 crates,
-stored byte-identically under `vendor/licenses/purrdf-4.0.2/`.
+this change. The license texts retained under `vendor/licenses/purrdf-4.0.2/` are
+byte-identical copies of the grants published inside the 4.0.2 crates; the
+crates' own NOTICE and CC-BY-4.0 files are not retained.
 The numeric compiler shares upstream's exact XSD arithmetic and records the
 original SHACL representability check for unrestricted IEEE domains; it adds no
 dependency to the core.

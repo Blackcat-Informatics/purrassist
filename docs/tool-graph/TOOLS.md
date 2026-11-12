@@ -771,8 +771,8 @@ label or mediation failures. Neither mode can silently fall back to the other.
 
 **G7 compiler prerequisite delivered in #70 and #43; loader integration remains open:**
 upstream PurRDF issue #788 closed through PR #806, and numeric prerequisite #885
-closed through PR #888, adopted at exact revision
-`742bbbfbe2240e1fc6f178badd049420753ef358`. The public
+closed through PR #888, adopted through the released
+`purrdf-core` and `purrdf-shapes` crates pinned at `=4` (4.0.2 resolved). The public
 `purrdf_shapes::json_schema::compile_tool_arguments` accepts caller-owned
 root-shape/class identities and parent-scoped FnO predicate/member bindings.
 It uses the shared constraint compiler for bare string/integer/number/boolean,
