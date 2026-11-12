@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "ScratchVec and ScratchString currently release their scratch reservations before Rust destroys their inner buffers. An owned payload destructor can therefore observe released capacity while its enclosing storage still exists.\n\nDestroy each inner buffer before releasing its reservation. Add focused regression coverage for the payload-destructor boundary, preserving public APIs, resource limits and the existing final release behavior.\n\nThis is a complete ownership prerequisite for #18, #33 and #36. The parent contracts remain open; Forest interning, publication, resolved folding and layout admission are separate work.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-04T02:31:45Z",
+  "labels": [],
+  "milestone": null,
+  "number": 170,
+  "state": "OPEN",
+  "title": "Destroy scratch buffers before releasing their reservations",
+  "updatedAt": "2026-11-04T02:31:45Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/170"
+}

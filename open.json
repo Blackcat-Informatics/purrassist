@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 170,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before",
+  "branch": "paudley/170-destroy-scratch-buffers-before",
+  "slug": "destroy-scratch-buffers-before",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "218ec2be1a5ff4277bb4bf546555487372429e12",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before",
+    "branch:paudley/170-destroy-scratch-buffers-before",
+    "ignored:3 files (3 reflinked, 0 written)",
+    "rust-caches:no built checkout to seed /home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before from; cold build",
+    "stage:/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before",
+    "issue:/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-03T20:32:34-0600",
+  "seed_error": ""
+}

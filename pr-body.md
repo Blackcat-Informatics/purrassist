@@ -1,0 +1,11 @@
+Keep ScratchVec and ScratchString storage admitted until their payloads and backing buffers are destroyed. Add a regression where a payload destructor requests the full scratch budget while its parent allocation remains live, then verify the parent releases its reservation.
+
+Pin both PurRDF dependencies to `511f8af4efafe7e9e1c4e673c28afb1f5b4f9572`, the resolved upstream main HEAD. Refresh the lockfile, dependency inventory and baseline: purrdf-zstd replaces registry structured-zstd and fastrand. Preserve native-table and codec attribution, archived notice inventories and the W3C grant for embedded SHACL data, with source-only conformance notices separately scoped.
+
+Preserve the original upstream notice bytes and filenames. Allow SPDX sidecars only for registered vendor notices whose actual SHA-256 matches the inventory; ordinary Markdown still requires inline attribution. Add focused regression coverage for valid sidecars and missing, malformed, changed, unregistered and conflicting notice records.
+
+Update the existing legacy JSON-LD golden consumer to pass the newly required canonicalization control. Its explicit finite limit of one million matches the old implicit ceiling; schema and OpenAPI inputs and exact golden assertions remain unchanged.
+
+Validation: independent combined source/provenance review, focused attribution and caller correction reviews, formatting/prose/diff checks and normal hooks passed. Locked default and all-feature dependency metadata resolve 98 packages / 89 external packages, with no core dependencies. Automatic run 41764443712 at 82c131b passed corpus, Windows, WASM and packaging checks; Windows explicitly passed the new destructor regression. Run 41767466274 at 5be1fd3 passed repository attribution and all 53 repository-audit cases on Linux and macOS, then failed compilation at the legacy consumer's missing control argument. The correction at 10afca5 awaits fresh automatic qualification. The Windows selection excludes toolgraph, so it does not qualify the upgraded PurRDF consumers. No local compilation, tests, replay, probes, helper-check execution or manual CI dispatch ran.
+
+Closes #170. References #18, #33 and #36; their remaining contracts stay open.

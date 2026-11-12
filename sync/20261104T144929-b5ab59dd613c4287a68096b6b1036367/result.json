@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before",
+  "branch": "paudley/170-destroy-scratch-buffers-before",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "10afca5460a66b7e79449d87ec044fefac2a59af",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before/sync/20261104T144929-b5ab59dd613c4287a68096b6b1036367",
+  "conflicts": [
+    "docs/IMPLEMENTATION.md"
+  ],
+  "status": "completed",
+  "base": "ffee73d4dde2d02c77569a41a2e3c85a341b1025",
+  "merge_bases": [
+    "218ec2be1a5ff4277bb4bf546555487372429e12"
+  ],
+  "merge_index": "0014971b6de4d7e6adffcf303df0f31dc5f7434b1d0102f8e37f2b5b411905e3",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'docs/IMPLEMENTATION.md'\n",
+  "candidate_tree": "1a7c5770b49fc979654b3f96a877508cc190702d",
+  "candidate_patch": "candidate-b82e78bcf5974046b86c2556ffc5afb3.patch",
+  "validation_records": [],
+  "commit": "b41458bd6a9c6adead629ca9bf7ce13e397d49fd",
+  "tree": "1a7c5770b49fc979654b3f96a877508cc190702d"
+}

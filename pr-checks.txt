@@ -1,0 +1,10 @@
+$ stagectl pr-checks 171
+FAILURE release-gate https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649603660
+SUCCESS qualification https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649603547
+SUCCESS wasm https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649603345
+FAILURE native (macos-14) https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649603463
+FAILURE native (ubuntu-24.04) https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649603067
+FAILURE windows-engines https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649603086
+FAILURE corpus https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649602931
+FAILURE fuzz https://github.com/Blackcat-Informatics/purrassist/actions/runs/41851753761/job/126649602560
+state: fail

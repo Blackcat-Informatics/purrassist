@@ -1,0 +1,163 @@
+{
+  "issue": 170,
+  "pr_number": 171,
+  "branch": "paudley/170-destroy-scratch-buffers-before",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before",
+  "observed_at": "2026-11-04T04:04:49.193753+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/170-destroy-scratch-buffers-before/.stage/destroy-scratch-buffers-before/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "218ec2be1a5ff4277bb4bf546555487372429e12",
+    "headRefName": "paudley/170-destroy-scratch-buffers-before",
+    "headRefOid": "10afca5460a66b7e79449d87ec044fefac2a59af",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 171,
+    "state": "OPEN",
+    "title": "Retain scratch reservations through destruction and update PurRDF",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/171"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374253488",
+        "name": "wasm",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374252800",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374253162",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374252884",
+        "name": "qualification",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374252917",
+        "name": "release-gate",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374252845",
+        "name": "native (ubuntu-24.04)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374252863",
+        "name": "native (macos-14)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41769073235/job/126374252486",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "10afca5460a66b7e79449d87ec044fefac2a59af",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "10afca5460a66b7e79449d87ec044fefac2a59af",
+    "branch": "paudley/170-destroy-scratch-buffers-before",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 171,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #171 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 19,
+      "bytes": 1690629,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "218ec2be1a5ff4277bb4bf546555487372429e12",
+      "head": "10afca5460a66b7e79449d87ec044fefac2a59af",
+      "status": "clean"
+    }
+  }
+}
