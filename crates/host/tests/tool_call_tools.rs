@@ -155,7 +155,7 @@ fn busy_turn_resolves_every_call_by_default() {
         actual
             .pointer("/receipt/budget/candidates")
             .map(Node::to_json),
-        Some((128 + 16 * 448).to_string())
+        Some((128 + 16 * 576).to_string())
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1153,7 +1153,7 @@ fn gemma_and_unparsed_markup_over_mcp() {
         .expect("a rejected attempt");
     assert_eq!(
         rejected.get("dialect").map(Node::to_json).as_deref(),
-        Some("null")
+        Some("\"kimi-k2-stripped.v1\"")
     );
     assert_eq!(
         rejected.pointer("/reason/family").and_then(Node::as_str),

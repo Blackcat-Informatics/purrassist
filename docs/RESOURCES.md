@@ -216,9 +216,66 @@ only a query over the immutable current window, and keeps every positive class
 and body qualification. Misses and positive queries can add control overhead;
 qualification covers these tradeoffs without changing budgets.
 
+Retained input doubles below 64 KiB capacity, then uses geometric growth of
+1.5 times the previous capacity, rounded upward, with a minimum of four bytes.
+This policy applies only to source capture. Each full-buffer append admits
+existing-length relocation and four planning Work units before reservation; every
+append retains its original insertion admission. Checked capacity arithmetic
+fails before allocation. The original vector policy and allocation cleanup
+serve all other callers. Buffer growth depends only on admitted byte count.
+
+Full native ownership censuses pre-admit one Work unit per input thread for a
+masked phase dispatch. Dual lexical/candidate ownership admits one additional
+unit before either update. Merge callbacks run after complete canonical
+merging and propagate refusal before their caller publishes ownership floors.
+
+Finished native codec values adopt their existing tree grants into payload
+leases. A governed slot vector admits 320 bytes per slot, including empty and
+spare slots; a governed head vector admits 16 bytes per table head. A typed
+192-byte control owner covers those descriptors and their bounded controls.
+Each table's intrusive list visits its slots once on final ordinary retirement,
+keeping native IDs unchanged while dropping trees before their leases.
+Retirement selection and each visited slot admit their work. Wrong-table,
+out-of-range and retired value reads fail explicitly. Pending codec transfer
+tracks all unadopted tree and edit grants through allocation refusal. Arena
+reset and destruction preserve the independent original ownership of edits
+and chain payloads. EOF length cuts and explicit abandonment still defer tree
+disposal to the whole arena.
+
+Part materialization owns its transient control records under a typed 512-byte
+reservation. A read-only builder refunds all outstanding manual admissions when
+it discards a mixed or failed part, including an original resource refusal.
+Duplicate readings drop before their own exact live deltas are refunded.
+Successful chained parts transfer checked live deltas rather than cumulative
+allocation totals. Chain metadata is admitted before persistence; no-call and
+refused transfers drop payloads before refunding their retained admission.
+
 ### Repeated runtime class queries
 
-Each grammar's operation-owned class runtime retains sixty-four exact bucket
+Call-reading digests use two governed passes through the JSON cursor: count the
+exact emitted length, then hash the eight-byte length prefix and identical tokens.
+Count tokens first exclude escaping with safe eight-byte word probes: four Work
+units cover the load and three classifications; scalar tails admit one per byte.
+An escaped token retains both its performed proof queries and the ordinary shared
+scanner's byte fees. Count writes admit one length update, and digest writes admit
+each hashed byte. Structural traversal remains admitted in both passes. A 384-byte typed control lease
+and the reused frame vector replace the full serialized argument buffer. A
+completed count pass proving every quoted token has no escapes permits direct
+hashing of those immutable tokens with no second byte scan. Otherwise the shared
+escaping walker runs again. Unescaped UTF-8 runs are emitted together without
+changing JSON bytes.
+
+A turn with one admitted folded output transfers top-level resolved call
+payloads into the final result. Fold facts retain their original branch, unioned
+origins and dialect maps in 112-byte governed rows; a 1024-byte control owner
+covers detachment and a 4096-byte owner covers consuming traversal. Original
+choice buffers remain owned through their destruction. Existing payload grants
+remain retained; the outgoing carrier and dialect slot admit 1024 bytes and a
+typed 4096-byte lease covers call conversion. Multiple outputs retain ordinary
+copy admission. Validation and provenance copies admit their variable payloads.
+Initialization, finalization and call-origin lookup remain shared.
+
+Each grammar's operation-owned class runtime retains thirty-two exact bucket
 entries for successful transition/deadness queries per class. The key includes the full native DFA state
 and input byte: term identity, matched and zero-width context flags, and the
 complete UTF-8 decoding position. Class sessions append derivative terms without
@@ -1313,7 +1370,7 @@ opaque handle beside the queued payload. Each heap identity reserves eight bytes
 Released slots form a free list and are reused before arena growth, bounding
 backing by the largest concurrent queue rather than input offsets or historical
 arrivals. A reused handle must still match its queued arrival, source and candidate
-membership before removal. The unchanged 640-byte metadata lease covers the actual
+membership before removal. The 1,024-byte metadata lease covers the actual
 three index owners, minima and free head, ownership and frontier memos, both compact
 sift plans inside their update carrier, preparation and replay cursors, and a
 temporary handle. Complete phase layout assertions include those real types and
@@ -1561,7 +1618,7 @@ records, each actual prefix lookup admits one and each visited binary-search ste
 two. Reconstructing coverage from a matching prior candidate coordinate admits
 one additional Work. No query allocates another coverage owner.
 
-Added retained metadata reserves 64 bytes per dialect set, 112 bytes per intake,
+Added retained metadata reserves 64 bytes per dialect set, 512 bytes per intake,
 128 bytes per event cursor, 904 bytes per recognizer plus 48 bytes for turn-node
 controls, and 56 bytes per engine table plus 160 bytes per engine. Layout assertions cover these portable reservations.
 Counter and bound reads allocate nothing, admit no work and do not poll the
@@ -1898,11 +1955,14 @@ as `BudgetExceeded(Candidates)`.
 `tool_call_cost::busy_turn_resolves_every_call_under_sized` recovers 64
 Qwen3-Coder XML calls, each needing the
 `tool_call.markup.missing-parameter-close` repair and each followed by a
-stray `<tool_call>` that both dialects contest (`m = 320`: two openers at
-each `<tool_call>` and one at each `<function=`): the unmodified
-`Effort::Standard` preset (128 candidates) exhausts explicitly, and
-`sized(Effort::Standard, output)` (128 + 16 · 320 = 5,248 candidates)
-recovers every call `Resolved`, charging 129 candidates.
+stray `<tool_call>` contested by GLM, Hermes and Qwen. The sizing count is
+`m = 576`: three dialect occurrences for each of 128 `<tool_call>` tokens,
+one Qwen occurrence for each of 64 `<function=` tokens, and 128 `function`
+occurrences in the stripped DeepSeek allow-list. Sizing includes occurrences
+where runtime framing forbids an attempt. The unmodified `Effort::Standard`
+preset (128 candidates) exhausts explicitly, and
+`sized(Effort::Standard, output)` (128 + 16 · 576 = 9,344 candidates)
+recovers every call `Resolved`, charging 193 candidates.
 `tool_call_cost::per_call_competition_scales_with_calls` does the same for
 64 read-only calls that each have a near-miss name and a repeated parameter
 (192 candidates), and

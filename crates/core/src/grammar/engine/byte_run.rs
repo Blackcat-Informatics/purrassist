@@ -53,11 +53,23 @@ fn class_eligible(table: &Table<'_>) -> bool {
         && table.kind == ProductionKind::Call
 }
 
-/// Native bodies are qualified dynamically; class proofs retain their guards.
+/// Immutable production route for a possible run proof.
+#[derive(Clone, Copy)]
+pub(super) enum RunKind {
+    Class,
+    Body,
+}
+
+/// Select once before the byte step; settlement cannot change the program.
 #[must_use]
-pub(super) fn eligible(table: &Table<'_>) -> bool {
-    class_eligible(table)
-        || (table.kind == ProductionKind::Call && table.program.run_eligibility.native_body())
+pub(super) fn eligible(table: &Table<'_>) -> Option<RunKind> {
+    if class_eligible(table) {
+        Some(RunKind::Class)
+    } else if table.kind == ProductionKind::Call && table.program.run_eligibility.native_body() {
+        Some(RunKind::Body)
+    } else {
+        None
+    }
 }
 
 /// Qualification borrows all payloads; only bounded control records coexist.
@@ -160,7 +172,7 @@ impl Engine<'_> {
         table: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        if !eligible(&self.tables[table]) {
+        if eligible(&self.tables[table]).is_none() {
             return Ok(());
         }
         invalidate(
@@ -302,26 +314,27 @@ impl Engine<'_> {
     pub(super) fn remember_byte_run(
         &mut self,
         table: usize,
+        kind: RunKind,
         byte: u8,
         next_at: usize,
+        repeated: &mut Option<bool>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 1)?;
+        if matches!(kind, RunKind::Body) {
+            return self.remember_body_run(table, byte, next_at, repeated, governor);
+        }
         let current = &self.tables[table];
-        if !byte.is_ascii() {
-            return Ok(());
-        }
-        if !class_eligible(current) {
-            return self.remember_body_run(table, byte, next_at, governor);
-        }
         // Most byte runs are still short or have just changed state. Refuse
         // those before inspecting side owners and immutable capture evidence.
-        governor.charge(Resource::Work, 5)?;
+        governor.charge(Resource::Work, 1)?;
         let Some(first) = current.threads.first() else {
             return Ok(());
         };
-        if !matches!(first.sub, Sub::Class(_))
-            || first.pos != next_at
+        if !matches!(first.sub, Sub::Class(_)) {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, 4)?;
+        if first.pos != next_at
             || first
                 .pos
                 .checked_sub(first.entry)
@@ -335,7 +348,9 @@ impl Engine<'_> {
                 return Ok(());
             }
         }
-        if !self.repeated_byte(byte, next_at, governor)? {
+        if !self.byte_run_may_repeat(byte, repeated, governor)?
+            || !self.repeated_byte(byte, next_at, governor)?
+        {
             return Ok(());
         }
         let Some(owner) = self.byte_run_owner(table, governor)? else {
@@ -359,6 +374,7 @@ impl Engine<'_> {
         table: usize,
         byte: u8,
         next_at: usize,
+        repeated: &mut Option<bool>,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let current = &self.tables[table];
@@ -383,16 +399,7 @@ impl Engine<'_> {
         }
         // Supported bodies still need an equal predecessor before inspecting
         // their full run, codecs or owners.
-        governor.charge(Resource::Work, 4)?;
-        let Some(previous) = self
-            .buffer
-            .len()
-            .checked_sub(2)
-            .and_then(|at| self.buffer.get(at))
-        else {
-            return Ok(());
-        };
-        if *previous != byte {
+        if !self.byte_run_may_repeat(byte, repeated, governor)? {
             return Ok(());
         }
         governor.charge(Resource::Work, 3)?;

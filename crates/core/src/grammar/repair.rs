@@ -552,7 +552,7 @@ impl<'a, 's: 'a> SearchState for RepairState<'a, 's> {
         if self.depth as usize > program.insts.len() + 2 {
             return Ok(());
         }
-        let Inst::Lit { lit, next } = program.insts[self.thread.pc as usize] else {
+        let Inst::Lit { lit, next, .. } = program.insts[self.thread.pc as usize] else {
             // Only `seed`'s raw control character opening a JSON envelope
             // string reaches a class run.
             if self.status == Status::Failed {

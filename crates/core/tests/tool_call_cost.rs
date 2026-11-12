@@ -308,9 +308,11 @@ fn busy_turn(calls: usize) -> String {
 /// every call needs a markup repair, with a contested stray opener after
 /// each, exhausts the fixed `Effort::Standard` preset explicitly, and is
 /// recovered with every call `Resolved` under `ToolRecoveryRequest::sized`:
-/// `⌈128 / 8⌉ = 16` candidates for each of its 448 openers (64 calls, each
-/// opened at `<tool_call>` by three dialects and at `<function=` by one, and 64
-/// stray lines, each opened by three dialects). Competing segmentations of
+/// `⌈128 / 8⌉ = 16` candidates for each of its 576 sizing occurrences:
+/// 128 `<tool_call>` tokens in three dialects, 64 `<function=` tokens in Qwen,
+/// and 128 `function` tokens in the `deepseek-v3-stripped.v1` opener allow-list.
+/// Sizing counts literal occurrences even where runtime framing forbids an
+/// attempt. Competing segmentations of
 /// the stray lines that recover the same calls are folded per span, so the
 /// readings charged grow with the calls instead of doubling per call.
 #[test]
@@ -331,9 +333,9 @@ fn busy_turn_resolves_every_call_under_sized() {
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
     let openers = DialectSet::built_in().call_openers(output.as_bytes());
-    assert_eq!(openers, 448);
+    assert_eq!(openers, 576);
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
-    assert_eq!(request.budget.candidates, 128 + 16 * 448);
+    assert_eq!(request.budget.candidates, 128 + 16 * 576);
     let result = tools.recover(
         output.as_bytes(),
         &request,

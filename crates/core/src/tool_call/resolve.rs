@@ -2501,6 +2501,12 @@ impl Resolver<'_> {
                     governor,
                 )?;
             }
+            if matches!(
+                &parameter.value,
+                ValueShape::String(_) | ValueShape::Unmodeled
+            ) {
+                governor.charge(Resource::ScratchBytes, occurrence.value.estimated_bytes())?;
+            }
             for mut typed in self.typed(
                 scope,
                 occurrence.value.clone(),
@@ -2642,7 +2648,11 @@ impl Resolver<'_> {
         governor.charge(Resource::Work, 1)?;
         governor.charge(
             Resource::ScratchBytes,
-            value.estimated_bytes().saturating_add(TYPED_BYTES),
+            if matches!(shape, ValueShape::String(_) | ValueShape::Unmodeled) {
+                TYPED_BYTES
+            } else {
+                value.estimated_bytes().saturating_add(TYPED_BYTES)
+            },
         )?;
         match shape {
             ValueShape::String(_) | ValueShape::Unmodeled => Ok(vec![Typed::plain(value)]),
@@ -2667,6 +2677,9 @@ impl Resolver<'_> {
                     blocker: None,
                 })];
                 for (index, value) in values.iter().enumerate() {
+                    if matches!(item.as_ref(), ValueShape::String(_) | ValueShape::Unmodeled) {
+                        governor.charge(Resource::ScratchBytes, value.estimated_bytes())?;
+                    }
                     let typed = self.typed(
                         scope,
                         value.clone(),
@@ -3018,13 +3031,11 @@ impl Names<'_> {
         state: &Assignment<'_>,
         governor: &mut Governor,
     ) -> Result<Vec<Slot>, StopReason> {
-        let mut slots: Vec<Slot> = Vec::with_capacity(self.members.len() + state.moves.len());
-        let mut members: Vec<Member> = self.members.to_vec();
         // The copied members, and per member its slot, occurrence and
         // source pointer.
         governor.charge(
             Resource::ScratchBytes,
-            members
+            self.members
                 .iter()
                 .map(|member| {
                     MEMBER_BYTES
@@ -3041,6 +3052,8 @@ impl Names<'_> {
                 })
                 .sum(),
         )?;
+        let mut slots: Vec<Slot> = Vec::with_capacity(self.members.len() + state.moves.len());
+        let mut members: Vec<Member> = self.members.to_vec();
         let mut moved: Vec<(usize, Occurrence)> = Vec::new();
         for &(member, child, index) in &state.moves {
             if let Value::Object(children) = &members[member as usize].value.value {
@@ -3978,44 +3991,38 @@ fn reading_digests(
     reading: &CallReading,
     governor: &mut Governor,
 ) -> Result<(Digest, Digest), StopReason> {
-    // The arguments' JSON is the only transient copy: written into a
-    // buffer sized (and leased) by its conservative estimate, so it is
-    // allocated once; every other part streams into the digests.
-    let estimate = reading.arguments.estimated_bytes();
-    let lease = governor.lease_scratch(estimate)?;
-    let mut json = String::with_capacity(usize::try_from(estimate).unwrap_or(usize::MAX));
-    reading.arguments.write_json(&mut json);
+    fn part(
+        builder: &mut DigestBuilder,
+        bytes: &[u8],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, size(bytes.len()).saturating_add(8))?;
+        builder.update(&(bytes.len() as u64).to_be_bytes());
+        builder.update(bytes);
+        Ok(())
+    }
     let blocker = reading
         .blocker
         .as_ref()
         .map_or_else(String::new, ToString::to_string);
     let mut builder = DigestBuilder::new();
-    let mut encoded = 0_usize;
-    let mut spans = 0_usize;
-    let mut part = |builder: &mut DigestBuilder, bytes: &[u8]| {
-        builder.update(&(bytes.len() as u64).to_be_bytes());
-        builder.update(bytes);
-        encoded += 8 + bytes.len();
-    };
     part(
         &mut builder,
         reading.tool.as_deref().unwrap_or("").as_bytes(),
-    );
-    part(&mut builder, json.as_bytes());
-    part(&mut builder, blocker.as_bytes());
-    drop(json);
-    drop(lease);
+        governor,
+    )?;
+    reading.arguments.hash_json_part(&mut builder, governor)?;
+    part(&mut builder, blocker.as_bytes(), governor)?;
     let content = builder.clone().finish();
     for evidence in &reading.repairs.evidence {
-        part(&mut builder, evidence.rule.as_bytes());
-        part(&mut builder, evidence.explanation.as_bytes());
+        part(&mut builder, evidence.rule.as_bytes(), governor)?;
+        part(&mut builder, evidence.explanation.as_bytes(), governor)?;
         if let Some(span) = &evidence.span {
+            governor.charge(Resource::Work, 16)?;
             builder.update(&(span.bytes.start as u64).to_be_bytes());
             builder.update(&(span.bytes.end as u64).to_be_bytes());
-            spans += 16;
         }
     }
-    governor.charge(Resource::Work, size(encoded + spans))?;
     Ok((content, builder.finish()))
 }
 

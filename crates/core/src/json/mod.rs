@@ -430,6 +430,15 @@ impl Node {
         total
     }
 
+    /// Hash the exact compact JSON with its eight-byte network-order length.
+    pub(crate) fn hash_json_part(
+        &self,
+        builder: &mut crate::digest::DigestBuilder,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        emission::hash_part(self, builder, governor)
+    }
+
     pub(crate) fn write_json(&self, output: &mut String) {
         emission::append(self, output);
     }

@@ -89,6 +89,7 @@ mod envelope;
 mod failure_header;
 pub(crate) use failure_header::{FailureWitness, HeaderSpan};
 mod insertion;
+mod value_owner;
 pub(crate) use envelope::{CompletedParts, PartEnvelope, SourceEnvelope, retained_context};
 
 /// Original name capture and optional beginning of its chained call.
@@ -373,7 +374,7 @@ impl ScratchCharge for HistNode {
 /// Reset whenever no configuration is live.
 pub(crate) struct Arena {
     pub(crate) nodes: ScratchVec<HistNode>,
-    pub(crate) values: Vec<ArgTree>,
+    values: value_owner::Values,
     pub(crate) edits: Vec<MarkupEdit>,
     /// Live codec states, out of line so a configuration stays `Copy`
     /// whatever state a codec keeps; each body configuration owns its slot.
@@ -399,7 +400,7 @@ pub(crate) struct Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
-        drop(core::mem::take(&mut self.values));
+        self.values.clear();
         drop(core::mem::take(&mut self.edits));
         self.codecs.clear();
         drop(core::mem::take(&mut self.chains));
@@ -417,7 +418,7 @@ const _: () = assert!(
 );
 
 impl Arena {
-    fn new(governor: &Governor) -> Result<Self, StopReason> {
+    fn new(table_count: usize, governor: &mut Governor) -> Result<Self, StopReason> {
         governor.scratch_meter().charge(CODEC_METADATA_BYTES)?;
         let codec_metadata = governor.scratch_lease_for(CODEC_METADATA_BYTES);
         let mut nodes = ScratchVec::new(governor);
@@ -428,7 +429,7 @@ impl Arena {
         })?;
         Ok(Self {
             nodes,
-            values: Vec::new(),
+            values: value_owner::Values::new(table_count, governor)?,
             edits: Vec::new(),
             codecs: ScratchVec::new(governor),
             _codec_metadata: codec_metadata,
@@ -481,14 +482,29 @@ impl Arena {
     /// alternative reading (see [`CodecValue::alternative`]) records both,
     /// packed side by side, so the call has both readings; were one
     /// cheaper, it alone is kept.
-    fn codec_value(&mut self, prev: u32, mut value: CodecValue) -> Result<(u32, u64), StopReason> {
+    fn codec_value(
+        &mut self,
+        table: usize,
+        prev: u32,
+        value: CodecValue,
+        governor: &mut Governor,
+    ) -> Result<(u32, u64), StopReason> {
+        let mut pending = value_owner::Pending::new(value, governor)?;
         let mut best = None;
         loop {
+            let value = pending
+                .value
+                .take()
+                .expect("the next codec reading is present");
             let (tree, edits, alternative) = value.into_parts();
-            let mut hist = self.value(prev, tree)?;
+            pending.value = alternative.map(crate::grammar::codec::CodecAlternative::into_value);
+            let tree = pending.tree(tree, governor)?;
+            let index = self.values.insert(table, tree, governor)?;
+            let mut hist = self.push(prev, HistKind::Value(index))?;
             let mut cost = 0_u64;
             for edit in edits {
                 cost = cost.saturating_add(edit.rule().cost);
+                pending.transfer(edit.estimated_bytes())?;
                 hist = self.adopt_edit(hist, edit)?;
             }
             best = Some(match best {
@@ -499,20 +515,10 @@ impl Arena {
                     core::cmp::Ordering::Greater => (prior, least),
                 },
             });
-            match alternative {
-                Some(next) => value = next.into_value(),
-                None => return Ok(best.expect("the first reading was recorded")),
+            if pending.value.is_none() {
+                return Ok(best.expect("the first reading was recorded"));
             }
         }
-    }
-
-    fn value(&mut self, prev: u32, tree: ArgTree) -> Result<u32, StopReason> {
-        // The codec charged exactly `tree.estimated_bytes()` when it built
-        // the tree; that charge is released with the arena.
-        self.charged = self.charged.saturating_add(tree.estimated_bytes());
-        self.values.push(tree);
-        let index = index_u32(self.values.len() - 1);
-        self.push(prev, HistKind::Value(index))
     }
 
     /// Admit and construct one native codec and its governed slot.
@@ -568,7 +574,7 @@ impl Arena {
             kind: HistKind::Root,
             evidence: HistoryEvidence(0),
         })?;
-        drop(core::mem::take(&mut self.values));
+        self.values.reset(governor)?;
         drop(core::mem::take(&mut self.edits));
         self.codecs.clear();
         self.deferred.clear();
@@ -676,6 +682,7 @@ impl Out {
 /// The interpreter over one table's program, with split borrows of the
 /// engine state it needs.
 pub(crate) struct Step<'a, 's> {
+    table: usize,
     pub(crate) grammar: &'s CompiledGrammar,
     pub(crate) program: &'s Program,
     /// What the program reads (a call's verbatim argument body may hold
@@ -880,7 +887,7 @@ impl<'s> Step<'_, 's> {
             return Ok(());
         }
         match self.program.insts[thread.pc as usize] {
-            Inst::Lit { lit, next } => {
+            Inst::Lit { lit, next, .. } => {
                 self.step_literal(thread, lit, next, byte, stack, out, governor)
             }
             Inst::Class { class, next } => {
@@ -2261,7 +2268,9 @@ impl<'s> Step<'_, 's> {
                     .unwrap_or(body_end);
                 Ok(Err(Finished::Unread { at }))
             }
-            Ok(value) => Ok(Ok(self.arena.codec_value(hist, value)?)),
+            Ok(value) => Ok(Ok(self
+                .arena
+                .codec_value(self.table, hist, value, governor)?)),
             Err(fault) => Ok(Err(Finished::Fault(fault))),
         }
     }
@@ -2707,28 +2716,15 @@ impl<'s> Step<'_, 's> {
 
     /// Classify a closure terminal without extending the finite opener phase.
     fn opener_ownership(
-        &self,
         ownership: u8,
-        pc: u32,
+        opener: bool,
         governor: &mut Governor,
     ) -> Result<u8, StopReason> {
         if ownership & 1 == 0 {
             return Ok(2);
         }
         governor.charge(Resource::Work, 1)?;
-        // epsilon_closure prepares sorted, unique PCs. Admit only the probes
-        // needed to classify this new terminal, once at its closure boundary.
-        let (mut low, mut high) = (0, self.program.openers.len());
-        while low < high {
-            governor.charge(Resource::Work, 1)?;
-            let middle = low + (high - low) / 2;
-            match self.program.openers[middle].cmp(&pc) {
-                core::cmp::Ordering::Less => low = middle + 1,
-                core::cmp::Ordering::Greater => high = middle,
-                core::cmp::Ordering::Equal => return Ok(ownership),
-            }
-        }
-        Ok(2)
+        Ok(if opener { ownership } else { 2 })
     }
 
     /// Follow every input-free transition from `pc` at offset `at`.
@@ -2796,9 +2792,9 @@ impl<'s> Step<'_, 's> {
                     })?;
                     continue;
                 }
-                Inst::Lit { .. } => (
+                Inst::Lit { opener, .. } => (
                     Sub::Lit(0),
-                    self.opener_ownership(thread.ownership, pc, governor)?,
+                    Self::opener_ownership(thread.ownership, opener, governor)?,
                 ),
                 Inst::Class { class, .. } => {
                     (Sub::Class(self.class_dfa(class, governor)?.start()), 2)
@@ -3224,7 +3220,8 @@ impl<'s> Step<'_, 's> {
 
     /// A charged copy of codec value `index`.
     fn value(&self, index: u32, governor: &mut Governor) -> Result<ArgTree, StopReason> {
-        let tree = &self.arena.values[index as usize];
+        governor.charge(Resource::Work, 1)?;
+        let tree = self.arena.values.get(self.table, index)?;
         governor.charge(Resource::ScratchBytes, tree.estimated_bytes())?;
         Ok(tree.clone())
     }
@@ -3482,14 +3479,14 @@ impl<'s> Step<'_, 's> {
                         // Original readings share this materialized cost.
                         // Joint-capture alternatives retain their extra cost
                         // without charging it to the original reading.
-                        let cost = readings[0].cost;
-                        let span = readings[0].span.clone();
-                        self.expand_joint(&mut readings, governor)?;
-                        let weight = self.undeclared(shape.kind, &readings);
+                        let cost = readings.values[0].cost;
+                        let span = readings.values[0].span.clone();
+                        readings.expand(self, governor)?;
+                        let weight = self.undeclared(shape.kind, &readings.values);
                         (
                             Part::Call(CallSegment {
                                 span,
-                                readings,
+                                readings: readings.into_values(),
                                 derivations: Vec::new(),
                             }),
                             cost.saturating_add(weight),
@@ -3530,7 +3527,7 @@ fn matching_group(
             .zip(calls)
             .all(|(known, call)| match (known, call) {
                 (PartReadings::Call(known), PartReadings::Call(call)) => {
-                    known[0].cost == call[0].cost
+                    known.values[0].cost == call.values[0].cost
                 }
                 (PartReadings::Rejected(..), PartReadings::Rejected(..)) => true,
                 _ => false,
@@ -3552,13 +3549,13 @@ fn merge_part_readings(
         let (PartReadings::Call(readings), PartReadings::Call(mut call)) = (readings, part) else {
             continue;
         };
-        let call = call.remove(0);
-        if !readings.contains(&call) {
-            // Every reading beyond the first competes.
-            if !readings.is_empty() {
+        if !readings.values.contains(&call.values[0]) {
+            // Admission precedes ownership transfer; refusal drops the input.
+            if !readings.values.is_empty() {
                 governor.charge(Resource::Candidates, 1)?;
             }
-            readings.push(call);
+            readings.storage.absorb(call.storage);
+            readings.values.append(&mut call.values);
         }
     }
     Ok(())
@@ -3800,18 +3797,35 @@ struct Tail {
 }
 
 impl Arena {
-    /// The parts of `chained` and the scratch holding them charges.
+    /// Copy shared prefixes and move the uniquely owned last part.
     pub(crate) fn parts(
         &self,
-        chained: &Chained,
+        chained: Chained,
         governor: &mut Governor,
     ) -> Result<(Parts, u64), StopReason> {
+        const CONTROL_BYTES: u64 = 384;
+        const _: () = assert!(
+            core::mem::size_of::<(
+                (Chained, ScratchLease),
+                Vec<u32>,
+                Parts,
+                Result<(Parts, u64), StopReason>,
+                ScratchLease,
+                [u64; 2],
+            )>() as u64
+                <= CONTROL_BYTES
+        );
+        let bytes = chained.last_bytes;
+        // Tuple fields drop in order, even on a refused first admission.
+        let mut owned = (chained, governor.scratch_lease_for(bytes));
+        let _controls = governor.lease_scratch(CONTROL_BYTES)?;
         let mut closed = Vec::new();
-        let mut at = chained.closed;
-        let mut bytes = chained.last_bytes;
-        if at != NO_CHAIN {
-            bytes = bytes.saturating_add(self.chains[at as usize].bytes);
-        }
+        let mut at = owned.0.closed;
+        let bytes = if at == NO_CHAIN {
+            0
+        } else {
+            self.chains[at as usize].bytes
+        };
         while at != NO_CHAIN {
             governor.charge(Resource::Work, K_CAPTURE)?;
             let node = &self.chains[at as usize];
@@ -3819,7 +3833,7 @@ impl Arena {
             at = node.parent;
         }
         governor.charge(Resource::Work, K_CAPTURE)?;
-        governor.charge(Resource::ScratchBytes, bytes)?;
+        owned.1.absorb(governor.lease_scratch(bytes)?);
         let mut parts: Parts = closed
             .iter()
             .rev()
@@ -3828,14 +3842,16 @@ impl Arena {
                 (node.part.clone(), node.cost)
             })
             .collect();
-        parts.push((chained.last.clone(), chained.last_cost));
+        parts.push((owned.0.last, owned.0.last_cost));
         let no_lead = [];
-        let lead = match chained.lead {
+        let lead = match owned.0.lead {
             NO_CHAIN => &no_lead[..],
             lead => &self.leads[lead as usize].edits,
         };
         lead_split(&mut parts, lead);
-        Ok((parts, bytes))
+        let charged = owned.1.bytes();
+        owned.1.retain();
+        Ok((parts, charged))
     }
 
     /// How many parts `chained` closed before its last.
@@ -3980,6 +3996,37 @@ impl Step<'_, '_> {
         shape: &Shape<'_>,
         governor: &mut Governor,
     ) -> Result<Built, StopReason> {
+        const CONTROL_BYTES: u64 = 512;
+        const _: () = assert!(
+            core::mem::size_of::<(ScratchLease, Result<Built, StopReason>, RawCall, [u64; 4],)>()
+                as u64
+                <= CONTROL_BYTES
+        );
+        let _controls = governor.lease_scratch(CONTROL_BYTES)?;
+        governor.charge(Resource::Work, 2)?;
+        let before = governor.scratch_meter().live();
+        let built = self.build_part(paths, first, shape, governor);
+        if matches!(&built, Ok(Built::Part(..))) {
+            return built;
+        }
+        // The pure builder has dropped every partial reading before return.
+        let bytes = governor
+            .scratch_meter()
+            .live()
+            .checked_sub(before)
+            .ok_or_else(|| invalid_input("discarded part released pre-existing scratch"))?;
+        let cleanup = governor.release_scratch(bytes);
+        built.and_then(|value| cleanup.map(|()| value))
+    }
+
+    /// Build one owned part; the caller refunds abandoned materializations.
+    fn build_part(
+        &self,
+        paths: &[Vec<HistKind>],
+        first: bool,
+        shape: &Shape<'_>,
+        governor: &mut Governor,
+    ) -> Result<Built, StopReason> {
         let skips: Vec<Option<usize>> = paths
             .iter()
             .map(|steps| {
@@ -4019,6 +4066,7 @@ impl Step<'_, '_> {
         }
         let mut readings: Vec<RawCall> = Vec::new();
         for steps in paths {
+            let before = governor.scratch_meter().live();
             let call = match self.reading(steps, shape, governor)? {
                 Ok(call) => call,
                 Err(reason) if paths.len() == 1 => return Ok(Built::Failed(reason)),
@@ -4033,7 +4081,17 @@ impl Step<'_, '_> {
                 // histories in separate segmentations.
                 return Ok(Built::Mixed);
             }
-            if !readings.contains(&call) {
+            if readings.contains(&call) {
+                drop(call);
+                let bytes = governor
+                    .scratch_meter()
+                    .live()
+                    .checked_sub(before)
+                    .ok_or_else(|| {
+                        invalid_input("duplicate reading released pre-existing scratch")
+                    })?;
+                governor.release_scratch(bytes)?;
+            } else {
                 // Every reading beyond the first competes.
                 if !readings.is_empty() {
                     governor.charge(Resource::Candidates, 1)?;
@@ -4132,7 +4190,7 @@ impl Step<'_, '_> {
         governor: &mut Governor,
     ) -> Result<Closed, StopReason> {
         let first = parent == NO_CHAIN;
-        let charged = governor.scratch_meter().total_charged();
+        let charged = governor.scratch_meter().live();
         let (part, cost, lead) = match self.part(paths, first, shape, governor)? {
             Built::Part(part, cost, lead) => (part, cost, lead),
             Built::Failed(reason) => return Ok(Closed::Failed(reason)),
@@ -4140,8 +4198,9 @@ impl Step<'_, '_> {
         };
         let bytes = governor
             .scratch_meter()
-            .total_charged()
-            .saturating_sub(charged);
+            .live()
+            .checked_sub(charged)
+            .ok_or_else(|| invalid_input("part materialization released pre-existing scratch"))?;
         let (depth, cum, first_call, before, held, total) = if first {
             (0, 0, u32::MAX, 0, NO_CHAIN, 0)
         } else {
@@ -4155,6 +4214,12 @@ impl Step<'_, '_> {
                 node.bytes,
             )
         };
+        if let Err(reason) = governor.charge(Resource::ScratchBytes, CHAIN_BYTES) {
+            drop(part);
+            drop(lead);
+            let _ = governor.release_scratch(bytes);
+            return Err(reason);
+        }
         let lead = match lead {
             Some(edits) => {
                 let moved = edits
@@ -4170,7 +4235,6 @@ impl Step<'_, '_> {
             (Part::Call(..), u32::MAX) => (depth, if first { 0 } else { self.tip_cost(parent) }),
             _ => (first_call, before),
         };
-        governor.charge(Resource::ScratchBytes, CHAIN_BYTES)?;
         self.arena.charged = self
             .arena
             .charged
@@ -4225,7 +4289,7 @@ impl Step<'_, '_> {
             open_end: shape.open_end,
             cost: shape.cost.saturating_sub(before),
         };
-        let charged = governor.scratch_meter().total_charged();
+        let charged = governor.scratch_meter().live();
         let (part, cost, lead) = match self.part(&tail.paths, last, &part_shape, governor)? {
             Built::Part(part, cost, lead) => (part, cost, lead),
             Built::Failed(reason) => return Ok(Some(Err(reason))),
@@ -4233,8 +4297,9 @@ impl Step<'_, '_> {
         };
         let last_bytes = governor
             .scratch_meter()
-            .total_charged()
-            .saturating_sub(charged);
+            .live()
+            .checked_sub(charged)
+            .ok_or_else(|| invalid_input("part materialization released pre-existing scratch"))?;
         let (depth, first_call, held) = match closed {
             NO_CHAIN => (0, u32::MAX, NO_CHAIN),
             id => {
@@ -4247,17 +4312,25 @@ impl Step<'_, '_> {
             _ => first_call,
         };
         if first_call == u32::MAX {
-            // No call was read: the attempt is rejected whole.
+            // No call was read: dispose of the unpublished part before refund.
+            drop(part);
+            drop(lead);
+            governor.release_scratch(last_bytes)?;
             return Ok(Some(Err(Rejection::Malformed { at: shape.span.end })));
         }
         let lead = match lead {
             Some(edits) => {
+                if let Err(reason) = governor.charge(Resource::ScratchBytes, CHAIN_BYTES) {
+                    drop(part);
+                    drop(edits);
+                    let _ = governor.release_scratch(last_bytes);
+                    return Err(reason);
+                }
                 let moved = edits
                     .iter()
                     .map(|edit| edit.operator.rule().cost)
                     .fold(EditOperator::GroupSplit.rule().cost, u64::saturating_add);
                 self.arena.leads.push(Lead { edits, moved });
-                governor.charge(Resource::ScratchBytes, CHAIN_BYTES)?;
                 self.arena.charged = self.arena.charged.saturating_add(CHAIN_BYTES);
                 index_u32(self.arena.leads.len() - 1)
             }
@@ -4282,6 +4355,41 @@ impl Step<'_, '_> {
     /// `cuts`), or `None` when a call part has no reading (its rejection
     /// noted in `rejection`).
     fn part_readings(
+        &self,
+        path: &[HistKind],
+        cuts: &[(usize, usize, u64)],
+        shape: &Shape<'_>,
+        rejection: &mut Option<Rejection>,
+        governor: &mut Governor,
+    ) -> Result<Option<Vec<PartReadings>>, StopReason> {
+        const CONTROL_BYTES: u64 = 256;
+        const _: () = assert!(
+            core::mem::size_of::<(
+                ScratchLease,
+                Result<Option<Vec<PartReadings>>, StopReason>,
+                CallReadings,
+                [u64; 2],
+            )>() as u64
+                <= CONTROL_BYTES
+        );
+        let _controls = governor.lease_scratch(CONTROL_BYTES)?;
+        governor.charge(Resource::Work, 2)?;
+        let before = governor.scratch_meter().live();
+        let built = self.build_part_readings(path, cuts, shape, rejection, governor);
+        if matches!(&built, Ok(Some(_))) {
+            return built;
+        }
+        let bytes = governor
+            .scratch_meter()
+            .live()
+            .checked_sub(before)
+            .ok_or_else(|| invalid_input("discarded readings released pre-existing scratch"))?;
+        let cleanup = governor.release_scratch(bytes);
+        built.and_then(|value| cleanup.map(|()| value))
+    }
+
+    /// Build correlated native readings under their caller's transaction.
+    fn build_part_readings(
         &self,
         path: &[HistKind],
         cuts: &[(usize, usize, u64)],
@@ -4342,8 +4450,21 @@ impl Step<'_, '_> {
                     lead,
                 ));
             } else {
+                let before = governor.scratch_meter().live();
                 match self.reading(&path[from..to], &part_shape, governor)? {
-                    Ok(call) => calls.push(PartReadings::Call(vec![call])),
+                    Ok(call) => {
+                        let bytes = governor
+                            .scratch_meter()
+                            .live()
+                            .checked_sub(before)
+                            .ok_or_else(|| {
+                                invalid_input("reading released pre-existing scratch")
+                            })?;
+                        calls.push(PartReadings::Call(CallReadings {
+                            values: vec![call],
+                            storage: governor.scratch_lease_for(bytes),
+                        }));
+                    }
                     Err(reason) => {
                         rejection.get_or_insert(reason);
                         return Ok(None);
@@ -4516,13 +4637,49 @@ pub(crate) enum Part {
 pub(crate) type Parts = Vec<(Part, u64)>;
 
 /// The readings of one part while they are collected.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 enum PartReadings {
-    Call(Vec<RawCall>),
+    Call(CallReadings),
     /// A skipped call: its span, why it was rejected, and (for the
     /// attempt's first call) the tokens read as omitted at the attempt's
     /// start, which belong to the calls the attempt went on to read.
     Rejected(Range<usize>, Rejection, Vec<MarkupEdit>),
+}
+
+/// Values drop before the exact grants backing their materialization.
+#[derive(Debug)]
+struct CallReadings {
+    values: Vec<RawCall>,
+    storage: ScratchLease,
+}
+// The owner fits inside the existing rejected variant's allocation envelope.
+const _: () = assert!(
+    core::mem::size_of::<CallReadings>()
+        <= core::mem::size_of::<(Range<usize>, Rejection, Vec<MarkupEdit>)>()
+);
+const _: () = assert!(
+    core::mem::align_of::<CallReadings>()
+        <= core::mem::align_of::<(Range<usize>, Rejection, Vec<MarkupEdit>)>()
+);
+
+impl CallReadings {
+    fn expand(&mut self, step: &Step<'_, '_>, governor: &mut Governor) -> Result<(), StopReason> {
+        let before = governor.scratch_meter().live();
+        let expanded = step.expand_joint(&mut self.values, governor);
+        let bytes = governor
+            .scratch_meter()
+            .live()
+            .checked_sub(before)
+            .ok_or_else(|| invalid_input("joint expansion released pre-existing scratch"))?;
+        self.storage.absorb(governor.scratch_lease_for(bytes));
+        expanded
+    }
+
+    fn into_values(self) -> Vec<RawCall> {
+        let Self { values, storage } = self;
+        storage.retain();
+        values
+    }
 }
 
 /// The readings of one segmentation while they are collected: where each
@@ -4587,7 +4744,7 @@ pub(crate) fn merge(
     arena: &mut Arena,
     governor: &mut Governor,
 ) -> Result<(), StopReason> {
-    merge_noting(threads, arena, governor, |_| {})
+    merge_noting(threads, arena, governor, |_, _| Ok(()))
 }
 
 /// [`merge`], calling `note` on every configuration kept, in the same
@@ -4596,7 +4753,7 @@ pub(crate) fn merge_noting(
     threads: &mut ScratchVec<Thread>,
     arena: &mut Arena,
     governor: &mut Governor,
-    mut note: impl FnMut(&Thread),
+    mut note: impl FnMut(&Thread, &mut Governor) -> Result<(), StopReason>,
 ) -> Result<(), StopReason> {
     governor.charge(Resource::Work, size(threads.len()).saturating_mul(K_THREAD))?;
     let slice = threads.as_mut_slice();
@@ -4640,7 +4797,7 @@ pub(crate) fn merge_noting(
         threads.pop();
     }
     for thread in threads.as_slice() {
-        note(thread);
+        note(thread, governor)?;
     }
     Ok(())
 }
@@ -4694,6 +4851,36 @@ impl FailureEnd {
     /// Whether the span ends where the attempt failed.
     const fn at_failure(self) -> bool {
         !matches!(self, Self::Stop)
+    }
+}
+
+impl Attempt {
+    /// Preserve native failure, EOF and salvage precedence in ended reports.
+    fn ended_reason(
+        &self,
+        eof: Option<&GenerationStop>,
+        at: usize,
+        tail_reason: Option<Rejection>,
+    ) -> Rejection {
+        let record = self;
+        tail_reason.unwrap_or_else(|| match (eof, record.failure) {
+            (
+                _,
+                Some(
+                    reason @ (Rejection::InvalidUtf8 { .. }
+                    | Rejection::PythonicPositionalRejected { .. }),
+                ),
+            )
+            | (None, Some(reason)) => reason,
+            (Some(_), Some(reason @ Rejection::Malformed { .. }))
+                if !record.completed && record.failure_end.at_failure() =>
+            {
+                reason
+            }
+            (Some(_), Some(reason)) if !record.completed && record.stuck => reason,
+            (Some(_), _) => Rejection::Unterminated,
+            (None, None) => Rejection::Overlapped { at },
+        })
     }
 }
 
@@ -4830,6 +5017,7 @@ const _: () = assert!(
         DeferredRelease,
         Option<usize>,
         Option<bool>,
+        Option<byte_run::RunKind>,
         &'static mut Option<bool>,
         ScratchLease,
         usize,
@@ -4841,13 +5029,26 @@ const _: () = assert!(
     )>() <= 160
 );
 
-fn note_ownership(floors: &mut OwnershipFloors, thread: &Thread) {
-    if thread.ownership & 1 != 0 {
-        floors.0 = Some(floors.0.map_or(thread.start, |old| old.min(thread.start)));
+/// Callers admit one dispatch per input; dual ownership needs one extra.
+fn note_ownership(
+    floors: &mut OwnershipFloors,
+    thread: &Thread,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    let include = |floor: &mut Option<usize>| {
+        *floor = Some(floor.map_or(thread.start, |old| old.min(thread.start)));
+    };
+    match thread.ownership & 3 {
+        0 => {}
+        1 => include(&mut floors.0),
+        2 => include(&mut floors.1),
+        _ => {
+            governor.charge(Resource::Work, 1)?;
+            include(&mut floors.0);
+            include(&mut floors.1);
+        }
     }
-    if thread.ownership & 2 != 0 {
-        floors.1 = Some(floors.1.map_or(thread.start, |old| old.min(thread.start)));
-    }
+    Ok(())
 }
 
 struct Table<'s> {
@@ -5299,7 +5500,7 @@ impl ScratchCharge for Option<ClassStep> {
 
 /// Fixed direct-mapped rows retain full state and byte tags. A collision only
 /// replaces a successful entry; the next different query uses the native DFA.
-const CLASS_STEP_BUCKETS: usize = 64;
+const CLASS_STEP_BUCKETS: usize = 32;
 type ClassSteps = Option<ScratchVec<Option<ClassStep>>>;
 
 impl ScratchCharge for ClassSteps {
@@ -5394,8 +5595,8 @@ pub(crate) struct Engine<'s> {
     deferred: Vec<(usize, Event)>,
     /// No deferred reader, report or whole-start input changed since release.
     deferred_release: DeferredRelease,
-    /// Cached minimum of immutable attempt and deferred-report origins. Every
-    /// insertion or removal invalidates it before changing those collections.
+    /// Cached minimum of immutable attempt and deferred-report origins.
+    /// Mutations invalidate it unless they prove the same minimum survives.
     continuation_floor: ContinuationFloor,
     ownership: Option<OwnershipFloors>,
     /// Revalidated against the current completed-byte thread minimum on use.
@@ -5451,9 +5652,9 @@ impl<'s> Engine<'s> {
             governor.charge(Resource::Work, 1)?;
             if !self.ownership_active {
                 let mut owned = (None, None);
-                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                governor.charge(Resource::Work, size(table.threads.len()))?;
                 for thread in &table.threads {
-                    note_ownership(&mut owned, thread);
+                    note_ownership(&mut owned, thread, governor)?;
                 }
                 table.thread_ownership = owned;
             }
@@ -5605,7 +5806,7 @@ impl<'s> Engine<'s> {
             base: 0,
             fed: 0,
             line_blank: true,
-            arena: Arena::new(governor)?,
+            arena: Arena::new(table_count, governor)?,
             next_attempt: 0,
             stack: ScratchVec::new(governor),
             out: Out::new(governor),
@@ -5682,9 +5883,11 @@ impl<'s> Engine<'s> {
         self.invalidate_byte_run(table, governor)?;
         let stall_cap = self.stall_cap(table);
         let runtime = &mut self.grammars.as_mut_slice()[self.tables[table].grammar];
+        let table_index = table;
         let table = &mut self.tables[table];
         Ok((
             Step {
+                table: table_index,
                 grammar: runtime.grammar,
                 program: table.program,
                 kind: table.kind,
@@ -5798,7 +6001,7 @@ impl<'s> Engine<'s> {
         {
             // Invalidate before either admission path changes the attempt or
             // appends threads: a new attempt never inherits a settled proof.
-            if byte_run::eligible(&self.tables[table]) {
+            if byte_run::eligible(&self.tables[table]).is_some() {
                 byte_run::invalidate(
                     &mut self.byte_runs,
                     &mut self.byte_run_count,
@@ -5851,7 +6054,7 @@ impl<'s> Engine<'s> {
         // The existing idle return stays ahead of proof work. Qualified
         // classes and native bodies share the same cursor materialization.
         let run_candidate = byte_run::eligible(&self.tables[table]);
-        if run_candidate && self.reuse_byte_run(table, byte, at, governor)? {
+        if run_candidate.is_some() && self.reuse_byte_run(table, byte, at, governor)? {
             return Ok(());
         }
         // A miss consumed its cursor before this pre-split thread movement.
@@ -5869,8 +6072,8 @@ impl<'s> Engine<'s> {
         }
         step.advance_settled(stack, at + 1, out, governor)?;
         self.settle(table, at, None, governor)?;
-        if run_candidate && self.byte_run_may_repeat(byte, repeated, governor)? {
-            self.remember_byte_run(table, byte, at + 1, governor)?;
+        if let Some(kind) = run_candidate {
+            self.remember_byte_run(table, kind, byte, at + 1, repeated, governor)?;
         }
         Ok(())
     }
@@ -5905,6 +6108,22 @@ impl<'s> Engine<'s> {
         Ok(id)
     }
 
+    /// Preserve an exact minimum only when this mutation cannot change it.
+    fn note_origin_change(
+        &mut self,
+        origin: usize,
+        adding: bool,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if !matches!(self.continuation_floor, ContinuationFloor::Ready(Some(minimum))
+            if origin > minimum || (adding && origin == minimum))
+        {
+            self.continuation_floor = ContinuationFloor::Invalid;
+        }
+        Ok(())
+    }
+
     /// Invalidate source/phase summaries before inserting a new lexical seed.
     fn note_attempt_start(
         &mut self,
@@ -5912,7 +6131,7 @@ impl<'s> Engine<'s> {
         at: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        self.continuation_floor = ContinuationFloor::Invalid;
+        self.note_origin_change(at, true, governor)?;
         self.ownership = None;
         if self.ownership_active {
             // No ownership reader runs inside a table step; its first merge
@@ -6097,11 +6316,11 @@ impl<'s> Engine<'s> {
                 return Ok(());
             }
             let mut owned = (None, None);
+            governor.charge(Resource::Work, size(live.len()))?;
             if candidate_only {
                 // The ordinary transition cannot restore a lexical bit. A
                 // new seed invalidates this proof before reaching this merge.
-                governor.charge(Resource::Work, size(live.len()))?;
-                merge_noting(live, &mut self.arena, governor, |thread| {
+                merge_noting(live, &mut self.arena, governor, |thread, _| {
                     if thread.ownership & 2 != 0 {
                         owned.1 = Some(
                             owned
@@ -6109,11 +6328,12 @@ impl<'s> Engine<'s> {
                                 .map_or(thread.start, |old: usize| old.min(thread.start)),
                         );
                     }
+                    Ok(())
                 })?;
             } else {
-                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
-                merge_noting(live, &mut self.arena, governor, |thread| {
-                    note_ownership(&mut owned, thread);
+                merge_noting(live, &mut self.arena, governor, |thread, governor| {
+                    note_ownership(&mut owned, thread, governor)?;
+                    Ok(())
                 })?;
             }
             self.publish_thread_ownership(table, owned);
@@ -6147,9 +6367,9 @@ impl<'s> Engine<'s> {
             Self::stop_past(live, opened, &keep, governor)?;
             if opened.is_some() && self.ownership_active {
                 let mut owned = (None, None);
-                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                governor.charge(Resource::Work, size(live.len()))?;
                 for thread in live.as_slice() {
-                    note_ownership(&mut owned, thread);
+                    note_ownership(&mut owned, thread, governor)?;
                 }
                 self.publish_thread_ownership(table, owned);
             }
@@ -6267,15 +6487,16 @@ impl<'s> Engine<'s> {
         let tracking = self.ownership_active;
         if dirty {
             if tracking {
-                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
+                governor.charge(Resource::Work, size(live.len()))?;
             }
-            merge_noting(live, &mut self.arena, governor, |thread| {
+            merge_noting(live, &mut self.arena, governor, |thread, governor| {
                 if tracking {
-                    note_ownership(&mut owned, thread);
+                    note_ownership(&mut owned, thread, governor)?;
                 }
                 if matches!(thread.sub, Sub::Body(state, _) if state & PAST_REPAIRED != 0) {
                     reading.push(thread.attempt);
                 }
+                Ok(())
             })?;
         } else {
             // The first merge's winners and ownership census remain exact.
@@ -6291,9 +6512,10 @@ impl<'s> Engine<'s> {
         if repaired {
             if tracking {
                 owned = (None, None);
-                governor.charge(Resource::Work, size(live.len()).saturating_mul(2))?;
-                merge_noting(live, &mut self.arena, governor, |thread| {
-                    note_ownership(&mut owned, thread);
+                governor.charge(Resource::Work, size(live.len()))?;
+                merge_noting(live, &mut self.arena, governor, |thread, governor| {
+                    note_ownership(&mut owned, thread, governor)?;
+                    Ok(())
                 })?;
             } else {
                 merge(live, &mut self.arena, governor)?;
@@ -7285,6 +7507,9 @@ impl<'s> Engine<'s> {
             self.release_past(table, record.id, governor)?;
             self.forget_written(table, record.id, governor)?;
             let record = self.tables[table].attempts.as_slice()[index];
+            if record.completed && self.tables[table].attempts.len() == 1 {
+                self.reclaim_completed_values(table, live, governor)?;
+            }
             self.release(table, record.id, governor)?;
             // How far the attempt read the calls it skipped, when it skipped
             // more than one: an attempt that ends rejected whole read their
@@ -7327,24 +7552,7 @@ impl<'s> Engine<'s> {
                     start: record.start,
                     at: end,
                     completed: record.completed,
-                    reason: tail_reason.unwrap_or_else(|| match (eof, record.failure) {
-                        (
-                            _,
-                            Some(
-                                reason @ (Rejection::InvalidUtf8 { .. }
-                                | Rejection::PythonicPositionalRejected { .. }),
-                            ),
-                        )
-                        | (None, Some(reason)) => reason,
-                        (Some(_), Some(reason @ Rejection::Malformed { .. }))
-                            if !record.completed && record.failure_end.at_failure() =>
-                        {
-                            reason
-                        }
-                        (Some(_), Some(reason)) if !record.completed && record.stuck => reason,
-                        (Some(_), _) => Rejection::Unterminated,
-                        (None, None) => Rejection::Overlapped { at },
-                    }),
+                    reason: record.ended_reason(eof, at, tail_reason),
                     salvage,
                     outread: false,
                 };
@@ -7354,7 +7562,7 @@ impl<'s> Engine<'s> {
                 self.take_boundary(table, record.id);
                 self.forget_failure_header(record.id, governor)?;
             }
-            self.continuation_floor = ContinuationFloor::Invalid;
+            self.note_origin_change(record.start, false, governor)?;
             self.ownership = None;
             governor.charge(Resource::Work, 3)?;
             let unopened = self.tables[table]
@@ -7373,6 +7581,59 @@ impl<'s> Engine<'s> {
         // Only an attempt that ended can release a held report.
         if retired {
             self.release_deferred(governor)?;
+            self.reclaim_table_values(table, live, governor)?;
+        }
+        Ok(())
+    }
+
+    /// A completed last owner has no future salvage or native value reader.
+    fn reclaim_completed_values(
+        &mut self,
+        table: usize,
+        live: &ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if !self.arena.values.has_values(table)? {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, 4)?;
+        let current = &self.tables[table];
+        if live.is_empty()
+            && current.trails.is_empty()
+            && current.past.is_empty()
+            && current.stalled.is_empty()
+        {
+            // release_past has materialized its reports. Remaining held parts
+            // own their arguments, and completed salvage cannot read the arena.
+            self.arena.values.retire(table, governor)?;
+        }
+        Ok(())
+    }
+
+    /// Release original values only after every native reader has drained.
+    fn reclaim_table_values(
+        &mut self,
+        table: usize,
+        live: &ScratchVec<Thread>,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, 1)?;
+        if !self.arena.values.has_values(table)? {
+            return Ok(());
+        }
+        governor.charge(Resource::Work, 6)?;
+        let current = &self.tables[table];
+        if current.attempts.is_empty()
+            && live.is_empty()
+            && current.trails.is_empty()
+            && current.held.by_attempt.is_empty()
+            && current.past.is_empty()
+            && current.stalled.is_empty()
+        {
+            // Reports and chains already own their materialized arguments.
+            // Future attempts start new histories and cannot read these IDs.
+            self.arena.values.retire(table, governor)?;
         }
         Ok(())
     }
@@ -7426,8 +7687,8 @@ impl<'s> Engine<'s> {
                 });
         if reads_on {
             governor.charge(Resource::Work, 1)?;
+            self.note_origin_change(record.start, true, governor)?;
             governor.charge(Resource::ScratchBytes, DEFERRED_REPORT_BYTES)?;
-            self.continuation_floor = ContinuationFloor::Invalid;
             self.ownership = None;
             self.deferred.push((record.start, ended));
             self.deferred_release = DeferredRelease::Changed;
@@ -7490,7 +7751,7 @@ impl<'s> Engine<'s> {
                 index += 1;
                 continue;
             }
-            self.continuation_floor = ContinuationFloor::Invalid;
+            self.note_origin_change(start, false, governor)?;
             self.ownership = None;
             let (_, mut ended) = self.deferred.remove(index);
             if let Event::Ended { outread, .. } = &mut ended {
@@ -7655,18 +7916,11 @@ impl<'s> Engine<'s> {
                 self.events.push(event);
             }
             HeldBody::Chain(chained) => {
-                let materialized = self.arena.parts(&chained, governor);
-                let (mut parts, charged) = match materialized {
-                    Ok(materialized) => materialized,
-                    Err(reason) => {
-                        let _ = HeldBody::Chain(chained).discard(governor);
-                        return Err(reason);
-                    }
-                };
+                let (source_table, attempt, at) = (chained.table, chained.attempt, chained.at);
+                let (mut parts, charged) = self.arena.parts(chained, governor)?;
                 if let Err(reason) = self.normalize_deepseek_layout(table, &mut parts, governor) {
                     drop(parts);
                     let _ = governor.release_scratch(charged);
-                    let _ = HeldBody::Chain(chained).discard(governor);
                     return Err(reason);
                 }
                 let envelopes =
@@ -7675,22 +7929,16 @@ impl<'s> Engine<'s> {
                         Err(reason) => {
                             drop(parts);
                             let _ = governor.release_scratch(charged);
-                            let _ = HeldBody::Chain(chained).discard(governor);
                             return Err(reason);
                         }
                     };
                 let event = Event::Completed {
-                    table: chained.table,
-                    attempt: chained.attempt,
-                    at: chained.at,
+                    table: source_table,
+                    attempt,
+                    at,
                     parts: CompletedParts { parts, envelopes },
                     charged,
                 };
-                if let Err(reason) = HeldBody::Chain(chained).discard(governor) {
-                    drop(event);
-                    let _ = governor.release_scratch(charged);
-                    return Err(reason);
-                }
                 self.events.push(event);
             }
         }
@@ -8729,9 +8977,9 @@ impl<'s> Engine<'s> {
             Self::stop_past(&mut table.threads, Some(start), &[], governor)?;
             if self.ownership_active {
                 table.thread_ownership = (None, None);
-                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                governor.charge(Resource::Work, size(table.threads.len()))?;
                 for thread in &table.threads {
-                    note_ownership(&mut table.thread_ownership, thread);
+                    note_ownership(&mut table.thread_ownership, thread, governor)?;
                 }
             }
         }
@@ -8776,9 +9024,9 @@ impl<'s> Engine<'s> {
             keep(&mut table.threads, |thread| thread.attempt != attempt);
             if self.ownership_active {
                 table.thread_ownership = (None, None);
-                governor.charge(Resource::Work, size(table.threads.len()).saturating_mul(2))?;
+                governor.charge(Resource::Work, size(table.threads.len()))?;
                 for thread in &table.threads {
-                    note_ownership(&mut table.thread_ownership, thread);
+                    note_ownership(&mut table.thread_ownership, thread, governor)?;
                 }
             }
             governor.charge(Resource::Work, size(table.attempts.len()).saturating_add(4))?;

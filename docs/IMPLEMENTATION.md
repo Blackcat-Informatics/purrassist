@@ -15,6 +15,57 @@ that same byte; incompatible endings omit the unused scan while retaining the
 complete positive source and provenance path. Query controls and comparisons
 retain explicit admission.
 
+Retained source doubles below 64 KiB capacity, then grows by one half of its
+current capacity. Growth remains a byte-wise decision independent of feed
+boundaries, admitting planning, relocation and reserved storage before
+allocation. Other scratch vectors retain their original growth policy.
+
+Literal instructions retain exact opener membership from the compiler's
+original epsilon closure. Runtime ownership classification reads this immutable
+flag with explicit admission. A continuation minimum survives single-origin
+additions at or above it and removals strictly above it; other changes invalidate
+the minimum before reuse. Ownership and deferred-report certificates retain
+their independent invalidation rules.
+
+Reading digests count and hash compact JSON through the shared structural cursor
+and escaping authority. Both passes admit traversal, escaping and hash work;
+only cursor frames and bounded controls coexist, without a complete JSON copy.
+When the count pass proves every quoted token needs no escaping, hashing writes
+those immutable tokens directly without another scan. Other values use the same
+escaping walker in both passes. Unescaped string runs retain their exact bytes. Length prefixes, member order,
+number spelling and digest framing remain unchanged.
+
+Recovery consumes top-level calls when folding leaves one admitted output.
+Owned fold facts preserve selected branches, unioned origins and dialect labels
+while segment borrows end. Arguments, alternatives and ledgers move into final
+calls with their existing grants; output carriers and temporary controls remain
+admitted. Multiple outputs retain their necessary copies. Both paths share call
+conversion, reading initialization, finalization and native origin lookup.
+
+Native ownership censuses use one masked phase dispatch. Single-phase threads
+omit the second independent flag probe; dual ownership admits its additional
+work before updating either floor. Canonical merges still finish before their
+winner callbacks, and a refused census publishes no partial ownership result.
+
+Finished codec trees retain independent payload owners and stable native value
+indices. Each table links only its own slots; after its final attempt and every
+live, trail, held, past and stalled reader drain, it releases those original
+trees. Empty table heads omit reader checks after a charged presence query.
+A completed final owner can release originals before its owned held
+parts transfer, after past reports finish and before any completed salvage. Outgoing reports and chains retain their materialized arguments. Other
+tables and fresh attempts cannot read the retired values. Slot capacity and
+table heads remain admitted; a pending codec transfer disposes of unadopted
+trees and edits on refusal. EOF length cuts and explicit abandonment retain
+their original arena-wide disposal path.
+
+Chained part construction refunds discarded and duplicate materializations
+after their buffers drop. Successful parts transfer checked live scratch deltas,
+excluding released temporary preparation. Mixed histories retain their ordinary
+flat fallback. Chain metadata is admitted before payloads enter persistent arena
+owners; refusal and no-call rejection dispose of unpublished payloads first.
+Outgoing chain publication moves its uniquely owned last part and copies only
+shared prefixes, transferring their combined reservations exactly once.
+
 Repair search keys encode their five unsigned integer fields in shortest
 base-128 form, retaining status, mode and the complete edit digest. Native tie
 ordering and exact duplicate identity remain unchanged; actual key bytes and
@@ -111,7 +162,7 @@ Contested spans admit their remaining paths individually before the existing
 whole-message product gate. Standalone native admission remains unchanged.
 Runtime, refusal-order and resource qualification remain pending automatic CI.
 
-Native class queries retain sixty-four exact successful transition/deadness entries
+Native class queries retain thirty-two exact successful transition/deadness entries
 per initialized class, indexed by the low byte bits with full state and byte tags.
 Collisions use the original native query. DFA and governed row construction
 publish together; unused classes allocate no row, and rows survive arena resets
@@ -119,6 +170,18 @@ for the lifetime of their native DFA. Byte proofs inspect the same selected
 entry and keep every existing self-loop guard. Query and initialization work,
 row capacity and construction controls remain admitted. Runtime and resource
 qualification remain pending automatic CI.
+
+Class-run selection carries its immutable production route through settlement
+and rejects a non-class survivor before examining predecessor bytes. Supported
+native bodies share the same immutable predecessor query; full positive class
+and body guards retain their original paths.
+
+Intake retains a successful publication projection only for identical raw
+frontiers and settled ancestry whose uncapped source cutoffs are already
+certified by UTF-8 intake. Appended source cannot change those normalized
+boundaries. Reuse omits duplicate normalization and event traversal queries;
+ownership counters still refresh for every byte. The memo and temporary
+copies retain an explicit metadata owner and are discarded on abandonment.
 
 An unchanged native frontier pinned at source zero retains its complete prior
 projection and settled history after the ordinary engine-floor query succeeds.
@@ -818,8 +881,9 @@ received candidate-byte count without recombining marker, report, turn or settle
 interval minima. Source, encoding, native parsing, frontier normalization and
 event publication still complete first. Other origins retain the full original
 calculation. The selection probe is admitted on every path; no epoch or retained
-cache is added. Intake's 112-byte control reservation includes the actual private
-projection enum alongside its previous carriers. Runtime qualification remains
+cache is added. Intake's 512-byte control reservation includes the actual private
+projection enum, publication memo and temporary copies alongside its previous
+carriers. Runtime qualification remains
 pending automatic CI.
 
 Native codec boxes now own their declared storage from before allocation until
@@ -830,7 +894,7 @@ argument trees, edits, source and output grants remain independent. Slot capacit
 uses one governed buffer with a 96-byte cell bound, including its box-lease header;
 empty slots retain their real capacity reservation. The added buffer header and
 lease have a 32-byte reservation, and construction/finalization controls have
-asserted 640-byte phase bounds. Arena reset and destruction physically free the
+asserted 1,024-byte phase bounds. Arena reset and destruction physically free the
 ordinary value/edit/chain/lead/map buffers before releasing their aggregate grants.
 Current runtime and fixed-budget qualification remain pending automatic CI.
 

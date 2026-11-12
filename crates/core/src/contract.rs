@@ -744,6 +744,37 @@ impl<T: ScratchCharge> ScratchVec<T> {
         let Some(target) = grown_capacity(self.inner.len(), capacity, additional) else {
             return Err(StopReason::BudgetExceeded(Resource::ScratchBytes));
         };
+        self.reserve_to(target)
+    }
+
+    /// Retained source uses smaller geometric steps while preserving linear
+    /// amortized relocation. Callers admit planning and relocation separately.
+    pub(crate) fn reserve_compact(&mut self, additional: usize) -> Result<(), StopReason> {
+        let capacity = self.inner.capacity();
+        let needed = self
+            .inner
+            .len()
+            .checked_add(additional)
+            .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+        if needed <= capacity {
+            return Ok(());
+        }
+        // Small sources keep the original allocation frequency. Large
+        // retained sources limit spare capacity with compact geometric steps.
+        if capacity < 64 * 1024 {
+            return self.reserve_to(needed.max(capacity * 2).max(4));
+        }
+        let target = capacity
+            .checked_add(capacity / 2 + capacity % 2)
+            .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes))?
+            .max(needed)
+            .max(4);
+        self.reserve_to(target)
+    }
+
+    /// Both growth policies share the same admitted fallible allocation.
+    fn reserve_to(&mut self, target: usize) -> Result<(), StopReason> {
+        let capacity = self.inner.capacity();
         if target == capacity {
             return Ok(());
         }

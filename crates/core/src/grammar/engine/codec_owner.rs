@@ -10,7 +10,7 @@ use crate::grammar::codec::{
 use core::ops::Range;
 
 /// Construction and finish have separate lifetimes but the same control bound.
-pub(super) const METADATA_BYTES: u64 = 640;
+pub(super) const METADATA_BYTES: u64 = 1024;
 const _: () = assert!(
     core::mem::size_of::<(
         TakenCodec,
@@ -39,7 +39,13 @@ const _: () =
     assert!(core::mem::size_of::<(TakenCodec, ScratchLease, u64, u32)>() as u64 <= METADATA_BYTES);
 
 const _: () = assert!(
-    core::mem::size_of::<(FinishedCodec, CodecValue, Result<(u32, u64), StopReason>)>() as u64
+    core::mem::size_of::<(
+        FinishedCodec,
+        CodecValue,
+        super::value_owner::Pending,
+        super::value_owner::OwnedValue,
+        Result<(u32, u64), StopReason>,
+    )>() as u64
         <= METADATA_BYTES
 );
 

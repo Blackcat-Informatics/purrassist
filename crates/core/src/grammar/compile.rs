@@ -41,7 +41,7 @@ use run_eligibility::RunEligibility;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inst {
     /// Match a literal (canonical spelling; repairs use its tables).
-    Lit { lit: u32, next: u32 },
+    Lit { lit: u32, next: u32, opener: bool },
     /// Match a maximal class run.
     Class { class: u32, next: u32 },
     /// Skip a verbatim body up to a delimiter.
@@ -1066,10 +1066,15 @@ impl Emitter<'_, '_> {
         visit(depth, self.governor)?;
         let child = depth + 1;
         Ok(match expr {
-            Expr::Literal(id) => self.push(Inst::Lit { lit: id.0, next })?,
+            Expr::Literal(id) => self.push(Inst::Lit {
+                lit: id.0,
+                next,
+                opener: false,
+            })?,
             Expr::Closer(id) => self.push(Inst::Lit {
                 lit: self.closer_literals[id.index()],
                 next,
+                opener: false,
             })?,
             Expr::Class(id) => self.push(Inst::Class { class: id.0, next })?,
             Expr::Until(id) => self.push(Inst::Until { set: id.0, next })?,
@@ -1482,7 +1487,7 @@ fn key_uses(
         let mut seen = ScratchVec::new(governor);
         for (pc, inst) in program.insts.iter().enumerate() {
             governor.charge(Resource::Work, 1)?;
-            let Inst::Lit { lit, next } = *inst else {
+            let Inst::Lit { lit, next, .. } = *inst else {
                 continue;
             };
             let literal_pc = symbol_index(pc, governor)?;
@@ -1745,6 +1750,10 @@ fn compile_program(
                 production: diagnostic(productions[root.index()].name.as_str(), governor)?,
             });
         };
+        governor.charge(Resource::Work, 1)?;
+        if let Inst::Lit { opener, .. } = &mut insts.as_mut_slice()[pc as usize] {
+            *opener = true;
+        }
         let mut mark = |byte: u8| first[usize::from(byte >> 6)] |= 1 << (byte & 63);
         mark(tables.literals[lit as usize].bytes[0]);
         let repairs = &tables.repairs[lit as usize];
@@ -3218,7 +3227,7 @@ fn call_ends(
             {
                 chained = true;
             }
-            if let Inst::Lit { lit, next } = *inst
+            if let Inst::Lit { lit, next, .. } = *inst
                 && pc != opener
             {
                 for (include, into) in [
@@ -3382,7 +3391,7 @@ fn protocol_closer(
     for inst in &program.insts {
         governor.charge(Resource::Work, 1)?;
         match *inst {
-            Inst::Lit { lit, next } if completing[next as usize] => {
+            Inst::Lit { lit, next, .. } if completing[next as usize] => {
                 if last.is_some_and(|prior| prior != lit) {
                     return Err(protocol_error(
                         "one final named fence closer is required",
