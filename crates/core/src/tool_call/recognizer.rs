@@ -1434,8 +1434,19 @@ fn same_example_call(
     right: &CallSegment,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
+    same_call_within_frames(left, right, |left, right| left == right, governor)
+}
+
+/// [`same_example_call`] with the segment and reading spans compared by
+/// `frames`: every other recognized fact must be equal.
+fn same_call_within_frames(
+    left: &CallSegment,
+    right: &CallSegment,
+    frames: impl Fn(&Range<usize>, &Range<usize>) -> bool,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
     governor.charge(Resource::Work, 96)?;
-    if left.span != right.span || left.readings.len() != right.readings.len() {
+    if !frames(&left.span, &right.span) || left.readings.len() != right.readings.len() {
         return Ok(false);
     }
     for derivation in &left.derivations {
@@ -1452,7 +1463,7 @@ fn same_example_call(
     for (left, right) in left.readings.iter().zip(&right.readings) {
         admit_example_call_metadata(left, governor)?;
         admit_example_call_metadata(right, governor)?;
-        if left.span != right.span
+        if !frames(&left.span, &right.span)
             || left.dialect != right.dialect
             || left.kind != right.kind
             || left.order != right.order
@@ -1473,6 +1484,45 @@ fn same_example_call(
             || left.tool != right.tool
             || left.collected != right.collected
             || !same_example_node(&left.root, &right.root, governor)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether two calls of marker-suppressed grammars have frames that differ
+/// only in how much optional layout they hold: each reading spans exactly
+/// its segment and the frames differ only by ASCII whitespace at either end.
+/// Recovery decides after resolution whether the two framings are one
+/// invocation (`recover::projected_layout_dominates`).
+fn layout_frames(
+    left: &CallSegment,
+    right: &CallSegment,
+    output: &[u8],
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.charge(
+        Resource::Work,
+        size(left.readings.len()).saturating_add(size(right.readings.len())),
+    )?;
+    let framed = |segment: &CallSegment| {
+        segment
+            .readings
+            .iter()
+            .all(|reading| reading.dialect.grammar().is_derived() && reading.span == segment.span)
+    };
+    if !framed(left) || !framed(right) {
+        return Ok(false);
+    }
+    for margin in [
+        left.span.start.min(right.span.start)..left.span.start.max(right.span.start),
+        left.span.end.min(right.span.end)..left.span.end.max(right.span.end),
+    ] {
+        governor.charge(Resource::Work, size(margin.len()))?;
+        if !output
+            .get(margin)
+            .is_some_and(|bytes| bytes.iter().all(u8::is_ascii_whitespace))
         {
             return Ok(false);
         }
@@ -3129,17 +3179,22 @@ impl<'s> Recognizer<'s> {
         stop: GenerationStop,
         governor: &mut Governor,
     ) -> Result<RecognizedTurn, StopReason> {
-        self.finish_over(stop, None, governor)
+        self.finish_over(stop, None, false, governor)
     }
 
     /// [`Self::finish`], given the whole `output` when the caller holds it:
     /// a rejected attempt's markup then extends as far as recovery reads it
     /// (`RejectedCall::span`) when fences inside it are kept out of the
     /// prose context; without it, the span its grammar read is used.
+    ///
+    /// `fold_layout` is set by a caller that folds optional-layout framings
+    /// of one marker-suppressed invocation after resolution and charges any
+    /// it does not fold ([`RecognizedTurn::take_layouts`]).
     pub(crate) fn finish_over(
         mut self,
         stop: GenerationStop,
         output: Option<&[u8]>,
+        fold_layout: bool,
         governor: &mut Governor,
     ) -> Result<RecognizedTurn, StopReason> {
         if let Some(reason) = self.failed.take() {
@@ -3177,11 +3232,14 @@ impl<'s> Recognizer<'s> {
             len: end,
             output,
             example_regions: None,
+            fold_layout,
+            layouts: ScratchVec::new(governor),
         };
         let (pieces, failure_proofs) = builder.pieces(last, governor)?;
         let Builder {
             forest,
             example_regions,
+            layouts,
             ..
         } = builder;
         let unused = self.turn.unused_bytes(last, governor)?;
@@ -3218,6 +3276,7 @@ impl<'s> Recognizer<'s> {
             cost: top.cost,
             attempted,
             failure_proofs,
+            layouts,
         })
     }
 }
@@ -3314,6 +3373,71 @@ impl<'t> PlannedReading<'t> {
         Ok(true)
     }
 
+    /// Whether this distinct plan is `other` with only the optional layout
+    /// of some marker-suppressed call frames moved between a frame and the
+    /// content beside it ([`layout_frames`]); every other fact is equal.
+    fn layout_of(
+        &self,
+        other: &Self,
+        output: &[u8],
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        governor.charge(
+            Resource::Work,
+            size(self.segments.len()).saturating_add(size(other.segments.len())),
+        )?;
+        let stored = |segment: &&PlannedSegment<'t>| !matches!(segment, PlannedSegment::Content(_));
+        let pairs = || {
+            self.segments
+                .iter()
+                .filter(stored)
+                .zip(other.segments.iter().filter(stored))
+        };
+        if self.segments.iter().filter(stored).count()
+            != other.segments.iter().filter(stored).count()
+        {
+            return Ok(false);
+        }
+        // Frames first: most distinct plans differ in a segment kind or a
+        // non-layout boundary, which rejects them before any value is read.
+        let mut framed = false;
+        for (a, b) in pairs() {
+            let (PlannedSegment::Stored(a), PlannedSegment::Stored(b)) = (a, b) else {
+                return Ok(false);
+            };
+            if a.span() == b.span() {
+                continue;
+            }
+            let (Segment::Call(a), Segment::Call(b)) = (a, b) else {
+                return Ok(false);
+            };
+            if !layout_frames(a, b, output, governor)? {
+                return Ok(false);
+            }
+            framed = true;
+        }
+        if !framed {
+            return Ok(false);
+        }
+        for (a, b) in pairs() {
+            let (PlannedSegment::Stored(a), PlannedSegment::Stored(b)) = (a, b) else {
+                return Ok(false);
+            };
+            let same = match (a, b) {
+                (Segment::Call(a), Segment::Call(b)) if a.span != b.span => {
+                    // The frames were compared above; every remaining fact
+                    // must be equal.
+                    same_call_within_frames(a, b, |_, _| true, governor)?
+                }
+                _ => core::ptr::eq(a, b) || same_recognized_segment(a, b, governor)?,
+            };
+            if !same {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Only admitted, distinct plans enter the existing owned public IR path.
     fn materialize(self, governor: &mut Governor) -> Result<BuiltReading, StopReason> {
         governor.charge(Resource::Work, size(self.segments.len()))?;
@@ -3341,6 +3465,14 @@ const PATH_METADATA_BYTES: u64 = 512;
 /// The plan table drops its physical storage before the metadata reservation.
 struct PathReadings<'t> {
     readings: ScratchVec<PlannedReading<'t>>,
+    /// How many of `readings` were admitted without a candidate: the layout
+    /// framings of the first (see [`Builder::layout_framing`]) and, when
+    /// every other reading is one, the first itself.
+    layouts: usize,
+    /// Whether the first reading's candidate is still uncharged: it is due
+    /// once a reading that is not a layout framing of it is admitted, or
+    /// when it stays the only reading.
+    first_uncharged: bool,
     metadata: ScratchLease,
 }
 
@@ -3349,6 +3481,8 @@ impl<'t> PathReadings<'t> {
         let metadata = governor.lease_scratch(PATH_METADATA_BYTES)?;
         Ok(Self {
             readings: ScratchVec::new(governor),
+            layouts: 0,
+            first_uncharged: false,
             metadata,
         })
     }
@@ -3409,9 +3543,44 @@ struct Builder<'t> {
     /// The whole output, when the caller holds it.
     output: Option<&'t [u8]>,
     example_regions: Option<ExampleRegions>,
+    /// Whether the caller folds optional-layout framings of one invocation
+    /// after resolution (no strict tool choice), so a framing is admitted
+    /// without a candidate of its own ([`Self::layout_framing`]).
+    fold_layout: bool,
+    /// The start of each choice holding such framings, and their number.
+    layouts: ScratchVec<(usize, usize)>,
 }
 
 impl<'t> Builder<'t> {
+    /// Whether the caller folds the layout framings of one invocation and
+    /// the whole output is at hand to compare their margins.
+    const fn folds_layout(&self) -> bool {
+        self.fold_layout && self.output.is_some()
+    }
+
+    /// Whether `reading` only moves the optional layout of marker-suppressed
+    /// call frames of the first segmentation admitted. Removing markers can
+    /// leave layout as either call framing or content; when the caller folds
+    /// these framings, they are one invocation unless resolution shows
+    /// otherwise, and the caller charges the candidate only then.
+    fn layout_framing(
+        &self,
+        readings: &PathReadings<'t>,
+        reading: &PlannedReading<'t>,
+        governor: &mut Governor,
+    ) -> Result<bool, StopReason> {
+        let (true, Some(output), Some(first)) =
+            (self.folds_layout(), self.output, readings.readings.first())
+        else {
+            return Ok(false);
+        };
+        // Only the first segmentation is compared: every framing of one
+        // invocation differs from it by layout alone, so the comparisons
+        // stay linear in the segmentations. A framing of a later, genuinely
+        // different segmentation is charged as before.
+        reading.layout_of(first, output, governor)
+    }
+
     fn predecessors(&self, node: u32) -> [Option<u32>; 2] {
         let TurnNode { prev, kind, .. } = self.turn.nodes[node as usize];
         match kind {
@@ -3540,7 +3709,18 @@ impl<'t> Builder<'t> {
                         .proofs
                         .intersect(&reading.proofs, governor)?;
                 } else {
-                    governor.charge(Resource::Candidates, 1)?;
+                    if readings.readings.is_empty() && self.folds_layout() {
+                        // Charged once a reading that is not a layout
+                        // framing of it is admitted, or when it stays alone.
+                        readings.first_uncharged = true;
+                    } else if self.layout_framing(&readings, &reading, governor)? {
+                        readings.layouts += 1;
+                    } else {
+                        if core::mem::take(&mut readings.first_uncharged) {
+                            governor.charge(Resource::Candidates, 1)?;
+                        }
+                        governor.charge(Resource::Candidates, 1)?;
+                    }
                     crate::contract::push_scratch(&mut readings.readings, reading, governor)?;
                 }
                 continue;
@@ -3563,6 +3743,16 @@ impl<'t> Builder<'t> {
                     )?;
                 }
                 TurnKind::Root => {}
+            }
+        }
+        if core::mem::take(&mut readings.first_uncharged) {
+            if readings.layouts == 0 {
+                governor.charge(Resource::Candidates, 1)?;
+            } else {
+                // Every other reading only moves the optional layout of the
+                // first: the choice is one invocation when recovery folds it,
+                // and the first is charged with them only when it does not.
+                readings.layouts += 1;
             }
         }
         governor.check()?;
@@ -3591,6 +3781,13 @@ impl<'t> Builder<'t> {
                             reversed.push(Piece::Segment(segment));
                         }
                     } else {
+                        if readings.layouts > 0 {
+                            crate::contract::push_scratch(
+                                &mut self.layouts,
+                                (self.turn.nodes[stop as usize].end, readings.layouts),
+                                governor,
+                            )?;
+                        }
                         let (readings, _readings_owner) = readings.into_owned_parts();
                         let mut derivations = Vec::with_capacity(readings.len());
                         let mut options = Vec::with_capacity(readings.len());
@@ -4414,6 +4611,9 @@ pub struct RecognizedTurn {
     cost: u64,
     attempted: Vec<(usize, DialectId)>,
     failure_proofs: FailureProofs,
+    /// The start of each choice holding layout framings admitted without a
+    /// candidate, and their number (see `Builder::layout_framing`).
+    layouts: ScratchVec<(usize, usize)>,
 }
 
 /// Scratch bytes charged per recorded rejected attempt.
@@ -4432,6 +4632,7 @@ impl PartialEq for RecognizedTurn {
             && self.cost == other.cost
             && self.attempted == other.attempted
             && self.failure_proofs == other.failure_proofs
+            && self.layouts == other.layouts
             && self.forest.nodes() == other.forest.nodes()
     }
 }
@@ -4441,6 +4642,13 @@ impl Eq for RecognizedTurn {}
 impl RecognizedTurn {
     pub(super) fn take_failure_proofs(&mut self, governor: &Governor) -> FailureProofs {
         core::mem::replace(&mut self.failure_proofs, FailureProofs::new(governor))
+    }
+
+    /// The choices holding layout framings admitted without a candidate:
+    /// each choice's start and the number of such framings. A caller that
+    /// does not fold a choice's framings into one invocation charges them.
+    pub(super) fn take_layouts(&mut self, governor: &Governor) -> ScratchVec<(usize, usize)> {
+        core::mem::replace(&mut self.layouts, ScratchVec::new(governor))
     }
 
     /// The SHA-256 digest of the recognized output.

@@ -6,6 +6,7 @@
 use super::{Attempt, Engine, Event, FailureEnd, HistoryEvidence, Inst, Sub, Table, Thread};
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason, invalid_input};
+use crate::grammar::cost::K_THREAD;
 use crate::tool_call::ProductionKind;
 
 /// The table's current settled vector already proves this exact self-loop.
@@ -202,8 +203,10 @@ impl Engine<'_> {
         if self.class_run_count == 0 {
             return Ok(false);
         }
-        // One bounded occupancy/slot metadata validation and probe.
-        governor.charge(Resource::Work, 1)?;
+        // One bounded probe: the occupancy check, the byte and position
+        // comparison and the cursor advance are constant-size, so a hit costs
+        // one configuration step however large the frozen cohort is.
+        governor.charge(Resource::Work, K_THREAD)?;
         if self.class_run_count > self.class_runs.len() {
             return Err(invalid_input("class run occupancy exceeds its slot count"));
         }
@@ -211,7 +214,6 @@ impl Engine<'_> {
         let Some(retained) = slot else {
             return Ok(false);
         };
-        governor.charge(Resource::Work, 2)?;
         if retained.byte != byte || retained.next_at != at {
             // step_table moves threads before split: restore them here.
             consume(
@@ -224,7 +226,6 @@ impl Engine<'_> {
         }
         // The frozen cohort keeps every phase/history field. Its cursor alone
         // advances; consumption restores physical positions before native use.
-        governor.charge(Resource::Work, 2)?;
         let next = at
             .checked_add(1)
             .ok_or_else(|| invalid_input("class run position overflow"))?;

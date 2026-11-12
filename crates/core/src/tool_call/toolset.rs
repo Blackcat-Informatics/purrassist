@@ -646,6 +646,8 @@ impl CompiledTool {
 pub struct ToolSet {
     tools: Vec<CompiledTool>,
     index: Vec<(String, usize)>,
+    /// The byte length of the longest declared name or alias.
+    longest_literal: usize,
 }
 
 impl ToolSet {
@@ -753,11 +755,13 @@ impl ToolSet {
         }
         let mut tools: ScratchVec<CompiledTool> = ScratchVec::new(governor);
         let mut index: ScratchMap<String, usize> = ScratchMap::new(governor);
+        let mut longest_literal = 0;
         for entry in sorted.into_vec() {
             let position = tools.len();
             let definition = &entry.definition;
             for literal in core::iter::once(&definition.name).chain(&definition.aliases) {
                 retain_text(governor, literal.len())?;
+                longest_literal = longest_literal.max(literal.len());
                 index
                     .insert(literal.clone(), position)
                     .map_err(ToolSetError::Resource)?;
@@ -769,7 +773,15 @@ impl ToolSet {
         Ok(Self {
             tools: tools.into_vec(),
             index: index.into_pairs(),
+            longest_literal,
         })
+    }
+
+    /// The byte length of the longest declared name or alias: no longer
+    /// written name can be an exact declared literal.
+    #[must_use]
+    pub(crate) const fn longest_literal(&self) -> usize {
+        self.longest_literal
     }
 
     /// Every compiled tool, sorted by canonical name.
