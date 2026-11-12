@@ -513,20 +513,21 @@ impl Arena {
         Ok(index_u32(self.codecs.len() - 1))
     }
 
-    /// The codec state in `slot`, which its configuration finishes. The
-    /// state leaves the arena with the slot, so its out-of-line charge is
-    /// released here rather than at the next reset, which does not come while
-    /// any attempt is live. The slot entry itself stays charged until reset.
-    fn take_codec(&mut self, slot: u32, governor: &mut Governor) -> Result<CodecState, StopReason> {
-        let state = self.codecs[slot as usize]
+    /// The codec state in `slot`, which its configuration finishes.
+    fn take_codec(&mut self, slot: u32) -> CodecState {
+        self.codecs[slot as usize]
             .take()
-            .expect("a codec slot is finished once");
-        let boxed = state.boxed_bytes();
-        // INVARIANT: `begin_codec` charged `boxed` into `charged` for this
-        // state, so the subtraction cannot underflow before a reset.
+            .expect("a codec slot is finished once")
+    }
+
+    /// Release the out-of-line charge of a codec state taken from its slot
+    /// and since consumed. It is released here rather than at the next reset,
+    /// which does not come while any attempt is live; the slot entry itself
+    /// stays charged until then. A state whose finish never reaches this call
+    /// keeps its charge in `charged`, which the reset or drop releases.
+    fn release_codec(&mut self, boxed: u64, governor: &mut Governor) -> Result<(), StopReason> {
         self.charged = self.charged.saturating_sub(boxed);
-        governor.release_scratch(boxed)?;
-        Ok(state)
+        governor.release_scratch(boxed)
     }
 
     fn reset(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
@@ -2153,12 +2154,15 @@ impl<'s> Step<'_, 's> {
         how: CodecEnd,
         governor: &mut Governor,
     ) -> Result<Result<(u32, u64), Finished>, StopReason> {
-        let codec = self.arena.take_codec(slot, governor)?;
+        let codec = self.arena.take_codec(slot);
+        let boxed = codec.boxed_bytes();
         let context = self.context(codec.kind(), hist, governor)?;
         let buffer = self.buffer;
         let bytes = &buffer[body.start - self.base..body.end - self.base];
         let body_end = body.end;
-        match codec.finish(bytes, body, how, context, governor)? {
+        let finished = codec.finish(bytes, body, how, context, governor);
+        self.arena.release_codec(boxed, governor)?;
+        match finished? {
             // A JSON value no repair reads is not a call's arguments: the
             // attempt fails where its decoding stopped (see
             // `Step::end_body`), a rejected attempt rather than a call.
