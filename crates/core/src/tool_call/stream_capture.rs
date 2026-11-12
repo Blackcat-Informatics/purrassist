@@ -32,7 +32,6 @@ struct TextFact {
 
 impl TextFact {
     fn copy(value: &Spanned<String>, governor: &mut Governor) -> Result<Self, StopReason> {
-        governor.charge(Resource::Work, 1)?;
         Ok(Self {
             span: value.span.clone(),
             value: ScratchString::copy_from(&value.value, governor)?,
@@ -72,7 +71,6 @@ impl NativeFact {
         if !raw.edits.is_empty() {
             let leaves = LeafPointers::new(&raw.arguments.leaves, governor)?;
             for edit in &raw.edits {
-                governor.charge(Resource::Work, 1)?;
                 let parameter = leaves.parameter(&edit.span, governor)?;
                 push_scratch(
                     &mut edits,
@@ -228,7 +226,6 @@ impl NativeTrace {
             .ok_or_else(|| invalid_input("native call has no header reading"))?;
         let fact = NativeFact::copy(raw_header, governor)?;
         push_scratch(&mut self.facts, fact, governor)?;
-        governor.charge(Resource::Work, 4)?;
         identities.insert(0, header)?;
         let mut readings = ScratchVec::new(governor);
         for &raw in order {
@@ -374,8 +371,7 @@ impl Origins {
     }
 
     /// The first row is the selected provenance; never substitute a witness.
-    pub(super) fn selected(&self, governor: &mut Governor) -> Result<usize, StopReason> {
-        governor.charge(Resource::Work, 1)?;
+    pub(super) fn selected(&self) -> Result<usize, StopReason> {
         let first = self
             .0
             .first()
@@ -453,6 +449,8 @@ pub(super) fn option_origins(
 ) -> Result<ScratchVec<OriginRow>, StopReason> {
     let mut rows = ScratchVec::new(governor);
     for (index, segment) in segments.iter().enumerate() {
+        // Every segment is visited, including reasoning without embedded calls.
+        governor.charge(Resource::Work, 1)?;
         let mut site = base;
         site.0[2] = index;
         match segment {
@@ -462,9 +460,7 @@ pub(super) fn option_origins(
                     add_origin(&mut rows, site.embedded(index)?, trace, governor)?;
                 }
             }
-            _ => {
-                governor.charge(Resource::Work, 1)?;
-            }
+            _ => {}
         }
     }
     Ok(rows)

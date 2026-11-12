@@ -1558,7 +1558,6 @@ impl<'t> Reader<'_, 't, '_> {
                 gap = at + width;
             } else if let Some(opener) = self.opener(at)? {
                 let owners = self.owners(&opener.name.value)?;
-                self.charge(2)?;
                 let text = self.known && owners.is_empty();
                 let candidate = Candidate {
                     at,

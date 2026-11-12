@@ -190,7 +190,6 @@ impl Sink for HashSink<'_> {
     type Error = StopReason;
 
     fn verbatim_quotes(&mut self, input: &str) -> Result<bool, StopReason> {
-        self.governor.charge(Resource::Work, 1)?;
         if self.builder.is_some() {
             return Ok(self.unescaped);
         }
@@ -200,7 +199,6 @@ impl Sink for HashSink<'_> {
     }
 
     fn note_escape(&mut self) -> Result<(), StopReason> {
-        self.governor.charge(Resource::Work, 1)?;
         self.unescaped = false;
         Ok(())
     }
@@ -425,7 +423,6 @@ pub(super) fn hash_part(
         )>() as u64
             <= CONTROLS
     );
-    governor.charge(Resource::Work, 4)?;
     let _controls = governor.lease_scratch(CONTROLS)?;
     governor.charge(Resource::Depth, 0)?;
     let mut frames = ScratchVec::new(governor);
@@ -440,7 +437,6 @@ pub(super) fn hash_part(
         emit_frames(&mut frames, None, &mut count)?;
         (count.bytes, count.unescaped)
     };
-    governor.charge(Resource::Work, 8)?;
     builder.update(&bytes.to_be_bytes());
     frames.push(Frame::new(node))?;
     let mut sink = HashSink {

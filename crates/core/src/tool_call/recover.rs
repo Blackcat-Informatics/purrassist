@@ -3108,7 +3108,6 @@ impl EncodingCursor {
     /// Classify one captured byte, returning its completed UTF-8 boundary.
     /// The caller's checked append guarantees that `end` is positive.
     fn step(&mut self, byte: u8, end: usize, governor: &mut Governor) -> Result<usize, StopReason> {
-        governor.charge(Resource::Work, 1)?;
         if self.len == 0 {
             self.start = end - 1;
         }
@@ -3410,7 +3409,6 @@ impl<'s> RecoveryIntake<'s> {
             .expect("live publication owns its recognizer")
             .recognizer
             .settled_history_id();
-        governor.charge(Resource::Work, 1)?;
         if let Some(memo) = self
             .progress_memo
             .filter(|memo| memo.raw == raw && memo.history == history)
@@ -3422,7 +3420,7 @@ impl<'s> RecoveryIntake<'s> {
         self.progress_memo = None;
         let prefix = frontier.prefix_end.min(utf8);
         frontier.prefix_end =
-            self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix, governor)?;
+            self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix)?;
         let normalized_prefix = (prefix, frontier.prefix_end);
         let mut normalized_content = None;
         frontier.content = match frontier.content {
@@ -3431,7 +3429,7 @@ impl<'s> RecoveryIntake<'s> {
                 let end = if raw == prefix {
                     frontier.prefix_end
                 } else {
-                    self.cached_source_boundary(raw, utf8, BoundaryKind::Content, governor)?
+                    self.cached_source_boundary(raw, utf8, BoundaryKind::Content)?
                 };
                 normalized_content = Some((raw, end));
                 (start < end).then_some((start, end))
@@ -3462,7 +3460,6 @@ impl<'s> RecoveryIntake<'s> {
             content,
         )?;
         self.refresh_ownership(utf8, normalized_prefix, normalized_content, governor)?;
-        governor.charge(Resource::Work, 2)?;
         if raw.prefix_end <= utf8 && raw.content.is_none_or(|(_, end)| end <= utf8) {
             self.progress_memo = Some(ProgressMemo {
                 raw,
@@ -3508,7 +3505,7 @@ impl<'s> RecoveryIntake<'s> {
         } else if let Some((_, normalized)) = content.filter(|(raw, _)| *raw == cutoff) {
             normalized
         } else {
-            self.cached_source_boundary(cutoff, utf8, BoundaryKind::Ownership, governor)?
+            self.cached_source_boundary(cutoff, utf8, BoundaryKind::Ownership)?
         };
         let (held, candidates) =
             self.events
@@ -3531,9 +3528,7 @@ impl<'s> RecoveryIntake<'s> {
         end: usize,
         certified: usize,
         kind: BoundaryKind,
-        governor: &mut Governor,
     ) -> Result<usize, StopReason> {
-        governor.charge(Resource::Work, 1)?;
         if end > certified || certified > self.received {
             return Err(invalid_input(
                 "source cutoff exceeds its certified boundary",
@@ -3551,7 +3546,7 @@ impl<'s> RecoveryIntake<'s> {
             // Source appends cannot alter its scalar boundary.
             return Ok(normalized);
         } else {
-            self.source_boundary(end, governor)?
+            self.source_boundary(end)?
         };
         if normalized > end {
             return Err(invalid_input(
@@ -3570,13 +3565,13 @@ impl<'s> RecoveryIntake<'s> {
     /// A lexical holdback can cut an earlier, already complete scalar even
     /// when the encoding cursor has no pending bytes. Inspect only the scalar
     /// crossing this cutoff; invalid sequences retain their original boundary.
-    fn source_boundary(&self, end: usize, governor: &mut Governor) -> Result<usize, StopReason> {
+    fn source_boundary(&self, end: usize) -> Result<usize, StopReason> {
         let source = self
             .capture
             .as_ref()
             .map(|capture| capture.bytes.as_slice())
             .ok_or_else(|| invalid_input("content frontier has no admitted source"))?;
-        super::stream_finish::source_boundary(source, end, governor)
+        super::stream_finish::source_boundary(source, end)
     }
 
     fn capture_byte(&mut self, byte: u8, governor: &mut Governor) -> Result<(), StopReason> {
@@ -3595,9 +3590,15 @@ impl<'s> RecoveryIntake<'s> {
             .capture
             .as_mut()
             .expect("capture admission requires an existing source owner");
-        governor.charge(Resource::Work, 1)?;
+        // One unit stores the byte. Relocation is admitted per byte at the
+        // compact growth bound, so admitted work covers every copy before it
+        // happens and stays linear across the growth threshold.
+        governor.charge(
+            Resource::Work,
+            capture.bytes.compact_relocation_work().saturating_add(1),
+        )?;
         if capture.bytes.len() == capture.bytes.capacity() {
-            governor.charge(Resource::Work, size(capture.bytes.len()).saturating_add(4))?;
+            governor.charge(Resource::Work, 4)?;
             capture.bytes.reserve_compact(1)?;
         }
         capture.bytes.push(byte)
@@ -4023,12 +4024,10 @@ fn detach_folds(
         )>() as u64
             <= CONTROLS
     );
-    governor.charge(Resource::Work, 1)?;
     let _controls = governor.lease_scratch(CONTROLS)?;
     let (choices, _storage) = choices.into_owned_parts();
     let mut facts = ScratchVec::new(governor);
     for mut options in choices {
-        governor.charge(Resource::Work, 1)?;
         if options.len() != 1 {
             return Err(invalid_input(
                 "single output has a non-singleton folded choice",
@@ -5483,7 +5482,6 @@ impl Recovery<'_> {
         if contested {
             governor.charge(Resource::Candidates, product)?;
         }
-        governor.charge(Resource::Work, 1)?;
         if product == 1 {
             let facts = detach_folds(choices, governor)?;
             return Ok(vec![self.single_reading(
@@ -5577,7 +5575,6 @@ impl Recovery<'_> {
             )>() as u64
                 <= CONTROLS
         );
-        governor.charge(Resource::Work, 1)?;
         let _controls = governor.lease_scratch(CONTROLS)?;
         let mut reading = self.begin_reading(turn.cost, encoding, governor)?;
         let mut choice = 0;
@@ -5599,6 +5596,8 @@ impl Recovery<'_> {
                     let branch = fold.branch.checked_sub(1).ok_or_else(|| {
                         invalid_input("folded choice has a shared branch identity")
                     })?;
+                    // Selecting the branch skips the readings before it.
+                    governor.charge(Resource::Work, size(branch))?;
                     let segments = value.readings.into_iter().nth(branch).ok_or_else(|| {
                         invalid_input("folded choice branch exceeds its source readings")
                     })?;
@@ -5616,7 +5615,6 @@ impl Recovery<'_> {
                 }
             }
         }
-        governor.charge(Resource::Work, 1)?;
         if choice != facts.len() {
             return Err(invalid_input(
                 "single output left unused folded choice facts",
@@ -6923,7 +6921,6 @@ fn conclude_values(
             ));
         }
         for &index in order {
-            governor.charge(Resource::Work, 1)?;
             let row = slots
                 .as_mut_slice()
                 .get_mut(index)

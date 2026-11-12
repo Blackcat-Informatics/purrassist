@@ -239,7 +239,6 @@ impl<'a, 's> RepairState<'a, 's> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         let ownership = if self.thread.ownership & 1 != 0 {
-            governor.charge(Resource::Work, 1)?;
             if matches!(
                 sub,
                 Sub::Lit(_) | Sub::Variant(_) | Sub::Confusable(_) | Sub::Json(..)

@@ -295,7 +295,6 @@ impl Engine<'_> {
             }
             // Every remaining contributor intersects this same proof. Once
             // absent, no read-only certification can restore it.
-            governor.charge(Resource::Work, 1)?;
             if header.is_none() {
                 break;
             }
@@ -491,7 +490,6 @@ impl Engine<'_> {
                 }
             }
         };
-        governor.charge(Resource::Work, 1)?;
         if linear {
             let mut prefix = Some(Prefix::default());
             while let Some((node, _)) = stack.pop() {
@@ -499,7 +497,6 @@ impl Engine<'_> {
                 governor.charge(Resource::Work, 9)?;
                 let history = &self.arena.nodes[node as usize];
                 prefix = prefix.and_then(|prefix| prefix.apply(history.kind, start));
-                governor.charge(Resource::Work, 1)?;
                 if prefix.is_none() {
                     break;
                 }

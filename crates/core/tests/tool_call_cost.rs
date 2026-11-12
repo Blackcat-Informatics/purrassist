@@ -325,14 +325,16 @@ fn busy_turn_resolves_every_call_under_sized() {
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(preset.outcome, Outcome::Unresolved);
-    // This branch's full pass over this turn costs 1,252,779 work, more than
-    // the fixed preset's 1,000,000 work limit, so the preset stops on Work;
-    // main's full pass over the same turn costs 951,127.
+    // The preset's 128 candidates run out before its work does: measured on
+    // this branch, the preset stops after 750,422 work, and the full sized
+    // pass below costs 813,025. Main stops the same way after 783,294 work,
+    // and its full pass costs 951,127.
     assert_eq!(
         preset.receipt.stopped,
-        StopReason::BudgetExceeded(Resource::Work),
+        StopReason::BudgetExceeded(Resource::Candidates),
         "{preset:#?}"
     );
+    assert_eq!(preset.receipt.usage.candidates, 128);
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
     // The native dialects open 448 times (the doc comment above); each

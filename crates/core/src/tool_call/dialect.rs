@@ -657,7 +657,6 @@ impl HoldBackBounds {
             governor.charge(Resource::Work, 1)?;
             let grammar = dialect.grammar();
             for program in &grammar.programs {
-                governor.charge(Resource::Work, 1)?;
                 for &pc in &program.openers {
                     governor.charge(Resource::Work, 1)?;
                     let lit = match program.insts[pc as usize] {
@@ -706,7 +705,6 @@ const _: () = assert!(core::mem::size_of::<Option<MarkerPrefixes>>() as u64 <= M
 
 impl MarkerPrefixes {
     fn new(matcher: &Matcher, governor: &mut Governor) -> Result<Self, StopReason> {
-        governor.charge(Resource::Work, 1)?;
         let metadata = governor.lease_scratch(MARKER_PREFIX_BYTES)?;
         let values = matcher.continuation_depths(governor)?;
         Ok(Self {
@@ -811,12 +809,7 @@ impl DialectSet {
 
     /// Current suffix that can still grow into a longer marker spelling.
     /// Complete leaf matches are protected by queued reports, not this table.
-    pub(crate) fn marker_prefix_len(
-        &self,
-        state: u32,
-        governor: &mut Governor,
-    ) -> Result<usize, StopReason> {
-        governor.charge(Resource::Work, 1)?;
+    pub(crate) fn marker_prefix_len(&self, state: u32) -> Result<usize, StopReason> {
         self.marker_prefixes
             .as_ref()
             .and_then(|prefixes| prefixes.values.get(state as usize))

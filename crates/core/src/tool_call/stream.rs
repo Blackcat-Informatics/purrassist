@@ -83,7 +83,7 @@ static OPERATOR_ID_ORDER: [usize; OPERATOR_COUNT] = {
     order
 };
 
-/// Admit each comparison before finding the first equal registry identifier.
+/// Find the first equal registry identifier in the static operator table.
 fn revision_operator(
     id: &str,
     governor: &mut Governor,
@@ -102,19 +102,14 @@ fn revision_operator(
             <= CONTROL_BYTES
     );
     let _controls = governor.lease_scratch(CONTROL_BYTES)?;
-    let comparison = size(id.len()).saturating_add(1);
     let (mut low, mut high) = (0, OPERATOR_ID_ORDER.len());
     while low < high {
         let middle = low + (high - low) / 2;
         let candidate = OPERATORS[OPERATOR_ID_ORDER[middle]].id;
-        governor.charge(Resource::Work, 1)?;
         let precedes = match candidate.len().cmp(&id.len()) {
             core::cmp::Ordering::Less => true,
             core::cmp::Ordering::Greater => false,
-            core::cmp::Ordering::Equal => {
-                governor.charge(Resource::Work, comparison)?;
-                candidate < id
-            }
+            core::cmp::Ordering::Equal => candidate < id,
         };
         if precedes {
             low = middle + 1;
@@ -126,11 +121,9 @@ fn revision_operator(
         return Ok(None);
     };
     let operator = &OPERATORS[ordinal];
-    governor.charge(Resource::Work, 1)?;
     if operator.id.len() != id.len() {
         return Ok(None);
     }
-    governor.charge(Resource::Work, comparison)?;
     Ok((operator.id == id).then_some(operator.operator))
 }
 
@@ -259,7 +252,6 @@ impl PreparedEvent {
 
 impl StreamEvent {
     fn admit(governor: &mut Governor) -> Result<ScratchLease, StopReason> {
-        governor.charge(Resource::Work, 4)?;
         governor.lease_scratch(EVENT_BYTES)
     }
 
@@ -482,7 +474,6 @@ fn copy_outcome(
     outcome: &CallOutcome,
     governor: &mut Governor,
 ) -> Result<OwnedOutcome, StopReason> {
-    governor.charge(Resource::Work, 1)?;
     let mut lease = ScratchLease::empty(governor);
     let value = match outcome {
         CallOutcome::Resolved => CallOutcome::Resolved,
@@ -500,7 +491,6 @@ fn copy_reason(
     governor: &mut Governor,
     lease: &mut ScratchLease,
 ) -> Result<UnresolvedReason, StopReason> {
-    governor.charge(Resource::Work, 1)?;
     let mut text = |value: &str, governor: &mut Governor| {
         let (copied, storage) = ScratchString::copy_from(value, governor)?.into_owned_parts();
         lease.absorb(storage);
@@ -664,7 +654,6 @@ impl EventCursor {
             end,
             content: frontier.content,
         };
-        governor.charge(Resource::Work, 1)?;
         if self.advance_key == Some(key) {
             return Ok(());
         }
@@ -706,7 +695,6 @@ impl EventCursor {
             Segment::Rejected { span, .. } => self.coverage.append(span, source.len(), governor)?,
             Segment::Reasoning(block) => {
                 for call in &block.embedded {
-                    governor.charge(Resource::Work, 1)?;
                     if call.span.start < block.span.start || call.span.end > block.span.end {
                         return Err(invalid_input(
                             "embedded candidate exceeds its reasoning block",
@@ -845,7 +833,7 @@ impl EventCursor {
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
         let limit = common_prefix(readings, native, source.len(), governor)?;
-        let limit = super::stream_finish::source_boundary(source, limit, governor)?;
+        let limit = super::stream_finish::source_boundary(source, limit)?;
         let first = readings
             .first()
             .ok_or_else(|| invalid_input("completed recovery has no final reading"))?;
@@ -898,7 +886,6 @@ impl EventCursor {
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
         let index = call.index;
-        governor.charge(Resource::Work, 1)?;
         let live = self.calls.as_slice().get(index);
         if let Some(live) = live {
             if live.start != call.span.start || live.end != call.span.end {
@@ -918,7 +905,7 @@ impl EventCursor {
             )?
             .publish(sink)?;
         }
-        let first = origins.selected(governor)?;
+        let first = origins.selected()?;
         let header = publication
             .native
             .fact(publication.native.call(first)?.header)?;
@@ -929,7 +916,7 @@ impl EventCursor {
             StreamEvent::name(index, tool, governor)?.publish(sink)?;
         }
         if live.is_none_or(|live| !live.arguments) {
-            let fact = selected_fact(origins, publication.native, governor)?;
+            let fact = selected_fact(origins, publication.native)?;
             for &(start, end) in &fact.arguments {
                 let end = end.min(publication.limit);
                 if start < end {
@@ -955,7 +942,7 @@ impl EventCursor {
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> Result<(), StopReason> {
-        let fact = selected_fact(origins, publication.native, governor)?;
+        let fact = selected_fact(origins, publication.native)?;
         let mut witnesses = None;
         for (position, edit) in fact.edits.iter().enumerate() {
             if edit.end > publication.limit {

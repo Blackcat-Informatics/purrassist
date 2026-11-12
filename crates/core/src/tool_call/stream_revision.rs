@@ -30,14 +30,8 @@ impl WitnessKey {
         (self.operator, self.at, self.end)
     }
 
-    fn compare(self, other: Self, governor: &mut Governor) -> Result<Ordering, StopReason> {
-        // Each actual key comparison visits at most five numeric fields.
-        governor.charge(Resource::Work, 5)?;
-        Ok((self.prefix(), self.view, self.semantic).cmp(&(
-            other.prefix(),
-            other.view,
-            other.semantic,
-        )))
+    fn compare(self, other: Self) -> Ordering {
+        (self.prefix(), self.view, self.semantic).cmp(&(other.prefix(), other.view, other.semantic))
     }
 }
 
@@ -69,7 +63,6 @@ impl RevisionWitnesses {
                 .calls
                 .get(index)
                 .ok_or_else(|| invalid_input("revision has no final native correlation"))?;
-            governor.charge(Resource::Work, 1)?;
             let semantic_count = call
                 .alternatives
                 .len()
@@ -151,7 +144,6 @@ impl RevisionWitnesses {
         let prefix = (edit.operator, edit.at, edit.end);
         let first = self.prefix_bound(prefix, false, governor)?;
         let end = self.prefix_bound(prefix, true, governor)?;
-        governor.charge(Resource::Work, 2)?;
         let matches = end
             .checked_sub(first)
             .ok_or_else(|| invalid_input("revision witness bounds are inconsistent"))?;
@@ -173,7 +165,6 @@ impl RevisionWitnesses {
                 return Ok(low);
             }
             let middle = low + (high - low) / 2;
-            governor.charge(Resource::Work, 3)?;
             let order = self.keys[middle].prefix().cmp(&prefix);
             if order.is_lt() || (upper && order.is_eq()) {
                 low = middle + 1;
@@ -188,7 +179,6 @@ impl RevisionWitnesses {
         let length = keys.len();
         let mut root = length / 2;
         loop {
-            governor.charge(Resource::Work, 1)?;
             if root == 0 {
                 break;
             }
@@ -197,20 +187,17 @@ impl RevisionWitnesses {
         }
         let mut end = keys.len();
         loop {
-            governor.charge(Resource::Work, 1)?;
             if end < 2 {
                 break;
             }
             end -= 1;
-            governor.charge(Resource::Work, 1)?;
             keys.swap(0, end);
             sift(keys, 0, end, governor)?;
         }
         let mut write = 0;
         for read in 0..keys.len() {
             governor.charge(Resource::Work, 1)?;
-            if write == 0 || keys[write - 1].compare(keys[read], governor)? != Ordering::Equal {
-                governor.charge(Resource::Work, 1)?;
+            if write == 0 || keys[write - 1].compare(keys[read]) != Ordering::Equal {
                 keys[write] = keys[read];
                 write += 1;
             }
@@ -238,13 +225,12 @@ fn sift(
         // The parent guard proves both child calculations cannot overflow.
         let mut child = root * 2 + 1;
         let right = child + 1;
-        if right < end && keys[child].compare(keys[right], governor)?.is_lt() {
+        if right < end && keys[child].compare(keys[right]).is_lt() {
             child = right;
         }
-        if !keys[root].compare(keys[child], governor)?.is_lt() {
+        if !keys[root].compare(keys[child]).is_lt() {
             return Ok(());
         }
-        governor.charge(Resource::Work, 1)?;
         keys.swap(root, child);
         root = child;
     }

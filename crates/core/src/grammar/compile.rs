@@ -254,7 +254,6 @@ impl Program {
 
     /// Whether this exact continuation can complete without consuming input.
     pub(crate) fn completes(&self, pc: u32, governor: &mut Governor) -> Result<bool, StopReason> {
-        governor.charge(Resource::Work, 1)?;
         let Some(completes) = self.completing.mask.get(pc as usize).copied() else {
             return Err(StopReason::InvalidInput(format_output_governed(
                 format_args!(
@@ -1491,7 +1490,6 @@ fn key_uses(
                 continue;
             };
             let literal_pc = symbol_index(pc, governor)?;
-            governor.charge(Resource::Work, 1)?;
             let generation = u64::from(literal_pc);
             let mut colon = true;
             let mut any = false;
@@ -1509,7 +1507,6 @@ fn key_uses(
                 if seen[pc as usize] == generation {
                     continue;
                 }
-                governor.charge(Resource::Work, 1)?;
                 seen.as_mut_slice()[pc as usize] = generation;
                 match program.insts[pc as usize] {
                     Inst::Split(first, second) => stack.extend([first, second])?,
@@ -1750,7 +1747,6 @@ fn compile_program(
                 production: diagnostic(productions[root.index()].name.as_str(), governor)?,
             });
         };
-        governor.charge(Resource::Work, 1)?;
         if let Inst::Lit { opener, .. } = &mut insts.as_mut_slice()[pc as usize] {
             *opener = true;
         }
@@ -2081,15 +2077,12 @@ impl<'a> TrailBuild<'a> {
         governor: &mut Governor,
     ) -> Result<(), GrammarError> {
         // Initialize both rank slots and copy both staged counters.
-        governor.charge(Resource::Work, 4)?;
         let mut ranks = [None; 2];
         let mut next = self.next;
         let mut view = 0;
         while view < 2 {
-            governor.charge(Resource::Work, 1)?;
             if views[view] {
                 // Read rank, check advancement, publish rank and staged count.
-                governor.charge(Resource::Work, 4)?;
                 ranks[view] = Some(next[view]);
                 next[view] = next[view]
                     .checked_add(1)
@@ -2097,7 +2090,6 @@ impl<'a> TrailBuild<'a> {
             }
             view += 1;
         }
-        governor.charge(Resource::Work, 1)?;
         push_scratch(&mut self.tokens, PriorityLiteral { bytes, ranks }, governor)?;
         self.next = next;
         Ok(())
@@ -2111,7 +2103,6 @@ impl<'a> TrailBuild<'a> {
                 governor.charge(Resource::Work, 1)?;
                 let program = &self.source.programs[self.view];
                 if let Inst::Lit { lit, .. } = program.insts[program.openers[self.outer] as usize] {
-                    governor.charge(Resource::Work, 3)?;
                     let mut views = [false; 2];
                     views[self.view] = true;
                     self.push(
@@ -2135,7 +2126,6 @@ impl<'a> TrailBuild<'a> {
             )?;
             self.outer += 1;
         }
-        governor.charge(Resource::Work, 1)?;
         self.positives = self.next;
         self.outer = 0;
         while self.outer < self.source.closers.len() {
@@ -2273,16 +2263,13 @@ fn trail_matcher(
         closers,
         reasoning,
     };
-    governor.charge(Resource::Work, 1)?;
     let metadata = governor.lease_scratch(size(TRAIL_MATCHER_BYTES))?;
-    governor.charge(Resource::Work, 1)?;
     let _construction = governor.lease_scratch(size(TRAIL_MATCHER_CONTROL_BYTES))?;
     let mut needed = false;
     for program in source.programs {
         for inst in &program.insts {
             governor.charge(Resource::Work, 1)?;
             if let Inst::Lit { lit, .. } = *inst {
-                governor.charge(Resource::Work, 1)?;
                 needed |= source.literals[lit as usize].closer.is_some();
             }
         }

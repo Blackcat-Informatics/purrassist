@@ -48,7 +48,6 @@ impl CandidateCoverage {
         n: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 1)?;
         if span.start > span.end || span.end > n {
             return Err(invalid_input(
                 "candidate interval exceeds interpreted source",
@@ -93,7 +92,6 @@ impl CandidateCoverage {
     }
 
     fn before(&self, at: usize, governor: &mut Governor) -> Result<usize, StopReason> {
-        governor.charge(Resource::Work, 1)?;
         let value = if self.intervals.last().is_none_or(|last| last.end <= at) {
             self.intervals.last().map_or(0, |last| last.covered)
         } else {
@@ -127,9 +125,7 @@ impl CandidateCoverage {
         governor: &mut Governor,
     ) -> Result<Basis, StopReason> {
         // Checked discarded/overlap/held records and final basis publication.
-        governor.charge(Resource::Work, 4)?;
         let covered = if let Some(basis) = self.basis.filter(|basis| basis.candidate == candidate) {
-            governor.charge(Resource::Work, 1)?;
             candidate
                 .checked_sub(basis.discarded)
                 .ok_or_else(|| invalid_input("cached candidate prefix is inconsistent"))?
@@ -174,14 +170,12 @@ impl CandidateCoverage {
         governor: &mut Governor,
     ) -> Result<(usize, usize), StopReason> {
         // Coordinate/union bounds and exact basis-key selection.
-        governor.charge(Resource::Work, 2)?;
         let last = self.intervals.last().copied();
         if candidate > n || normalized > n || last.is_some_and(|last| last.end > n) {
             return Err(invalid_input("byte ownership exceeds interpreted source"));
         }
         let normalized = normalized.min(candidate);
         if candidate == n && normalized == n {
-            governor.charge(Resource::Work, 1)?;
             let candidates = last.map_or(0, |last| last.covered);
             if candidates > n {
                 return Err(invalid_input("candidate coverage exceeds source length"));
@@ -192,7 +186,6 @@ impl CandidateCoverage {
             .basis
             .filter(|basis| basis.candidate == candidate && basis.normalized == normalized)
         {
-            governor.charge(Resource::Work, 1)?;
             let candidates = n
                 .checked_sub(basis.discarded)
                 .ok_or_else(|| invalid_input("cached candidate coverage exceeds source length"))?;

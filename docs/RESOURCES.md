@@ -1956,8 +1956,8 @@ the fold keeps them, as under a strict tool choice. A run of calls whose
 only contested spans differ in that layout therefore charges no candidate
 however many follow one another (`hermes-stripped` alone resolves 16 calls
 under `Exact`; measured on this branch with one call per line, the first call
-count that stops on `BudgetExceeded(Work)` under `Exact` is 25 for
-`hermes-stripped` and 33 for native Hermes). Dialects with other documented readings keep them:
+count that stops on `BudgetExceeded(Work)` under `Exact` is 32 for
+`hermes-stripped` and 62 for native Hermes). Dialects with other documented readings keep them:
 `harmony-stripped.v1` charges its documented candidates, and
 `deepseek-v3-stripped.v1` charges one for two to four calls
 (`tool_call_recover::exact_effort_accepts_canonical_markup`). The derivation is
@@ -1973,14 +1973,33 @@ stray `<tool_call>` contested by GLM, Hermes and Qwen. The sizing count is
 `m = 576`: three dialect occurrences for each of 128 `<tool_call>` tokens,
 one Qwen occurrence for each of 64 `<function=` tokens, and 128 `function`
 occurrences in the stripped DeepSeek allow-list. Sizing includes occurrences
-where runtime framing forbids an attempt. On this branch the full pass over
-the 64-call busy turn costs 1,252,779 work, more than the unmodified
-`Effort::Standard` preset's 1,000,000 work limit, so the preset exhausts
-explicitly on `Work`; main's full pass over the same turn costs 951,127 and
-fits that limit. With the sized work limit
-its 128 candidates exhaust `Candidates`, and
-`sized(Effort::Standard, output)` (128 + 16 · 576 = 9,344 candidates)
-recovers every call `Resolved`, charging 193 candidates.
+where runtime framing forbids an attempt. The unmodified
+`Effort::Standard` preset exhausts explicitly on `Candidates`: its 128
+candidates run out after 750,422 work on this branch (main stops the same
+way after 783,294). With the sized work limit its 128 candidates still
+exhaust `Candidates`, and `sized(Effort::Standard, output)`
+(128 + 16 · 576 = 9,344 candidates) recovers every call `Resolved`,
+charging 193 candidates. That full pass costs 813,025 work on this branch
+and 951,127 on main.
+
+Work charges each loop whose trip count depends on the input once per
+iteration, at the scale main uses for a comparable loop; bookkeeping that
+takes a fixed number of steps inside an operation already charged (a byte,
+a thread step, an attempt, a candidate) carries no charge of its own.
+Retained source admits its relocation copies per appended byte at the
+growth policy's bound: two units while capacity doubles (below 64 KiB) and
+three once it grows by one half, so the admitted work covers every copy
+before it happens and stays linear across the threshold. Native Hermes
+under `Exact`, one call per line, costs 52,265 work for 32 calls on this
+branch (main: 54,401) and completes 58 calls at 94,517 work (main: 98,367).
+Both branch figures sit below main's Work times the branch-to-main ratio of
+executed instructions (0.994 for the busy turn, 1.021 for 32 Hermes calls).
+Those ratios were counted with Valgrind callgrind before the charges were
+revised to the rule above, on statically linked `x86_64-unknown-linux-musl`
+release builds of both sides, as whole-process counts less a run that
+builds the same inputs without recovering. They describe that build and
+allocator only, not a glibc build, and they include any setup work the
+subtracted run does not repeat.
 `tool_call_cost::per_call_competition_scales_with_calls` does the same for
 64 read-only calls that each have a near-miss name and a repeated parameter
 (192 candidates), and

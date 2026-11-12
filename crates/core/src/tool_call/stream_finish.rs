@@ -16,19 +16,11 @@ use crate::json::{same_source_text as text, same_source_tree};
 use crate::provenance::ProvenanceNode;
 use core::ops::Range;
 
-/// Four source-family lookups, ordering and a checked cursor update.
-const CURSOR_WORK: u64 = 32;
-
 /// Keep a publication cutoff outside any valid UTF-8 scalar crossing it.
 /// Invalid byte sequences keep their exact original boundaries.
-pub(super) fn source_boundary(
-    source: &[u8],
-    end: usize,
-    governor: &mut Governor,
-) -> Result<usize, StopReason> {
+pub(super) fn source_boundary(source: &[u8], end: usize) -> Result<usize, StopReason> {
     // One cutoff lookup, at most three backward probes, and scalar validation
     // over at most four bytes, shared with the existing live publication path.
-    governor.charge(Resource::Work, 12)?;
     if end > source.len() {
         return Err(invalid_input("content frontier exceeds admitted source"));
     }
@@ -152,7 +144,8 @@ impl<'a> FinalCursor<'a> {
         &mut self,
         governor: &mut Governor,
     ) -> Result<Option<FinalItem<'a>>, StopReason> {
-        governor.charge(Resource::Work, CURSOR_WORK)?;
+        // One unit per final item advanced; the four-slot peek is fixed.
+        governor.charge(Resource::Work, 1)?;
         let Some((slot, item)) = self.peek() else {
             return Ok(None);
         };
@@ -181,10 +174,6 @@ pub(super) fn common_prefix(
     }
     let mut limit = length;
     loop {
-        governor.charge(
-            Resource::Work,
-            size(cursors.len()).saturating_mul(CURSOR_WORK),
-        )?;
         let earliest = cursors
             .iter()
             .filter_map(|cursor| cursor.peek().map(|(_, item)| item.span().start))
@@ -192,7 +181,6 @@ pub(super) fn common_prefix(
         if earliest.is_none_or(|start| start >= limit) {
             break;
         }
-        governor.charge(Resource::Work, CURSOR_WORK)?;
         let base = cursors[0].peek().map(|(_, item)| item);
         for cursor in &cursors {
             if let Some((_, FinalItem::Call(call, origins))) = cursor.peek()
@@ -202,7 +190,6 @@ pub(super) fn common_prefix(
             }
         }
         for cursor in &cursors.as_slice()[1..] {
-            governor.charge(Resource::Work, CURSOR_WORK)?;
             let other = cursor.peek().map(|(_, item)| item);
             if let Some(at) = difference(base, other, native, governor)? {
                 limit = limit.min(at);
@@ -270,9 +257,8 @@ fn range_difference(left: &Range<usize>, right: &Range<usize>) -> Option<usize> 
 pub(super) fn selected_fact<'a>(
     origins: &Origins,
     native: &'a NativeTrace,
-    governor: &mut Governor,
 ) -> Result<&'a NativeFact, StopReason> {
-    let row = native.call(origins.selected(governor)?)?;
+    let row = native.call(origins.selected()?)?;
     let selected = row
         .readings
         .first()
@@ -344,7 +330,7 @@ pub(super) fn call_limit(
     native: &NativeTrace,
     governor: &mut Governor,
 ) -> Result<Option<usize>, StopReason> {
-    let base = selected_fact(origins, native, governor)?;
+    let base = selected_fact(origins, native)?;
     let mut limit = None;
     for origin in &origins.0 {
         governor.charge(Resource::Work, 5)?;
@@ -404,8 +390,8 @@ fn call_difference(
     if left.index != right.index || left.span.start != right.span.start {
         return Ok(Some(left.span.start.min(right.span.start)));
     }
-    let a = selected_fact(left_origins, native, governor)?;
-    let b = selected_fact(right_origins, native, governor)?;
+    let a = selected_fact(left_origins, native)?;
+    let b = selected_fact(right_origins, native)?;
     let mut limit = fact_difference(a, b, governor)?;
     limit = source_min(limit, range_difference(&left.span, &right.span));
     if !optional_text(left.tool.as_deref(), right.tool.as_deref(), governor)? {
@@ -531,7 +517,6 @@ fn difference(
     native: &NativeTrace,
     governor: &mut Governor,
 ) -> Result<Option<usize>, StopReason> {
-    governor.charge(Resource::Work, 16)?;
     let (left, right) = match (left, right) {
         (Some(left), Some(right)) => (left, right),
         (Some(item), None) | (None, Some(item)) => return Ok(Some(item.span().start)),
@@ -560,7 +545,6 @@ fn optional_text(
     right: Option<&str>,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
-    governor.charge(Resource::Work, 1)?;
     match (left, right) {
         (Some(a), Some(b)) => text(a, b, governor),
         (None, None) => Ok(true),
@@ -589,7 +573,6 @@ pub(super) fn same_call(
     right: &ToolCall,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
-    governor.charge(Resource::Work, 32)?;
     if left.index != right.index
         || left.span != right.span
         || left.effects != right.effects
@@ -624,7 +607,6 @@ pub(super) fn same_call(
         }
     }
     for (left, right) in left.keywords.iter().zip(&right.keywords) {
-        governor.charge(Resource::Work, 1)?;
         if left.used != right.used
             || !text(&left.pointer, &right.pointer, governor)?
             || !text(&left.keyword, &right.keyword, governor)?
@@ -675,9 +657,6 @@ fn same_rejected(
             .saturating_add(size(left.raw.len()))
             .saturating_add(size(right.raw.len())),
     )?;
-    for dialect in left.dialect.iter().chain(right.dialect.iter()) {
-        governor.charge(Resource::Work, size(dialect.name().len()).saturating_add(1))?;
-    }
     Ok(left.span == right.span
         && left.dialect == right.dialect
         && left.reason == right.reason
@@ -706,7 +685,6 @@ fn ledger(
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
     for value in [left, right] {
-        governor.charge(Resource::Work, 3)?;
         for value in &value.evidence {
             admit_evidence(value, governor)?;
         }
@@ -763,7 +741,6 @@ fn outcome(
     right: &CallOutcome,
     governor: &mut Governor,
 ) -> Result<bool, StopReason> {
-    governor.charge(Resource::Work, 1)?;
     for value in [left, right] {
         if let CallOutcome::Unresolved { reason } = value {
             admit_reason(reason, governor)?;

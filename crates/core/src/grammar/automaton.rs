@@ -282,11 +282,7 @@ trait MatcherOutputs: Sized + From<ScratchVec<Self::Cell>> {
 
     fn initialize(&mut self, count: usize) -> Result<(), StopReason>;
     fn prefix(&mut self, state: usize, label: Option<u32>, depth: u32);
-    fn inherit(
-        &mut self,
-        cursor: &mut MatcherCursor<'_>,
-        governor: &mut Governor,
-    ) -> Result<(), StopReason>;
+    fn inherit(&mut self, cursor: &mut MatcherCursor<'_>);
 }
 
 type LongestOutputs = ScratchVec<Option<(u32, u32)>>;
@@ -303,15 +299,10 @@ impl MatcherOutputs for LongestOutputs {
         self.as_mut_slice()[state] = label.map(|label| (label, depth));
     }
 
-    fn inherit(
-        &mut self,
-        cursor: &mut MatcherCursor<'_>,
-        _governor: &mut Governor,
-    ) -> Result<(), StopReason> {
+    fn inherit(&mut self, cursor: &mut MatcherCursor<'_>) {
         if self[cursor.state].is_none() {
             self.as_mut_slice()[cursor.state] = self[cursor.fallback];
         }
-        Ok(())
     }
 }
 
@@ -330,22 +321,16 @@ impl MatcherOutputs for PriorityOutputs {
         // Exact terminal replay initializes both projections before BFS.
     }
 
-    fn inherit(
-        &mut self,
-        cursor: &mut MatcherCursor<'_>,
-        governor: &mut Governor,
-    ) -> Result<(), StopReason> {
+    fn inherit(&mut self, cursor: &mut MatcherCursor<'_>) {
         cursor.edge = 0;
         while cursor.edge < 2 {
             // Read the candidates, select original view order, publish.
-            governor.charge(Resource::Work, 3)?;
             cursor.current = self[cursor.state][cursor.edge];
             cursor.inherited = self[cursor.fallback][cursor.edge];
             self.as_mut_slice()[cursor.state][cursor.edge] =
                 first_output(cursor.current, cursor.inherited);
             cursor.edge += 1;
         }
-        Ok(())
     }
 }
 
@@ -445,10 +430,8 @@ impl<O: MatcherOutputs> MatcherBuild<O> {
             cursor.state = self.queue[self.cursor] as usize;
             self.cursor += 1;
             cursor.fallback = self.fail[cursor.state] as usize;
-            self.outputs.inherit(cursor, governor)?;
+            self.outputs.inherit(cursor);
 
-            // Two row starts, two ends, two bounds, range and edge cursor.
-            governor.charge(Resource::Work, 8)?;
             cursor.position = cursor.fallback * 256;
             cursor.slot = cursor.state * 256;
             let source = cursor.position..cursor.position + 256;
@@ -669,10 +652,7 @@ impl MatcherBuild<PriorityOutputs> {
             }
             cursor.edge = 0;
             while cursor.edge < 2 {
-                // Absent ranks still require a view-slot observation.
-                governor.charge(Resource::Work, 1)?;
                 if let Some(rank) = literals[cursor.literal].ranks[cursor.edge] {
-                    governor.charge(Resource::Work, 3)?;
                     cursor.current = self.outputs[cursor.state][cursor.edge];
                     cursor.inherited = Some((rank, cursor.next_depth));
                     self.outputs.as_mut_slice()[cursor.state][cursor.edge] =
@@ -798,7 +778,6 @@ impl PriorityMatcher {
         literals: &[PriorityLiteral<'_>],
         governor: &mut Governor,
     ) -> Result<Self, StopReason> {
-        governor.charge(Resource::Work, 1)?;
         let _construction = governor.lease_scratch(size(PRIORITY_MATCHER_CONTROL_BYTES))?;
         let mut cursor = MatcherCursor::new();
         let mut build = MatcherBuild::<PriorityOutputs>::prepare(literals, &mut cursor, governor)?;

@@ -65,7 +65,6 @@ impl Values {
         value: OwnedValue,
         governor: &mut Governor,
     ) -> Result<u32, StopReason> {
-        governor.charge(Resource::Work, 2)?;
         let head = self
             .heads
             .get(owner)
@@ -114,7 +113,6 @@ impl Values {
         owner: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 1)?;
         let head = self
             .heads
             .as_mut_slice()

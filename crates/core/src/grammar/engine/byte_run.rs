@@ -111,7 +111,6 @@ pub(super) fn invalidate(
         .get_mut(table)
         .ok_or_else(|| invalid_input("byte run table has no proof slot"))?;
     if slot.is_some() {
-        governor.charge(Resource::Work, 1)?;
         let cursor = cursor.ok_or_else(|| {
             invalid_input("byte run reached native processing without its pre-byte cursor")
         })?;
@@ -267,7 +266,6 @@ impl Engine<'_> {
         let Some(retained) = slot else {
             return Ok(false);
         };
-        governor.charge(Resource::Work, 1)?;
         if retained.byte != byte {
             // step_table moves threads before split: restore them here.
             consume(
@@ -291,13 +289,10 @@ impl Engine<'_> {
         &self,
         byte: u8,
         repeated: &mut Option<bool>,
-        governor: &mut Governor,
-    ) -> Result<bool, StopReason> {
-        governor.charge(Resource::Work, 1)?;
+    ) -> bool {
         if let Some(known) = *repeated {
-            return Ok(known);
+            return known;
         }
-        governor.charge(Resource::Work, 4)?;
         let known = byte.is_ascii()
             && self
                 .buffer
@@ -306,7 +301,7 @@ impl Engine<'_> {
                 .and_then(|at| self.buffer.get(at))
                 .is_some_and(|previous| *previous == byte);
         *repeated = Some(known);
-        Ok(known)
+        known
     }
 
     /// Certify the actual settled cohort through its native classifiers.
@@ -348,7 +343,7 @@ impl Engine<'_> {
                 return Ok(());
             }
         }
-        if !self.byte_run_may_repeat(byte, repeated, governor)?
+        if !self.byte_run_may_repeat(byte, repeated)
             || !self.repeated_byte(byte, next_at, governor)?
         {
             return Ok(());
@@ -386,7 +381,6 @@ impl Engine<'_> {
         };
         // Incremental bodies cannot qualify. Classify the actual instruction
         // before examining a predecessor that cannot change that result.
-        governor.charge(Resource::Work, 2)?;
         if !matches!(
             current.program.insts[first.pc as usize],
             Inst::Until { .. }
@@ -399,14 +393,12 @@ impl Engine<'_> {
         }
         // Supported bodies still need an equal predecessor before inspecting
         // their full run, codecs or owners.
-        if !self.byte_run_may_repeat(byte, repeated, governor)? {
+        if !self.byte_run_may_repeat(byte, repeated) {
             return Ok(());
         }
-        governor.charge(Resource::Work, 3)?;
         if raw != ROOT || first.past || first.pending != 0 {
             return Ok(());
         }
-        governor.charge(Resource::Work, 5)?;
         if first.pos != next_at
             || first
                 .pos
@@ -422,7 +414,6 @@ impl Engine<'_> {
         {
             return Ok(());
         }
-        governor.charge(Resource::Work, 2)?;
         self.byte_runs.as_mut_slice()[table] = Some(RunProof { byte });
         self.byte_run_count += 1;
         Ok(())
@@ -431,7 +422,6 @@ impl Engine<'_> {
     /// Every pristine opened owner has a surviving body, with no suffix work.
     fn body_run_owners(&self, table: usize, governor: &mut Governor) -> Result<bool, StopReason> {
         let current = &self.tables[table];
-        governor.charge(Resource::Work, 24)?;
         if current.attempts.is_empty()
             || !current.trails.is_empty()
             || !current.held.by_attempt.is_empty()
@@ -746,7 +736,6 @@ impl Engine<'_> {
                 return Ok(false);
             }
             previous = Some(thread.key());
-            governor.charge(Resource::Work, 1)?;
             let steps = runtime.class_steps[class as usize]
                 .as_ref()
                 .ok_or_else(|| invalid_input("class byte proof has no native transition cache"))?;

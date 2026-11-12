@@ -766,9 +766,6 @@ impl ToolSet {
             let position = tools.len();
             let definition = &entry.definition;
             for literal in core::iter::once(&definition.name).chain(&definition.aliases) {
-                governor
-                    .charge(Resource::Work, 3)
-                    .map_err(ToolSetError::Resource)?;
                 max_name_bytes = max_name_bytes.max(literal.len());
                 retain_text(governor, literal.len())?;
                 index

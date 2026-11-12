@@ -80,7 +80,6 @@ pub(crate) fn same_source_tree(
                     return Ok(false);
                 }
                 for (left, right) in a.iter().zip(b).rev() {
-                    governor.charge(Resource::Work, 1)?;
                     governor.charge(Resource::Depth, depth.saturating_add(1))?;
                     push_scratch(
                         &mut stack,
@@ -98,7 +97,6 @@ pub(crate) fn same_source_tree(
                     return Ok(false);
                 }
                 for (left, right) in a.iter().zip(b).rev() {
-                    governor.charge(Resource::Work, 1)?;
                     if left.key_span != right.key_span
                         || !same_source_text(&left.key, &right.key, governor)?
                     {

@@ -6,15 +6,6 @@ use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason, invalid_input};
 
 const NONE: usize = usize::MAX;
-// Source/domain or removal identity (2), arena/free-row access (2), checked
-// planning (1), row/carrier handoff (1), row/free publication (2), projected
-// lane/minimum consistency (1), and publishing the exact floor pair (1).
-const UPDATE_WORK: u64 = 10;
-// Length/reservation planning, compact plan handoff, final incoming ID placement,
-// and its row-position publication. Removal instead pays for endpoint identity,
-// tail pop and clearing the removed position, plus separate replacement stores.
-const INSERT_WORK: u64 = 4;
-const REMOVE_WORK: u64 = 5;
 
 /// A queue handle; its arrival identity is checked before every removal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,7 +285,6 @@ impl PendingSources {
             ));
         }
         if lane == 1 {
-            governor.charge(Resource::Work, 1)?;
             self.endpoint(0, cursor.row.positions[0], cursor.id)?;
         }
         Ok(())
@@ -312,11 +302,9 @@ impl PendingSources {
         while cursor.hole > 0 {
             cursor.parent = (cursor.hole - 1) / 2;
             self.read(lane, cursor.parent, cursor, governor)?;
-            governor.charge(Resource::Work, 1)?;
             if cursor.key >= cursor.row.key {
                 break;
             }
-            governor.charge(Resource::Work, 2)?;
             cursor.hole = cursor.parent;
         }
         plan.target = cursor.hole;
@@ -351,17 +339,14 @@ impl PendingSources {
             cursor.selected_position = cursor.left;
             if cursor.right < cursor.length {
                 self.read(lane, cursor.right, cursor, governor)?;
-                governor.charge(Resource::Work, 1)?;
                 if cursor.row.key < cursor.selected {
                     cursor.selected = cursor.row.key;
                     cursor.selected_position = cursor.right;
                 }
             }
-            governor.charge(Resource::Work, 1)?;
             if cursor.selected >= cursor.key {
                 break;
             }
-            governor.charge(Resource::Work, 2)?;
             if cursor.hole == 0 {
                 *floor = Some(cursor.selected.source);
             }
@@ -410,8 +395,6 @@ impl PendingSources {
         self.read(lane, cursor.last, cursor, governor)?;
         cursor.key = cursor.row.key;
         plan.replacement = cursor.id;
-        // Final replacement stores are distinct from intermediate ID shifts.
-        governor.charge(Resource::Work, 2)?;
         self.ascend(lane, plan, floor, cursor, governor)?;
         if plan.target == plan.hole {
             plan.movement = Move::Down;
@@ -430,7 +413,6 @@ impl PendingSources {
         fed: usize,
         governor: &mut Governor,
     ) -> Result<SourceUpdate, StopReason> {
-        governor.charge(Resource::Work, UPDATE_WORK)?;
         if source > fed || u64::try_from(source).is_err() || arrival == 0 {
             return Err(invalid_input(
                 "queued source origin or arrival exceeds its admitted domain",
@@ -472,7 +454,6 @@ impl PendingSources {
             update.next_free = cursor.row.key.source;
         }
         for heap in self.heaps.iter_mut().take(1 + usize::from(candidate)) {
-            governor.charge(Resource::Work, INSERT_WORK)?;
             heap.len()
                 .checked_add(1)
                 .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
@@ -506,7 +487,6 @@ impl PendingSources {
         candidate: bool,
         governor: &mut Governor,
     ) -> Result<SourceUpdate, StopReason> {
-        governor.charge(Resource::Work, UPDATE_WORK)?;
         let mut cursor = PreparationCursor::new(Key { source, arrival });
         self.record(id, candidate, &mut cursor)?;
         let mut update = SourceUpdate {
@@ -528,7 +508,6 @@ impl PendingSources {
             .enumerate()
             .take(1 + usize::from(candidate))
         {
-            governor.charge(Resource::Work, REMOVE_WORK)?;
             self.endpoint(lane, plan.hole, id)?;
             self.remove_plan(lane, plan, floor, &mut cursor, governor)?;
         }
@@ -585,12 +564,7 @@ impl PendingSources {
 
     /// Admit terminal mode and the eventual constant-time owner retirements.
     /// The owners themselves remain through every queued-handle lifetime.
-    pub(super) fn prepare_terminal(
-        &self,
-        pending: usize,
-        governor: &mut Governor,
-    ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 6)?;
+    pub(super) fn prepare_terminal(&self, pending: usize) -> Result<(), StopReason> {
         if self.heaps[0].len() != pending {
             return Err(invalid_input(
                 "terminal report heap and dispatch queue lengths disagree",
@@ -609,14 +583,11 @@ impl PendingSources {
         source: usize,
         arrival: u64,
         candidate: bool,
-        governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 4)?;
         let mut cursor = PreparationCursor::new(Key { source, arrival });
         self.record(id, candidate, &mut cursor)?;
         self.endpoint(0, cursor.row.positions[0], id)?;
         if candidate {
-            governor.charge(Resource::Work, 1)?;
             self.endpoint(1, cursor.row.positions[1], id)?;
         }
         Ok(())

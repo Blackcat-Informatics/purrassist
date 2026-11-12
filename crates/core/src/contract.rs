@@ -710,6 +710,10 @@ pub struct ScratchVec<T> {
     reserved: u64,
 }
 
+/// Capacity from which [`ScratchVec::reserve_compact`] grows by one half
+/// instead of doubling.
+const COMPACT_GROWTH_FROM: usize = 64 * 1024;
+
 /// Admit one insertion and any relocation before growing a scratch vector.
 pub(crate) fn push_scratch<T: ScratchCharge>(
     values: &mut ScratchVec<T>,
@@ -747,8 +751,23 @@ impl<T: ScratchCharge> ScratchVec<T> {
         self.reserve_to(target)
     }
 
+    /// Relocation work to admit for one element appended under
+    /// [`ScratchVec::reserve_compact`], before it is appended. While capacity
+    /// doubles (below 64 KiB), the elements relocated so far never exceed
+    /// twice the elements appended; once capacity grows by one half, they
+    /// never exceed three times. Admitting two or three units per appended
+    /// element therefore covers every relocation copy before it happens.
+    pub(crate) const fn compact_relocation_work(&self) -> u64 {
+        if self.inner.capacity() < COMPACT_GROWTH_FROM {
+            2
+        } else {
+            3
+        }
+    }
+
     /// Retained source uses smaller geometric steps while preserving linear
-    /// amortized relocation. Callers admit planning and relocation separately.
+    /// amortized relocation. Callers admit relocation through
+    /// [`ScratchVec::compact_relocation_work`] for each appended element.
     pub(crate) fn reserve_compact(&mut self, additional: usize) -> Result<(), StopReason> {
         let capacity = self.inner.capacity();
         let needed = self
@@ -761,7 +780,7 @@ impl<T: ScratchCharge> ScratchVec<T> {
         }
         // Small sources keep the original allocation frequency. Large
         // retained sources limit spare capacity with compact geometric steps.
-        if capacity < 64 * 1024 {
+        if capacity < COMPACT_GROWTH_FROM {
             return self.reserve_to(needed.max(capacity * 2).max(4));
         }
         let target = capacity

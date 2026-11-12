@@ -759,7 +759,6 @@ impl Turn {
         } else {
             (parent.plain, 0, 0)
         };
-        governor.charge(Resource::Work, 4)?;
         let payload = match kind {
             TurnKind::Stored(stored, _) => match &self.store[stored as usize] {
                 Segment::Content(_) => None,
@@ -891,7 +890,6 @@ impl Turn {
         hist: u32,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, K_CAPTURE)?;
         *common = Some(match *common {
             Some(previous) => self.common_plain(previous, hist, governor)?,
             None => self.nodes[hist as usize].plain,
@@ -1872,7 +1870,6 @@ fn same_example_call(
     for (left, right) in left.readings.iter().zip(&right.readings) {
         // Different native dialect identities cannot be equal readings. Check
         // their bounded identity before traversing either argument's metadata.
-        governor.charge(Resource::Work, 1)?;
         if left.dialect.name().len() != right.dialect.name().len() {
             return Ok(false);
         }
@@ -2247,7 +2244,6 @@ impl<'s> Recognizer<'s> {
     /// Prepare candidate accounting before any report can enter the queue.
     /// Standalone recognition has no consumer for the candidate-only index.
     pub(super) fn prepare_ownership(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
-        governor.charge(Resource::Work, 1)?;
         if self.failed.is_some()
             || self.engine.tracks_ownership()
             || self.engine.fed() != 0
@@ -2274,7 +2270,7 @@ impl<'s> Recognizer<'s> {
             return Err(invalid_input("candidate accounting was not prepared"));
         }
         let (mut lexical, mut candidate) =
-            if let Some(origin) = self.engine.source_candidate_floor(governor)? {
+            if let Some(origin) = self.engine.source_candidate_floor()? {
                 if origin == 0 {
                     return Ok(ByteOwnership::WholeCandidate);
                 }
@@ -2284,7 +2280,6 @@ impl<'s> Recognizer<'s> {
             } else {
                 self.engine.ownership_floors(governor)?
             };
-        governor.charge(Resource::Work, 1)?;
         if candidate == Some(0) {
             // No turn, report, marker or settled interval can precede zero.
             return Ok(ByteOwnership::WholeCandidate);
@@ -2292,7 +2287,6 @@ impl<'s> Recognizer<'s> {
         if matches!(self.policy, ReasoningPolicy::Separate { .. })
             && self.set.marker_matcher.is_some()
         {
-            governor.charge(Resource::Work, 1)?;
             let marker = self
                 .frontier_memo
                 .as_ref()
@@ -2300,7 +2294,7 @@ impl<'s> Recognizer<'s> {
                 .lexical;
             let marker = match marker {
                 Some(marker) => marker,
-                None => self.current_marker_floor(governor)?,
+                None => self.current_marker_floor()?,
             };
             if marker > self.fed() {
                 return Err(invalid_input("marker projection exceeds consumed source"));
@@ -2444,11 +2438,11 @@ impl<'s> Recognizer<'s> {
     }
 
     /// The current marker floor, shared by eager and deferred projections.
-    fn current_marker_floor(&self, governor: &mut Governor) -> Result<usize, StopReason> {
+    fn current_marker_floor(&self) -> Result<usize, StopReason> {
         let held = if matches!(self.policy, ReasoningPolicy::Separate { .. })
             && self.set.marker_matcher.is_some()
         {
-            self.set.marker_prefix_len(self.marker, governor)?
+            self.set.marker_prefix_len(self.marker)?
         } else {
             0
         };
@@ -2466,7 +2460,6 @@ impl<'s> Recognizer<'s> {
         let previous = self.frontier_memo.take();
         let engine_floor = self.engine.continuation_floor(governor)?;
         // Select the projection before consulting sources it may not need.
-        governor.charge(Resource::Work, 1)?;
         if engine_floor == Some(0)
             && let Some(mut memo) = previous
             && memo.engine_floor == Some(0)
@@ -2483,8 +2476,7 @@ impl<'s> Recognizer<'s> {
             return Ok(());
         }
         let report_floor = self.pending_sources.floor();
-        let lexical = self.current_marker_floor(governor)?;
-        governor.charge(Resource::Work, 1)?;
+        let lexical = self.current_marker_floor()?;
         if let Some(mut memo) = previous
             && memo.engine_floor == engine_floor
             && memo.report_floor == report_floor
@@ -2650,7 +2642,6 @@ impl<'s> Recognizer<'s> {
                 update.apply(&mut self.pending_sources);
                 handle
             } else {
-                governor.charge(Resource::Work, 1)?;
                 if source > self.engine.fed() || u64::try_from(source).is_err() || arrival == 0 {
                     return Err(invalid_input(
                         "queued source origin or arrival exceeds its admitted domain",
@@ -2723,7 +2714,6 @@ impl<'s> Recognizer<'s> {
                     update.apply(&mut self.pending_sources);
                     pending
                 } else {
-                    governor.charge(Resource::Work, 1)?;
                     if !handle.is_untracked() {
                         return Err(invalid_input(
                             "standalone report owns an indexed source handle",
@@ -2751,7 +2741,7 @@ impl<'s> Recognizer<'s> {
     fn settle_final(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         if self.engine.tracks_ownership() {
             self.pending_sources
-                .prepare_terminal(self.pending.len(), governor)?;
+                .prepare_terminal(self.pending.len())?;
         }
         let mut ready = Vec::new();
         let prepared = (|| {
@@ -2769,15 +2759,11 @@ impl<'s> Recognizer<'s> {
                         source,
                         key.2,
                         candidate.is_some(),
-                        governor,
                     )?;
-                } else {
-                    governor.charge(Resource::Work, 1)?;
-                    if !handle.is_untracked() {
-                        return Err(invalid_input(
-                            "standalone report owns an indexed source handle",
-                        ));
-                    }
+                } else if !handle.is_untracked() {
+                    return Err(invalid_input(
+                        "standalone report owns an indexed source handle",
+                    ));
                 }
                 let (_, (pending, _)) = self
                     .pending
