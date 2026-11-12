@@ -47,6 +47,12 @@ crates share one version.
 
 ### Changed
 
+- The unpublished tool-graph crate depends on the released `purrdf-core` and
+  `purrdf-shapes` crates at exactly `=4` (resolving 4.0.2) instead of a Git
+  revision. The lock has no Git source, and the dependency inventory, baseline
+  and license notices record the registry packages. Vocabulary admission now
+  retains the typed namespace construction error as the error source.
+
 - Hostname and email formats now own temporary Unicode mapping, normalization,
   Punycode and label storage, admitting scans, table lookups and buffer movement.
   Normalization retains one algorithm for ordinary and governed callers, with
