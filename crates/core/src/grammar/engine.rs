@@ -520,6 +520,16 @@ impl Arena {
             .expect("a codec slot is finished once")
     }
 
+    /// Release the out-of-line charge of a codec state taken from its slot
+    /// and since consumed. It is released here rather than at the next reset,
+    /// which does not come while any attempt is live; the slot entry itself
+    /// stays charged until then. A state whose finish never reaches this call
+    /// keeps its charge in `charged`, which the reset or drop releases.
+    fn release_codec(&mut self, boxed: u64, governor: &mut Governor) -> Result<(), StopReason> {
+        self.charged = self.charged.saturating_sub(boxed);
+        governor.release_scratch(boxed)
+    }
+
     fn reset(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         self.nodes.clear();
         self.nodes.push(HistNode {
@@ -2145,11 +2155,14 @@ impl<'s> Step<'_, 's> {
         governor: &mut Governor,
     ) -> Result<Result<(u32, u64), Finished>, StopReason> {
         let codec = self.arena.take_codec(slot);
+        let boxed = codec.boxed_bytes();
         let context = self.context(codec.kind(), hist, governor)?;
         let buffer = self.buffer;
         let bytes = &buffer[body.start - self.base..body.end - self.base];
         let body_end = body.end;
-        match codec.finish(bytes, body, how, context, governor)? {
+        let finished = codec.finish(bytes, body, how, context, governor);
+        self.arena.release_codec(boxed, governor)?;
+        match finished? {
             // A JSON value no repair reads is not a call's arguments: the
             // attempt fails where its decoding stopped (see
             // `Step::end_body`), a rejected attempt rather than a call.
@@ -3994,16 +4007,13 @@ impl Step<'_, '_> {
         governor: &mut Governor,
     ) -> Result<Closed, StopReason> {
         let first = parent == NO_CHAIN;
-        let charged = governor.scratch_meter().total_charged();
+        let charged = governor.scratch_meter().live();
         let (part, cost, lead) = match self.part(paths, first, shape, governor)? {
             Built::Part(part, cost, lead) => (part, cost, lead),
             Built::Failed(reason) => return Ok(Closed::Failed(reason)),
             Built::Mixed => return Ok(Closed::Whole),
         };
-        let bytes = governor
-            .scratch_meter()
-            .total_charged()
-            .saturating_sub(charged);
+        let bytes = governor.scratch_meter().live().saturating_sub(charged);
         let (depth, cum, first_call, before, held, total) = if first {
             (0, 0, u32::MAX, 0, NO_CHAIN, 0)
         } else {
@@ -4087,16 +4097,13 @@ impl Step<'_, '_> {
             open_end: shape.open_end,
             cost: shape.cost.saturating_sub(before),
         };
-        let charged = governor.scratch_meter().total_charged();
+        let charged = governor.scratch_meter().live();
         let (part, cost, lead) = match self.part(&tail.paths, last, &part_shape, governor)? {
             Built::Part(part, cost, lead) => (part, cost, lead),
             Built::Failed(reason) => return Ok(Some(Err(reason))),
             Built::Mixed => return Ok(None),
         };
-        let last_bytes = governor
-            .scratch_meter()
-            .total_charged()
-            .saturating_sub(charged);
+        let last_bytes = governor.scratch_meter().live().saturating_sub(charged);
         let (depth, first_call, held) = match closed {
             NO_CHAIN => (0, u32::MAX, NO_CHAIN),
             id => {
@@ -6465,7 +6472,7 @@ impl<'s> Engine<'s> {
             open_end: boundary.at,
             cost: boundary.cost,
         };
-        let before = governor.scratch_meter().total_charged();
+        let before = governor.scratch_meter().live();
         let Ok(mut segmentations) = step.segment(boundary.hist, &shape, governor)? else {
             return Ok(None);
         };
@@ -6487,10 +6494,7 @@ impl<'s> Engine<'s> {
                 }
             }
         }
-        let charged = governor
-            .scratch_meter()
-            .total_charged()
-            .saturating_sub(before);
+        let charged = governor.scratch_meter().live().saturating_sub(before);
         let charged = if segmentations.len() == 1 { charged } else { 0 };
         let mut certified = ScratchVec::new(governor);
         for parts in segmentations {
@@ -7775,14 +7779,12 @@ impl<'s> Engine<'s> {
             return self.hold_chained(table, &thread, dangling, chained, governor);
         }
         let (step, _, _) = self.split(table, governor)?;
-        let before = governor.scratch_meter().total_charged();
+        let before = governor.scratch_meter().live();
         let segmentations = step.segment(thread.hist, &shape, governor)?;
-        // Materializing charges only retained scratch (no lease), so the
-        // growth of the cumulative total is what the parts hold.
-        let charged = governor
-            .scratch_meter()
-            .total_charged()
-            .saturating_sub(before);
+        // Materializing charges transient scratch too (histories and the
+        // like, released before it returns), so the growth of the live
+        // total, not of the cumulative one, is what the parts hold.
+        let charged = governor.scratch_meter().live().saturating_sub(before);
         if segmentations.is_ok()
             && let Err(reason) = self.forget_failure_header(thread.attempt, governor)
         {
