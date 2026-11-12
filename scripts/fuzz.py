@@ -885,6 +885,10 @@ TOOL_CALL_REGRESSIONS = [
     b'\x00Rpre <tool_call><function=read_file><function=read_file><parameter=path<think>ter></function></tool_call> p"t',
     # Issue #6: 75h_s59q (deepseek31_resynced_tail_has_own_failure).
     b'\x00RHi <\xef\xbd\x9ctool\xe2\x96\x81calls\xe2\x96\x81begin\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"a"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_file oops<\xef\xbd\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"b"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c><\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81begin\xef\xbd\x9c>read_fil\x9ctool\xe2\x96\x81sep\xef\xbd\x9c>{"path":"c"}<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96<\xef\xbd\x9ctool\xe2\x96\x81call\xe2\x96\x81end\xef\xbd\x9c>\xef\xbd\x9c> done',
+    # Issue #183: a rejected GLM attempt does not run past its failure into
+    # the next call's opener (campaign failure: the rejected attempt covered
+    # the whole following <tool_call> opener).
+    b'[\xe6#<think>Write the file.</think>\n<tool_call>write_file\n<arg_key>path</arg_key><arg_value>src/main.rs</arg_value><arg_key>content</arg_key><arg_value>fn main() {\n    println!("hi");\n\n\tlet  x = 1;  \n}\n</arg_value><arg_key>mode</arg_key><arg_value>create</arg_value><arg_key>ratio</arg_key><arg_value>Write the file.</think>\n<tool_call>write_file\n<arg_key>path</arg_key><arg_value>src/main.rs</arg_value><arg_key>content</arg_key><arg_value>fn main() {\n    println!("hi");\n\n\tlet  x = 1;  \n}\n</arg_value><arg_key>mode</arg_key><arg_value>create</arg_value><arg_key>ratio</arg_key><arg_value>2.50</arg_value><arg_key>count</arg_key><arg_value>1e3</arg_value><arg_key>tags</arg_key><arg_value>[]</arg_value><arg_key>options</arg_key><arg_value>{"backup": false, "retries": 0, "owner": {"name": "ops", "uid": -7}}</arg_value></tool_call>]',
 ]
 
 # Strict forced tool choice: header `\xe6\x23` (forced `read_file`) plus a
