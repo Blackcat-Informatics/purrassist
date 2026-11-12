@@ -480,6 +480,23 @@ impl DialectId {
         self.built_in().map(|built| built.recipe)
     }
 
+    /// Whether this dialect is a derived projection whose unchanged parent
+    /// source is also in `others`: the two share every result and declaration
+    /// convention, so the parent alone needs to read results.
+    pub(crate) fn parent_in(&self, others: &[Self]) -> bool {
+        let Some(GrammarRecipe::Derived(recipe)) = self.source() else {
+            return false;
+        };
+        let parent = recipe.source();
+        others.iter().any(|other| {
+            matches!(
+                other.source(),
+                Some(GrammarRecipe::Literal(text))
+                    if core::ptr::eq(text.as_ptr(), parent.as_ptr()) && text.len() == parent.len()
+            )
+        })
+    }
+
     /// The dialect's grammar; a built-in grammar is compiled on first use.
     ///
     /// ```

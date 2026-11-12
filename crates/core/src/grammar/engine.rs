@@ -2327,13 +2327,21 @@ impl<'s> Step<'_, 's> {
         if self.retained_name_prefix(hist, segment.unwrap_or(start)..name.start, governor)? {
             return Ok(true);
         }
-        governor.charge(Resource::Work, size(name.len()).saturating_mul(K_CODEC))?;
-        let bytes = self.bytes(name);
-        if core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some()) {
+        // A name longer than every declared literal cannot be one: the lookup
+        // is skipped rather than charged per byte of a long plain word.
+        let comparable = name.len().min(tools.longest_literal().saturating_add(1));
+        governor.charge(Resource::Work, size(comparable).saturating_mul(K_CODEC))?;
+        let bytes = self.bytes(name.clone());
+        if name.len() <= tools.longest_literal()
+            && core::str::from_utf8(bytes).is_ok_and(|name| tools.lookup_exact(name).is_some())
+        {
             return Ok(true);
         }
         for &relation in &self.grammar.joint_captures {
-            let boundaries = super::partition::boundaries(self.grammar, relation, bytes, governor)?;
+            // The split points are needed only once a declared name or alias
+            // is a prefix of the written name: a plain word that no declared
+            // name begins never pays for them.
+            let mut boundaries = None;
             for tool in tools.tools() {
                 for candidate in
                     core::iter::once(tool.name()).chain(tool.aliases().iter().map(String::as_str))
@@ -2342,8 +2350,20 @@ impl<'s> Step<'_, 's> {
                         Resource::Work,
                         size(candidate.len().min(bytes.len())).saturating_add(65),
                     )?;
-                    if bytes.starts_with(candidate.as_bytes())
-                        && boundaries.binary_search(&candidate.len()).is_ok()
+                    if !bytes.starts_with(candidate.as_bytes()) {
+                        continue;
+                    }
+                    if boundaries.is_none() {
+                        boundaries = Some(super::partition::boundaries(
+                            self.grammar,
+                            relation,
+                            bytes,
+                            governor,
+                        )?);
+                    }
+                    if boundaries
+                        .as_ref()
+                        .is_some_and(|found| found.binary_search(&candidate.len()).is_ok())
                     {
                         // This is admission evidence only. Expansion still
                         // retains every original source-valid partition.
@@ -4642,6 +4662,10 @@ impl Event {
 struct Table<'s> {
     grammar: usize,
     kind: ProductionKind,
+    /// A derived dialect's result program is its parent's, unchanged. When
+    /// the parent is in the same set its table reads every result, so this
+    /// one never opens an attempt.
+    shadowed: bool,
     program: &'s Program,
     /// A `ClassRun` may hold logical pos/reach; consume it before position reads.
     threads: ScratchVec<Thread>,
@@ -5053,6 +5077,9 @@ pub(crate) struct Engine<'s> {
     class_runs: ScratchVec<Option<class_run::ClassRun>>,
     /// Empty occupancy skips invalidation probes and whole-slot reset sweeps.
     class_run_count: usize,
+    /// The tables holding at least one live attempt: held reports are swept
+    /// against these alone, so an idle dialect adds nothing to a sweep.
+    attempt_tables: usize,
     grammars: ScratchVec<GrammarRuntime<'s>>,
     buffer: ScratchVec<u8>,
     base: usize,
@@ -5125,6 +5152,7 @@ impl<'s> Engine<'s> {
         let mut protocol_fences = false;
         for (index, dialect) in dialects.iter().enumerate() {
             let grammar = dialect.grammar();
+            let parent_present = dialect.parent_in(dialects);
             protocol_fences |= grammar.protocol_fences();
             let dfas = (0..grammar.classes.len()).map(|_| None).collect();
             let mut class_steps = ScratchVec::new(governor);
@@ -5148,6 +5176,7 @@ impl<'s> Engine<'s> {
                 tables.push(Table {
                     grammar: index,
                     kind,
+                    shadowed: kind == ProductionKind::Result && parent_present,
                     program,
                     threads: ScratchVec::new(governor),
                     attempts: ScratchVec::new(governor),
@@ -5167,6 +5196,7 @@ impl<'s> Engine<'s> {
             failure_headers: ScratchMap::new(governor),
             class_runs,
             class_run_count: 0,
+            attempt_tables: 0,
             grammars,
             protocol_fences,
             buffer: ScratchVec::new(governor),
@@ -5312,6 +5342,9 @@ impl<'s> Engine<'s> {
         at: usize,
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
+        if self.tables[table].shadowed {
+            return Ok(());
+        }
         let program = self.tables[table].program;
         let mut spawned = None;
         let line_blank = self.line_blank;
@@ -5341,6 +5374,7 @@ impl<'s> Engine<'s> {
             }
             let id = self.next_attempt;
             self.next_attempt += 1;
+            let first_attempt = self.tables[table].attempts.is_empty();
             self.tables[table].attempts.push(Attempt {
                 id,
                 start: at,
@@ -5352,6 +5386,7 @@ impl<'s> Engine<'s> {
                 stuck: false,
                 closed: None,
             })?;
+            self.attempt_tables += usize::from(first_attempt);
             let thread = Thread {
                 pc: program.start,
                 sub: Sub::Lit(0),
@@ -6589,6 +6624,9 @@ impl<'s> Engine<'s> {
             let attempts = self.tables[table].attempts.as_mut_slice();
             attempts.copy_within(index + 1.., index);
             self.tables[table].attempts.pop();
+            if self.tables[table].attempts.is_empty() {
+                self.attempt_tables -= 1;
+            }
             retired = true;
         }
         // Only an attempt that ended can release a held report.
@@ -6654,7 +6692,7 @@ impl<'s> Engine<'s> {
         }
         governor.charge(
             Resource::Work,
-            size(self.deferred.len() + self.whole.len()).saturating_mul(size(self.tables.len())),
+            size(self.deferred.len() + self.whole.len()).saturating_mul(size(self.attempt_tables)),
         )?;
         let reading = |tables: &[Table<'_>], start: usize| {
             tables.iter().any(|entry| {
@@ -7967,6 +8005,9 @@ impl<'s> Engine<'s> {
                 self.settle(table, end, Some(generation), governor)?;
             }
             self.tables[table].threads.clear();
+            if !self.tables[table].attempts.is_empty() {
+                self.attempt_tables -= 1;
+            }
             self.tables[table].attempts.clear();
             self.tables[table].failures.clear();
             self.tables[table].stalled.clear();

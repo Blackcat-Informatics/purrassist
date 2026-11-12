@@ -48,7 +48,9 @@ arguments, repairs or segmentations remain alternatives. Selecting a profile
 does not authorize converting an inferred value into a resolved one.
 
 Without strict tool-choice constraints, optional whitespace left by suppressed
-markers has one maximal framing. Grouped calls retain the latest end and then
+markers has one maximal framing, and a framing folded into it is not a
+competing candidate: the multiple-calls anchor resolves under the unchanged
+`Exact` preset. Grouped calls retain the latest end and then
 the earliest start in call order. This applies only within the
 same derived grammar for each changed frame when the ordered calls, every
 retained source span, arguments, outcome and complete provenance agree. A

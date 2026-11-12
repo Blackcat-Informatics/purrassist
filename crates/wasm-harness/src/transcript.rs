@@ -27,7 +27,14 @@ use purrassist_core::{
 ///
 /// ```
 /// let json = wasm_harness::transcript_json();
-/// assert!(purrassist_core::json::parse(&json).is_ok());
+/// // The transcript holds a turn per built-in dialect, beyond the default
+/// // parse budget: size the work to its length.
+/// let budget = purrassist_core::Budget {
+///     work: 64 * json.len() as u64,
+///     ..purrassist_core::Budget::default()
+/// };
+/// let mut governor = purrassist_core::Governor::new(budget);
+/// assert!(purrassist_core::json::parse_with(&json, &mut governor).is_ok());
 /// ```
 ///
 /// # Panics

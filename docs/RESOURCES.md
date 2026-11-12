@@ -1356,7 +1356,12 @@ a busy one; the opener term grows with the calls and keeps every limit
 finite and linear in `n` (`m ≤ n`). Recovery folds the segmentations of a
 contested span that recover the same calls before it enumerates
 whole-message readings, so such spans add readings instead of multiplying
-them. The derivation is saturating and deterministic; every other limit is
+them. A segmentation that only moves the optional layout a suppressed
+marker left (whitespace inside or beside a marker-suppressed call's frame)
+is no further segmentation when recovery folds it into one maximal framing:
+it is charged only when the fold keeps it, as under a strict tool choice, so
+canonical marker-suppressed markup resolves under `Exact`. The derivation is
+saturating and deterministic; every other limit is
 the preset's, so repair search stays bounded by the effort, and readings
 that genuinely multiply (a call with many repeated parameters) still exhaust
 as `BudgetExceeded(Candidates)`.
@@ -1364,11 +1369,12 @@ as `BudgetExceeded(Candidates)`.
 `tool_call_cost::busy_turn_resolves_every_call_under_sized` recovers 64
 Qwen3-Coder XML calls, each needing the
 `tool_call.markup.missing-parameter-close` repair and each followed by a
-stray `<tool_call>` that both dialects contest (`m = 320`: two openers at
-each `<tool_call>` and one at each `<function=`): the unmodified
-`Effort::Standard` preset (128 candidates) exhausts explicitly, and
-`sized(Effort::Standard, output)` (128 + 16 · 320 = 5,248 candidates)
-recovers every call `Resolved`, charging 129 candidates.
+stray `<tool_call>` that the dialects contest (`m = 576`: 448 native
+openers, three at each `<tool_call>` and one at each `<function=`, plus
+128 line-start name openers of the derived marker-suppressed dialects, two
+per call): the unmodified `Effort::Standard` preset (128 candidates)
+exhausts explicitly, and `sized(Effort::Standard, output)` (128 + 16 · 576 =
+9,344 candidates) recovers every call `Resolved`, charging 193 candidates.
 `tool_call_cost::per_call_competition_scales_with_calls` does the same for
 64 read-only calls that each have a near-miss name and a repeated parameter
 (192 candidates), and
