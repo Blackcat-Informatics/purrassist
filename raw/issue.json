@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "The tool-call fuzz target fails on main (dade01d) at execution 710 with an assertion at `crates/core/examples/fuzz_tool_call.rs:1264` about a rejected glm-4.5 attempt running past its failure point.\n\nReproduction: `python3 scripts/fuzz.py --target tool-call --timeout 120` (fails at execution 710). The failing input is saved in the repository's review record as a binary file and reproduces identically on dade01d.\n\nEarlier, this same target passed on the repair stack (#175 PRs 176-179). A merged change since then lets a rejected attempt run past the point where it fails. The fix must find that change and fix the code, not the oracle: the saved input becomes a pinned regression case, and the oracle assertion stays as it is.\n\nAcceptance: the saved input is a pinned regression test that fails on dade01d and passes after the fix; the fuzz target passes with `--timeout 120`; `clippy --workspace --all-targets -- -D warnings` exits 0.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-12T17:53:28Z",
+  "labels": [],
+  "milestone": null,
+  "number": 183,
+  "state": "OPEN",
+  "title": "Main's tool-call fuzz target fails: a rejected attempt runs past its failure point",
+  "updatedAt": "2026-11-12T17:53:28Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/183"
+}
