@@ -6092,32 +6092,6 @@ impl<'s> Engine<'s> {
         Ok(())
     }
 
-    /// Whether history `hist` holds captures, and every one of them is
-    /// dropped text. One `Work` unit per node visited.
-    fn reads_only_dropped(
-        &self,
-        mut hist: u32,
-        governor: &mut Governor,
-    ) -> Result<bool, StopReason> {
-        let mut dropped = false;
-        loop {
-            governor.charge(Resource::Work, 1)?;
-            let HistNode { prev, kind, .. } = self.arena.nodes.as_slice()[hist as usize];
-            match kind {
-                HistKind::Root => return Ok(dropped),
-                HistKind::Open(CaptureKind::Dropped, _) => dropped = true,
-                HistKind::Open(..)
-                | HistKind::Value(_)
-                | HistKind::Next(..)
-                | HistKind::Skipped(_) => {
-                    return Ok(false);
-                }
-                _ => {}
-            }
-            hist = prev;
-        }
-    }
-
     /// Record why (and where) an attempt left with no configuration failed.
     fn note_failure<'f>(
         &mut self,
@@ -6136,17 +6110,7 @@ impl<'s> Engine<'s> {
         // The rejected span ends where the furthest failing token began: a
         // partial literal may start the next opener.
         let program = self.tables[table].program;
-        // A configuration that read nothing but dropped text (the output as
-        // prose up to a token it then lacks) read no call markup: where it
-        // ran out shows nothing about where the call ends.
-        let mut read = Vec::new();
-        for failure in current() {
-            if !self.reads_only_dropped(failure.thread.hist, governor)? {
-                read.push(failure);
-            }
-        }
-        let end = read
-            .into_iter()
+        let end = current()
             .map(|failure| match program.insts[failure.thread.pc as usize] {
                 Inst::Lit { .. } => failure.thread.entry,
                 _ => failure.at,

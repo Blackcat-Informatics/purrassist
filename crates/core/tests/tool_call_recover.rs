@@ -3169,12 +3169,11 @@ fn rejected_span_never_splits_a_character_a_class_cannot_consume() {
 }
 
 /// Fuzz regression (`scripts/fuzz.py --target tool-call`): a Pythonic call
-/// whose arguments fault inside a string and run on to the end of the output
-/// with no `)` fails where the arguments stopped decoding (F4). Its bytes
-/// after the fault, which hold the next call and the list's `]` as text of an
-/// unclosed string, are not shown to be its markup and stay content; a
-/// configuration that merely skipped the whole output as dropped text before
-/// a token it then lacked shows no end either.
+/// whose arguments fault and run on to the end of the output with no `)`
+/// fails where the value stopped decoding (F4). The string closes at 52; the
+/// fault is the bare `a` at 53. Its bytes after the fault, which hold the
+/// next call and the list's `]` as text of an unclosed string, are not shown
+/// to be its markup and stay content.
 #[test]
 fn pythonic_arguments_faulting_at_the_end_of_output_do_not_swallow_what_follows() {
     let tools = ToolSet::compile(
