@@ -19,9 +19,20 @@
 //! reader charge their live storage to the governor's scratch meter and poll its
 //! work and cancellation authority at their native counting points; this crate's
 //! own passes charge one unit of work per statement and per validated property.
-//! An exhausted budget is [`LoadError::Exhausted`] and a cancellation is
-//! [`LoadError::Cancelled`], whichever stage observed it; neither is reported as
-//! invalid syntax, and no partial graph escapes. The storage a catalog holds
+//! The native steps are finer than a work unit: the loader charges one work unit
+//! per 64 native units, carrying the remainder, and polls cancellation on every
+//! native step. Measured on the worked example (9,518 bytes), a load charges about
+//! 33,000 work units, about 3.5 per source byte (native work is about 205 units per
+//! byte), so the Standard budget (1,000,000 work units) admits roughly 290 KB of
+//! Turtle and the Maximum budget (50,000,000) roughly 14 MB; the figures come from
+//! the `usage().work` of a governor over that document and scale with its shape.
+//! An exhausted work or scratch budget the governor recorded is
+//! [`LoadError::Exhausted`] and a cancellation is [`LoadError::Cancelled`],
+//! whichever stage observed it; neither is reported as invalid syntax, and no
+//! partial graph escapes. A native storage failure the governor did not record (an
+//! allocation or layout limit) is not claimed as a budget: it is a
+//! [`LoadError::Parse`] with code `storage` and the native cause, and a rejected
+//! scratch release is a [`LoadError::Parse`] with code `storage-accounting`. The storage a catalog holds
 //! stays charged to the governor's scratch meter until the [`ToolGraph`] is dropped.
 //!
 //! # Stated limits
@@ -29,7 +40,8 @@
 //! * Only Turtle and `TriG` load: `PurRDF` 4.0.2 governs and retains source
 //!   occurrences for those formats alone, so another media type is a
 //!   [`LoadError::Parse`] with code `unsupported-format`.
-//! * The owned rows this crate materialises for validation, and the owned
+//! * The owned rows this crate materialises for validation, their per-subject
+//!   index, the `FnO` view dataset built for the catalog reader, and the owned
 //!   [`RdfDataset`] copy returned by [`ToolGraph::dataset`] (`PurRDF` offers no
 //!   governed detach of a retained parse), are allocated outside the governor's
 //!   storage account; their size is proportional to the document and bounded by
@@ -64,12 +76,13 @@ use purrdf_core::{RdfDataset, fno::FnoCatalog};
 
 use crate::Vocabulary;
 
-/// A fully loaded tool graph: typed tools over the original parsed dataset.
+/// A fully loaded tool graph: typed tools over a dataset re-interned from the parse.
 ///
 /// A value exists only when every statement was owned and every shape held.
-/// Tools are ordered by their IRI. The original [`RdfDataset`] and the strict
-/// `FnO` catalog stay available, so later projections consult the source rather
-/// than a lossy rebuild.
+/// Tools are ordered by their IRI. The [`RdfDataset`] is a copy re-interned from
+/// the retained parse (not the parser's own dataset), holding every parsed
+/// statement, and the strict `FnO` catalog stays available, so later projections
+/// consult the source statements rather than a lossy rebuild.
 ///
 /// ```
 /// use purrassist_core::{Budget, Governor};
@@ -106,12 +119,18 @@ impl ToolGraph {
     ///
     /// # Errors
     /// Returns [`LoadError`] for the first parse failure (including a media type
-    /// the governed parser does not support), out-of-vocabulary term, unowned
+    /// the governed parser does not support, code `unsupported-format`), out-of-vocabulary term, unowned
     /// statement, violated vocabulary shape, invalid hint, execution profile or
     /// `FnO` binding, unsupported context projection, exhausted budget or
-    /// cancellation. A budget exhausted by the parser or the `FnO` reader, in work
-    /// or storage, is [`LoadError::Exhausted`], and a cancellation observed there
-    /// is [`LoadError::Cancelled`]. No partial graph escapes.
+    /// cancellation. A work or scratch budget the governor recorded as exhausted by
+    /// the parser or the `FnO` reader is [`LoadError::Exhausted`], and a
+    /// cancellation observed there is [`LoadError::Cancelled`]. A native storage
+    /// failure the governor did not record is a [`LoadError::Parse`] (code `storage`
+    /// or `storage-accounting`) carrying the native cause, not a budget claim. No
+    /// partial graph escapes.
+    ///
+    /// The Standard budget admits roughly 290 KB of Turtle, measured on the worked
+    /// example (see the module's governance notes).
     pub fn load(
         bytes: &[u8],
         media_type: &str,
@@ -134,7 +153,8 @@ impl ToolGraph {
         self.tools.iter().find(|tool| tool.name == name)
     }
 
-    /// The original parsed dataset, including reifiers and every unprojected statement.
+    /// The dataset re-interned from the parse (a copy, not the parser's own
+    /// dataset), including reifiers and every unprojected statement.
     #[must_use]
     pub const fn dataset(&self) -> &Arc<RdfDataset> {
         &self.dataset

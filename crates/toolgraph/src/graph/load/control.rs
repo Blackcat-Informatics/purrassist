@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use purrassist_core::{Governor, ScratchMeter, StopReason, contract::Resource};
 use purrdf_core::{TermValue, dataset_view::DatasetView};
@@ -29,21 +30,44 @@ use crate::graph::{LoadError, SourceExtent};
 /// loader's own stages. Native calls never run while a stage holds the borrow.
 pub(super) type Shared<'g> = RefCell<&'g mut Governor>;
 
+/// The refusal the storage adapter recorded for a release it could not honour.
+///
+/// The governor records a charge that exceeds the scratch limit, but an
+/// unbalanced release leaves no trace in it, so the adapter keeps that reason
+/// here for [`storage_stop`] to read.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Rejection(Arc<Mutex<Option<StopReason>>>);
+
+impl Rejection {
+    fn record(&self, reason: StopReason) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(reason);
+    }
+
+    fn take(&self) -> Option<StopReason> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
 /// Storage admission: the live bytes of one native account, charged to the
 /// governor's scratch meter and refunded when the account is released.
 #[derive(Debug)]
 pub(super) struct Storage {
     meter: ScratchMeter,
     live: usize,
+    rejection: Rejection,
 }
 
 impl Storage {
-    /// A fresh account with no live bytes.
-    pub(super) fn new(governor: &Shared<'_>) -> Self {
-        Self {
+    /// A fresh account with no live bytes, and the handle that reports why it
+    /// refused a release.
+    pub(super) fn new(governor: &Shared<'_>) -> (Self, Rejection) {
+        let rejection = Rejection::default();
+        let account = Self {
             meter: governor.borrow().scratch_meter(),
             live: 0,
-        }
+            rejection: rejection.clone(),
+        };
+        (account, rejection)
     }
 }
 
@@ -52,38 +76,87 @@ impl Admission for Storage {
         let growing = live_bytes >= self.live;
         let delta = u64::try_from(live_bytes.abs_diff(self.live))
             .map_err(|_| StorageError::SizeOverflow)?;
-        // The meter keeps the typed reason (it is sticky); the governor restores it.
+        // The meter keeps an exhausted charge (it is sticky) and the governor
+        // restores it; any other refusal is kept in the rejection.
         let result = if growing {
             self.meter.charge(delta)
         } else {
             self.meter.release(delta)
         };
-        result.map_err(|_| StorageError::AdmissionFailed)?;
+        result.map_err(|reason| {
+            self.rejection.record(reason);
+            StorageError::AdmissionFailed
+        })?;
         self.live = live_bytes;
         Ok(())
     }
 }
 
-/// Work and stop authority: one governor work unit per native step.
+/// Native work units charged as one governor work unit. The governed parser and
+/// `FnO` reader count one native unit per lexical or structural step, measured at
+/// about 205 native units per source byte on the worked example, which would
+/// admit only a few kilobytes under the Standard budget; sixty-four native units
+/// per work unit admits several hundred kilobytes.
+pub(super) const NATIVE_UNITS_PER_WORK: u64 = 64;
+
+/// Work and stop authority: one governor work unit per
+/// [`NATIVE_UNITS_PER_WORK`] native units.
 #[derive(Debug)]
-pub(super) struct Work<'c, 'g>(pub(super) &'c Shared<'g>);
+pub(super) struct Work<'c, 'g> {
+    governor: &'c Shared<'g>,
+    /// Native units counted but not yet charged; always below the divisor.
+    carried: u64,
+}
+
+impl<'c, 'g> Work<'c, 'g> {
+    /// A progress authority with no carried native units.
+    pub(super) const fn new(governor: &'c Shared<'g>) -> Self {
+        Self {
+            governor,
+            carried: 0,
+        }
+    }
+}
 
 impl Progress for Work<'_, '_> {
     type Error = StopReason;
 
     fn charge(&mut self, units: u64) -> Result<(), StopReason> {
+        // The running total is charged by floor; the remainder is carried so that
+        // small native steps are not rounded up one by one. A final remainder
+        // below the divisor is never charged.
+        let total = self.carried.saturating_add(units);
+        self.carried = total % NATIVE_UNITS_PER_WORK;
+        // A zero charge still polls cancellation and any recorded stop.
         // INVARIANT: native code runs only while no loader stage holds the borrow.
-        self.0.borrow_mut().charge(Resource::Work, units)
+        self.governor
+            .borrow_mut()
+            .charge(Resource::Work, total / NATIVE_UNITS_PER_WORK)
     }
 }
 
-/// The refusal for a storage failure, with the governor's first typed reason.
-pub(super) fn storage_stop(governor: &Shared<'_>) -> LoadError {
-    match governor.borrow().check() {
-        Err(reason) => stop(reason),
-        // A physical or logical native limit the governor did not record.
-        Ok(()) => LoadError::Exhausted(StopReason::BudgetExceeded(Resource::ScratchBytes)),
+/// The refusal for a storage failure.
+///
+/// The governor's first typed reason wins. Otherwise the refusal is the native
+/// storage cause itself (a physical or logical limit the governor did not
+/// record) or the adapter's rejected release; neither is claimed as a budget.
+pub(super) fn storage_stop(
+    governor: &Shared<'_>,
+    rejection: &Rejection,
+    cause: &StorageError,
+) -> LoadError {
+    if let Err(reason) = governor.borrow().check() {
+        return stop(reason);
     }
+    rejection.take().map_or_else(
+        || read_failure("storage", cause),
+        |reason| {
+            read_failure(
+                "storage-accounting",
+                format!("scratch accounting refused a native release ({reason:?}): {cause}"),
+            )
+        },
+    )
 }
 
 /// A source-read failure with a stable code; the dataset is the parser's own.
@@ -94,6 +167,11 @@ pub(super) fn read_failure(code: &str, cause: impl std::fmt::Display) -> LoadErr
         line: None,
         column: None,
     }
+}
+
+/// The refusal of a media type the loader does not parse.
+pub(super) fn unsupported_format(cause: impl std::fmt::Display) -> LoadError {
+    read_failure("unsupported-format", cause)
 }
 
 /// A native diagnostic as the typed parse error, keeping its code and position.
@@ -118,15 +196,23 @@ fn positioned(code: &str, message: String, line: u64, column: u32) -> LoadError 
 
 /// Map a native or caller failure of the governed parse. A caller stop or
 /// storage refusal is never reported as invalid syntax.
-fn refusal(refusal: &ParseRefusal<'_, Storage, Work<'_, '_>>, governor: &Shared<'_>) -> LoadError {
+fn refusal(
+    refusal: &ParseRefusal<'_, Storage, Work<'_, '_>>,
+    governor: &Shared<'_>,
+    rejection: &Rejection,
+) -> LoadError {
     let native = match refusal.cause() {
         ControlledError::Control(reason) => return stop(reason.clone()),
         ControlledError::Native(native) => native,
     };
     match native {
-        NativeParseError::Storage(_) => storage_stop(governor),
+        NativeParseError::Storage(cause) => storage_stop(governor, rejection, cause),
         NativeParseError::Diagnostic(found) if found.storage_error().is_some() => {
-            storage_stop(governor)
+            // INVARIANT: the guard established the storage cause.
+            found.storage_error().map_or_else(
+                || diagnostic(found),
+                |cause| storage_stop(governor, rejection, &cause),
+            )
         }
         NativeParseError::Diagnostic(found) => diagnostic(found),
         NativeParseError::Lexical {
@@ -148,7 +234,7 @@ fn refusal(refusal: &ParseRefusal<'_, Storage, Work<'_, '_>>, governor: &Shared<
         NativeParseError::Base { cause } => read_failure("base", cause),
         NativeParseError::Composite(cause) => read_failure("composite", cause),
         NativeParseError::SourceAssociation(cause) => read_failure("source-association", cause),
-        NativeParseError::UnsupportedFormat(_) => read_failure("unsupported-format", native),
+        NativeParseError::UnsupportedFormat(_) => unsupported_format(native),
     }
 }
 
@@ -156,16 +242,19 @@ fn refusal(refusal: &ParseRefusal<'_, Storage, Work<'_, '_>>, governor: &Shared<
 /// retaining the exact ordered source occurrences.
 ///
 /// # Errors
-/// A caller stop or exhausted budget is [`LoadError::Exhausted`] or
-/// [`LoadError::Cancelled`]; every native failure is [`LoadError::Parse`].
+/// A caller stop or exhausted budget the governor recorded is
+/// [`LoadError::Exhausted`] or [`LoadError::Cancelled`]; every native failure,
+/// including a storage failure the governor did not record, is
+/// [`LoadError::Parse`].
 pub(super) fn parse<'b, 'c, 'g>(
     bytes: &'b [u8],
     format: NativeRdfFormat,
     base: Option<&str>,
     governor: &'c Shared<'g>,
 ) -> Result<RetainedParse<'b, Storage, Work<'c, 'g>>, LoadError> {
-    parse_dataset_controlled(bytes, format, base, Storage::new(governor), Work(governor))
-        .map_err(|failed| refusal(&failed, governor))
+    let (storage, rejection) = Storage::new(governor);
+    parse_dataset_controlled(bytes, format, base, storage, Work::new(governor))
+        .map_err(|failed| refusal(&failed, governor, &rejection))
 }
 
 /// The statement a diagnostic refers to, as far as the error names it.
@@ -314,5 +403,35 @@ mod tests {
             "{:?}",
             refused.map(|_| ())
         );
+    }
+
+    // Rationale: a storage failure the governor did not record must not be claimed as
+    // a budget; it keeps its native cause as a parse error. A governor-recorded
+    // exhaustion still wins, and a rejected release is its own accounting error.
+    // Native work below the divisor is carried, and a zero charge still observes a stop.
+    #[test]
+    fn unrecorded_storage_failures_keep_their_cause_and_work_is_carried() {
+        let mut governor = Governor::new(Budget::default());
+        let shared = RefCell::new(&mut governor);
+        let (_, rejection) = Storage::new(&shared);
+        let refused = storage_stop(&shared, &rejection, &StorageError::AllocationFailed);
+        let LoadError::Parse { code, message, .. } = refused else {
+            panic!("an unrecorded failure is not a budget claim");
+        };
+        assert_eq!(code, "storage");
+        assert!(message.contains("allocation failed"), "{message}");
+        rejection.record(StopReason::InvalidInput("x".into()));
+        let refused = storage_stop(&shared, &rejection, &StorageError::AdmissionFailed);
+        assert!(matches!(&refused, LoadError::Parse { code, .. } if code == "storage-accounting"));
+
+        let mut work = Work::new(&shared);
+        for _ in 0..NATIVE_UNITS_PER_WORK - 1 {
+            work.charge(1).expect("below the divisor");
+        }
+        assert_eq!(shared.borrow().usage().work, 0);
+        let mut work = Work::new(&shared);
+        work.charge(NATIVE_UNITS_PER_WORK * 2 + 1).expect("charged");
+        work.charge(NATIVE_UNITS_PER_WORK - 1).expect("carried");
+        assert_eq!(shared.borrow().usage().work, 3);
     }
 }

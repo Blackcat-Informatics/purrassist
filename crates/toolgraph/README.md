@@ -17,7 +17,7 @@ Run the executable caller example with
 Implemented: validated vocabulary construction, registered projection loss
 meanings, the complete caller-owned MCP context fragment codec, the bounded
 four-form field-mask parser, and the governed `OutputByteLimit` checker. The checker records exact bytes and refuses oversized
-serialized results intact; it makes no token-count claim. `ToolGraph::load` reads RDF 1.2 Turtle or TriG into typed
+serialized results intact; it makes no token-count claim. `ToolGraph::load` reads RDF 1.2 Turtle or `TriG` into typed
 `Tool` values over the vocabulary, `CallableBinding`, `FieldMask` and
 `OutputByteLimit`, all or nothing: every out-of-vocabulary term, shape
 violation, unowned statement and unsupported construct is a `LoadError` naming
@@ -26,9 +26,12 @@ fails with `LoadError::UnsupportedProjection`. The load runs through the governe
 `PurRDF` entry points (`parse_dataset_controlled`, `from_dataset_with_control`):
 the caller's `Governor` bounds parsing and catalog construction, and
 statement-level refusals (`UnknownTerm`, `UnsupportedConstruct`) carry the exact
-`SourceExtent`. Remaining limits (the owned rows and dataset copy sit outside the
-storage account; node-level refusals carry no extent; only Turtle and TriG) are
-listed in the `graph` module documentation. The Rust shape table is
+`SourceExtent`. The loader charges one work unit per 64 native units; measured on
+the worked example, a load charges about 3.5 work units per source byte, so the
+Standard budget admits roughly 290 KB of Turtle and the Maximum budget roughly
+14 MB. Remaining limits (the owned rows, their index, the `FnO` view dataset and
+the dataset copy sit outside the storage account; node-level refusals carry no
+extent; only Turtle and `TriG`) are listed in the `graph` module documentation. The Rust shape table is
 not equivalent to the shapes document; its differences and the unchecked
 requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
 the `graph` module documentation. The production
@@ -44,8 +47,8 @@ complete source dataset is retained as Turtle in `_meta.security.sourceGraph`.
 Output is byte-deterministic. Decoding loads that source and requires every
 declaration to agree with it; legacy bundle formats and `maxOutputTokens` are
 refused. The pinned golden is `tests/data/worked_manifest.json`.
-`ToolGraph::tool_set`, the core adapter augmentation, governed source parsing and
-wasm-harness wiring remain on #33.
+`ToolGraph::tool_set`, the core adapter augmentation and wasm-harness wiring
+remain on #33.
 
 `codec::mcp::ExecutionProfile` reads the complete execution-profile fragment
 from a caller-owned JSON DOM; `ManifestEnvelope::read` checks these fields for
@@ -125,8 +128,8 @@ masks. It preserves tag values, order and duplicates, accepts mathematical
 integer spellings across the full portable `u64` domain, and emits fixed field
 order with canonical masks and exact byte enforcement. Run
 `cargo run -p purrassist-toolgraph --example roundtrip_context` for an actual
-round trip. The `tool_set` bridge, governed source parsing, wasm-harness wiring
-and host-release integration remain outstanding.
+round trip. The `tool_set` bridge, wasm-harness wiring and host-release
+integration remain outstanding.
 
 `codec::mcp::ManifestEnvelope` has a source implementation for borrowing a
 complete v2 bundle envelope from the existing ordered JSON DOM. It checks fixed

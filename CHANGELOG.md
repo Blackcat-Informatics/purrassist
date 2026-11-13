@@ -18,11 +18,16 @@ crates share one version.
 - `ToolGraph::load` parses through `purrdf_rdf::parse_dataset_controlled` and
   builds the `FnO` catalog through `FnoCatalog::from_dataset_with_control`, so the
   caller's `Governor` bounds source parsing and catalog construction (work,
-  scratch storage, cancellation): exhaustion is `LoadError::Exhausted`, a stop is
-  `LoadError::Cancelled`, and no partial graph escapes. `UnknownTerm` and
+  scratch storage, cancellation): a recorded exhaustion is `LoadError::Exhausted`, a
+  stop is `LoadError::Cancelled`, a native storage failure the governor did not
+  record is a `LoadError::Parse` (code `storage`) with its native cause rather than
+  a budget claim, and no partial graph escapes. `UnknownTerm` and
   `UnsupportedConstruct` carry the exact `SourceExtent` of the statement. Only
-  Turtle and TriG load, and the native work units are finer than before (about 190
-  per source byte), so size the work budget accordingly.
+  Turtle and TriG load; every other media type is `LoadError::Parse` with code
+  `unsupported-format`. Native work is about 205 units per source byte, so the
+  loader charges one work unit per 64 native units: measured on the worked example,
+  a load charges about 3.5 work units per source byte, and the Standard budget
+  admits roughly 290 KB of Turtle and the Maximum budget roughly 14 MB.
 
 - Gemma 3 `tool_code` fences recover direct Python keyword calls through
   `gemma3-tool-code.v1` and the native Pythonic codec. Multiple fenced calls

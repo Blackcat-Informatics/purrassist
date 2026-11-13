@@ -114,7 +114,8 @@ pub(super) fn load(
             u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         )
         .map_err(stop)?;
-    let format = purrdf_rdf::classify(media_type).map_err(|found| control::diagnostic(&found))?;
+    let format = purrdf_rdf::classify(media_type)
+        .map_err(|found| control::unsupported_format(&found.message))?;
     let governor = RefCell::new(governor);
     let parse = control::parse(bytes, format, base, &governor)?;
     let view = parse
@@ -128,8 +129,10 @@ pub(super) fn load(
             return Err(error);
         }
     };
-    // The owned copy is the only ungoverned allocation of the load: `PurRDF`
-    // offers no governed detach of a retained parse.
+    // The owned copy is not governed: `PurRDF` offers no governed detach of a
+    // retained parse. It is one of several ungoverned allocations of the load; the
+    // `Doc` rows, the `by_subject` index and the `FnO` view dataset built in
+    // `fno_view` are also outside the governor's storage account.
     let dataset = dataset_from_view(&view)
         .map_err(|cause| control::read_failure("dataset-materialisation", cause))?;
     Ok(ToolGraph {
@@ -764,20 +767,16 @@ impl Doc<'_> {
             let mut governor = governor.borrow_mut();
             self.fno_view(nodes, &mut governor)?
         };
-        FnoCatalog::from_dataset_with_control(
-            &*view,
-            self.namespace,
-            Storage::new(governor),
-            Work(governor),
-        )
-        .map(Some)
-        .map_err(|failure| match failure {
-            ControlledError::Control(reason) => stop(reason),
-            ControlledError::Native(purrdf_core::fno::FnoConstructionFailure::Storage(_)) => {
-                control::storage_stop(governor)
-            }
-            ControlledError::Native(native) => self.fno_error(&native),
-        })
+        let (storage, rejection) = Storage::new(governor);
+        FnoCatalog::from_dataset_with_control(&*view, self.namespace, storage, Work::new(governor))
+            .map(Some)
+            .map_err(|failure| match failure {
+                ControlledError::Control(reason) => stop(reason),
+                ControlledError::Native(purrdf_core::fno::FnoConstructionFailure::Storage(
+                    cause,
+                )) => control::storage_stop(governor, &rejection, &cause),
+                ControlledError::Native(native) => self.fno_error(&native),
+            })
     }
 
     /// The default-graph rows the `FnO` reader owns, frozen as a dataset.

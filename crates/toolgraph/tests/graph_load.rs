@@ -50,9 +50,10 @@ fn worked() -> String {
         .to_owned()
 }
 
-/// The governed parser and `FnO` reader charge one work unit per native step (about
-/// 190 per source byte here), so the worked example needs more than the default budget.
-const WORKED_BUDGET: Budget = Effort::Maximum.budget();
+/// The governed parser and `FnO` reader count native steps (about 205 per source byte
+/// on the worked example) and the loader charges one work unit per 64 of them, so the
+/// worked example loads under the Standard budget, which `Budget::default()` is.
+const WORKED_BUDGET: Budget = Effort::Standard.budget();
 
 fn load(source: &str) -> Result<ToolGraph, LoadError> {
     ToolGraph::load(
@@ -441,7 +442,7 @@ fn output_projection_outside_the_field_mask_subset_is_refused() {
 }
 
 // Rationale: budget exhaustion and cancellation are explicit errors, never a partial
-// graph; the same input loads under the default budget.
+// graph; the same input loads under the Standard budget.
 #[test]
 fn exhausted_budget_and_cancellation_are_explicit() {
     let source = worked();
@@ -489,7 +490,7 @@ fn a_work_or_storage_limit_below_the_worked_example_refuses_without_a_graph() {
         &vocabulary(),
         &mut measured,
     )
-    .expect("worked example loads under the default budget");
+    .expect("worked example loads under the Standard budget");
     let (work, scratch) = (measured.usage().work, measured.usage().peak_scratch_bytes);
     assert!(work > 0 && scratch > 0, "the load must be metered");
     let limited = |budget: Budget| {
@@ -532,5 +533,56 @@ fn a_work_or_storage_limit_below_the_worked_example_refuses_without_a_graph() {
         );
         limited(loose)
             .unwrap_or_else(|error| panic!("{resource:?} at the measured limit: {error}"));
+    }
+}
+
+// Rationale: a document far above what the Standard budget admits (several hundred
+// kilobytes of Turtle at 64 native units per work unit) refuses with the typed work
+// exhaustion and publishes no graph, rather than loading or being reported as
+// invalid syntax. The document is well-formed Turtle, so only the budget refuses it.
+#[test]
+fn a_document_far_above_the_standard_budget_refuses_with_work_exhaustion() {
+    let source = "<urn:s> <urn:p> <urn:o> .\n".repeat(40_000);
+    assert!(
+        source.len() > 1_000_000,
+        "the document must exceed Standard"
+    );
+    let refused = ToolGraph::load(
+        source.as_bytes(),
+        "text/turtle",
+        None,
+        &vocabulary(),
+        &mut Governor::new(Budget::default()),
+    );
+    assert_eq!(
+        refused.unwrap_err(),
+        LoadError::Exhausted(StopReason::BudgetExceeded(Resource::Work))
+    );
+}
+
+// Rationale: only Turtle and TriG are parsed with exact source occurrences. TriG is
+// accepted and gives the graph Turtle gives for the same default-graph statements;
+// N-Triples and an unknown media type are refused with one stable parse code, never a
+// partial graph and never a guess at the format.
+#[test]
+fn only_turtle_and_trig_media_types_are_loaded() {
+    let source = worked();
+    let load_as = |media_type: &str| {
+        ToolGraph::load(
+            source.as_bytes(),
+            media_type,
+            None,
+            &vocabulary(),
+            &mut Governor::new(WORKED_BUDGET),
+        )
+    };
+    let turtle = load_as("text/turtle").expect("turtle");
+    let trig = load_as("application/trig").expect("a default-graph TriG document loads");
+    assert_eq!(trig.tools().len(), turtle.tools().len());
+    for media_type in ["application/n-triples", "application/x-unknown"] {
+        let LoadError::Parse { code, .. } = load_as(media_type).unwrap_err() else {
+            panic!("{media_type} must be a parse refusal");
+        };
+        assert_eq!(code, "unsupported-format", "{media_type}");
     }
 }

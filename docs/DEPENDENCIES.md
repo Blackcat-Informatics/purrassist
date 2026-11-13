@@ -11,7 +11,7 @@ IRI validation and the shared loss registry, `purrdf-rdf` for RDF text parsing i
 `ToolGraph::load`, `purrdf-lex` for the `Admission` and `Progress` traits that
 adapt the caller's governor to those governed entry points (it is already in the
 closure through `purrdf-core`), and `purrdf-shapes` for its shared
-namespace table, FnO reader and public plain argument-schema compiler. All three are
+namespace table, FnO reader and public plain argument-schema compiler. All four are
 registry dependencies pinned exactly at `=4` in the workspace manifest; the
 lock resolves 4.0.2. No Git source or `[patch]` entry remains, so a workspace
 that also depends on another crate pinned at `=4` resolves a single PurRDF major.

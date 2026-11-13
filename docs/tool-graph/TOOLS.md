@@ -20,17 +20,29 @@ nothing, and the worked example below loads. It is bounded as follows. The FnO
 catalog is built with `FnoCatalog::from_dataset_with_control`. The caller's
 governor supplies both purrdf authorities: parser and reader storage is charged
 to its scratch meter, and every native step is one unit of work polled for
-cancellation, so an exhausted work or storage budget is `LoadError::Exhausted`,
-a cancellation is `LoadError::Cancelled`, and no partial graph is published.
-Native work units are finer than this crate's row accounting (the worked example
-uses about 190 per source byte), so size the work budget for the document.
+cancellation, so a work or scratch budget the governor recorded as exhausted is
+`LoadError::Exhausted`, a cancellation is `LoadError::Cancelled`, and no partial
+graph is published. A native storage failure the governor did not record is not
+claimed as a budget: it is a `LoadError::Parse` with code `storage` and the
+native cause (code `storage-accounting` for a rejected scratch release). Native
+work units are finer than this crate's row accounting (about 205 native units per
+source byte on the worked example), so the loader charges one work unit per 64
+native units, carrying the remainder across charges and polling cancellation on
+every native step. Measured on the worked example (9,518 bytes, a governor's
+`usage().work` after the load), a load charges about 33,000 work units, about 3.5
+per source byte, so the Standard budget (1,000,000 work units) admits roughly
+290 KB of Turtle and the Maximum budget (50,000,000) roughly 14 MB; the figures
+scale with document shape.
 `UnknownTerm` and `UnsupportedConstruct` carry the exact source extent (byte
 range, line and column) of the first statement matching the refusal; refusals
 that name a node (shape, hint, profile, FnO binding) name subject and predicate
 only. Other media types than Turtle and TriG are refused as `LoadError::Parse`
-because purrdf governs and retains occurrences for those two alone. The rows
-materialised for validation and the owned `RdfDataset` copy returned by
-`ToolGraph::dataset` are allocated outside the governor's storage account.
+because purrdf governs and retains occurrences for those two alone; the refusal
+code is `unsupported-format` for every such media type. The rows materialised for
+validation, their per-subject index, the `FnO` view dataset built for the catalog
+reader and the owned `RdfDataset` copy returned by `ToolGraph::dataset` (re-interned
+from the parse, not the parser's own dataset) are allocated outside the governor's
+storage account.
 Only default-graph statements load; a named-graph statement or
 reifier is refused. The vocabulary shapes are enforced by a Rust table, not by
 running the shapes document through the SHACL engine, and the table is not
