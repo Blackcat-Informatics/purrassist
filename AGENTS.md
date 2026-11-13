@@ -14,6 +14,19 @@ Read `.goals` and `docs/IMPLEMENTATION.md` before changing behavior. Work in
 Rust. Preserve unrelated work. Implement the complete accepted capability;
 tests and public documentation must distinguish implemented behavior from plans.
 
+## Guiding principles
+
+When requests conflict, these decide. They decide between conflicting requests;
+they do not replace the standing rules in this file.
+
+- **GREENFIELD:** we always correct the mistakes of the past. Others' mistakes
+  are our lessons, not our limits.
+- **SOTA:** always choose the state of the art over the bones of the past.
+- **OPTIMAL:** choose the Pareto frontier of the quality, speed, efficiency and
+  other axes.
+- **MAXIMAL:** support the broadest functionality possible after the other
+  choices are made.
+
 ## Verification
 
 Never bypass commit hooks, including through `--no-verify`, `-n`, environment
