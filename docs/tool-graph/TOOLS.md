@@ -44,10 +44,9 @@ rule, waiver or non-inherit exec transition in the profile tree, and only when
 every subtool resolves and is itself proven. That proof is a static read of the
 execution-profile tree and the subtool closure only: it is not security
 admission, `tool.implementation` is not inspected, and network, Unix-socket,
-signal and ptrace allowances are treated as non-writes. `ReadOnly` also changes
-unknown-argument handling (the core default is `DropWithLoss`). Admission
-remains #33 work. The policy is `Tolerant` when any
-hint permits edit distance, coercion or folding. Core has no per-parameter
+signal and ptrace allowances are treated as non-writes. Unknown-argument handling
+comes from the exact schema, not from effects. Admission remains #33 work.
+The policy is `Tolerant` when any hint permits edit distance, coercion or folding. Core has no per-parameter
 switches, so the per-hint bounds are not enforced by this method. The MCP
 Extended codec (`codec::mcp::encode` and `decode`) is implemented; its pinned
 output for the worked example is `crates/toolgraph/tests/data/worked_manifest.json`,

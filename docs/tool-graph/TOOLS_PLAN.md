@@ -404,8 +404,8 @@ execution-profile tree and subtool closure that finds no write; it does not
 inspect `tool.implementation`, performs no security admission, and treats
 network, Unix, signal and ptrace allowances as non-writes. Every other tool is
 `Mutating`. Remaining #33 work: once admission exists, the bridge uses metadata
-derived from the admission certificate to select proven effects. Alias metadata does not bypass exact-schema validation. #33 executes
-a consumer importing a schema with keywords outside the typed-definition subset,
+derived from the admission certificate to select proven effects. Alias metadata
+does not bypass exact-schema validation. #33 executes a consumer importing a schema with keywords outside the typed-definition subset,
 attaches an alias, recovers through it, rejects a value violating an unchanged
 schema constraint and verifies byte-exact source declaration render-back. A
 neighbouring collision case must fail. This is required integration acceptance,
