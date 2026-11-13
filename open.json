@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 173,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/173-reuse-reach-full-reuse-3-3-compliance",
+  "branch": "paudley/173-reuse-reach-full-reuse-3-3-compliance",
+  "slug": "reuse-reach-full-reuse-3-3-compliance",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/173-reuse-reach-full-reuse-3-3-compliance/.stage/reuse-reach-full-reuse-3-3-compliance",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "3928c8f4069b7063cdf405ecd740a46e22bfe718",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/173-reuse-reach-full-reuse-3-3-compliance",
+    "branch:paudley/173-reuse-reach-full-reuse-3-3-compliance",
+    "ignored:3 files (3 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer caches into /home/paudley/Active/purrassist/.worktrees/173-reuse-reach-full-reuse-3-3-compliance plus 135 dependency units from 1 other checkouts in 16.9s; 2196 unchanged files keep their built mtimes; 0 other files take the seed time and rebuild; 198 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/173-reuse-reach-full-reuse-3-3-compliance/.stage/reuse-reach-full-reuse-3-3-compliance",
+    "issue:/home/paudley/Active/purrassist/.worktrees/173-reuse-reach-full-reuse-3-3-compliance/.stage/reuse-reach-full-reuse-3-3-compliance/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-13T01:47:12-0600",
+  "seed_error": ""
+}
