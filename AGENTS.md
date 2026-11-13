@@ -38,3 +38,21 @@ local verification gate; packaging and publication require their own evidence.
 
 All source files carry SPDX headers. Public APIs have Rustdoc with meaningful
 examples and error semantics. Capability claims require executable evidence.
+
+## Shell commands
+
+1. One shell call does one thing. Several related commands may share a call,
+   but a long chain joined with `&&` or `;` is never written. If a step needs
+   a script, write it as a file in a git-ignored local scratch directory and
+   run that file.
+2. A deletion is never inside a chain. Do not use recursive removal,
+   `find -delete`, `git clean`, or forced worktree removal alongside other
+   commands. A deletion is its own call on one exact path inside the
+   repository, and that path must have been listed in an earlier call.
+   Worktrees and branches are removed with the repository's stagectl cleanup
+   or a plain `git worktree remove`.
+3. Do not send anything that could raise an authorization prompt: no deletion
+   by glob or variable, no path outside the repository, and no long compound
+   command. If a call is refused, do not send it again in another form. Use
+   the plain, small version, or tell the operator.
+4. Briefs to sub-agents carry rules 1 to 3.
