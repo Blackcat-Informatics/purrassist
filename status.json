@@ -1,0 +1,135 @@
+{
+  "issue": 198,
+  "pr_number": 199,
+  "branch": "paudley/198-tool-graph-toolgraph-tool-set-bridge-to",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/198-tool-graph-toolgraph-tool-set-bridge-to/.stage/tool-graph-toolgraph-tool-set-bridge-to",
+  "observed_at": "2026-11-13T20:22:33.175109+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_fail",
+      "message": "CI state is fail"
+    }
+  ],
+  "unavailable": [
+    {
+      "source": "ci_logs",
+      "reason": "one or more failed-job logs unavailable; see inventory"
+    }
+  ],
+  "next_actions": [
+    "Inspect saved failed-job excerpts"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/198-tool-graph-toolgraph-tool-set-bridge-to/.stage/tool-graph-toolgraph-tool-set-bridge-to/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/198-tool-graph-toolgraph-tool-set-bridge-to/.stage/tool-graph-toolgraph-tool-set-bridge-to/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/198-tool-graph-toolgraph-tool-set-bridge-to/.stage/tool-graph-toolgraph-tool-set-bridge-to/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/198-tool-graph-toolgraph-tool-set-bridge-to/.stage/tool-graph-toolgraph-tool-set-bridge-to/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/198-tool-graph-toolgraph-tool-set-bridge-to/.stage/tool-graph-toolgraph-tool-set-bridge-to/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "8fc97e9944623241263bde22039b966e42054a36",
+    "headRefName": "paudley/198-tool-graph-toolgraph-tool-set-bridge-to",
+    "headRefOid": "b6a50cb9f9a5d1d791c4b928a13798f91074003f",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 199,
+    "state": "OPEN",
+    "title": "Bridge loaded tool graphs to the governed MCP adapter (tool_set, third piece of #33)",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/199"
+  },
+  "checks": {
+    "state": "fail",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019436",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019412",
+        "name": "native (ubuntu-24.04)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019423",
+        "name": "release-gate",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019074",
+        "name": "windows-engines",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019665",
+        "name": "wasm",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019487",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019613",
+        "name": "qualification",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019424",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019737",
+        "name": "native (macos-14)",
+        "state": "CANCELLED"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "b6a50cb9f9a5d1d791c4b928a13798f91074003f",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "b6a50cb9f9a5d1d791c4b928a13798f91074003f",
+    "branch": "paudley/198-tool-graph-toolgraph-tool-set-bridge-to",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 199,
+    "jobs": [
+      {
+        "name": "native (macos-14)",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019737",
+        "path": "/home/paudley/Active/purrassist/.worktrees/198-tool-graph-toolgraph-tool-set-bridge-to/.stage/tool-graph-toolgraph-tool-set-bridge-to/ci-logs/github-job-132142019737.log",
+        "error": "Log download failed (exit 1): gh: HTTP 404\n"
+      }
+    ],
+    "ok": false,
+    "summary": "# PR #199 failed CI logs\n\n## native (macos-14)\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/43499726076/job/132142019737\n\nLOG UNAVAILABLE: Log download failed (exit 1): gh: HTTP 404\n\n\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

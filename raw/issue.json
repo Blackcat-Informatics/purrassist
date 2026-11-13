@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Objective\n\nThird bounded delivery of #33 (parent): the bridge from a loaded `ToolGraph` to the core recovery engine, `ToolGraph::tool_set(budget) -> ToolSet`, on top of the loader (#191, merged d808673) and the codec (#196).\n\n## Scope\n\n- `ToolGraph::tool_set(budget)` uses the existing core MCP adapter with the metadata augmentation specified in PR #42: `ToolSet::from_mcp_with_metadata_governed` (purrassist-core) and its `DeclarationForm`. Add a narrow adapter API only if the existing one cannot carry the augmentation; keep the exact schema and original declaration.\n- Each reified alias becomes a `ParameterSpec::alias`.\n- `readOnlyHint` and the security model select `Effects`; `ReadOnly` only when the graph proves no write capability.\n- The policy follows from the tolerances.\n- Recovery stays on the existing engine; no lossy typed schema subset is rebuilt.\n- Metadata collision is refused.\n\n## Excluded (stays on #33)\n\nGoverned source parsing (purrdf 4.0.2 `from_dataset_with_control` and `parse_dataset_controlled` are the next piece), the wasm harness wiring, host integration.\n\n## Acceptance\n\n- Alias recovery, exact unmodeled-schema validation, byte-exact declaration render-back and metadata-collision refusal are exercised through the augmented existing adapter, on the worked example.\n- `cargo test -p purrassist-toolgraph --locked` for the new target; clippy with `-D warnings`; the `wasm32-unknown-unknown` build of the crate; `make check` on the head.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-13T19:02:08Z",
+  "labels": [],
+  "milestone": null,
+  "number": 198,
+  "state": "OPEN",
+  "title": "Tool graph: ToolGraph::tool_set bridge to the governed MCP adapter (third piece of #33)",
+  "updatedAt": "2026-11-13T19:02:08Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/198"
+}
