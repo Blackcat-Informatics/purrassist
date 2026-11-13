@@ -3566,6 +3566,70 @@ fn rejected_glm_attempt_does_not_run_past_its_failure_into_the_next_opener() {
     );
 }
 
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`, pinned input of
+/// 336 bytes after its two control bytes): an Anthropic attempt whose
+/// string-valued `input` was cut and restarted ends where a closed string
+/// leaves its walk, which here falls inside the `"input"` member name the
+/// attempt itself began (`"in`, then foreign markup, then `put"`). A rejected
+/// attempt never splits a literal it began, so it ends before the quote and
+/// the whole member name stays out of the next segment's content.
+#[test]
+fn rejected_anthropic_attempt_does_not_end_inside_its_input_literal() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("write_file")
+            .effects(Effects::Mutating)
+            .param("path", Param::string().required())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let input = concat!(
+        "#{\t\t\"type\":\"tool_use\",\"id\"<|tool_call_argument_begin|>\t\t:\t\"call_22bb690f\",",
+        "\t\t\"name\"\t:\t\t\"write_file\",\t\"input\":\"{\\\"pat<|python_tag[ARGS]|>\\\"ratio\\\":39.32,",
+        "\\\"count\\\":-415,\t\t:\t\"call_22bb690f\",\t\t\"name\"\t:\t\t\"write_file\",\t\"in",
+        "<|tool:_calls_section_begin|>put\":\"{\\\"pat<|python_tag|>\\\"ratio\\\":39.32,",
+        "\\\"count\\\":-415,\\\"options\\\":{\\\"backup\\\":false}}\"\t}]"
+    );
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+        panic!("one reading expected");
+    };
+    let mut checked = 0;
+    for rejected in &calls.rejected {
+        let Some(dialect) = &rejected.dialect else {
+            continue;
+        };
+        if !calls
+            .content
+            .iter()
+            .any(|content| content.start == rejected.span.end)
+        {
+            continue;
+        }
+        for spelling in dialect.grammar().call_literals() {
+            for inside in 1..spelling.len() {
+                let Some(start) = rejected.span.end.checked_sub(inside) else {
+                    break;
+                };
+                if start < rejected.span.start {
+                    break;
+                }
+                assert!(
+                    !input.as_bytes()[start..].starts_with(spelling),
+                    "rejected attempt {:?} ends inside the literal {:?}",
+                    rejected.span,
+                    String::from_utf8_lossy(spelling)
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "a rejected attempt is followed by content");
+}
+
 /// Fuzz regression (`scripts/fuzz.py --target tool-call`): a rejected result
 /// attempt fails at most one literal spelling past its span's end, and the
 /// literals of a dialect's result production are among the spellings
