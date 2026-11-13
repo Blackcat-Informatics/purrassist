@@ -834,9 +834,9 @@ exhausting any budget:
 
 | Input | Bytes | Whole-recovery Work | Budget |
 | --- | ---: | ---: | --- |
-| Prose with 100,000 `{` (empty placeholders) | 200,047 | 800,141 | `Effort::Standard` |
-| A JSON string holding 100,000 `{` | 100,050 | 500,150 | `Effort::Standard` |
-| A 1 MiB tool-call argument in prose | 1,048,592 | 5,204,027 | Deep, scratch raised to 1 GiB |
+| Prose with 100,000 `{` (empty placeholders) | 200,047 | 801,126 | `Effort::Standard` |
+| A JSON string holding 100,000 `{` | 100,050 | 700,578 | `Effort::Standard` |
+| A 1 MiB tool-call argument in prose | 1,048,592 | 7,199,645 | Deep, scratch raised to 1 GiB |
 
 The 1 MiB case raises only the scratch limit: its recovered tree, candidate
 copy and search key storage exceed the presets' 64 MiB. Recovery goldens and
@@ -1251,7 +1251,7 @@ Recovering `n` output bytes charges exactly
 
 ```text
 recover     = W_intake + recognition + resolution
-W_intake    = 2·n (source insertion, encoding scan) + G_source(n) + r + G_ranges(r)
+W_intake    = C(n) (source capture) + 4·R(n) (relocations) + r + G_ranges(r)
 recognition = K_LEX·n + K_THREAD·(configuration steps) + K_EVENT·(segment events)
             + K_CAPTURE·(captured bytes and history nodes materialized)
             + K_ERR·(error configurations explored)
@@ -1264,12 +1264,19 @@ resolution  = one unit per member, option, alternative and validation step,
             + (unparsed-markup scan: one unit per content byte read)
 ```
 
-Here `r` is the number of maximal invalid UTF-8 runs. `G_source` and
-`G_ranges` sum the occupied lengths charged before each capacity growth of
-the source and invalid-range vectors. The shared doubling growth policy gives
-`G_source(n) ≤ 2·n`, `G_ranges(r) ≤ 2·r` and `r ≤ n`, so intake work is at most
-`7·n`. Empty vectors contribute zero relocation work. These terms describe
-admitted work. A governor or capture refusal stops admission at its original
+Here `r` is the number of maximal invalid UTF-8 runs. Source capture admits,
+for each byte, one unit to store it plus a prepaid relocation allowance of 2
+units while the source capacity is below 64 KiB (65,536) and 3 units from
+then on: `C(n)` is 3 per byte below that capacity and 4 per byte after it.
+The source grows by doubling below 64 KiB capacity and by one half above it,
+so the allowance covers every element copied by a relocation before the copy
+happens. Capacity first reaches 65,536 at byte 32,769, so the per-byte rate
+steps from 3 to 4 at byte 32,770, not at 64 KiB of data. `R(n)` is the number
+of source relocations; each admits 4 further units. `G_ranges` sums the
+occupied lengths charged before each capacity growth of the invalid-range
+vector; the doubling policy gives `G_ranges(r) ≤ 2·r` and `r ≤ n`. Empty
+vectors contribute zero relocation work. UTF-8 classification carries no
+separate unit. These terms describe admitted work. A governor or capture refusal stops admission at its original
 cause; a semantic request error stops interpretation while admitted source
 capture can continue.
 
@@ -1296,17 +1303,18 @@ The unparsed-markup scan (`tool_call::detect_unparsed`) reads each reading's
 content once and, at each anchor, a bounded window (256 bytes, 64 for
 Harmony's message tokens); after a hit it resumes at the hit's end.
 `tool_call_cost::unparsed_markup_scan_is_linear` measures it on 64 KiB and
-1 MiB of prose (2.9 units per byte) and of inputs dense with each family's
-anchor (at most 29.5 units per byte, for `to=functions.` on every line),
+1 MiB of prose (3.9 units per byte) and of inputs dense with each family's
+anchor (at most 29.6 units per byte, for `to=functions.` on every line),
 linear within 1.05x and under 32 units per byte. A turn that is a single
 call has no content to scan.
 
 Tool-call recovery now uses one incremental intake path. It admits the source
 document's metadata before validating the request and constructing the
 recognizer. Each input byte then admits the cumulative input length, source
-storage and copying, UTF-8 classification, and recognition, in that order.
-Source and invalid-range vectors admit insertion and relocation work before
-growth; their capacity schedule depends on the byte sequence, never the number
+storage and copying, and recognition, in that order (UTF-8 classification
+is a fixed step inside the recognition step and carries no unit of its own).
+The source admits its per-byte relocation allowance before each byte, and the
+invalid-range vector admits insertion and relocation work before growth; their capacity schedule depends on the byte sequence, never the number
 or size of caller chunks. The pending UTF-8 scalar holds at most three bytes
 between byte steps. Invalid runs retain their original ranges and receive the
 existing loss records once the complete source digest is available.
@@ -2026,18 +2034,18 @@ parsed again. The charges include the call's schema validation (see
 
 | Input | Bytes | Work | Work per byte | Peak scratch | Scratch per byte |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 17,831,002 | 17.00 | 11,644,176 | 11.10 |
-| Hermes JSON string argument | 1,048,648 | 17,833,269 | 17.01 | 11,649,509 | 11.11 |
-| Llama 3 JSON string argument | 1,048,624 | 12,588,743 | 12.01 | 8,397,746 | 8.01 |
-| Mistral v3 JSON string argument | 1,048,657 | 17,833,607 | 17.01 | 11,647,317 | 11.11 |
-| Mistral v11 JSON string argument | 1,048,632 | 10,490,105 | 10.00 | 8,399,489 | 8.01 |
-| DeepSeek-V3.1 JSON string argument | 1,048,720 | 10,493,971 | 10.01 | 8,397,978 | 8.01 |
-| DeepSeek-V3 fenced JSON string argument | 1,048,741 | 14,692,492 | 14.01 | 8,399,375 | 8.01 |
-| Kimi-K2 JSON string argument | 1,048,726 | 10,508,318 | 10.02 | 8,398,198 | 8.01 |
-| Anthropic `tool_use` JSON string argument | 1,048,649 | 12,588,649 | 12.00 | 8,398,045 | 8.01 |
-| Harmony JSON string argument | 1,048,686 | 12,599,510 | 12.01 | 8,397,816 | 8.01 |
-| Bare JSON string argument | 1,048,623 | 12,588,732 | 12.01 | 8,397,745 | 8.01 |
-| `OpenAI` stringified string argument | 1,048,679 | 27,273,065 | 26.01 | 47,200,607 | 45.01 |
+| Qwen3-Coder XML `<parameter>` string | 1,048,663 | 20,431,019 | 19.48 | 8,601,677 | 8.20 |
+| Hermes JSON string argument | 1,048,648 | 28,814,990 | 27.48 | 10,694,004 | 10.20 |
+| Llama 3 JSON string argument | 1,048,624 | 28,289,203 | 26.98 | 9,598,420 | 9.15 |
+| Mistral v3 JSON string argument | 1,048,657 | 17,281,982 | 16.48 | 6,463,565 | 6.16 |
+| Mistral v11 JSON string argument | 1,048,632 | 13,080,985 | 12.47 | 5,390,008 | 5.14 |
+| DeepSeek-V3.1 JSON string argument | 1,048,720 | 22,520,242 | 21.47 | 5,387,792 | 5.14 |
+| DeepSeek-V3 fenced JSON string argument | 1,048,741 | 23,573,908 | 22.48 | 5,441,740 | 5.19 |
+| Kimi-K2 JSON string argument | 1,048,726 | 13,097,827 | 12.49 | 5,439,965 | 5.19 |
+| Anthropic `tool_use` JSON string argument | 1,048,649 | 17,277,041 | 16.48 | 7,477,933 | 7.13 |
+| Harmony JSON string argument | 1,048,686 | 13,089,528 | 12.48 | 5,415,014 | 5.16 |
+| Bare JSON string argument | 1,048,623 | 31,961,133 | 30.48 | 11,698,236 | 11.16 |
+| `OpenAI` stringified string argument | 1,048,679 | 35,106,451 | 33.48 | 42,032,197 | 40.08 |
 
 `OpenAI` stringified arguments are decoded and parsed again, and an element
 that starts with `"id"` becomes a call attempt only at its `"type":
@@ -2046,7 +2054,8 @@ leading `"id"` stays content); a program with commit points checks each live
 configuration for them, about 2 work per byte. The element's function object
 `{"name": ..., "arguments": "..."}` is also a bare JSON call, so the
 `bare-json.v1` dialect reads and decodes the same stringified arguments
-until the element's call covers it (9 of the 26 work per byte); in the same
+until the element's call covers it (9 of the 26 work per byte on main;
+this decomposition was not re-measured on this branch); in the same
 way it reads the call object inside a Hermes `<tool_call>` or a Mistral v3
 array (7 of their 17). The recognizer releases the scratch of a reading it
 drops unread (an attempt that began inside another attempt's committed
@@ -2061,7 +2070,8 @@ end. A wrapped Qwen3-Coder XML call is read twice: under the default
 allow-list Hermes also attempts the `<tool_call>` and rejects it at the
 `<function=` body, and in that segmentation the bare function element is a
 call attempt of its own, kept until the wrapped call ends (6 of its 17 work
-per byte). All use the
+per byte; the 7 of 17 and 6 of 17 figures are likewise main's and were
+not re-measured on this branch). All use the
 default request of that capture (the twelve built-in dialects then available); charging schema
 validation's working set left these measurements unchanged, because
 validating one string argument peaks below the recognizer's buffers. The
@@ -2078,13 +2088,13 @@ array only for an item with several readings, which genuinely multiplies the
 readings (`Candidates` bounds those). Before this, each item copied and
 charged the growing partial array, so k items charged O(k²) scratch
 (measured on the previous head: 13.99 GB at k = 8,000 nested items, against
-1.54 GB now) and took quadratic wall time (9.0 s against 1.8 s).
+2.40 GB now) and took quadratic wall time (9.0 s against 2.4 s).
 `tool_call_cost::repeated_parameters_cost_is_linear` recovers 1,000 to 8,000
 occurrences as nested items, as one-item JSON arrays and as string items,
 and requires both counters to track the byte ratio within 1.05x. At k =
-8,000 the nested form charges 29.2 million work (59 per byte), 1.54 GB of
-total scratch and peaks at 130 MB (262 per byte), the JSON form 52 work and
-104 peak scratch per byte, and the string form 61 and 244. The test recovers
+8,000 the nested form charges 23.9 million work (48 per byte), 2.40 GB of
+total scratch and peaks at 121 MB (244 per byte), the JSON form 28 work and
+104 peak scratch per byte, and the string form 46 and 223. The test recovers
 every k under plain `sized(Effort::Standard, output)`, with no raised limit,
 and asserts `RECOVER_WORK_PER_BYTE` and `RECOVER_SCRATCH_PER_BYTE` as
 ceilings.
@@ -2092,8 +2102,8 @@ ceilings.
 ### Dense markup
 
 Output that is nothing but one small unit repeated (many tiny calls, many
-repeated parameters) costs more per byte than a long string argument: 53 to
-142 work and 80 to 302 peak scratch per byte, against 10 to 26 and 8 to 45.
+repeated parameters) costs more per byte than a long string argument: 29 to
+173 work and 76 to 422 peak scratch per byte, against 12 to 33 and 5 to 40.
 Before the constants were raised (32 work and 48 scratch per byte), plain
 `sized(Effort::Standard, output)` exhausted explicitly on such output:
 `BudgetExceeded(Work)` for every shape at 1 MiB but DeepSeek-V3, which ran
@@ -2111,27 +2121,27 @@ the other recorded rows use the twelve-dialect request before GLM.
 
 | Dense shape (1 MiB) | Units | Work per byte | Peak scratch per byte | Evidence per byte |
 | --- | ---: | ---: | ---: | ---: |
-| Gemma calls | 29,127 | 48.5 | 226.5 | 0.028 |
-| Pythonic calls | 49,932 | 69.2 | 380.2 | 0.048 |
-| GLM 4.5 calls | 13,107 | 106.0 | 88.8 | 0.012 |
-| Qwen3-Coder XML repeated nested items | 16,911 | 59.4 | 268.3 | 0.065 |
-| Qwen3-Coder XML repeated JSON-array items | 30,838 | 52.9 | 103.6 | 0.000 |
-| Qwen3-Coder XML repeated string items | 34,950 | 62.1 | 250.5 | 0.067 |
-| Qwen3-Coder XML calls | 11,781 | 72.4 | 281.6 | 0.101 |
-| Hermes calls | 14,169 | 82.4 | 114.0 | 0.014 |
-| `OpenAI` stringified calls | 10,485 | 72.0 | 183.0 | 0.070 |
-| Mistral v3 calls (one section each) | 12,633 | 71.9 | 160.6 | 0.060 |
-| Mistral v3 calls (one `[TOOL_CALLS] [..]` array) | 15,195 | 79.6 | 186.0 | 0.072 |
-| Mistral v11 calls (`</s>` after each) | 16,912 | 58.6 | 203.7 | 0.081 |
-| Mistral v11 calls (chained, a newline after each) | 18,078 | 67.8 | 220.8 | 0.086 |
-| Harmony calls | 9,446 | 118.9 | 80.1 | 0.009 |
-| DeepSeek-V3.1 calls | 11,522 | 73.0 | 98.7 | 0.011 |
-| DeepSeek-V3 calls | 9,361 | 82.3 | 301.6 | 0.045 |
-| Kimi-K2 calls | 10,809 | 142.3 | 131.4 | 0.052 |
-| Llama 3 JSON calls | 20,971 | 76.2 | 150.1 | 0.020 |
-| Anthropic `tool_use` calls | 13,981 | 56.5 | 170.0 | 0.067 |
-| Bare JSON calls with empty arguments | 34,952 | 101.4 | 165.6 | 0.033 |
-| Qwen3-Coder XML 1 MiB string (above) | 1 | 17.0 | 11.1 | 0.000 |
+| Gemma calls | 29,127 | 138.3 | 373.3 | 0.027 |
+| Pythonic calls | 49,932 | 108.2 | 422.1 | 0.047 |
+| GLM 4.5 calls | 13,107 | 51.7 | 100.9 | 0.012 |
+| Qwen3-Coder XML repeated nested items | 16,911 | 48.6 | 254.3 | 0.064 |
+| Qwen3-Coder XML repeated JSON-array items | 30,838 | 28.6 | 103.7 | 0.000 |
+| Qwen3-Coder XML repeated string items | 34,950 | 47.7 | 234.5 | 0.066 |
+| Qwen3-Coder XML calls | 11,781 | 84.4 | 316.1 | 0.101 |
+| Hermes calls | 14,169 | 121.2 | 184.9 | 0.013 |
+| `OpenAI` stringified calls | 10,485 | 78.4 | 198.0 | 0.069 |
+| Mistral v3 calls (one section each) | 12,633 | 135.0 | 162.2 | 0.060 |
+| Mistral v3 calls (one `[TOOL_CALLS] [..]` array) | 15,195 | 101.8 | 186.2 | 0.072 |
+| Mistral v11 calls (`</s>` after each) | 16,912 | 84.2 | 217.4 | 0.080 |
+| Mistral v11 calls (chained, a newline after each) | 18,078 | 97.4 | 224.1 | 0.086 |
+| Harmony calls | 9,446 | 112.1 | 75.7 | 0.009 |
+| DeepSeek-V3.1 calls | 11,522 | 66.3 | 85.8 | 0.010 |
+| DeepSeek-V3 calls | 9,361 | 78.1 | 286.2 | 0.044 |
+| Kimi-K2 calls | 10,809 | 131.2 | 133.4 | 0.051 |
+| Llama 3 JSON calls | 20,971 | 173.0 | 373.1 | 0.020 |
+| Anthropic `tool_use` calls | 13,981 | 96.7 | 189.4 | 0.066 |
+| Bare JSON calls with empty arguments | 34,952 | 92.3 | 218.0 | 0.033 |
+| Qwen3-Coder XML 1 MiB string (above) | 1 | 19.5 | 8.2 | 0.000 |
 
 These are measured ratios, not per-input upper bounds. Fixed storage and
 capacity growth can change them at other input lengths. The supplied

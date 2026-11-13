@@ -36,7 +36,7 @@ impl RunEligibility {
         native_body: bool,
         governor: &mut Governor,
     ) -> Result<Self, GrammarError> {
-        governor.charge(Resource::Work, 2)?;
+        governor.charge(Resource::Work, 1)?;
         let descriptor = governor.lease_scratch(64)?;
         let mut result = Self {
             mask: ScratchVec::new(governor),

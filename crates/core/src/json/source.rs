@@ -57,7 +57,6 @@ pub(crate) fn same_source_tree(
         governor,
     )?;
     while let Some(SourceNode { left, right, depth }) = stack.pop() {
-        governor.charge(Resource::Work, 1)?;
         governor.charge(Resource::Depth, depth)?;
         if left.span != right.span {
             return Ok(false);

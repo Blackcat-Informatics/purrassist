@@ -27,7 +27,6 @@ use crate::contract::{
     StopReason, invalid_input, push_scratch, reserve_failure, saturating_size as size,
 };
 use crate::grammar::CaptureKind;
-use crate::grammar::cost::K_EVENT;
 use crate::grammar::edit::{EditOperator, OPERATOR_COUNT, OPERATOR_TABLE, OPERATORS};
 use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
@@ -695,6 +694,7 @@ impl EventCursor {
             Segment::Rejected { span, .. } => self.coverage.append(span, source.len(), governor)?,
             Segment::Reasoning(block) => {
                 for call in &block.embedded {
+                    governor.charge(Resource::Work, 1)?;
                     if call.span.start < block.span.start || call.span.end > block.span.end {
                         return Err(invalid_input(
                             "embedded candidate exceeds its reasoning block",
@@ -812,7 +812,6 @@ impl EventCursor {
     ) -> Result<(), StopReason> {
         let start = span.start.max(self.content_end);
         if start < span.end {
-            governor.charge(Resource::Work, K_EVENT)?;
             let end = span.end;
             let span = start..end;
             let raw = StreamEvent::bytes(span.clone(), source, governor)?;

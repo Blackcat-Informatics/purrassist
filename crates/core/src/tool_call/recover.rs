@@ -167,7 +167,7 @@ use crate::contract::{
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CallEnd;
 use crate::grammar::cost::{
-    K_EVENT, RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR,
+    RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR,
     RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
 };
 use crate::grammar::edit::LossKind;
@@ -3437,7 +3437,6 @@ impl<'s> RecoveryIntake<'s> {
             None => None,
         };
         if frontier != self.progress {
-            governor.charge(Resource::Work, K_EVENT)?;
             self.progress = frontier;
             progress(frontier);
         }
