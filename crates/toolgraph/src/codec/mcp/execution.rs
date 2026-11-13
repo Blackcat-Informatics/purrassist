@@ -6,13 +6,13 @@
 use purrassist_core::{
     Governor,
     contract::Resource,
-    json::{self, IntegerReading, JsonField, JsonLine, Node, Value},
+    json::{self, IntegerReading, JsonField, JsonLine, Member, Node, Number, Value},
 };
 
 use super::{EnvelopeError, EnvelopeProblem, error, fields, step, text};
-use crate::ResourceLimits;
+use crate::{ResourceLimits, ToolExecutionProfile};
 
-const FIELDS: [&str; 10] = [
+pub(super) const FIELDS: [&str; 10] = [
     "graphBinding",
     "mode",
     "profileName",
@@ -32,6 +32,23 @@ pub enum ExecutionMode {
     AaExec,
     /// Select the named hat through `change_hat`.
     ChangeHat,
+}
+
+impl ExecutionMode {
+    /// The exact wire spelling that [`ExecutionProfile::read`] accepts for this mode.
+    ///
+    /// ```
+    /// use purrassist_toolgraph::codec::mcp::ExecutionMode;
+    /// assert_eq!(ExecutionMode::AaExec.wire_name(), "aa-exec");
+    /// assert_eq!(ExecutionMode::ChangeHat.wire_name(), "change_hat");
+    /// ```
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::AaExec => "aa-exec",
+            Self::ChangeHat => "change_hat",
+        }
+    }
 }
 
 /// Why a JSON number cannot represent an execution-profile wire quantity.
@@ -97,16 +114,10 @@ impl<'a> ExecutionProfile<'a> {
         let graph_binding = text(selected[0], FIELDS[0], governor)?;
         let mode = text(selected[1], FIELDS[1], governor)?;
         step(selected[1], Resource::Work, 20, governor)?;
-        let mode = match mode {
-            "aa-exec" => ExecutionMode::AaExec,
-            "change_hat" => ExecutionMode::ChangeHat,
-            _ => {
-                return Err(error(
-                    selected[1],
-                    EnvelopeProblem::UnsupportedExecutionMode,
-                ));
-            }
-        };
+        let mode = [ExecutionMode::AaExec, ExecutionMode::ChangeHat]
+            .into_iter()
+            .find(|candidate| candidate.wire_name() == mode)
+            .ok_or_else(|| error(selected[1], EnvelopeProblem::UnsupportedExecutionMode))?;
         let profile_name = text(selected[2], FIELDS[2], governor)?;
         let hat_name = text(selected[3], FIELDS[3], governor)?;
         step(selected[4], Resource::Work, 1, governor)?;
@@ -199,6 +210,37 @@ impl<'a> ExecutionProfile<'a> {
         debug_assert_eq!(terminator, Some('\n'));
         Ok(output)
     }
+}
+
+/// Generated wire fragment for a loaded profile, in the reader's field order.
+///
+/// Reading the encoded fragment back with [`ExecutionProfile::read`] yields the
+/// same mode, names, flag and five exact quantities.
+pub(super) fn profile_node(profile: &ToolExecutionProfile) -> Node {
+    let limits = profile.limits;
+    let values = [
+        Value::String(profile.iri.clone()),
+        Value::String(profile.mode.wire_name().to_owned()),
+        Value::String(profile.profile_name.clone()),
+        Value::String(profile.hat_name.clone()),
+        Value::Bool(profile.egress_allowed),
+        Value::Number(Number::from_unsigned(limits.address_space_bytes)),
+        Value::Number(Number::from_unsigned(limits.file_size_bytes)),
+        Value::Number(Number::from_unsigned(limits.processes)),
+        Value::Number(Number::from_unsigned(limits.cpu_seconds)),
+        Value::Number(Number::from_unsigned(limits.open_files)),
+    ];
+    Node::new(Value::Object(
+        FIELDS
+            .into_iter()
+            .zip(values)
+            .map(|(key, value)| Member {
+                key: key.to_owned(),
+                key_span: None,
+                value: Node::new(value),
+            })
+            .collect(),
+    ))
 }
 
 fn quantity(

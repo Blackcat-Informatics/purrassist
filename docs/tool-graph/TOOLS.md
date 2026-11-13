@@ -34,8 +34,12 @@ enforced; `xsd:integer` is accepted where `xsd:positiveInteger` is specified;
 datatype agreement between `FnO` parameters and shape paths, the content of
 `sh:*` constraints, and `pa:subtool` closure. `owl:imports` and the
 `fnom:Mapping` alias normalization are not handled, and rule values are checked
-for kind but not interpreted. These checks, the MCP codec, `ToolGraph::tool_set`,
-G7 schema output and the governed, span-exact load remain on #33.
+for kind but not interpreted. These checks, `ToolGraph::tool_set`, the core
+adapter augmentation and the governed, span-exact load remain on #33. The MCP
+Extended codec (`codec::mcp::encode` and `decode`) is implemented; its pinned
+output for the worked example is `crates/toolgraph/tests/data/worked_manifest.json`,
+whose schemas keep the upstream compiler's `$schema` and `$defs` members and
+member order, unlike the illustrative manifest below.
 
 The governing decisions are #40 D1–D10 and the reconnaissance is #31. No
 compiler output authorizes execution. A recovered call passes complete shape
@@ -59,7 +63,7 @@ context metadata will require `outputEnforcement: "exact-bytes"` beside
 `maxOutputBytes`; the RDF vocabulary's byte property will have that fixed
 meaning. The implemented standalone context codec rejects an unsupported supplied bundle
 format, an absent or unknown enforcement mode, duplicate fields, and unknown
-context fields. The full manifest decoder remains planned. The context codec
+context fields. The manifest codec reuses it for every tool. The context codec
 rejects legacy `maxOutputTokens` wherever a context limit is expected,
 even when `maxOutputBytes` also appears. An imported v1 bundle will fail with
 `UnsupportedVersion`; no number will be silently renamed or converted. The
