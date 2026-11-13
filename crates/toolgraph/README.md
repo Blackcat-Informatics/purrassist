@@ -6,8 +6,8 @@ Pure Rust validation for caller-owned tool-graph vocabulary, loss-profile and
 MCP context fragments and [AppArmor](https://apparmor.net/) glob words, with exact output byte bounds. No vocabulary
 namespace is supplied implicitly.
 
-This workspace crate is unpublished. It depends on the released `purrdf-core`
-and `purrdf-shapes` crates at exactly `=4`. Facade/host integration and
+This workspace crate is unpublished. It depends on the released `purrdf-core`,
+`purrdf-rdf` and `purrdf-shapes` crates at exactly `=4`. Facade/host integration and
 registry-resolvable packaging remain part of the complete graph-loader delivery. The existing release set
 retains its registry-resolvable dependencies.
 
@@ -17,8 +17,20 @@ Run the executable caller example with
 Implemented: validated vocabulary construction, registered projection loss
 meanings, the complete caller-owned MCP context fragment codec, the bounded
 four-form field-mask parser, and the governed `OutputByteLimit` checker. The checker records exact bytes and refuses oversized
-serialized results intact; it makes no token-count claim. Graph loading, the
-production schema bridge, manifest codecs, authorization and execution remain specified in
+serialized results intact; it makes no token-count claim. `ToolGraph::load` reads RDF 1.2 Turtle (any `purrdf_rdf` text codec) into typed
+`Tool` values over the vocabulary, `CallableBinding`, `FieldMask` and
+`OutputByteLimit`, all or nothing: every out-of-vocabulary term, shape
+violation, unowned statement and unsupported construct is a `LoadError` naming
+subject and predicate. `outputProjectionJq` must be a field mask or the load
+fails with `LoadError::UnsupportedProjection`. This delivery uses the ungoverned
+entry points (`FnoCatalog::from_dataset` and `parse_dataset`); the governed
+ones available at the pinned `PurRDF` 4.0.2 (`from_dataset_with_control`,
+`parse_dataset_controlled`) are the next step, so governed catalog construction
+and exact per-quad source spans are not yet provided. The Rust shape table is
+not equivalent to the shapes document; its differences and the unchecked
+requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
+the `graph` module documentation. The production
+schema bridge, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 
 `codec::mcp::ExecutionProfile` reads the complete execution-profile fragment

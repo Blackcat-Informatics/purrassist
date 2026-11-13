@@ -995,7 +995,7 @@
         "vendor/licenses/purrdf-4.0.2/third-party/rdfc/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
         "vendor/licenses/purrdf-4.0.2/third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-shapes -> purrdf-rdf."
+      "justification": "Required directly by purrassist-toolgraph for RDF text parsing in ToolGraph::load (also reached through purrdf-shapes)."
     },
     {
       "name": "purrdf-shapes",

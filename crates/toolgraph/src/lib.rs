@@ -9,6 +9,7 @@ mod binding;
 pub mod codec;
 mod file_rule;
 mod glob_language;
+mod graph;
 mod internet;
 mod ipc;
 mod policy_document;
@@ -40,6 +41,10 @@ pub use apparmor_glob::{
 };
 pub use binding::{BindingError, CallableBinding, ParameterBinding, ReturnBinding};
 pub use glob_language::{GlobInclusion, GlobLanguage, GlobLanguageError, GlobLanguageInput};
+pub use graph::{
+    Coercion, Construct, Hint, LoadError, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile,
+    ToolGraph, ToolImplementation, ToolOutput, ToolParameter, Violation, Waiver,
+};
 
 pub use internet::{
     InternetAccessSet, InternetEndpoint, InternetError, InternetFamily, InternetFragment,

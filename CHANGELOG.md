@@ -11,6 +11,13 @@ crates share one version.
 
 ### Added
 
+- `ToolGraph::load` in `purrassist-toolgraph` reads RDF 1.2 text into typed
+  tools (`FnO` identity, shapes, annotations, reified parameter hints, execution
+  profile and context management) with all-or-nothing `LoadError`s naming subject
+  and predicate. Projections outside the field-mask subset are refused. It does
+  not claim governed catalog construction or exact per-quad source spans; both
+  wait on upstream seams (PurRDF issue 1306).
+
 - Gemma 3 `tool_code` fences recover direct Python keyword calls through
   `gemma3-tool-code.v1` and the native Pythonic codec. Multiple fenced calls
   retain order, ordinary code examples remain content, and `tool_output`

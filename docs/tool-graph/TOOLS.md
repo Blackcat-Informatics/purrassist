@@ -5,14 +5,37 @@
 Status: **pipeline specified; caller-input foundations implemented**. The
 examples and compiler contracts describe Phase 3 acceptance. The existing
 recovery/declaration renderers and caller-prepared result projection are
-implemented; graph loading, authorization, model-family prompt projection and
-confinement are not. Specification delivery is complete in #32;
+implemented; typed graph loading is a first partial delivery (see below), and
+authorization, model-family prompt projection and confinement are not. Specification delivery is complete in #32;
 implementation and necessary dependency adoption are authorized. The delivery
 sequence and executable acceptance are in [TOOLS_PLAN.md](TOOLS_PLAN.md).
 The unpublished [`purrassist-toolgraph`](../../crates/toolgraph/README.md) crate
 implements validated vocabulary/loss-profile inputs and the four-form context
 mask parser, with a standalone governed exact output byte-limit checker;
-it does not yet load or execute a tool graph.
+it loads a tool graph (below) but does not execute one.
+
+`ToolGraph::load` (#191, the first bounded delivery of #33) reads RDF 1.2 text
+with `purrdf_rdf::parse_dataset` into typed tools, all or nothing, and the
+worked example below loads. It is bounded as follows. This delivery uses the
+ungoverned entry points `purrdf_rdf::parse_dataset` and `FnoCatalog::from_dataset`,
+so the caller's governor meters only this crate's own row accounting. The pinned
+`PurRDF` 4.0.2 also provides `FnoCatalog::from_dataset_with_control` and
+`purrdf_rdf::parse_dataset_controlled` (with exact ordered source occurrences);
+adopting them is the next step, so governed catalog construction and exact
+per-quad source spans are not yet provided and `LoadError` names subject and
+predicate. Only default-graph statements load; a named-graph statement or
+reifier is refused. The vocabulary shapes are enforced by a Rust table, not by
+running the shapes document through the SHACL engine, and the table is not
+equivalent to the document. Known differences: `readOnlyHint`, `destructiveHint`,
+`idempotentHint` and `openWorldHint` are optional in the table but
+`sh:minCount 1` in the shapes; the `filePermissions` pattern `^[rwaklm]*$` is not
+enforced; `xsd:integer` is accepted where `xsd:positiveInteger` is specified;
+`xsd:anyURI` values are not validated. Not checked at all: requiredness and
+datatype agreement between `FnO` parameters and shape paths, the content of
+`sh:*` constraints, and `pa:subtool` closure. `owl:imports` and the
+`fnom:Mapping` alias normalization are not handled, and rule values are checked
+for kind but not interpreted. These checks, the MCP codec, `ToolGraph::tool_set`,
+G7 schema output and the governed, span-exact load remain on #33.
 
 The governing decisions are #40 D1–D10 and the reconnaissance is #31. No
 compiler output authorizes execution. A recovered call passes complete shape
