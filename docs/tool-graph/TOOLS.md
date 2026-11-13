@@ -34,8 +34,20 @@ enforced; `xsd:integer` is accepted where `xsd:positiveInteger` is specified;
 datatype agreement between `FnO` parameters and shape paths, the content of
 `sh:*` constraints, and `pa:subtool` closure. `owl:imports` and the
 `fnom:Mapping` alias normalization are not handled, and rule values are checked
-for kind but not interpreted. These checks, `ToolGraph::tool_set`, the core
-adapter augmentation and the governed, span-exact load remain on #33. The MCP
+for kind but not interpreted. These checks and the governed, span-exact load
+remain on #33. `ToolGraph::tool_set(vocabulary, governor)` is implemented: it
+imports the encoded manifest through `ToolSet::from_mcp_with_metadata_governed`
+with alias, effects and policy metadata, so the exact schema and declaration
+bytes are kept. It selects `Effects::ReadOnly` only for a true `readOnlyHint`
+with no allowed write, append, lock or link file grant, mount or capability
+rule, waiver or non-inherit exec transition in the profile tree, and only when
+every subtool resolves and is itself proven. That proof is a static read of the
+execution-profile tree and the subtool closure only: it is not security
+admission, `tool.implementation` is not inspected, and network, Unix-socket,
+signal and ptrace allowances are treated as non-writes. Unknown-argument handling
+comes from the exact schema, not from effects. Admission remains #33 work.
+The policy is `Tolerant` when any hint permits edit distance, coercion or folding. Core has no per-parameter
+switches, so the per-hint bounds are not enforced by this method. The MCP
 Extended codec (`codec::mcp::encode` and `decode`) is implemented; its pinned
 output for the worked example is `crates/toolgraph/tests/data/worked_manifest.json`,
 whose schemas keep the upstream compiler's `$schema` and `$defs` members and
@@ -360,8 +372,11 @@ absence separately from an explicit value; effective defaults follow MCP:
 read-only false, destructive true, idempotent false, open-world true. Encoding
 preserves original presence, while graph admission materializes and records
 the effective values for security checking. `Effects::ReadOnly` requires both
-a true hint and a statically read-only admitted implementation; every other
-tool is `Effects::Mutating`. Hints never establish trust.
+a true hint and a statically write-free execution-profile tree and subtool
+closure; every other tool is `Effects::Mutating`. Shipped `tool_set` does this
+without inspecting `tool.implementation` and without security admission, which
+remains #33 work; the final rule requires an admitted implementation. Hints
+never establish trust.
 
 Reifier aliases become `ParameterSpec::alias`; `RepairPolicy::Structural` is
 chosen when all inference permissions are zero/false/none, otherwise

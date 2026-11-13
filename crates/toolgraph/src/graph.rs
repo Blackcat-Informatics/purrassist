@@ -32,6 +32,9 @@
 mod load;
 mod model;
 mod problem;
+mod tool_set;
+
+pub use tool_set::ToolSetBridgeError;
 
 pub use model::{
     Coercion, Hint, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile, ToolImplementation,
