@@ -1,0 +1,95 @@
+//! probe
+use purrassist_core::{Effort, Governor};
+use purrassist_toolgraph::{LoadError, PrefixTable, TERM_NAMES, TermBindings, ToolGraph, Vocabulary, register_loss_profile};
+use purrdf_core::loss::LossProfile;
+
+const NAMESPACE: &str = "https://example.org/toolgraph#";
+const TOOLS: &str = include_str!("../../../docs/tool-graph/TOOLS.md");
+
+fn vocabulary() -> Vocabulary {
+    Vocabulary::new(
+        "pa",
+        PrefixTable(vec![("pa".into(), NAMESPACE.into())]),
+        TermBindings {
+            namespace_iri: NAMESPACE.into(),
+            local_names: TERM_NAMES.iter().map(|n| ((*n).into(), format!("{NAMESPACE}{n}"))).collect(),
+        },
+        register_loss_profile(LossProfile::builtin()).expect("loss"),
+    )
+    .expect("vocab")
+}
+
+fn worked() -> String {
+    let section = TOOLS.split("## End-to-end example").nth(1).unwrap();
+    let fence = section.split("```turtle\n").nth(1).unwrap();
+    fence.split("\n```").next().unwrap().to_owned()
+}
+
+/// n copies of the worked example body, each under its own prefix, blank-node
+/// labels and tool names.
+fn bulk(n: usize) -> String {
+    let w = worked();
+    let (head, body) = w.split_once("\nex:QueryArguments").unwrap();
+    let head: String = head.lines().filter(|l| !l.starts_with("@prefix ex:")).collect::<Vec<_>>().join("\n");
+    let body = format!("ex:QueryArguments{body}");
+    let mut out = head;
+    out.push('\n');
+    for i in 0..n {
+        out.push_str(&format!("@prefix e{i}: <https://example.org/tools/{i}/> .\n"));
+        let b = body
+            .replace("query_customer_orders", &format!("query_customer_orders_{i}"))
+            .replace("edit_file", &format!("edit_file_{i}"))
+            .replace("ex:", &format!("e{i}:"))
+            .replace("_:", &format!("_:c{i}_"));
+        let b = if i == 0 { b } else {
+            let lines: Vec<&str> = b.lines().collect();
+            let at = lines.iter().position(|l| l.contains(":catalog a owl:Ontology")).unwrap();
+            let mut keep = lines[..at].to_vec();
+            keep.extend_from_slice(&lines[at + 2..]);
+            keep.join("\n")
+        };
+        out.push_str(&b);
+        out.push('\n');
+    }
+    out
+}
+
+fn run(src: &str, effort: Effort) -> (Result<(), String>, u64, u64) {
+    let mut g = Governor::new(effort.budget());
+    let r = ToolGraph::load(src.as_bytes(), "text/turtle", None, &vocabulary(), &mut g);
+    let u = g.usage();
+    let r = r.map(|_| ()).map_err(|e| match e {
+        LoadError::Exhausted(s) => format!("Exhausted({s:?})"),
+        other => format!("{other:?}"),
+    });
+    (r, u.work, u.peak_scratch_bytes)
+}
+
+#[test]
+fn zz_probe() {
+    let w = worked();
+    let (r, work, peak) = run(&w, Effort::Maximum);
+    println!("PROBE worked bytes={} result={r:?} work={work} ({:.3}/B) peak_scratch={peak} ({:.1}/B)", w.len(), work as f64 / w.len() as f64, peak as f64 / w.len() as f64);
+    for n in [1usize, 16, 64] {
+        let b = bulk(n);
+        let (r, work, peak) = run(&b, Effort::Maximum);
+        println!("PROBE bulk n={n} bytes={} result={r:?} work={work} ({:.3}/B) peak_scratch={peak} ({:.1}/B)", b.len(), work as f64 / b.len() as f64, peak as f64 / b.len() as f64);
+    }
+    for effort in [Effort::Exact, Effort::Quick, Effort::Standard, Effort::Deep, Effort::Maximum] {
+        let (r, work, peak) = run(&w, effort);
+        println!("PROBE level={effort:?} worked bytes={} result={r:?} work={work} peak_scratch={peak}", w.len());
+        // largest n that loads
+        let (mut lo, mut hi) = (0usize, 2usize);
+        while hi < 4096 && run(&bulk(hi), effort).0.is_ok() { lo = hi; hi *= 2; }
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if run(&bulk(mid), effort).0.is_ok() { lo = mid } else { hi = mid }
+        }
+        let ok = bulk(lo);
+        let (r1, w1, p1) = run(&ok, effort);
+        let bad = bulk(lo + 1);
+        let (r2, w2, p2) = run(&bad, effort);
+        println!("PROBE level={effort:?} bulk max_ok n={lo} bytes={} result={r1:?} work={w1} peak_scratch={p1}", ok.len());
+        println!("PROBE level={effort:?} bulk first_refused n={} bytes={} result={r2:?} work={w2} peak_scratch={p2}", lo + 1, bad.len());
+    }
+}

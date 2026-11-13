@@ -1,0 +1,12 @@
+{
+  "pr": 201,
+  "jobs": [
+    {
+      "name": "native (macos-14)",
+      "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43517987635/job/132204758573",
+      "path": "/home/paudley/Active/purrassist/.worktrees/200-tool-graph-load-through-purrdf-s/.stage/tool-graph-load-through-purrdf-s/ci-logs/github-job-132204758573.log",
+      "error": "Log download failed (exit 1): gh: HTTP 404\n"
+    }
+  ],
+  "ok": false
+}
