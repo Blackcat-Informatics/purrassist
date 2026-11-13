@@ -2740,8 +2740,7 @@ impl<'s> Recognizer<'s> {
     /// Retain all index owners until every queued handle has been stripped.
     fn settle_final(&mut self, governor: &mut Governor) -> Result<(), StopReason> {
         if self.engine.tracks_ownership() {
-            self.pending_sources
-                .prepare_terminal(self.pending.len())?;
+            self.pending_sources.prepare_terminal(self.pending.len())?;
         }
         let mut ready = Vec::new();
         let prepared = (|| {

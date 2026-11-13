@@ -167,8 +167,8 @@ use crate::contract::{
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CallEnd;
 use crate::grammar::cost::{
-    RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR,
-    RECOVER_SCRATCH_PER_BYTE, RECOVER_WORK_PER_BYTE,
+    RECOVER_EVIDENCE_BYTES_PER_ENTRY, RECOVER_OPENER_CANDIDATE_DIVISOR, RECOVER_SCRATCH_PER_BYTE,
+    RECOVER_WORK_PER_BYTE,
 };
 use crate::grammar::edit::LossKind;
 use crate::json::{Node, Value, pointer_segment, same_source_text};
@@ -3427,8 +3427,7 @@ impl<'s> RecoveryIntake<'s> {
         }
         self.progress_memo = None;
         let prefix = frontier.prefix_end.min(utf8);
-        frontier.prefix_end =
-            self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix)?;
+        frontier.prefix_end = self.cached_source_boundary(prefix, utf8, BoundaryKind::Prefix)?;
         let normalized_prefix = (prefix, frontier.prefix_end);
         let mut normalized_content = None;
         frontier.content = match frontier.content {

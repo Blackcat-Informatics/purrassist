@@ -3573,7 +3573,7 @@ fn merge_part_readings(
             if !readings.values.is_empty() {
                 governor.charge(Resource::Candidates, 1)?;
             }
-            readings.storage.absorb(call.storage);
+            readings.storage.absorb(*call.storage);
             readings.values.append(&mut call.values);
         }
     }
@@ -4479,7 +4479,7 @@ impl Step<'_, '_> {
                             })?;
                         calls.push(PartReadings::Call(CallReadings {
                             values: vec![call],
-                            storage: governor.scratch_lease_for(bytes),
+                            storage: Box::new(governor.scratch_lease_for(bytes)),
                         }));
                     }
                     Err(reason) => {
@@ -4667,7 +4667,9 @@ enum PartReadings {
 #[derive(Debug)]
 struct CallReadings {
     values: Vec<RawCall>,
-    storage: ScratchLease,
+    /// Boxed so the 64-bit lease counter does not raise the owner's
+    /// alignment above the rejected variant's on 32-bit targets.
+    storage: Box<ScratchLease>,
 }
 // The owner fits inside the existing rejected variant's allocation envelope.
 const _: () = assert!(
@@ -4694,7 +4696,7 @@ impl CallReadings {
 
     fn into_values(self) -> Vec<RawCall> {
         let Self { values, storage } = self;
-        storage.retain();
+        (*storage).retain();
         values
     }
 }
@@ -7617,8 +7619,7 @@ impl<'s> Engine<'s> {
         governor: &mut Governor,
     ) -> Result<(), StopReason> {
         if whole && !self.whole.contains(&record.start) {
-            if let Err(reason) = governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)
-            {
+            if let Err(reason) = governor.charge(Resource::ScratchBytes, DEFERRED_BYTES) {
                 let charged = match &ended {
                     Event::Ended {
                         salvage: Some(value),
@@ -8790,8 +8791,7 @@ impl<'s> Engine<'s> {
         // It ends whole: a held report at its opener is outread now,
         // and no longer waits for it (see `Self::defer`).
         if !self.whole.contains(&start) {
-            if let Err(reason) = governor.charge(Resource::ScratchBytes, DEFERRED_BYTES)
-            {
+            if let Err(reason) = governor.charge(Resource::ScratchBytes, DEFERRED_BYTES) {
                 drop(segmentations);
                 let cleanup = governor.release_scratch(charged);
                 return Err::<(), _>(reason).and(cleanup);

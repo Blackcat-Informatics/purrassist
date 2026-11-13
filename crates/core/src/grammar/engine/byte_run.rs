@@ -285,11 +285,7 @@ impl Engine<'_> {
 
     /// The byte window stays immutable across one push's table loop. Both
     /// class and body certificates require this predecessor before any proof.
-    pub(super) fn byte_run_may_repeat(
-        &self,
-        byte: u8,
-        repeated: &mut Option<bool>,
-    ) -> bool {
+    pub(super) fn byte_run_may_repeat(&self, byte: u8, repeated: &mut Option<bool>) -> bool {
         if let Some(known) = *repeated {
             return known;
         }
