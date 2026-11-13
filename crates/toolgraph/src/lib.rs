@@ -43,7 +43,8 @@ pub use binding::{BindingError, CallableBinding, ParameterBinding, ReturnBinding
 pub use glob_language::{GlobInclusion, GlobLanguage, GlobLanguageError, GlobLanguageInput};
 pub use graph::{
     Coercion, Construct, Hint, LoadError, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile,
-    ToolGraph, ToolImplementation, ToolOutput, ToolParameter, Violation, Waiver,
+    ToolGraph, ToolImplementation, ToolOutput, ToolParameter, ToolSetBridgeError, Violation,
+    Waiver,
 };
 
 pub use internet::{
