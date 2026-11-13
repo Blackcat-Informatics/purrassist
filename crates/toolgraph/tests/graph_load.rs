@@ -50,9 +50,9 @@ fn worked() -> String {
         .to_owned()
 }
 
-/// The governed parser and `FnO` reader count native steps (about 205 per source byte
-/// on the worked example) and the loader charges one work unit per 64 of them, so the
-/// worked example loads under the Standard budget, which `Budget::default()` is.
+/// The loader charges one work unit per 64 native steps of the governed parser and
+/// `FnO` reader, so the worked example loads under the Standard budget, which
+/// `Budget::default()` is.
 const WORKED_BUDGET: Budget = Effort::Standard.budget();
 
 fn load(source: &str) -> Result<ToolGraph, LoadError> {
@@ -579,6 +579,10 @@ fn only_turtle_and_trig_media_types_are_loaded() {
     let turtle = load_as("text/turtle").expect("turtle");
     let trig = load_as("application/trig").expect("a default-graph TriG document loads");
     assert_eq!(trig.tools().len(), turtle.tools().len());
+    let iris = |graph: &ToolGraph| -> Vec<String> {
+        graph.tools().iter().map(|tool| tool.iri.clone()).collect()
+    };
+    assert_eq!(iris(&trig), iris(&turtle));
     for media_type in ["application/n-triples", "application/x-unknown"] {
         let LoadError::Parse { code, .. } = load_as(media_type).unwrap_err() else {
             panic!("{media_type} must be a parse refusal");

@@ -93,10 +93,11 @@ impl Admission for Storage {
 }
 
 /// Native work units charged as one governor work unit. The governed parser and
-/// `FnO` reader count one native unit per lexical or structural step, measured at
-/// about 205 native units per source byte on the worked example, which would
-/// admit only a few kilobytes under the Standard budget; sixty-four native units
-/// per work unit admits several hundred kilobytes.
+/// `FnO` reader count one native unit per lexical or structural step, which is
+/// much finer than this crate's row accounting; charging each step as a work unit
+/// would admit only a few kilobytes under the Standard budget. The admitted sizes
+/// at 64 native units per work unit are measured in the `graph` module's
+/// governance notes.
 pub(super) const NATIVE_UNITS_PER_WORK: u64 = 64;
 
 /// Work and stop authority: one governor work unit per
