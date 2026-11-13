@@ -33,6 +33,17 @@ the `graph` module documentation. The production
 schema bridge, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 
+`codec::mcp::encode` and `codec::mcp::decode` convert a loaded `ToolGraph` to and
+from the MCP Extended manifest (format `purrassist-toolgraph-v2`) with a native
+`LossLedger`. Input and output schemas come from the upstream plain-argument
+compiler, whose reported losses are carried into the ledger unchanged; the
+complete source dataset is retained as Turtle in `_meta.security.sourceGraph`.
+Output is byte-deterministic. Decoding loads that source and requires every
+declaration to agree with it; legacy bundle formats and `maxOutputTokens` are
+refused. The pinned golden is `tests/data/worked_manifest.json`.
+`ToolGraph::tool_set`, the core adapter augmentation, governed source parsing and
+wasm-harness wiring remain on #33.
+
 `codec::mcp::ExecutionProfile` reads the complete execution-profile fragment
 from a caller-owned JSON DOM; `ManifestEnvelope::read` checks these fields for
 every tool and `ToolEnvelope::execution` exposes the borrowed typed view.
