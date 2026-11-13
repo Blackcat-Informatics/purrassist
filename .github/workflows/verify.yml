@@ -161,3 +161,18 @@ jobs:
         run: make resources RESOURCE_ARGS=--portable-runtime
       - name: Check resource limits
         run: python3 scripts/check-resource-limits.py .cache/resource-report.json
+  reuse:
+    # REUSE 3.3 conformance (`reuse lint`), pinned to reuse 6.2.0 and the same
+    # lint as the local `make reuse` target.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned REUSE tool
+        run: |
+          python3 -m venv "$RUNNER_TEMP/reuse"
+          "$RUNNER_TEMP/reuse/bin/pip" install --disable-pip-version-check reuse==6.2.0
+          echo "$RUNNER_TEMP/reuse/bin" >> "$GITHUB_PATH"
+      - name: REUSE lint
+        run: reuse lint

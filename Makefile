@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check corpus fmt lint test doc hygiene wasm-test benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check release-gate
+.PHONY: check corpus fmt lint test doc hygiene reuse wasm-test benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check release-gate
 
 check: fmt hygiene helper-test helper-check lint test doc
 
@@ -18,6 +18,10 @@ hygiene:
 	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-resource-report.py
 	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json
+
+# REUSE 3.3 lint, pinned to reuse 6.2.0 (the CI `reuse` job runs the same lint).
+reuse:
+	uvx reuse@6.2.0 lint
 
 lint:
 	cargo clippy --workspace --all-targets --locked -- -D warnings

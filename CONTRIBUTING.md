@@ -20,6 +20,9 @@ warnings clean. Capability or performance claims need executable evidence;
 `docs/QUALIFICATION.md` records the executable evidence and its limits, including its
 Known limitations section.
 
-First-party contributions use MIT OR Apache-2.0 OR MulanPSL-2.0. Add SPDX headers
-to new source files. Do not include credentials, personal service endpoints, or
+First-party contributions use MIT OR Apache-2.0 OR MulanPSL-2.0. Every new file needs
+an SPDX header (`SPDX-FileCopyrightText` and `SPDX-License-Identifier`) wherever its
+format allows comments. Files that cannot carry one, such as JSON, lockfiles and
+generated or vendored data, get an annotation in `REUSE.toml` instead. `make reuse`
+checks this with REUSE 3.3. Do not include credentials, personal service endpoints, or
 private infrastructure in examples, fixtures, metadata, or documentation.

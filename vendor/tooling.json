@@ -197,5 +197,16 @@
     "notice_normalization": "None; the LICENSE file is copied unmodified from the v1.8.1 release archive. It records the project's transition from MIT to Apache-2.0: contributions are Apache-2.0 where relicensing consent was obtained and otherwise remain MIT, and documentation is CC-BY-4.0.",
     "binary_source": "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz",
     "binary_sha256": "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc"
+  },
+  {
+    "name": "reuse",
+    "version": "6.2.0",
+    "license": "Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 AND GPL-3.0-or-later",
+    "source": "https://github.com/fsfe/reuse-tool/tree/v6.2.0",
+    "scope": "REUSE conformance linter installed from PyPI as reuse==6.2.0 by the `reuse` job in .github/workflows/verify.yml and run by `make reuse` (`uvx reuse@6.2.0 lint`). Used only to check license headers and REUSE.toml annotations; not part of `make check`, not linked, vendored as source, or packaged into any crate. The license field is the expression declared by upstream pyproject.toml; the vendored notice is the GPL-3.0-or-later text, which is the license of the tool's own source. Its other declared terms cover upstream data files that this project does not vendor.",
+    "notices": {
+      "vendor/licenses/reuse-6.2.0/GPL-3.0-or-later.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    "notice_normalization": "None; the GPL-3.0-or-later text is copied unmodified from LICENSES/GPL-3.0-or-later.txt at tag v6.2.0."
   }
 ]

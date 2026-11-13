@@ -1,0 +1,277 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# REUSE 3.3 annotations for files that cannot carry an inline SPDX header:
+# JSON, JSONL, lockfiles, fixtures and generated data, and vendored third-party
+# notices. Each annotation names the upstream holder and license taken from the
+# file's own notice or from docs/DEPENDENCIES.md and vendor/dependencies.json.
+# A file with an inline header is not affected by these entries.
+version = 1
+
+# Test fixture read through include_str!; kept byte-identical rather than headed.
+[[annotations]]
+path = "crates/toolgraph/tests/data/policy_document.apparmor"
+SPDX-FileCopyrightText = "2026 Blackcat Informatics Inc."
+SPDX-License-Identifier = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+
+# First-party data: generated fixtures, manifests and registries of this project.
+[[annotations]]
+path = [
+  "Cargo.lock",
+  ".goals",
+  "server.json",
+  "crates/core/tests/data/tool-call-goldens/**",
+  "crates/core/tests/data/tool-calls/**",
+  "crates/core/tests/data/recovery-goldens/**",
+  "crates/core/tests/data/tool-adapters/**",
+  "crates/core/tests/data/evaluation/**",
+  "crates/core/tests/data/receipts/**",
+  "crates/core/tests/data/markdown/manifest.json",
+  "crates/core/tests/data/markdown/gfm-profiles.json",
+  "crates/helper-census/UPSTREAM.json",
+  "docs/qualification/**",
+  "docs/schema/**",
+  "docs/known-limitations.json",
+  "docs/assets.json",
+  "examples/**",
+  "scripts/data/**",
+  "vendor/dependencies.json",
+  "vendor/tooling.json",
+  "vendor/profiling-runtime.json",
+  "vendor/wasi.json",
+  "vendor/typescript.json",
+]
+SPDX-FileCopyrightText = "2026 Blackcat Informatics Inc."
+SPDX-License-Identifier = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+
+# Upstream test suites and data taken verbatim, under their own licenses.
+[[annotations]]
+path = "crates/core/tests/data/test262/**"
+SPDX-FileCopyrightText = "2012 Ecma International"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "crates/core/tests/data/json-schema/**"
+SPDX-FileCopyrightText = "2012 Julian Berman"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "crates/core/tests/data/unicode/**"
+SPDX-FileCopyrightText = "1991-2026 Unicode, Inc."
+SPDX-License-Identifier = "Unicode-3.0"
+
+[[annotations]]
+path = "crates/core/tests/data/entities/entities.json"
+SPDX-FileCopyrightText = "WHATWG (Apple, Google, Mozilla, Microsoft)"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = "crates/core/tests/data/markdown/commonmark-0.31.2.json"
+SPDX-FileCopyrightText = "2014-2016 John MacFarlane"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+[[annotations]]
+path = "crates/core/tests/data/markdown/gfm-0.29.0.gfm.13.json"
+SPDX-FileCopyrightText = "2014 John MacFarlane"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+[[annotations]]
+path = "crates/core/src/schema/metaschemas/**"
+SPDX-FileCopyrightText = "2022 JSON Schema Specification Authors"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "vendor/unicode/**"
+SPDX-FileCopyrightText = "Unicode, Inc."
+SPDX-License-Identifier = "Unicode-3.0"
+
+[[annotations]]
+path = "vendor/entities/**"
+SPDX-FileCopyrightText = "WHATWG (Apple, Google, Mozilla, Microsoft)"
+SPDX-License-Identifier = "BSD-3-Clause AND CC-BY-4.0"
+
+# Vendored license notices and third-party license texts, by upstream package.
+[[annotations]]
+path = "vendor/licenses/aho-corasick-1.1.5/UNLICENSE"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "Unlicense"
+
+[[annotations]]
+path = [
+  "vendor/licenses/libarchive-3.8.9/BSD-2-Clause.txt",
+  "vendor/licenses/libarchive-tools-3.7.2-2ubuntu0.8/COPYRIGHT",
+]
+SPDX-FileCopyrightText = "libarchive authors"
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = "vendor/licenses/libarchive-3.8.9/BSD-4-Clause-UC.txt"
+SPDX-FileCopyrightText = "1985, 1986, 1992, 1993 The Regents of the University of California"
+SPDX-License-Identifier = "BSD-4-Clause-UC"
+
+[[annotations]]
+path = "vendor/licenses/librsvg-2.63.2/LGPL-2.1-or-later.txt"
+SPDX-FileCopyrightText = "1991, 1999 Free Software Foundation, Inc."
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
+[[annotations]]
+path = [
+  "vendor/licenses/profiling-glibc/LGPL-2.1-or-later.txt",
+]
+SPDX-FileCopyrightText = "1991, 1999 Free Software Foundation, Inc."
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
+[[annotations]]
+path = [
+  "vendor/licenses/profiling-glibc/GPL-2.0-or-later.txt",
+  "vendor/licenses/valgrind-3.25.1/GPL-2.0-or-later.txt",
+]
+SPDX-FileCopyrightText = "1989, 1991 Free Software Foundation, Inc."
+SPDX-License-Identifier = "GPL-2.0-or-later"
+
+[[annotations]]
+path = "vendor/licenses/reuse-6.2.0/GPL-3.0-or-later.txt"
+SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = "vendor/licenses/noto-sans-2.015/OFL.txt"
+SPDX-FileCopyrightText = "2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)"
+SPDX-License-Identifier = "OFL-1.1"
+
+[[annotations]]
+path = "vendor/licenses/r-efi-6.0.0/AUTHORS"
+SPDX-FileCopyrightText = [
+  "2017-2023 Red Hat, Inc.",
+  "2019-2023 Microsoft Corporation",
+  "2022-2023 David Rheinsberg",
+]
+SPDX-License-Identifier = "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
+
+[[annotations]]
+path = "vendor/licenses/typescript-5.9.3/ThirdPartyNoticeText.txt"
+SPDX-FileCopyrightText = "Microsoft Corporation"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+  "vendor/licenses/purrdf-4.0.2/third-party/csvw/0-W3C-document-license.html",
+]
+SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
+SPDX-License-Identifier = "LicenseRef-W3C-Document"
+
+[[annotations]]
+path = [
+  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/0-W3C-software-document-2015.html",
+  "vendor/licenses/purrdf-4.0.2/third-party/rdfc/0-W3C-software-document-2015.html",
+  "vendor/licenses/purrdf-4.0.2/third-party/shacl/0-W3C-software-document-2015.html",
+  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/0-W3C-software-document-2015.html",
+]
+SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
+SPDX-License-Identifier = "LicenseRef-W3C-Software-and-Document"
+
+[[annotations]]
+path = [
+  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/1-W3C-test-suites-policy.html",
+  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/2-W3C-test-suite-license.html",
+  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/4-LICENSE",
+  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/1-W3C-test-suites-policy.html",
+  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/2-W3C-test-suite-license.html",
+]
+SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
+SPDX-License-Identifier = "LicenseRef-LICENSES-FOR-W3C-TEST-SUITES"
+
+[[annotations]]
+path = [
+  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/3-W3C-test-suite-BSD.html",
+  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/3-W3C-test-suite-BSD.html",
+]
+SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/eff-word-alphabet/0-CC-BY-4.0.txt"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/eff-word-alphabet/1-EFF-NOTICE.txt"
+SPDX-FileCopyrightText = "Electronic Frontier Foundation"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA"
+SPDX-FileCopyrightText = "2016-2024 Unicode, Inc."
+SPDX-License-Identifier = "Unicode-3.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/gb18030-reference-2005/0-LICENSE-ICU-71"
+SPDX-FileCopyrightText = "1991-2022 Unicode, Inc."
+SPDX-License-Identifier = "LicenseRef-Unicode-DFS-ICU-71"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/hashbrown-native-table/0-MIT.txt"
+SPDX-FileCopyrightText = "2016 Amanieu d'Antras"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/hashbrown-native-table/1-Apache-2.0.txt"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/hashbrown-native-table/2-NOTICE"
+SPDX-FileCopyrightText = "2016 Amanieu d'Antras"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+  "vendor/licenses/purrdf-4.0.2/third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt",
+  "vendor/licenses/purrdf-4.0.2/third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt",
+]
+SPDX-FileCopyrightText = ["2017-2020 Ingy döt Net", "2006-2016 Kirill Simonov"]
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/obographs/0-BSD-3-Clause.txt"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/structured-zstd-native/0-LICENSE"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/structured-zstd-native/1-NOTICE"
+SPDX-FileCopyrightText = [
+  "Moritz Borcherding",
+  "Structured World Foundation",
+  "2026 Blackcat Informatics Inc.",
+]
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/unicode/0-Unicode-3.0.txt"
+SPDX-FileCopyrightText = "1991-2026 Unicode, Inc."
+SPDX-License-Identifier = "Unicode-3.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/visual-hashing-native/0-LICENSE-MIT"
+SPDX-FileCopyrightText = "2026 Blackcat Informatics® Inc."
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/visual-hashing-native/1-LICENSE-APACHE"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/visual-hashing-native/2-LICENSE-MULAN"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "MulanPSL-2.0"
+
+[[annotations]]
+path = "vendor/licenses/purrdf-4.0.2/third-party/whatwg-html-references/0-LICENSE-WHATWG"
+SPDX-FileCopyrightText = "WHATWG (Apple, Google, Mozilla, Microsoft)"
+SPDX-License-Identifier = "CC-BY-4.0"
