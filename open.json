@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 188,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/188-agents-add-shell-safety-rules-one",
+  "branch": "paudley/188-agents-add-shell-safety-rules-one",
+  "slug": "agents-add-shell-safety-rules-one",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/188-agents-add-shell-safety-rules-one/.stage/agents-add-shell-safety-rules-one",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "29270ea30845c51a7acee8a0e72c84726fb7ea34",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/188-agents-add-shell-safety-rules-one",
+    "branch:paudley/188-agents-add-shell-safety-rules-one",
+    "ignored:3 files (3 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/173-reuse-reach-full-reuse-3-3-compliance caches into /home/paudley/Active/purrassist/.worktrees/188-agents-add-shell-safety-rules-one plus 0 dependency units from 0 other checkouts in 24.7s; 2216 unchanged files keep their built mtimes; 0 other files take the seed time and rebuild; 26 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/188-agents-add-shell-safety-rules-one/.stage/agents-add-shell-safety-rules-one",
+    "issue:/home/paudley/Active/purrassist/.worktrees/188-agents-add-shell-safety-rules-one/.stage/agents-add-shell-safety-rules-one/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-13T03:16:40-0600",
+  "seed_error": ""
+}

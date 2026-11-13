@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Add shell-safety rules to the repository agent instructions (AGENTS.md), per the coordinator standing rule.\n\nRules to add, in neutral words: one shell call does one thing (related commands may share a call; no long chains joined with && or ;; a script goes in .stage and is run as a file); a deletion is never inside a chain and is its own call on one exact path inside the repository after it has been listed; nothing that could raise an authorization prompt is sent (no glob or variable deletion, no path outside the repository, no long compound command); sub-agent briefs carry these rules.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-13T09:16:04Z",
+  "labels": [],
+  "milestone": null,
+  "number": 188,
+  "state": "OPEN",
+  "title": "Agents: add shell-safety rules (one action per call, deletions alone, no long chains) to AGENTS.md",
+  "updatedAt": "2026-11-13T09:16:04Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/188"
+}
