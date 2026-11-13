@@ -636,8 +636,9 @@ graph loading, routing and complete projection ledgers remain under #36 and #47.
 The internal tool-graph crate also admits complete callable FnO bindings from
 caller-prepared upstream catalogs. Its governed checker preserves original
 records and declaration order; the `admit_callable` example exercises the actual
-upstream reader and public API. This does not implement governed RDF/FnO source
-admission, SHACL/G7 integration, graph loading or manifest conversion (#33).
+upstream reader and public API. `ToolGraph::load` reads RDF source through the
+governed `PurRDF` parse and FnO catalog entry points; SHACL/G7 integration and
+manifest conversion remain #33 work.
 
 Governed JSON emission shares the existing serializer's structural/escaping
 authority through `Node::to_json_governed` and `json::quote_governed`. The

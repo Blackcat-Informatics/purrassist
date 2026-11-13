@@ -21,5 +21,6 @@ workspace = true
 [dependencies]
 purrassist-core.workspace = true
 purrdf-core.workspace = true
+purrdf-lex.workspace = true
 purrdf-rdf.workspace = true
 purrdf-shapes.workspace = true

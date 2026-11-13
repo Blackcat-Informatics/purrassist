@@ -17,16 +17,18 @@ Run the executable caller example with
 Implemented: validated vocabulary construction, registered projection loss
 meanings, the complete caller-owned MCP context fragment codec, the bounded
 four-form field-mask parser, and the governed `OutputByteLimit` checker. The checker records exact bytes and refuses oversized
-serialized results intact; it makes no token-count claim. `ToolGraph::load` reads RDF 1.2 Turtle (any `purrdf_rdf` text codec) into typed
+serialized results intact; it makes no token-count claim. `ToolGraph::load` reads RDF 1.2 Turtle or TriG into typed
 `Tool` values over the vocabulary, `CallableBinding`, `FieldMask` and
 `OutputByteLimit`, all or nothing: every out-of-vocabulary term, shape
 violation, unowned statement and unsupported construct is a `LoadError` naming
 subject and predicate. `outputProjectionJq` must be a field mask or the load
-fails with `LoadError::UnsupportedProjection`. This delivery uses the ungoverned
-entry points (`FnoCatalog::from_dataset` and `parse_dataset`); the governed
-ones available at the pinned `PurRDF` 4.0.2 (`from_dataset_with_control`,
-`parse_dataset_controlled`) are the next step, so governed catalog construction
-and exact per-quad source spans are not yet provided. The Rust shape table is
+fails with `LoadError::UnsupportedProjection`. The load runs through the governed
+`PurRDF` entry points (`parse_dataset_controlled`, `from_dataset_with_control`):
+the caller's `Governor` bounds parsing and catalog construction, and
+statement-level refusals (`UnknownTerm`, `UnsupportedConstruct`) carry the exact
+`SourceExtent`. Remaining limits (the owned rows and dataset copy sit outside the
+storage account; node-level refusals carry no extent; only Turtle and TriG) are
+listed in the `graph` module documentation. The Rust shape table is
 not equivalent to the shapes document; its differences and the unchecked
 requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
 the `graph` module documentation. The production

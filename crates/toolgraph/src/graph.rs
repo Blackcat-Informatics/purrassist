@@ -3,31 +3,49 @@
 
 //! Typed, all-or-nothing loading of an RDF 1.2 tool graph.
 //!
-//! [`ToolGraph::load`] parses RDF text with `purrdf_rdf::parse_dataset`, partitions
-//! every statement into an owned view (the strict `FnO` catalog, the vocabulary
+//! [`ToolGraph::load`] parses Turtle or `TriG` with the governed
+//! `purrdf_rdf::parse_dataset_controlled` (exact ordered source occurrences
+//! retained), partitions every statement into an owned view (the strict `FnO`
+//! catalog, built with `FnoCatalog::from_dataset_with_control`; the vocabulary
 //! nodes, the SHACL shapes, the reifier side table), and returns typed [`Tool`]
 //! values. A statement that no view owns, a term outside the caller's
 //! [`Vocabulary`], and a violated shape are each a [`LoadError`] naming the
-//! subject and predicate. Nothing is skipped.
+//! subject and predicate; the statement-level refusals also carry the exact
+//! [`SourceExtent`]. Nothing is skipped.
+//!
+//! # Governance
+//!
+//! The caller's [`Governor`] bounds the whole load. The parser and the `FnO`
+//! reader charge their live storage to the governor's scratch meter and poll its
+//! work and cancellation authority at their native counting points; this crate's
+//! own passes charge one unit of work per statement and per validated property.
+//! An exhausted budget is [`LoadError::Exhausted`] and a cancellation is
+//! [`LoadError::Cancelled`], whichever stage observed it; neither is reported as
+//! invalid syntax, and no partial graph escapes. The storage a catalog holds
+//! stays charged to the governor's scratch meter until the [`ToolGraph`] is dropped.
 //!
 //! # Stated limits
 //!
-//! * This delivery uses the ungoverned entry points `parse_dataset` and
-//!   `FnoCatalog::from_dataset`. The pinned `PurRDF` 4.0.2 also provides the
-//!   governed `FnoCatalog::from_dataset_with_control` and
-//!   `purrdf_rdf::parse_dataset_controlled` (exact ordered source occurrences);
-//!   adopting them is the next step. Until then the caller's [`Governor`] meters
-//!   only this crate's own row accounting (input bytes, one unit of work per
-//!   statement and per validated property), not the parser's or reader's
-//!   allocations, and errors name subject and predicate rather than an exact
-//!   per-quad span. [`LoadError::Parse`] carries the parser's own line and column.
+//! * Only Turtle and `TriG` load: `PurRDF` 4.0.2 governs and retains source
+//!   occurrences for those formats alone, so another media type is a
+//!   [`LoadError::Parse`] with code `unsupported-format`.
+//! * The owned rows this crate materialises for validation, and the owned
+//!   [`RdfDataset`] copy returned by [`ToolGraph::dataset`] (`PurRDF` offers no
+//!   governed detach of a retained parse), are allocated outside the governor's
+//!   storage account; their size is proportional to the document and bounded by
+//!   the input-byte limit and the per-statement work charge.
+//! * [`SourceExtent`] names the first statement in source order whose subject and
+//!   predicate (and term) match the refusal. Refusals that name a node rather than
+//!   one statement (shape, hint, profile, `FnO` binding) carry subject and
+//!   predicate only. A term the grammar generates without source spelling is
+//!   located by the syntax that introduced it.
 //! * Only default-graph statements and reifiers load; a named-graph one is refused.
 //! * The vocabulary shapes are checked by a Rust table that is not equivalent to
 //!   the shapes document; see `docs/tool-graph/TOOLS.md` for the differences.
 //!
-//! The runtime cost of a load is one parse, one pass over every statement to
-//! materialise owned rows (memory is proportional to the document), and one
-//! `FnO` catalog construction.
+//! The runtime cost of a load is one governed parse, one pass over every statement
+//! to materialise owned rows (memory is proportional to the document), one `FnO`
+//! catalog construction and one owned dataset copy.
 
 mod load;
 mod model;
@@ -37,7 +55,7 @@ pub use model::{
     Coercion, Hint, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile, ToolImplementation,
     ToolOutput, ToolParameter, Waiver,
 };
-pub use problem::{Construct, LoadError, Violation};
+pub use problem::{Construct, LoadError, SourceExtent, Violation};
 
 use std::sync::Arc;
 
@@ -81,16 +99,19 @@ pub struct ToolGraph {
 impl ToolGraph {
     /// Load RDF text into typed tools, all or nothing.
     ///
-    /// `media_type` selects the `PurRDF` text codec (for example `text/turtle`)
-    /// and `base` is the optional document base IRI. `governor` meters this
-    /// crate's own accounting and carries cancellation; it does not govern the
-    /// upstream parser or `FnO` reader (see the module's stated limits).
+    /// `media_type` selects the `PurRDF` text codec (`text/turtle` or
+    /// `application/trig`) and `base` is the optional document base IRI.
+    /// `governor` bounds the parser, the `FnO` reader and this crate's own passes
+    /// and carries cancellation (see the module's governance notes).
     ///
     /// # Errors
-    /// Returns [`LoadError`] for the first parse failure, out-of-vocabulary term,
-    /// unowned statement, violated vocabulary shape, invalid hint, execution
-    /// profile or `FnO` binding, unsupported context projection, exhausted budget
-    /// or cancellation. No partial graph escapes.
+    /// Returns [`LoadError`] for the first parse failure (including a media type
+    /// the governed parser does not support), out-of-vocabulary term, unowned
+    /// statement, violated vocabulary shape, invalid hint, execution profile or
+    /// `FnO` binding, unsupported context projection, exhausted budget or
+    /// cancellation. A budget exhausted by the parser or the `FnO` reader, in work
+    /// or storage, is [`LoadError::Exhausted`], and a cancellation observed there
+    /// is [`LoadError::Cancelled`]. No partial graph escapes.
     pub fn load(
         bytes: &[u8],
         media_type: &str,

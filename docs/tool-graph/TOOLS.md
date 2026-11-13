@@ -14,16 +14,24 @@ implements validated vocabulary/loss-profile inputs and the four-form context
 mask parser, with a standalone governed exact output byte-limit checker;
 it loads a tool graph (below) but does not execute one.
 
-`ToolGraph::load` (#191, the first bounded delivery of #33) reads RDF 1.2 text
-with `purrdf_rdf::parse_dataset` into typed tools, all or nothing, and the
-worked example below loads. It is bounded as follows. This delivery uses the
-ungoverned entry points `purrdf_rdf::parse_dataset` and `FnoCatalog::from_dataset`,
-so the caller's governor meters only this crate's own row accounting. The pinned
-`PurRDF` 4.0.2 also provides `FnoCatalog::from_dataset_with_control` and
-`purrdf_rdf::parse_dataset_controlled` (with exact ordered source occurrences);
-adopting them is the next step, so governed catalog construction and exact
-per-quad source spans are not yet provided and `LoadError` names subject and
-predicate. Only default-graph statements load; a named-graph statement or
+`ToolGraph::load` (#191, the first bounded delivery of #33) reads RDF 1.2 Turtle
+or TriG with `purrdf_rdf::parse_dataset_controlled` into typed tools, all or
+nothing, and the worked example below loads. It is bounded as follows. The FnO
+catalog is built with `FnoCatalog::from_dataset_with_control`. The caller's
+governor supplies both purrdf authorities: parser and reader storage is charged
+to its scratch meter, and every native step is one unit of work polled for
+cancellation, so an exhausted work or storage budget is `LoadError::Exhausted`,
+a cancellation is `LoadError::Cancelled`, and no partial graph is published.
+Native work units are finer than this crate's row accounting (the worked example
+uses about 190 per source byte), so size the work budget for the document.
+`UnknownTerm` and `UnsupportedConstruct` carry the exact source extent (byte
+range, line and column) of the first statement matching the refusal; refusals
+that name a node (shape, hint, profile, FnO binding) name subject and predicate
+only. Other media types than Turtle and TriG are refused as `LoadError::Parse`
+because purrdf governs and retains occurrences for those two alone. The rows
+materialised for validation and the owned `RdfDataset` copy returned by
+`ToolGraph::dataset` are allocated outside the governor's storage account.
+Only default-graph statements load; a named-graph statement or
 reifier is refused. The vocabulary shapes are enforced by a Rust table, not by
 running the shapes document through the SHACL engine, and the table is not
 equivalent to the document. Known differences: `readOnlyHint`, `destructiveHint`,
@@ -35,7 +43,7 @@ datatype agreement between `FnO` parameters and shape paths, the content of
 `sh:*` constraints, and `pa:subtool` closure. `owl:imports` and the
 `fnom:Mapping` alias normalization are not handled, and rule values are checked
 for kind but not interpreted. These checks, the MCP codec, `ToolGraph::tool_set`,
-G7 schema output and the governed, span-exact load remain on #33.
+and G7 schema output remain on #33.
 
 The governing decisions are #40 D1–D10 and the reconnaissance is #31. No
 compiler output authorizes execution. A recovered call passes complete shape
@@ -334,7 +342,7 @@ FnO reading uses an explicit checked subdataset view: the catalog document's
 FnO properties, labels and admitted additional `rdf:type` values; parameter
 and output FnO properties; implementation format and `rdfs:seeAlso`; blank
 mapping nodes and their FnO/FnOM mapping fields; and the exact list-cell
-closure. This partition is passed to `FnoCatalog::from_dataset` with ontology
+closure. This partition is passed to `FnoCatalog::from_dataset_with_control` with ontology
 `https://example.org/toolgraph#`. All other triples and reifiers stay in the
 original dataset; shape/reifier projections consume that source. No unknown
 FnO/FnOM predicate is filtered away: it remains in the FnO view and the strict

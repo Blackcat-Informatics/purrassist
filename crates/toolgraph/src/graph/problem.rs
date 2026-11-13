@@ -95,11 +95,59 @@ impl fmt::Display for Construct {
     }
 }
 
+/// The exact extent of a statement in the source text.
+///
+/// It spans the statement's predicate and object as written (or, for a term the
+/// grammar generates, the syntax that introduced it), so it points into the
+/// original input rather than at a rebuilt serialization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SourceExtent {
+    /// Byte offset of the first byte, from the start of the input.
+    pub start: usize,
+    /// Byte offset one past the last byte.
+    pub end: usize,
+    /// The 1-based line of `start`.
+    pub line: u64,
+    /// The 1-based column of `start`, counted in characters.
+    pub column: u32,
+}
+
+impl SourceExtent {
+    /// The extent of `range` within `source`, with its starting line and column.
+    pub(super) fn new(source: &[u8], range: std::ops::Range<usize>) -> Self {
+        let start = range.start.min(source.len());
+        let before = &source[..start];
+        let line_start = before
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |at| at + 1);
+        let line = before.split(|&b| b == b'\n').count() as u64;
+        let column = std::str::from_utf8(&before[line_start..])
+            .map_or(start - line_start, |text| text.chars().count());
+        Self {
+            start: range.start,
+            end: range.end,
+            line,
+            column: u32::try_from(column + 1).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+impl fmt::Display for SourceExtent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}, column {}", self.line, self.column)
+    }
+}
+
 /// Why a tool graph was refused.
 ///
 /// Every variant names its subject; predicate-level variants also name the
-/// predicate. None carries an exact per-quad source span (see the stated limits
-/// in the `graph` module documentation).
+/// predicate. [`UnknownTerm`](Self::UnknownTerm) and
+/// [`UnsupportedConstruct`](Self::UnsupportedConstruct) also carry the exact
+/// [`SourceExtent`] of the statement they refuse when the governed parser
+/// retained it; variants that name a node rather than one statement do not (see
+/// the stated limits in the `graph` module documentation).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum LoadError {
@@ -123,6 +171,8 @@ pub enum LoadError {
         predicate: String,
         /// The offending term.
         term: String,
+        /// The first matching statement in the source, when the parser retained it.
+        at: Option<SourceExtent>,
     },
     /// A tool, context, or shape-reference node violates the vocabulary's shape.
     InvalidShape {
@@ -168,6 +218,8 @@ pub enum LoadError {
         predicate: String,
         /// The refused construct.
         construct: Construct,
+        /// The first matching statement in the source, when the parser retained it.
+        at: Option<SourceExtent>,
     },
     /// `outputProjectionJq` is not in the field-mask subset.
     UnsupportedProjection {
@@ -178,7 +230,8 @@ pub enum LoadError {
         /// The field-mask parser's refusal with its byte offset.
         error: FieldMaskError,
     },
-    /// The caller's budget stopped this crate's accounting.
+    /// The caller's budget (work, input bytes or scratch storage) stopped the load,
+    /// in this crate's accounting or in the governed parser or `FnO` reader.
     Exhausted(StopReason),
     /// The caller cancelled the load.
     Cancelled,
@@ -200,10 +253,14 @@ impl fmt::Display for LoadError {
                 subject,
                 predicate,
                 term,
-            } => write!(
-                f,
-                "{subject} {predicate}: term {term} is not in the vocabulary"
-            ),
+                at,
+            } => {
+                write!(
+                    f,
+                    "{subject} {predicate}: term {term} is not in the vocabulary"
+                )?;
+                at.iter().try_for_each(|at| write!(f, " ({at})"))
+            }
             Self::InvalidShape {
                 subject,
                 predicate,
@@ -232,7 +289,11 @@ impl fmt::Display for LoadError {
                 subject,
                 predicate,
                 construct,
-            } => write!(f, "{subject} {predicate}: unsupported {construct}"),
+                at,
+            } => {
+                write!(f, "{subject} {predicate}: unsupported {construct}")?;
+                at.iter().try_for_each(|at| write!(f, " ({at})"))
+            }
             Self::UnsupportedProjection {
                 subject,
                 projection,

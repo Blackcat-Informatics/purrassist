@@ -14,9 +14,15 @@ crates share one version.
 - `ToolGraph::load` in `purrassist-toolgraph` reads RDF 1.2 text into typed
   tools (`FnO` identity, shapes, annotations, reified parameter hints, execution
   profile and context management) with all-or-nothing `LoadError`s naming subject
-  and predicate. Projections outside the field-mask subset are refused. It does
-  not claim governed catalog construction or exact per-quad source spans; both
-  wait on upstream seams (PurRDF issue 1306).
+  and predicate. Projections outside the field-mask subset are refused.
+- `ToolGraph::load` parses through `purrdf_rdf::parse_dataset_controlled` and
+  builds the `FnO` catalog through `FnoCatalog::from_dataset_with_control`, so the
+  caller's `Governor` bounds source parsing and catalog construction (work,
+  scratch storage, cancellation): exhaustion is `LoadError::Exhausted`, a stop is
+  `LoadError::Cancelled`, and no partial graph escapes. `UnknownTerm` and
+  `UnsupportedConstruct` carry the exact `SourceExtent` of the statement. Only
+  Turtle and TriG load, and the native work units are finer than before (about 190
+  per source byte), so size the work budget accordingly.
 
 - Gemma 3 `tool_code` fences recover direct Python keyword calls through
   `gemma3-tool-code.v1` and the native Pythonic codec. Multiple fenced calls
