@@ -384,3 +384,10 @@ vendored license notice. It is justified only for submitting `server.json` to
 the MCP Registry from that manually triggered workflow, which authenticates
 with the workflow's GitHub OIDC token. It is never invoked at build or runtime
 or by `make check`, and it is never linked or packaged into any crate.
+
+The REUSE conformance linter `reuse` 6.2.0 is installed from PyPI as `reuse==6.2.0`
+by the `reuse` job in `.github/workflows/verify.yml` and run locally by `make reuse`
+(`uvx reuse@6.2.0 lint`). It is registered in `vendor/tooling.json` with its vendored
+GPL-3.0-or-later notice. It is justified only as a check of license headers and
+`REUSE.toml` annotations. It is not part of `make check`, and it is never linked,
+vendored as source, or packaged into any crate.

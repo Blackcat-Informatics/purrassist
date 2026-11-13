@@ -130,6 +130,11 @@ SPDX-FileCopyrightText = "1989, 1991 Free Software Foundation, Inc."
 SPDX-License-Identifier = "GPL-2.0-or-later"
 
 [[annotations]]
+path = "vendor/licenses/reuse-6.2.0/GPL-3.0-or-later.txt"
+SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
 path = "vendor/licenses/noto-sans-2.015/OFL.txt"
 SPDX-FileCopyrightText = "2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)"
 SPDX-License-Identifier = "OFL-1.1"
