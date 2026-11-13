@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 185,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/185-main-s-tool-call-fuzz-target-fails-a",
+  "branch": "paudley/185-main-s-tool-call-fuzz-target-fails-a",
+  "slug": "main-s-tool-call-fuzz-target-fails-a",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/185-main-s-tool-call-fuzz-target-fails-a/.stage/main-s-tool-call-fuzz-target-fails-a",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "08702033c4ff053a87c6e3836b5e605fa7d2684b",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/185-main-s-tool-call-fuzz-target-fails-a",
+    "branch:paudley/185-main-s-tool-call-fuzz-target-fails-a",
+    "ignored:3 files (3 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/183-main-s-tool-call-fuzz-target-fails-a caches into /home/paudley/Active/purrassist/.worktrees/185-main-s-tool-call-fuzz-target-fails-a plus 0 dependency units from 0 other checkouts in 16.4s; 2187 unchanged files keep their built mtimes; 0 other files take the seed time and rebuild; 192 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/185-main-s-tool-call-fuzz-target-fails-a/.stage/main-s-tool-call-fuzz-target-fails-a",
+    "issue:/home/paudley/Active/purrassist/.worktrees/185-main-s-tool-call-fuzz-target-fails-a/.stage/main-s-tool-call-fuzz-target-fails-a/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-12T20:19:48-0600",
+  "seed_error": ""
+}
