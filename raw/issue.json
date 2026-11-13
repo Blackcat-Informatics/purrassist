@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Objective\n\nSecond bounded delivery of #33 (parent): the bidirectional MCP Extended Tool Manifest codec for `purrassist-toolgraph`, on top of the typed `ToolGraph` loaded by #191 (merged as d808673).\n\n## Scope\n\n- `codec::mcp::encode(&ToolGraph) -> (ManifestJson, LossLedger)` emitting `name`, `description`, `inputSchema`, `outputSchema`, `annotations`, `_meta.security`, `_meta.executionProfile`, `_meta.contextManagement`.\n- `codec::mcp::decode(&ManifestJson, &Vocabulary) -> (ToolGraph, LossLedger)`, the reverse.\n- Round-trip law for the worked example: `decode(encode(g))` equals `g` except for exactly the ledgered losses. An unledgered loss is a bug.\n- Output is byte-deterministic (fixed key order; nothing time- or hash-seed-dependent).\n- Input and output schemas come from `purrdf_shapes::json_schema::compile_tool_arguments` (the plain-argument profile used by `examples/plain_tool_schemas.rs`), keeping `CompiledSchema.losses` in the ledger. No local JSON-LD key rewriting and no second compiler.\n- Output byte limit and exact-bytes enforcement keep the #47 contract: `maxOutputBytes`, `outputEnforcement: \"exact-bytes\"`, outer format `purrassist-toolgraph-v2`; legacy `maxOutputTokens` is rejected.\n\n## Excluded (stays on #33)\n\n`ToolGraph::tool_set`, the core adapter augmentation, governed source parsing (purrdf 4.0.2 `from_dataset_with_control` and `parse_dataset_controlled` are the next step, not this issue), and wasm-harness wiring.\n\n## Acceptance\n\n- The MCP Extended JSON golden for the worked example is byte-identical across two encodes.\n- The round-trip law holds for the worked example.\n- `cargo test -p purrassist-toolgraph --locked` for the new codec test targets; `cargo clippy -p purrassist-toolgraph --all-targets --locked -- -D warnings`; `cargo build -p purrassist-toolgraph --locked --target wasm32-unknown-unknown`; `make check` on the head.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-13T18:00:16Z",
+  "labels": [],
+  "milestone": null,
+  "number": 196,
+  "state": "OPEN",
+  "title": "Tool graph: MCP Extended codec encode/decode with LossLedger (second piece of #33)",
+  "updatedAt": "2026-11-13T18:00:16Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/196"
+}

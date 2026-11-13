@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 196,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/196-tool-graph-mcp-extended-codec-encode",
+  "branch": "paudley/196-tool-graph-mcp-extended-codec-encode",
+  "slug": "tool-graph-mcp-extended-codec-encode",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/196-tool-graph-mcp-extended-codec-encode/.stage/tool-graph-mcp-extended-codec-encode",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "d808673de54c4cb761cd36ddd5ee4016928149e0",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/196-tool-graph-mcp-extended-codec-encode",
+    "branch:paudley/196-tool-graph-mcp-extended-codec-encode",
+    "ignored:3 files (3 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/191-tool-graph-typed-toolgraph-load-with caches into /home/paudley/Active/purrassist/.worktrees/196-tool-graph-mcp-extended-codec-encode plus 0 dependency units from 0 other checkouts in 60.8s; 2220 unchanged files keep their built mtimes; 2 other files take the seed time and rebuild; 212 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/196-tool-graph-mcp-extended-codec-encode/.stage/tool-graph-mcp-extended-codec-encode",
+    "issue:/home/paudley/Active/purrassist/.worktrees/196-tool-graph-mcp-extended-codec-encode/.stage/tool-graph-mcp-extended-codec-encode/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-13T12:01:33-0600",
+  "seed_error": ""
+}
