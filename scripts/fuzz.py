@@ -889,6 +889,10 @@ TOOL_CALL_REGRESSIONS = [
     # the next call's opener (campaign failure: the rejected attempt covered
     # the whole following <tool_call> opener).
     b'[\xe6#<think>Write the file.</think>\n<tool_call>write_file\n<arg_key>path</arg_key><arg_value>src/main.rs</arg_value><arg_key>content</arg_key><arg_value>fn main() {\n    println!("hi");\n\n\tlet  x = 1;  \n}\n</arg_value><arg_key>mode</arg_key><arg_value>create</arg_value><arg_key>ratio</arg_key><arg_value>Write the file.</think>\n<tool_call>write_file\n<arg_key>path</arg_key><arg_value>src/main.rs</arg_value><arg_key>content</arg_key><arg_value>fn main() {\n    println!("hi");\n\n\tlet  x = 1;  \n}\n</arg_value><arg_key>mode</arg_key><arg_value>create</arg_value><arg_key>ratio</arg_key><arg_value>2.50</arg_value><arg_key>count</arg_key><arg_value>1e3</arg_value><arg_key>tags</arg_key><arg_value>[]</arg_value><arg_key>options</arg_key><arg_value>{"backup": false, "retries": 0, "owner": {"name": "ops", "uid": -7}}</arg_value></tool_call>]',
+    # Issue #185: a rejected Anthropic attempt does not end inside the
+    # `"in` of its `"input"` member name (campaign failure: the walk's found
+    # end split a literal the attempt began; oracle F7).
+    b'[\xe6#{\t\t"type":"tool_use","id"<|tool_call_argument_begin|>\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"input":"{\\"pat<|python_tag[ARGS]|>\\"ratio\\":39.32,\\"count\\":-415,\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"in<|tool:_calls_section_begin|>put":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\\"options\\":{\\"backup\\":false}}"\t}]',
 ]
 
 # Strict forced tool choice: header `\xe6\x23` (forced `read_file`) plus a
