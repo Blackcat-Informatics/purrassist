@@ -6,8 +6,8 @@ Pure Rust validation for caller-owned tool-graph vocabulary, loss-profile and
 MCP context fragments and [AppArmor](https://apparmor.net/) glob words, with exact output byte bounds. No vocabulary
 namespace is supplied implicitly.
 
-This workspace crate is unpublished. It depends on the released `purrdf-core`
-and `purrdf-shapes` crates at exactly `=4`. Facade/host integration and
+This workspace crate is unpublished. It depends on the released `purrdf-core`,
+`purrdf-rdf` and `purrdf-shapes` crates at exactly `=4`. Facade/host integration and
 registry-resolvable packaging remain part of the complete graph-loader delivery. The existing release set
 retains its registry-resolvable dependencies.
 
@@ -17,8 +17,16 @@ Run the executable caller example with
 Implemented: validated vocabulary construction, registered projection loss
 meanings, the complete caller-owned MCP context fragment codec, the bounded
 four-form field-mask parser, and the governed `OutputByteLimit` checker. The checker records exact bytes and refuses oversized
-serialized results intact; it makes no token-count claim. Graph loading, the
-production schema bridge, manifest codecs, authorization and execution remain specified in
+serialized results intact; it makes no token-count claim. `ToolGraph::load` reads RDF 1.2 Turtle (any `purrdf_rdf` text codec) into typed
+`Tool` values over the vocabulary, `CallableBinding`, `FieldMask` and
+`OutputByteLimit`, all or nothing: every out-of-vocabulary term, shape
+violation, unowned statement and unsupported construct is a `LoadError` naming
+subject and predicate. `outputProjectionJq` must be a field mask or the load
+fails with `LoadError::UnsupportedProjection`. The load does not claim governed
+catalog construction (`FnoCatalog::from_dataset` and `parse_dataset` take no
+governor at the pinned `PurRDF` revision) or exact per-quad source spans
+(`PurRDF` issue 1306); see the `graph` module documentation. The production
+schema bridge, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 
 `codec::mcp::ExecutionProfile` reads the complete execution-profile fragment

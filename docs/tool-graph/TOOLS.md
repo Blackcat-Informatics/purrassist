@@ -5,14 +5,28 @@
 Status: **pipeline specified; caller-input foundations implemented**. The
 examples and compiler contracts describe Phase 3 acceptance. The existing
 recovery/declaration renderers and caller-prepared result projection are
-implemented; graph loading, authorization, model-family prompt projection and
-confinement are not. Specification delivery is complete in #32;
+implemented; typed graph loading is implemented, but authorization, model-family
+prompt projection and confinement are not. Specification delivery is complete in #32;
 implementation and necessary dependency adoption are authorized. The delivery
 sequence and executable acceptance are in [TOOLS_PLAN.md](TOOLS_PLAN.md).
 The unpublished [`purrassist-toolgraph`](../../crates/toolgraph/README.md) crate
 implements validated vocabulary/loss-profile inputs and the four-form context
 mask parser, with a standalone governed exact output byte-limit checker;
-it does not yet load or execute a tool graph.
+it loads a tool graph (below) but does not execute one.
+
+`ToolGraph::load` (#191, the first bounded delivery of #33) reads RDF 1.2 text
+with `purrdf_rdf::parse_dataset` into typed tools, all or nothing, and the
+worked example below loads. It is bounded as follows. It does not claim governed
+catalog construction: `FnoCatalog::from_dataset` and `parse_dataset` take no
+governor at the pinned `PurRDF` revision, so the caller's governor meters only
+this crate's own row accounting. It does not claim exact per-quad source spans:
+the parser's span table is keyed by subject, so `LoadError` names subject and
+predicate (PurRDF issue 1306 requests the seam). Only default-graph statements
+load. The vocabulary shapes are enforced by an equivalent Rust table rather than
+by running the shapes document through the SHACL engine, `owl:imports` and the
+`fnom:Mapping` alias normalization are not handled, and rule values are checked
+for kind but not interpreted. The MCP codec, `ToolGraph::tool_set`, G7 schema
+output and source-span guarantees remain on #33.
 
 The governing decisions are #40 D1–D10 and the reconnaissance is #31. No
 compiler output authorizes execution. A recovered call passes complete shape

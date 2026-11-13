@@ -7,8 +7,9 @@ exact decimals, schema evaluation, regex matching, normalization algorithms,
 edit distances, phonetics, recovery search, and receipts are first-party Rust.
 
 The unpublished `purrassist-toolgraph` foundation uses `purrdf-core` for native
-IRI validation and the shared loss registry, and `purrdf-shapes` for its shared
-namespace table, FnO reader and public plain argument-schema compiler. Both are
+IRI validation and the shared loss registry, `purrdf-rdf` for RDF text parsing in
+`ToolGraph::load`, and `purrdf-shapes` for its shared
+namespace table, FnO reader and public plain argument-schema compiler. All three are
 registry dependencies pinned exactly at `=4` in the workspace manifest; the
 lock resolves 4.0.2. No Git source or `[patch]` entry remains, so a workspace
 that also depends on another crate pinned at `=4` resolves a single PurRDF major.

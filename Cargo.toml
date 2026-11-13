@@ -22,6 +22,7 @@ purrassist-syntax = { path = "crates/syntax", version = "0.1.0" }
 purrassist = { path = "crates/purrassist", version = "0.1.0" }
 purrassist-host = { path = "crates/host", version = "0.1.0" }
 purrdf-core = "=4"
+purrdf-rdf = "=4"
 purrdf-shapes = "=4"
 
 [workspace.lints.rust]
