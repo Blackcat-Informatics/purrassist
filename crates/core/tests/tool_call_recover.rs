@@ -3504,6 +3504,68 @@ fn pythonic_arguments_faulting_at_the_end_of_output_do_not_swallow_what_follows(
     assert_eq!(calls.content[0], 53..input.len());
 }
 
+/// Fuzz regression (`scripts/fuzz.py --target tool-call`, pinned input of
+/// 830 bytes after its two control bytes): a GLM call whose `ratio` value is
+/// prose that no number reads ends at the next call's `<tool_call>`, which
+/// also delimits an arguments body. The body is not delimited by a closer, so
+/// nothing shows the bytes from that opener on are the call's: the rejected
+/// attempt fails where the value stopped decoding (321) and ends there. It
+/// must not run on over the opener, which is the next call's.
+#[test]
+fn rejected_glm_attempt_does_not_run_past_its_failure_into_the_next_opener() {
+    let tools = ToolSet::compile(
+        [ToolDefinition::new("write_file")
+            .effects(Effects::Mutating)
+            .param("path", Param::string().required())
+            .param("content", Param::string().required())
+            .param("mode", Param::enumeration(&["create", "overwrite"]))
+            .param("ratio", Param::number())],
+        Budget::default(),
+    )
+    .expect("tools");
+    let call = |ratio: &str| {
+        format!(
+            "<tool_call>write_file\n<arg_key>path</arg_key><arg_value>src/main.rs</arg_value>\
+             <arg_key>content</arg_key><arg_value>fn main() {{\n    println!(\"hi\");\n}}\n</arg_value>\
+             <arg_key>mode</arg_key><arg_value>create</arg_value>\
+             <arg_key>ratio</arg_key><arg_value>{ratio}"
+        )
+    };
+    let input = format!(
+        "#<think>Write the file.</think>\n{}</think>\n{}</arg_value></tool_call>]",
+        call("Write the file."),
+        call("2.50"),
+    );
+    let opener = input.rfind("<tool_call>").expect("second call");
+    let result = tools.recover(
+        input.as_bytes(),
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = result.outcome else {
+        panic!("one reading expected");
+    };
+    let first = calls
+        .rejected
+        .iter()
+        .find(|rejected| {
+            rejected
+                .dialect
+                .as_ref()
+                .is_some_and(|dialect| *dialect == DialectId::Glm45)
+        })
+        .expect("the first call is rejected");
+    assert_eq!(first.reason, Rejection::Malformed { at: opener });
+    assert_eq!(first.span.end, opener);
+    assert!(
+        calls
+            .content
+            .iter()
+            .any(|content| content.start == opener || content.end > opener),
+        "the next call's opener stays outside the rejected attempt"
+    );
+}
+
 /// Fuzz regression (`scripts/fuzz.py --target tool-call`): a rejected result
 /// attempt fails at most one literal spelling past its span's end, and the
 /// literals of a dialect's result production are among the spellings

@@ -2225,7 +2225,10 @@ impl<'s> Step<'_, 's> {
                     // closer, however it decodes. A body that ran to the end
                     // of input has no closer to show its bytes after the
                     // fault are the call's, so the attempt fails where the
-                    // value stopped decoding, as for an unread value.
+                    // value stopped decoding, as for an unread value. A body
+                    // that stopped at the next call's opener has no closer
+                    // either: the opener is the next call's, so the attempt
+                    // ends where the body does.
                     let at = match (how, reason) {
                         (
                             CodecEnd::EndOfInput | CodecEnd::Truncated,
@@ -2233,6 +2236,7 @@ impl<'s> Step<'_, 's> {
                             | Rejection::InvalidUtf8 { at }
                             | Rejection::PythonicPositionalRejected { at },
                         ) => at.clamp(thread.entry, thread.pos),
+                        (CodecEnd::Delimited, _) if self.opens_next_call(end, thread.pos) => end,
                         _ => thread.pos,
                     };
                     return Self::fail(out, thread, at, reason);
@@ -2240,6 +2244,18 @@ impl<'s> Step<'_, 's> {
             }
         }
         self.closure(thread, next, end, stack, out, governor)
+    }
+
+    /// Whether the delimiter that ended a body, `end` to `last` (the offset
+    /// of its last byte), is the opener of the next call (a spelling longer
+    /// than one byte, which prose and JSON write too), not a closer.
+    fn opens_next_call(&self, end: usize, last: usize) -> bool {
+        let delimiter = self.bytes(end..last + 1);
+        self.grammar
+            .call_ends()
+            .iter()
+            .flat_map(super::CallEnd::openers)
+            .any(|opener| opener.len() > 1 && opener.as_slice() == delimiter)
     }
 
     /// Finish the codec in `slot` over `body` and record its value and
