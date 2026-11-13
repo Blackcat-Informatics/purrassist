@@ -283,8 +283,10 @@ class MarkdownAttribution(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding='utf-8')
 
+    # REUSE-IgnoreStart
     HEADER = ('<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. -->\n'
               '<!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->\n')
+    # REUSE-IgnoreEnd
 
     def test_headed_markdown_passes(self):
         self.write('docs/A.md', self.HEADER + '# A\n')
@@ -296,7 +298,9 @@ class MarkdownAttribution(unittest.TestCase):
                          ['docs/B.md: missing attribution'])
 
     def test_one_missing_tag_fails(self):
+        # REUSE-IgnoreStart
         self.write('C.md', '<!-- SPDX-License-Identifier: MIT -->\n# C\n')
+        # REUSE-IgnoreEnd
         self.assertEqual(len(AUDIT.check_markdown_attribution(self.root, ['C.md'])), 1)
 
     def test_vendored_licence_needs_a_sidecar(self):
@@ -304,8 +308,10 @@ class MarkdownAttribution(unittest.TestCase):
         self.write(name, '# upstream text with no header\n')
         self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name]),
                          [f'{name}: missing attribution'])
+        # REUSE-IgnoreStart
         self.write(f'{name}.license', 'SPDX-FileCopyrightText: Contributors to the W3C\n'
                                        'SPDX-License-Identifier: LicenseRef-W3C-Document\n')
+        # REUSE-IgnoreEnd
         self.assertEqual(AUDIT.check_markdown_attribution(self.root, [name]), [])
 
     def test_tracked_markdown_is_the_git_index_minus_test_data(self):
@@ -329,8 +335,10 @@ BINARY = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
 
 
 class BinaryAttribution(unittest.TestCase):
+    # REUSE-IgnoreStart
     SIDECAR = ('SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.\n'
                'SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0\n')
+    # REUSE-IgnoreEnd
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -348,7 +356,9 @@ class BinaryAttribution(unittest.TestCase):
                          ['docs/a.png: missing attribution sidecar docs/a.png.license'])
 
     def test_sidecar_missing_a_tag_fails(self):
+        # REUSE-IgnoreStart
         (self.root / 'docs/a.png.license').write_text('SPDX-License-Identifier: MIT\n', encoding='utf-8')
+        # REUSE-IgnoreEnd
         self.assertEqual(AUDIT.check_binary_attribution(self.root, ['docs/a.png']),
                          ['docs/a.png: sidecar docs/a.png.license lacks the SPDX tags'])
 

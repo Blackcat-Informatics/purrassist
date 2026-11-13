@@ -1,0 +1,53 @@
+Summary of use of the W3C test suite license
+How to use the licenses
+Disclaimers
+
+Licenses for distribution of W3C test suites should satisfy two goals:
+Enable developers to use test cases easily, and promote software development and bug tracking.
+Enable a W3C Working Group to create a branded, "Authoritative W3C Test Suite" to reflect the group consensus process, and to promote interoperability and stability of performance claims.
+To achieve these goals, W3C makes available test suites under two distinct licenses for two mutually exclusive uses:
+a 3-clause BSD license for software development, bug tracking, and other applications that do not require assertions of performance to the public or implied claims of conformance to a W3C Specification. See summary of 3-clause BSD License.
+a W3C test suite license for an authoritative W3C Test Suite or when claims of performance with respect to a specification are required. See summary of W3C test suite license.
+The choice of license is up to the licensee for every single use of tests from a W3C Test Suite. It will typically depend on usage requirements: the first one allows changes, the second does not. See how to use the licenses.
+W3C encourages community development of test suites and welcomes contributions, which will then be distributed under these two licenses. If you wish to contribute (e.g., altered) test cases, please contact the relevant Working Group and review the contribution policies.
+Summary of use of the BSD test suite license for software development
+Under the 3-clause BSD license, tests can be copied, altered, and integrated into software development tools, bug tracking tools, etc. This license allows developers, commercial vendors, and open source projects to copy tests and alter them as they wish to test and improve their software. However, if changes are made, the derivative work must not be distributed with W3C logos, unless W3C gives explicit permission.
+Note: It is explicitly understood that clause 3 of the BSD license prohibits the assertion of performance claims with respect to W3C Specifications by claiming successful passing of modified tests.
+Summary of use of the W3C test suite license
+Under the W3C test suite license, a vendor neutral test suite is provided to the public, implementers and page authors so they may test performance of software or content with respect to a W3C Specification. Tests published under this license can be copied and used for any purpose, but no modifications are permitted. Consequently, performance claims can only be made against unaltered tests. Under this license, tests of a W3C Test Suite are protected by copyright and by the W3C trademark. Copies of tests from a W3C Test Suite created for the purpose of allowing assertion of performance claims with respect to W3C Specifications are implicitly made under this license.
+The creation of a subset of a test suite is considered a derivative work, thus a violation of the rights of the collection. Consequently it either does not allow claims of performance and the use of the name W3C or it requires a special license from W3C.
+Test suites may distinguish the test harness (or, framework for navigation) and the actual tests. For these test suites, the prohibition of change only applies to the tests. The W3C test suite license is based on the W3C document license but gives further rights concerning navigation/harness and the use of the W3C trademark in performance claims.
+How to use the licenses
+For either license, include the following statement in a test suite (HTML markup shown):
+Distributed under both the <a href="https://www.w3.org/copyright/test-suite-license-2023/">W3C test suite license</a> and the <a href="https://www.w3.org/copyright/3-clause-bsd-license-2008/">W3C 3-clause BSD license</a>.
+How does this affect test suites published prior to this policy?
+It does not affect existing test suites until they are modified to include the new license. We encourage parties who manage W3C test suites to update the test suite to include the license statement shown above. Depending on the organization of the test suite, it may be necessary to update both "cover pages" and individual test cases.
+Disclaimers
+UNDER BOTH MUTUALLY EXCLUSIVE LICENSES, THIS DOCUMENT AND ALL DOCUMENTS, TESTS AND SOFTWARE THAT LINK THIS STATEMENT ARE PROVIDED "AS IS," AND COPYRIGHT HOLDERS MAKE NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, OR TITLE; THAT THE CONTENTS OF THE DOCUMENT ARE SUITABLE FOR ANY PURPOSE; NOR THAT THE IMPLEMENTATION OF SUCH CONTENTS WILL NOT INFRINGE ANY THIRD PARTY PATENTS, COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS.
+COPYRIGHT HOLDERS WILL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, SPECIAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF ANY USE OF THE DOCUMENT OR THE PERFORMANCE OR IMPLEMENTATION OF THE CONTENTS THEREOF.
+
+Send questions to site-policy@w3.org.
+
+In this section
+
+BSD test suite license
+
+Document license - 2002 version
+
+Document license - 2015 version
+
+Document license - 2023 version
+
+Intellectual rights
+
+Software and Document license - 2002 version
+
+Software and Document license - 2015 version
+
+Software and Document license - 2023 version
+
+Test suites licenses
+
+W3C test suite license - 2008 version
+
+W3C test suite license - 2023 version

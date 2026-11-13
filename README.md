@@ -4,6 +4,8 @@
 
 # PurRAssist
 
+[![REUSE status](https://api.reuse.software/badge/github.com/Blackcat-Informatics/purrassist)](https://api.reuse.software/info/github.com/Blackcat-Informatics/purrassist)
+
 **Assistance for AIs that get the details almost right.**
 
 PurRAssist recovers intent from imperfect JSON, names, paths, and text. Give a
