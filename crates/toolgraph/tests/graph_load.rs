@@ -111,7 +111,6 @@ fn worked_example_loads_to_the_graph_the_document_describes() {
     );
     let customer = query.parameters[0].hint.as_ref().expect("customer hint");
     assert_eq!(customer.reifier, format!("{EX}customerClaim"));
-    assert_eq!(customer.graph, None);
     assert_eq!(customer.aliases, ["customer"]);
     assert_eq!(customer.taints, ["personal-data"]);
     assert_eq!(
@@ -344,6 +343,54 @@ fn a_statement_no_view_owns_is_refused_not_skipped() {
     );
     let declared = format!("{}\n<urn:declared> a rdfs:Class .\n", worked());
     load(&declared).expect("a class declaration is owned");
+}
+
+// Rationale: a vocabulary statement on a node with no concrete role (a bare shape, or
+// a node typed only as the abstract Node class) has no property table to validate it,
+// so it is refused rather than silently accepted; the unedited example loads.
+#[test]
+fn a_vocabulary_statement_on_a_node_without_a_concrete_role_is_refused() {
+    load(&worked()).expect("the unedited example loads");
+    let cases = [
+        (
+            "ex:QueryInput pa:name \"x\" .",
+            "https://example.org/tools/QueryInput",
+            NAMESPACE,
+            "name",
+        ),
+        (
+            "ex:EditInput pa:egressAllowed true .",
+            "https://example.org/tools/EditInput",
+            NAMESPACE,
+            "egressAllowed",
+        ),
+        (
+            "ex:marker a pa:Node .",
+            "https://example.org/tools/marker",
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+            "type",
+        ),
+    ];
+    for (statement, subject, namespace, local) in cases {
+        let error = load(&format!("{}\n{statement}\n", worked())).expect_err(statement);
+        let LoadError::UnsupportedConstruct {
+            subject: found,
+            predicate,
+            construct,
+        } = error
+        else {
+            panic!("{statement}: {error:?}");
+        };
+        assert_eq!(
+            (found.as_str(), predicate, construct),
+            (
+                subject,
+                format!("{namespace}{local}"),
+                Construct::UnownedStatement
+            ),
+            "{statement}"
+        );
+    }
 }
 
 // Rationale: only the four-form field-mask subset is accepted; any other jq is

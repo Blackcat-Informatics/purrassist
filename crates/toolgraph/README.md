@@ -22,10 +22,14 @@ serialized results intact; it makes no token-count claim. `ToolGraph::load` read
 `OutputByteLimit`, all or nothing: every out-of-vocabulary term, shape
 violation, unowned statement and unsupported construct is a `LoadError` naming
 subject and predicate. `outputProjectionJq` must be a field mask or the load
-fails with `LoadError::UnsupportedProjection`. The load does not claim governed
-catalog construction (`FnoCatalog::from_dataset` and `parse_dataset` take no
-governor at the pinned `PurRDF` revision) or exact per-quad source spans
-(`PurRDF` issue 1306); see the `graph` module documentation. The production
+fails with `LoadError::UnsupportedProjection`. This delivery uses the ungoverned
+entry points (`FnoCatalog::from_dataset` and `parse_dataset`); the governed
+ones available at the pinned `PurRDF` 4.0.2 (`from_dataset_with_control`,
+`parse_dataset_controlled`) are the next step, so governed catalog construction
+and exact per-quad source spans are not yet provided. The Rust shape table is
+not equivalent to the shapes document; its differences and the unchecked
+requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
+the `graph` module documentation. The production
 schema bridge, manifest codecs, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 

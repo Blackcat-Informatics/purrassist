@@ -10,9 +10,8 @@ use std::convert::Infallible;
 
 use purrassist_core::{Governor, StopReason, contract::Resource, output::FieldMask};
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, TermValue,
+    RdfDataset, RdfDatasetBuilder, TermId, TermValue,
     fno::{FnoCatalog, FnoReadError, FnoReadFailure},
-    term_fixture,
 };
 
 use super::{
@@ -55,7 +54,6 @@ struct Row {
 #[derive(Debug)]
 struct Reifier {
     id: TermValue,
-    graph: Option<TermValue>,
     s: TermValue,
     p: String,
     o: TermValue,
@@ -167,6 +165,10 @@ impl<'v> Doc<'v> {
         for quad in dataset.reifier_quads() {
             work(governor, 1)?;
             let id = value(quad.s);
+            if quad.g.is_some() {
+                // A reifier row in a named graph would need a graph on its hint.
+                return Err(unsupported(&id, "-", Construct::NamedGraph));
+            }
             let TermValue::Triple { s, p, o } = value(quad.o) else {
                 return Err(unsupported(&id, "-", Construct::Reifier));
             };
@@ -175,14 +177,10 @@ impl<'v> Doc<'v> {
             };
             reifiers.push(Reifier {
                 id,
-                graph: quad.g.map(value),
                 s: (*s).clone(),
                 p,
                 o: (*o).clone(),
             });
-        }
-        if let Some(reifier) = reifiers.iter().find(|reifier| reifier.graph.is_some()) {
-            return Err(unsupported(&reifier.id, &reifier.p, Construct::NamedGraph));
         }
         Ok(Self {
             vocabulary,
@@ -451,6 +449,22 @@ impl Doc<'_> {
     }
 }
 
+/// Intern a materialised term through the builder's public owned-term API.
+///
+/// The default blank scope is the exact inverse of the owned rendering that
+/// `TermValue::to_rdf_term` produces, so a blank node keeps its parsed identity.
+fn intern(
+    builder: &mut RdfDatasetBuilder,
+    value: &TermValue,
+) -> Result<TermId, Box<dyn std::fmt::Display>> {
+    let owned = value
+        .to_rdf_term()
+        .map_err(|cause| Box::new(cause) as Box<dyn std::fmt::Display>)?;
+    builder
+        .intern_owned_term(&owned)
+        .map_err(|cause| Box::new(cause) as Box<dyn std::fmt::Display>)
+}
+
 fn is_literal(value: &TermValue, datatypes: &[&str]) -> bool {
     matches!(
         value,
@@ -618,6 +632,17 @@ impl Doc<'_> {
         for (node, &mask) in &nodes.roles {
             let mask = self.concrete(node, mask)?;
             if mask == 0 {
+                // A node with no concrete role (a bare argument/result shape, or one
+                // typed only as the abstract `Node` class) has no property table, so
+                // a vocabulary statement on it would be validated by nothing.
+                for row in self.rows_of(node) {
+                    work(governor, 1)?;
+                    let vocabulary_class = row.p == RDF_TYPE
+                        && iri_of(&row.o).is_some_and(|iri| self.in_namespace(iri));
+                    if self.in_namespace(&row.p) || vocabulary_class {
+                        return Err(unsupported(node, &row.p, Construct::UnownedStatement));
+                    }
+                }
                 continue;
             }
             // A predicate whose domain excludes every role of its subject.
@@ -713,13 +738,11 @@ impl Doc<'_> {
             if !nodes.fno.contains(&row.s) || is_vocabulary {
                 continue;
             }
-            let s = term_fixture::intern_value(&mut builder, &row.s)
-                .map_err(|cause| storage(&cause))?;
+            let s = intern(&mut builder, &row.s).map_err(|cause| storage(&*cause))?;
             let p = builder
                 .intern_iri(&row.p)
                 .map_err(|cause| storage(&cause))?;
-            let o = term_fixture::intern_value(&mut builder, &row.o)
-                .map_err(|cause| storage(&cause))?;
+            let o = intern(&mut builder, &row.o).map_err(|cause| storage(&*cause))?;
             builder
                 .push_quad(s, p, o, None)
                 .map_err(|cause| storage(&cause))?;
@@ -1104,7 +1127,6 @@ impl Doc<'_> {
         }
         Ok(Some(Hint {
             reifier: show(id),
-            graph: reifier.graph.as_ref().map(show),
             shape: show(shape),
             max_edit_distance: self.number(id, "maxEditDistance"),
             aliases: self.texts(id, "alias"),

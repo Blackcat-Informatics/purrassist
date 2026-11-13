@@ -12,16 +12,18 @@
 //!
 //! # Stated limits
 //!
-//! * Catalog construction is not governed. At the pinned `PurRDF` revision
-//!   `FnoCatalog::from_dataset` takes no governor and `parse_dataset` takes none
-//!   either. The caller's [`Governor`] meters this crate's own row accounting
-//!   (input bytes, one unit of work per statement and per validated property), not
-//!   the upstream parser's or reader's allocations.
-//! * Errors name subject and predicate, not an exact per-quad source span: the
-//!   parser's span table is keyed by subject, without a per-statement or
-//!   per-predicate occurrence identity. `PurRDF` issue 1306 requests the missing
-//!   seam. [`LoadError::Parse`] carries the parser's own line and column.
-//! * Only default-graph statements load; a named-graph statement is refused.
+//! * This delivery uses the ungoverned entry points `parse_dataset` and
+//!   `FnoCatalog::from_dataset`. The pinned `PurRDF` 4.0.2 also provides the
+//!   governed `FnoCatalog::from_dataset_with_control` and
+//!   `purrdf_rdf::parse_dataset_controlled` (exact ordered source occurrences);
+//!   adopting them is the next step. Until then the caller's [`Governor`] meters
+//!   only this crate's own row accounting (input bytes, one unit of work per
+//!   statement and per validated property), not the parser's or reader's
+//!   allocations, and errors name subject and predicate rather than an exact
+//!   per-quad span. [`LoadError::Parse`] carries the parser's own line and column.
+//! * Only default-graph statements and reifiers load; a named-graph one is refused.
+//! * The vocabulary shapes are checked by a Rust table that is not equivalent to
+//!   the shapes document; see `docs/tool-graph/TOOLS.md` for the differences.
 //!
 //! The runtime cost of a load is one parse, one pass over every statement to
 //! materialise owned rows (memory is proportional to the document), and one

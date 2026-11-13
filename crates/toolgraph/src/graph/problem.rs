@@ -95,9 +95,11 @@ impl fmt::Display for Construct {
     }
 }
 
-/// Why a tool graph was refused. Every variant names its subject; predicate-level
-/// variants also name the predicate. None carries an exact per-quad source span
-/// (see the [module limits](super)).
+/// Why a tool graph was refused.
+///
+/// Every variant names its subject; predicate-level variants also name the
+/// predicate. None carries an exact per-quad source span (see the stated limits
+/// in the `graph` module documentation).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum LoadError {

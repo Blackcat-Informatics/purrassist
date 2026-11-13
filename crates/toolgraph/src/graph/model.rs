@@ -139,14 +139,13 @@ pub enum Coercion {
 /// A reified parameter hint read from the reifier side table.
 ///
 /// The reifier annotates the triple `(property shape, sh:path, parameter predicate)`.
+/// Only default-graph reifiers load; a named-graph reifier is refused.
 /// Hints are untrusted descriptions of permitted recovery, never authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Hint {
     /// The reifier node carrying the hint.
     pub reifier: String,
-    /// The graph the reifier row was declared in; `None` is the default graph.
-    pub graph: Option<String>,
     /// The property shape whose path this hint annotates.
     pub shape: String,
     /// Maximum admitted edit-distance inference; zero forbids it.

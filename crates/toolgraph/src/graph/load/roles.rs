@@ -3,8 +3,12 @@
 
 //! The vocabulary's node roles and per-role property table, keyed by term name.
 //!
-//! This table is the loader's executable form of the structural shapes in
-//! `docs/tool-graph/TOOLS.md`. It names only [`TERM_NAMES`](crate::TERM_NAMES)
+//! This table is the loader's executable approximation of the structural shapes in
+//! `docs/tool-graph/TOOLS.md`, not an equivalent of them: the four tool
+//! annotation hints are optional here but required there, `filePermissions` has
+//! no pattern check, integers are not distinguished by `xsd:positiveInteger`,
+//! `xsd:anyURI` is not validated, and `FnO` parameter agreement and `sh:*`
+//! constraint content are unchecked (remaining #33 work). It names only [`TERM_NAMES`](crate::TERM_NAMES)
 //! identifiers, never IRIs; the caller's `Vocabulary` supplies those.
 
 /// How a property value is checked.
