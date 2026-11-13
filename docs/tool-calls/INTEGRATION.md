@@ -646,10 +646,29 @@ and resource usage, on every platform.
 Recovery work is linear in the output length for a fixed dialect
 allow-list, with a published bound, and every limit is explicit.
 
+Batch recovery uses a shared incremental intake kernel: source metadata,
+request validation and recognizer construction precede byte intake. For each
+byte, source admission and copying precede UTF-8 classification and recognition.
+This replaces whole-source retention followed by whole-source encoding scans;
+resource counters and refusal precedence intentionally change with that shared
+ordering. A semantic invalid request stops interpretation while source capture
+continues on the same healthy governor. A later source-admission failure is an
+explicit refusal with no source published. After a governor or capture refusal,
+there are no further copies, admissions or interpreter steps; failed source
+allocation is never retried. The digest still identifies every supplied byte, while
+`receipt.sources` contains either the complete admitted source or nothing.
+No retained prefix is presented as the full source. A complete source can still
+be retained when finalization or resolution refuses. See
+[the resource contract](../RESOURCES.md) for ownership and growth details.
+The public streaming API, stable-prefix events and progress surfaces remain
+unfinished under #16.
+
 - **Enforced by** the published bound
-  `work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E` (each dialect contributes
+  `work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux` (each dialect contributes
   `K_THREAD` times its configuration bound per byte; `E` error configurations
-  are capped by the effort's budget), linear JSON extraction, and governed
+  are capped by the effort's budget; `W_intake` includes source/range growth,
+  and `W_aux` retains the separately admitted codec, history and resolution
+  terms), linear JSON extraction, and governed
   charges for every step. Exhaustion is an `Unresolved` result naming the
   resource, never a partial value.
 - **Proved by** `tool_call_cost::resources_doc_matches_cost_constants` (every

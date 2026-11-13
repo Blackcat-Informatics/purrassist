@@ -952,16 +952,6 @@ impl<'t> Reader<'_, 't, '_> {
         }))
     }
 
-    /// Whether an opener of `name` ends an open value: it names a parameter
-    /// declared in some open scope, or no tool is known.
-    fn boundary(&mut self, name: &str) -> Result<bool, StopReason> {
-        if !self.known {
-            return Ok(true);
-        }
-        self.charge(self.frames.len())?;
-        Ok(self.frames.iter().any(|frame| frame.scope.declares(name)))
-    }
-
     /// The innermost open scope declaring `name`, or the innermost scope.
     fn owner(&mut self, name: &str) -> Result<usize, StopReason> {
         self.charge(self.frames.len())?;
@@ -1567,11 +1557,12 @@ impl<'t> Reader<'_, 't, '_> {
                 });
                 gap = at + width;
             } else if let Some(opener) = self.opener(at)? {
-                let text = !self.boundary(&opener.name.value)?;
+                let owners = self.owners(&opener.name.value)?;
+                let text = self.known && owners.is_empty();
                 let candidate = Candidate {
                     at,
                     terminator: Terminator::Boundary,
-                    owners: self.owners(&opener.name.value)?,
+                    owners,
                     respelled: opener.respelled.is_some(),
                     text,
                 };

@@ -8,6 +8,7 @@ mod equivalence;
 pub mod incremental;
 mod number;
 mod parser;
+mod source;
 use crate::contract::saturating_size as size;
 use crate::contract::{Governor, Resource, ScratchCharge, ScratchLease, ScratchString, StopReason};
 use core::ops::Range;
@@ -15,6 +16,7 @@ pub use incremental::recover_syntax;
 pub(crate) use incremental::{Region, recover_region};
 pub use number::{IntegerReading, Number, NumberError, NumberParseError};
 pub use parser::{ParseError, ParseFailure, parse, parse_with};
+pub(crate) use source::{same_source_text, same_source_tree};
 
 /// Immutable parsed storage with transferred buffer reservations, not estimates.
 /// The root drops before its storage reservation releases.
@@ -427,6 +429,15 @@ impl Node {
             }
         }
         total
+    }
+
+    /// Hash the exact compact JSON with its eight-byte network-order length.
+    pub(crate) fn hash_json_part(
+        &self,
+        builder: &mut crate::digest::DigestBuilder,
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        emission::hash_part(self, builder, governor)
     }
 
     pub(crate) fn write_json(&self, output: &mut String) {

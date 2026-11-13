@@ -15,7 +15,7 @@ use super::shape::{
     ShapeStep, ValueShape,
 };
 use crate::contract::{
-    Budget, Governor, Resource, ScratchCharge, ScratchMap, ScratchVec, StopReason,
+    Budget, Governor, Resource, ScratchCharge, ScratchLease, ScratchMap, ScratchVec, StopReason,
     saturating_size as size,
 };
 use crate::json::{self, Node, Value, pointer_segment};
@@ -646,9 +646,12 @@ impl CompiledTool {
 pub struct ToolSet {
     tools: Vec<CompiledTool>,
     index: Vec<(String, usize)>,
-    /// The byte length of the longest declared name or alias.
-    longest_literal: usize,
+    max_name_bytes: usize,
+    _name_bound_owner: ScratchLease,
 }
+
+const NAME_BOUND_BYTES: u64 = 24;
+const _: () = assert!(core::mem::size_of::<(usize, ScratchLease)>() as u64 <= NAME_BOUND_BYTES);
 
 impl ToolSet {
     /// Compile definitions under a fresh governor with `budget`.
@@ -753,15 +756,18 @@ impl ToolSet {
         if let Some((key, first, second)) = find_collision(literals, governor)? {
             return Err(ToolSetError::Collision { first, second, key });
         }
+        let name_bound_owner = governor
+            .lease_scratch(NAME_BOUND_BYTES)
+            .map_err(ToolSetError::Resource)?;
+        let mut max_name_bytes = 0;
         let mut tools: ScratchVec<CompiledTool> = ScratchVec::new(governor);
         let mut index: ScratchMap<String, usize> = ScratchMap::new(governor);
-        let mut longest_literal = 0;
         for entry in sorted.into_vec() {
             let position = tools.len();
             let definition = &entry.definition;
             for literal in core::iter::once(&definition.name).chain(&definition.aliases) {
+                max_name_bytes = max_name_bytes.max(literal.len());
                 retain_text(governor, literal.len())?;
-                longest_literal = longest_literal.max(literal.len());
                 index
                     .insert(literal.clone(), position)
                     .map_err(ToolSetError::Resource)?;
@@ -773,15 +779,9 @@ impl ToolSet {
         Ok(Self {
             tools: tools.into_vec(),
             index: index.into_pairs(),
-            longest_literal,
+            max_name_bytes,
+            _name_bound_owner: name_bound_owner,
         })
-    }
-
-    /// The byte length of the longest declared name or alias: no longer
-    /// written name can be an exact declared literal.
-    #[must_use]
-    pub(crate) const fn longest_literal(&self) -> usize {
-        self.longest_literal
     }
 
     /// Every compiled tool, sorted by canonical name.
@@ -827,6 +827,17 @@ impl ToolSet {
             .binary_search_by(|(literal, _)| literal.as_str().cmp(name_or_alias))
             .ok()
             .map(|position| &self.tools[self.index[position].1])
+    }
+
+    /// Cardinality of the canonical-name and alias index searched by
+    /// `lookup_exact`, for admission of its logarithmic comparison work.
+    pub(crate) const fn name_index_len(&self) -> usize {
+        self.index.len()
+    }
+
+    /// Longest exact index key, including aliases; zero for an empty set.
+    pub(crate) const fn max_name_bytes(&self) -> usize {
+        self.max_name_bytes
     }
 
     /// The canonical compact JSON Schema of a tool's arguments, by canonical

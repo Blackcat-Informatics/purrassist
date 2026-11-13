@@ -15,7 +15,8 @@
 //! changes a recognition result.
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Budget, Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason,
+    Budget, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
+    invalid_input,
 };
 use crate::digest::Digest;
 use crate::grammar::automaton::Matcher;
@@ -171,9 +172,14 @@ impl BuiltIn {
 
     fn grammar(&self) -> &CompiledGrammar {
         self.compiled.get_or_init(|| {
-            self.recipe
-                .compile_governed(&mut Governor::new(Budget::default()))
-                .expect("every built-in dialect grammar compiles under the default budget")
+            let mut governor = Governor::new(Budget::default());
+            self.recipe.compile_governed(&mut governor).unwrap_or_else(|error| {
+                panic!(
+                    "built-in dialect {} must compile under the default budget: {error:?}; usage: {:?}",
+                    self.id,
+                    governor.usage(),
+                )
+            })
         })
     }
 }
@@ -610,11 +616,113 @@ pub struct DialectSet {
     /// `explicit` (see [`CompiledGrammar::reasoning_explicit`](crate::grammar::CompiledGrammar::reasoning_explicit)).
     pub(crate) explicit: ScratchVec<bool>,
     pub(crate) marker_matcher: Option<Matcher>,
+    marker_prefixes: Option<MarkerPrefixes>,
     pub(crate) lookbehind: usize,
     configuration_bound: u64,
+    hold_back: HoldBackBounds,
+}
+
+#[derive(Debug)]
+struct HoldBackBounds {
+    native: usize,
+    separate: usize,
+    _metadata: ScratchLease,
+}
+const _: () = assert!(core::mem::size_of::<HoldBackBounds>() <= 64);
+
+fn include_prefix(
+    bound: &mut usize,
+    bytes: &[u8],
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    governor.charge(Resource::Work, 1)?;
+    let prefix = bytes.len().saturating_sub(1);
+    let extra = usize::from(bytes.first().is_some_and(|b| b & 0xc0 == 0x80)) * 3;
+    let normalized = prefix
+        .checked_add(extra)
+        .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+    *bound = (*bound).max(normalized);
+    Ok(())
+}
+
+impl HoldBackBounds {
+    fn build(
+        dialects: &[DialectId],
+        markers: &[MarkerPair],
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(64)?;
+        let mut native = 3;
+        for dialect in dialects {
+            governor.charge(Resource::Work, 1)?;
+            let grammar = dialect.grammar();
+            for program in &grammar.programs {
+                for &pc in &program.openers {
+                    governor.charge(Resource::Work, 1)?;
+                    let lit = match program.insts[pc as usize] {
+                        crate::grammar::Inst::Lit { lit, .. } => lit,
+                        // Derived class openers enter closure and become candidate
+                        // owners before consuming input; their runs are not finite
+                        // lexical prefixes and retain their own actual byte count.
+                        crate::grammar::Inst::Class { .. } if grammar.is_derived() => continue,
+                        _ => return Err(invalid_input("lexical opener has no finite literal")),
+                    };
+                    include_prefix(&mut native, &grammar.literals[lit as usize].bytes, governor)?;
+                    let table = &grammar.literal_tables[lit as usize];
+                    for spellings in [&table.variants, &table.confusables]
+                        .into_iter()
+                        .chain(table.json.iter())
+                    {
+                        for bytes in &spellings.list {
+                            include_prefix(&mut native, bytes, governor)?;
+                        }
+                    }
+                }
+            }
+        }
+        let mut separate = native;
+        for (open, close) in markers {
+            include_prefix(&mut separate, open, governor)?;
+            include_prefix(&mut separate, close, governor)?;
+        }
+        Ok(Self {
+            native,
+            separate,
+            _metadata: metadata,
+        })
+    }
+}
+
+/// Retained marker-only table and its added allow-list metadata.
+#[derive(Debug)]
+struct MarkerPrefixes {
+    values: ScratchVec<u32>,
+    _metadata: ScratchLease,
+}
+
+const MARKER_PREFIX_BYTES: u64 = 64;
+const _: () = assert!(core::mem::size_of::<Option<MarkerPrefixes>>() as u64 <= MARKER_PREFIX_BYTES);
+
+impl MarkerPrefixes {
+    fn new(matcher: &Matcher, governor: &mut Governor) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(MARKER_PREFIX_BYTES)?;
+        let values = matcher.continuation_depths(governor)?;
+        Ok(Self {
+            values,
+            _metadata: metadata,
+        })
+    }
 }
 
 impl DialectSet {
+    pub(crate) const fn hold_back_bound(&self, separate: bool) -> usize {
+        if separate {
+            self.hold_back.separate
+        } else {
+            self.hold_back.native
+        }
+    }
+
     /// Compile an allow-list: order it canonically, check it, and build the
     /// combined reasoning-marker matcher (the union of the dialects'
     /// declared reasoning markers).
@@ -680,16 +788,33 @@ impl DialectSet {
             }
             Some(Matcher::build(&literals, governor)?)
         };
+        let marker_prefixes = marker_matcher
+            .as_ref()
+            .map(|matcher| MarkerPrefixes::new(matcher, governor))
+            .transpose()?;
         let (lookbehind, configuration_bound) = set_bounds(&collected, &markers, governor)?;
+        let hold_back = HoldBackBounds::build(&collected, &markers, governor)?;
         governor.check()?;
         Ok(Self {
             dialects: collected,
             markers,
             explicit,
             marker_matcher,
+            marker_prefixes,
             lookbehind,
             configuration_bound,
+            hold_back,
         })
+    }
+
+    /// Current suffix that can still grow into a longer marker spelling.
+    /// Complete leaf matches are protected by queued reports, not this table.
+    pub(crate) fn marker_prefix_len(&self, state: u32) -> Result<usize, StopReason> {
+        self.marker_prefixes
+            .as_ref()
+            .and_then(|prefixes| prefixes.values.get(state as usize))
+            .map(|&depth| depth as usize)
+            .ok_or_else(|| invalid_input("reasoning marker has no viable-prefix state"))
     }
 
     /// The allow-list of every built-in dialect ([`DialectId::BUILT_IN`]).

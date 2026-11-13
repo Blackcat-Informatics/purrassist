@@ -17,7 +17,7 @@
 // shared across the grammar and tool-call modules, so `pub(crate)` (matching
 // `unreachable_pub`) wins, as in `pattern::derive`.
 #![allow(clippy::redundant_pub_crate)]
-use super::automaton::{Matcher, Trie};
+use super::automaton::{Matcher, PriorityLiteral, PriorityMatcher, Trie};
 use super::codec::CodecKind;
 use super::cost::K_COMPILE;
 use super::syntax::{Document, PExpr, Statement};
@@ -28,20 +28,20 @@ use super::{
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, format_output_governed,
-    format_scratch_governed,
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
+    format_output_governed, format_scratch_governed, push_scratch,
 };
 use crate::digest::Digest;
 use crate::pattern::{Pattern, PatternCompileError};
 
-mod initial_classes;
-use initial_classes::InitialClasses;
+mod run_eligibility;
+use run_eligibility::RunEligibility;
 
 /// One instruction of a compiled production program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inst {
     /// Match a literal (canonical spelling; repairs use its tables).
-    Lit { lit: u32, next: u32 },
+    Lit { lit: u32, next: u32, opener: bool },
     /// Match a maximal class run.
     Class { class: u32, next: u32 },
     /// Skip a verbatim body up to a delimiter.
@@ -98,10 +98,54 @@ impl ScratchCharge for ClassOpener {
     };
 }
 
+/// Immutable existential reachability of Accept through zero-input edges.
+/// The descriptor stays owned independently of its fallible mask capacity.
+#[derive(Debug)]
+struct CompletionReachability {
+    mask: ScratchVec<bool>,
+    _descriptor: ScratchLease,
+}
+
+impl PartialEq for CompletionReachability {
+    fn eq(&self, other: &Self) -> bool {
+        self.mask == other.mask
+    }
+}
+
+impl Eq for CompletionReachability {}
+
+impl CompletionReachability {
+    fn compile(insts: &[Inst], governor: &mut Governor) -> Result<Self, GrammarError> {
+        const DESCRIPTOR_BYTES: u64 = 64;
+        const CONTROL_BYTES: u64 = 384;
+        const _: () =
+            assert!(core::mem::size_of::<CompletionReachability>() as u64 <= DESCRIPTOR_BYTES);
+        const _: () = assert!(
+            core::mem::size_of::<(
+                CompletionReachability,
+                Result<CompletionReachability, GrammarError>,
+                ScratchVec<ScratchVec<u32>>,
+                ScratchVec<u32>,
+                ScratchVec<bool>,
+                [ScratchLease; 2],
+            )>() as u64
+                <= CONTROL_BYTES
+        );
+        let descriptor = governor.lease_scratch(DESCRIPTOR_BYTES)?;
+        let _construction = governor.lease_scratch(CONTROL_BYTES)?;
+        let mask = reach_back(insts, |inst| matches!(inst, Inst::Accept), true, governor)?;
+        Ok(Self {
+            mask,
+            _descriptor: descriptor,
+        })
+    }
+}
+
 /// The recognizer program of one production.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program {
     pub(crate) insts: ScratchVec<Inst>,
+    completing: CompletionReachability,
     /// The program's entry location.
     pub(crate) start: u32,
     /// The literal instructions reachable from the start without input.
@@ -142,8 +186,8 @@ pub(crate) struct Program {
     /// completion of the same attempt reads further at no more cost is
     /// dropped (the attempt reads every call it can).
     pub(crate) grouped: bool,
-    /// Initial Class locations unreachable after any `next`; empty otherwise.
-    pub(crate) initial_classes: InitialClasses,
+    /// Initial Class locations and immutable native body eligibility.
+    pub(crate) run_eligibility: RunEligibility,
     /// For a grouped program, the literal instructions after which one call
     /// ends (the production completes or the next call begins, without
     /// input): where an attempt that could not read a call resynchronizes
@@ -206,6 +250,19 @@ impl Program {
     #[inline]
     pub(crate) const fn deferred(&self) -> bool {
         self.origin.is_projected() || self.argument_anchor || !self.committed.is_empty()
+    }
+
+    /// Whether this exact continuation can complete without consuming input.
+    pub(crate) fn completes(&self, pc: u32, governor: &mut Governor) -> Result<bool, StopReason> {
+        let Some(completes) = self.completing.mask.get(pc as usize).copied() else {
+            return Err(StopReason::InvalidInput(format_output_governed(
+                format_args!(
+                    "completion query at program location {pc} is outside its instruction table"
+                ),
+                governor,
+            )?));
+        };
+        Ok(completes)
     }
 
     /// Whether a configuration at `pc` belongs to a committed attempt.
@@ -1008,10 +1065,15 @@ impl Emitter<'_, '_> {
         visit(depth, self.governor)?;
         let child = depth + 1;
         Ok(match expr {
-            Expr::Literal(id) => self.push(Inst::Lit { lit: id.0, next })?,
+            Expr::Literal(id) => self.push(Inst::Lit {
+                lit: id.0,
+                next,
+                opener: false,
+            })?,
             Expr::Closer(id) => self.push(Inst::Lit {
                 lit: self.closer_literals[id.index()],
                 next,
+                opener: false,
             })?,
             Expr::Class(id) => self.push(Inst::Class { class: id.0, next })?,
             Expr::Until(id) => self.push(Inst::Until { set: id.0, next })?,
@@ -1406,31 +1468,46 @@ const _: () = {
     assert!(core::mem::size_of::<KeyUse>() <= KeyUse::CHARGE);
     assert!(core::mem::size_of::<KeyCopy>() <= KeyCopy::CHARGE);
 };
+// Added visitation-generation controls; existing vector headers keep their
+// prior representation and each tag slot has the actual u64 element charge.
+const KEY_VISIT_METADATA_BYTES: u64 = 32;
+const _: () =
+    assert!(core::mem::size_of::<(ScratchLease, u64, u32)>() as u64 <= KEY_VISIT_METADATA_BYTES);
+
 fn key_uses(
     programs: &[Program],
     literals: &[Literal],
     governor: &mut Governor,
 ) -> Result<ScratchVec<ScratchVec<KeyUse>>, GrammarError> {
+    let _visitation_metadata = governor.lease_scratch(KEY_VISIT_METADATA_BYTES)?;
     let mut per_program = ScratchVec::new(governor);
     for program in programs {
         let mut uses = ScratchVec::new(governor);
+        let mut seen = ScratchVec::new(governor);
         for (pc, inst) in program.insts.iter().enumerate() {
             governor.charge(Resource::Work, 1)?;
-            let Inst::Lit { lit, next } = *inst else {
+            let Inst::Lit { lit, next, .. } = *inst else {
                 continue;
             };
+            let literal_pc = symbol_index(pc, governor)?;
+            let generation = u64::from(literal_pc);
             let mut colon = true;
             let mut any = false;
-            work_for(program.insts.len(), 1, 1, governor)?;
-            let mut seen = ScratchVec::new(governor);
-            seen.extend(core::iter::repeat_n(false, program.insts.len()))?;
+            if seen.is_empty() {
+                // Every instruction PC fits u32, so this sentinel can never
+                // name a walk. Class-only programs allocate no visitation table.
+                work_for(program.insts.len(), 1, 1, governor)?;
+                seen.extend(core::iter::repeat_n(u64::MAX, program.insts.len()))?;
+            }
             let mut stack = ScratchVec::new(governor);
             stack.push(next)?;
             while let Some(pc) = stack.pop() {
+                // Read/compare the tag, then admit a store only for a new PC.
                 governor.charge(Resource::Work, 1)?;
-                if core::mem::replace(&mut seen.as_mut_slice()[pc as usize], true) {
+                if seen[pc as usize] == generation {
                     continue;
                 }
+                seen.as_mut_slice()[pc as usize] = generation;
                 match program.insts[pc as usize] {
                     Inst::Split(first, second) => stack.extend([first, second])?,
                     Inst::Open { next, .. }
@@ -1447,11 +1524,12 @@ fn key_uses(
                 }
             }
             uses.push(KeyUse {
-                pc: symbol_index(pc, governor)?,
+                pc: literal_pc,
                 lit,
                 key: any && colon,
             })?;
         }
+        drop(seen);
         per_program.push(uses)?;
     }
     Ok(per_program)
@@ -1669,6 +1747,9 @@ fn compile_program(
                 production: diagnostic(productions[root.index()].name.as_str(), governor)?,
             });
         };
+        if let Inst::Lit { opener, .. } = &mut insts.as_mut_slice()[pc as usize] {
+            *opener = true;
+        }
         let mut mark = |byte: u8| first[usize::from(byte >> 6)] |= 1 << (byte & 63);
         mark(tables.literals[lit as usize].bytes[0]);
         let repairs = &tables.repairs[lit as usize];
@@ -1687,10 +1768,11 @@ fn compile_program(
     let committed = committed(&insts, start, governor)?;
     work_for(insts.len(), 1, 1, governor)?;
     let grouped = insts.iter().any(|inst| matches!(inst, Inst::Next { .. }));
-    let initial_classes = InitialClasses::compile(
+    let run_eligibility = RunEligibility::compile(
         &insts,
         start,
         tables.derived && tables.argument_anchor && grouped,
+        !tables.derived && !grouped,
         governor,
     )?;
     // A class opener needs its native DFA start state, installed by closure.
@@ -1699,9 +1781,11 @@ fn compile_program(
     let call_closers = call_closer_lits(&insts, grouped, governor)?;
     let call_openers = call_opener_lits(&insts, governor)?;
     let insert_alternatives = insert_alternatives(&insts, governor)?;
+    let completing = CompletionReachability::compile(&insts, governor)?;
     governor.check()?;
     Ok(Program {
         insts,
+        completing,
         start,
         openers,
         class_openers,
@@ -1717,7 +1801,7 @@ fn compile_program(
         committed,
         start_closure,
         grouped,
-        initial_classes,
+        run_eligibility,
         call_closers,
         call_openers,
         insert_alternatives,
@@ -1949,6 +2033,272 @@ impl Programs<'_> {
         governor.check()?;
         Ok(programs)
     }
+}
+
+/// First native opener/marker/closer ending at the current wrapper-tail byte.
+#[derive(Debug)]
+pub(crate) struct TrailMatcher {
+    pub(crate) matcher: Option<PriorityMatcher>,
+    pub(crate) positives: [u32; 2],
+    _metadata: ScratchLease,
+}
+
+const TRAIL_MATCHER_BYTES: usize = 128;
+const _: () = assert!(core::mem::size_of::<TrailMatcher>() <= TRAIL_MATCHER_BYTES);
+const _: () =
+    assert!(core::mem::size_of::<Result<TrailMatcher, GrammarError>>() <= TRAIL_MATCHER_BYTES);
+const _: () = assert!(
+    core::mem::size_of::<(Option<PriorityMatcher>, [u32; 2], ScratchLease)>()
+        <= TRAIL_MATCHER_BYTES
+);
+
+struct TrailSources<'a> {
+    programs: &'a [Program; 2],
+    literals: &'a [Literal],
+    closers: &'a [CloserClass],
+    reasoning: &'a [(Bytes, Bytes)],
+}
+
+struct TrailBuild<'a> {
+    source: TrailSources<'a>,
+    tokens: ScratchVec<PriorityLiteral<'a>>,
+    next: [u32; 2],
+    positives: [u32; 2],
+    view: usize,
+    outer: usize,
+    inner: usize,
+}
+
+impl<'a> TrailBuild<'a> {
+    fn push(
+        &mut self,
+        bytes: &'a [u8],
+        views: [bool; 2],
+        governor: &mut Governor,
+    ) -> Result<(), GrammarError> {
+        // Initialize both rank slots and copy both staged counters.
+        let mut ranks = [None; 2];
+        let mut next = self.next;
+        let mut view = 0;
+        while view < 2 {
+            if views[view] {
+                // Read rank, check advancement, publish rank and staged count.
+                ranks[view] = Some(next[view]);
+                next[view] = next[view]
+                    .checked_add(1)
+                    .ok_or_else(|| governor.stop_resource(Resource::ScratchBytes))?;
+            }
+            view += 1;
+        }
+        push_scratch(&mut self.tokens, PriorityLiteral { bytes, ranks }, governor)?;
+        self.next = next;
+        Ok(())
+    }
+
+    /// Gather exactly the lists the native wrapper scan searched, in order.
+    fn gather(&mut self, governor: &mut Governor) -> Result<(), GrammarError> {
+        while self.view < 2 {
+            self.outer = 0;
+            while self.outer < self.source.programs[self.view].openers.len() {
+                governor.charge(Resource::Work, 1)?;
+                let program = &self.source.programs[self.view];
+                if let Inst::Lit { lit, .. } = program.insts[program.openers[self.outer] as usize] {
+                    let mut views = [false; 2];
+                    views[self.view] = true;
+                    self.push(
+                        self.source.literals[lit as usize].bytes.as_slice(),
+                        views,
+                        governor,
+                    )?;
+                }
+                self.outer += 1;
+            }
+            self.view += 1;
+        }
+        self.outer = 0;
+        while self.outer < self.source.reasoning.len() {
+            // Source lookup and both selected-view slots precede push.
+            governor.charge(Resource::Work, 3)?;
+            self.push(
+                self.source.reasoning[self.outer].0.as_slice(),
+                [true; 2],
+                governor,
+            )?;
+            self.outer += 1;
+        }
+        self.positives = self.next;
+        self.outer = 0;
+        while self.outer < self.source.closers.len() {
+            self.inner = 0;
+            while self.inner < self.source.closers[self.outer].spellings.len() {
+                governor.charge(Resource::Work, 3)?;
+                self.push(
+                    self.source.closers[self.outer].spellings[self.inner].as_slice(),
+                    [true; 2],
+                    governor,
+                )?;
+                self.inner += 1;
+            }
+            self.outer += 1;
+        }
+        Ok(())
+    }
+}
+
+// Push/refusal includes GrammarError's full InvalidLayout carrier and
+// tuple alignment, alongside the independent StopReason carrier.
+const TRAIL_MATCHER_CONTROL_BYTES: usize = 448;
+const _: () = {
+    assert!(
+        core::mem::size_of::<(&[Program; 2], &[Literal], &[CloserClass], &[(Bytes, Bytes)])>()
+            == core::mem::size_of::<TrailSources<'_>>()
+    );
+    assert!(
+        core::mem::size_of::<(
+            TrailSources<'_>,
+            ScratchLease,
+            Result<ScratchLease, crate::StopReason>,
+            &mut Governor,
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+    assert!(
+        core::mem::size_of::<(
+            TrailBuild<'_>,
+            TrailSources<'_>,
+            PriorityLiteral<'_>,
+            [Option<u32>; 2],
+            [u32; 2],
+            [bool; 2],
+            usize,
+            Option<u32>,
+            bool,
+            ScratchLease,
+            ScratchLease,
+            &mut TrailBuild<'_>,
+            &mut ScratchVec<PriorityLiteral<'_>>,
+            Result<u32, crate::StopReason>,
+            &mut Governor,
+            &Literal,
+            &Program,
+            Inst,
+            u32,
+            &[u8],
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+    assert!(
+        core::mem::size_of::<(
+            TrailBuild<'_>,
+            TrailSources<'_>,
+            PriorityLiteral<'_>,
+            ScratchLease,
+            ScratchLease,
+            &mut TrailBuild<'_>,
+            &mut ScratchVec<PriorityLiteral<'_>>,
+            &mut Governor,
+            [Option<u32>; 2],
+            [u32; 2],
+            [bool; 2],
+            Option<u32>,
+            bool,
+            Result<(), GrammarError>,
+            Result<(), crate::StopReason>,
+            usize,
+            &[u8],
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+    // The returned matcher is covered even before final record assembly.
+    assert!(
+        core::mem::size_of::<(
+            TrailBuild<'_>,
+            TrailSources<'_>,
+            PriorityLiteral<'_>,
+            ScratchLease,
+            ScratchLease,
+            Result<PriorityMatcher, crate::StopReason>,
+            Option<PriorityMatcher>,
+            Result<TrailMatcher, GrammarError>,
+            bool,
+            &mut Governor,
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES + TRAIL_MATCHER_BYTES
+    );
+    // The reachability predicate visits both final instruction streams before
+    // any token owner or private matcher construction frame is created.
+    assert!(
+        core::mem::size_of::<(
+            TrailSources<'_>,
+            ScratchLease,
+            ScratchLease,
+            core::slice::Iter<'_, Program>,
+            core::slice::Iter<'_, Inst>,
+            Option<&Program>,
+            Option<&Inst>,
+            &[Inst],
+            &[Program; 2],
+            &Program,
+            &ScratchVec<Inst>,
+            &Inst,
+            Inst,
+            &Literal,
+            u32,
+            bool,
+            Option<CloserId>,
+            [u32; 2],
+            Result<(), crate::StopReason>,
+            Result<TrailMatcher, GrammarError>,
+            &mut Governor,
+        )>() <= TRAIL_MATCHER_CONTROL_BYTES
+    );
+};
+
+fn trail_matcher(
+    programs: &[Program; 2],
+    literals: &[Literal],
+    closers: &[CloserClass],
+    reasoning: &[(Bytes, Bytes)],
+    governor: &mut Governor,
+) -> Result<TrailMatcher, GrammarError> {
+    let source = TrailSources {
+        programs,
+        literals,
+        closers,
+        reasoning,
+    };
+    let metadata = governor.lease_scratch(size(TRAIL_MATCHER_BYTES))?;
+    let _construction = governor.lease_scratch(size(TRAIL_MATCHER_CONTROL_BYTES))?;
+    let mut needed = false;
+    for program in source.programs {
+        for inst in &program.insts {
+            governor.charge(Resource::Work, 1)?;
+            if let Inst::Lit { lit, .. } = *inst {
+                needed |= source.literals[lit as usize].closer.is_some();
+            }
+        }
+    }
+    if !needed {
+        // Only repair of a closer-tagged literal can produce the
+        // MissingWrapperClose history required to enter wrapper lookahead.
+        return Ok(TrailMatcher {
+            matcher: None,
+            positives: [0; 2],
+            _metadata: metadata,
+        });
+    }
+    let mut build = TrailBuild {
+        source,
+        tokens: ScratchVec::new(governor),
+        next: [0; 2],
+        positives: [0; 2],
+        view: 0,
+        outer: 0,
+        inner: 0,
+    };
+    build.gather(governor)?;
+    let matcher = PriorityMatcher::build(build.tokens.as_slice(), governor)?;
+    Ok(TrailMatcher {
+        matcher: Some(matcher),
+        positives: build.positives,
+        _metadata: metadata,
+    })
 }
 
 /// The non-production statements of a document, and its production bodies
@@ -2524,6 +2874,7 @@ fn compile_policy(
     // An optional-id grammar reads model-added ids absent from its markup.
     let call_ids = !optional_id && captures(&productions, call, CaptureKind::Id, governor)?;
     let call_markup = call_markup(&call_ends, governor)?;
+    let trail_matcher = trail_matcher(&programs, &literals, &closers, &reasoning, governor)?;
     governor.check()?;
     Ok(CompiledGrammar {
         id: document.id.into_string(),
@@ -2551,6 +2902,7 @@ fn compile_policy(
         call_ends,
         call_literals,
         programs,
+        trail_matcher,
         stray: stray.trie,
         longest,
         layouts,
@@ -2829,12 +3181,7 @@ fn call_ends(
     tables: &[LiteralTables],
     governor: &mut Governor,
 ) -> Result<ScratchVec<CallEnd>, GrammarError> {
-    let completing = reach_back(
-        &program.insts,
-        |inst| matches!(inst, Inst::Accept),
-        true,
-        governor,
-    )?;
+    let completing = &program.completing.mask;
     let ending = reach_back(
         &program.insts,
         |inst| matches!(inst, Inst::Accept | Inst::Next { .. }),
@@ -2868,7 +3215,7 @@ fn call_ends(
             {
                 chained = true;
             }
-            if let Inst::Lit { lit, next } = *inst
+            if let Inst::Lit { lit, next, .. } = *inst
                 && pc != opener
             {
                 for (include, into) in [
@@ -3021,12 +3368,7 @@ fn protocol_closer(
     repairs: &[LiteralTables],
     governor: &mut Governor,
 ) -> Result<u32, GrammarError> {
-    let completing = reach_back(
-        &program.insts,
-        |inst| matches!(inst, Inst::Accept),
-        true,
-        governor,
-    )?;
+    let completing = &program.completing.mask;
     if completing[program.start as usize] {
         return Err(protocol_error(
             "every path must end in a literal fence",
@@ -3037,7 +3379,7 @@ fn protocol_closer(
     for inst in &program.insts {
         governor.charge(Resource::Work, 1)?;
         match *inst {
-            Inst::Lit { lit, next } if completing[next as usize] => {
+            Inst::Lit { lit, next, .. } if completing[next as usize] => {
                 if last.is_some_and(|prior| prior != lit) {
                     return Err(protocol_error(
                         "one final named fence closer is required",

@@ -7,7 +7,8 @@ use std::convert::Infallible;
 
 use super::{JsonField, JsonLine, JsonOutput as Governed, Node, Value};
 use crate::contract::{
-    Governor, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason, saturating_size,
+    Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec, StopReason,
+    saturating_size,
 };
 
 #[derive(Clone, Copy)]
@@ -153,6 +154,103 @@ trait Sink {
     type Error;
     fn scan(&mut self, bytes: usize) -> Result<(), Self::Error>;
     fn write(&mut self, text: &str) -> Result<(), Self::Error>;
+    fn verbatim_quotes(&mut self, _: &str) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+    fn note_escape(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+trait GovernedSink: Sink<Error = StopReason> {
+    fn governor(&mut self) -> &mut Governor;
+}
+
+impl GovernedSink for Governed<'_> {
+    fn governor(&mut self) -> &mut Governor {
+        self.governor
+    }
+}
+
+/// The same tokens first count their exact framing length, then stream to SHA-256.
+struct HashSink<'a> {
+    governor: &'a mut Governor,
+    builder: Option<&'a mut crate::digest::DigestBuilder>,
+    bytes: u64,
+    unescaped: bool,
+}
+
+impl GovernedSink for HashSink<'_> {
+    fn governor(&mut self) -> &mut Governor {
+        self.governor
+    }
+}
+
+impl Sink for HashSink<'_> {
+    type Error = StopReason;
+
+    fn verbatim_quotes(&mut self, input: &str) -> Result<bool, StopReason> {
+        if self.builder.is_some() {
+            return Ok(self.unescaped);
+        }
+        let unescaped = unescaped_words(input, self.governor)?;
+        self.unescaped &= unescaped;
+        Ok(unescaped)
+    }
+
+    fn note_escape(&mut self) -> Result<(), StopReason> {
+        self.unescaped = false;
+        Ok(())
+    }
+
+    fn scan(&mut self, bytes: usize) -> Result<(), StopReason> {
+        self.governor.charge(Resource::Work, saturating_size(bytes))
+    }
+
+    fn write(&mut self, text: &str) -> Result<(), StopReason> {
+        let bytes = saturating_size(text.len());
+        self.governor.charge(
+            Resource::Work,
+            if self.builder.is_some() { bytes } else { 1 },
+        )?;
+        self.bytes = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or_else(|| self.governor.stop_resource(Resource::Work))?;
+        if let Some(builder) = &mut self.builder {
+            builder.update(text.as_bytes());
+        }
+        Ok(())
+    }
+}
+
+/// Exact exclusion of the shared encoder's three ASCII escape classes.
+/// Valid UTF-8 bytes above ASCII never need JSON escaping.
+fn unescaped_words(input: &str, governor: &mut Governor) -> Result<bool, StopReason> {
+    let (words, tail) = input.as_bytes().as_chunks::<8>();
+    for bytes in words {
+        // One safe word load and three whole-word classification queries.
+        governor.charge(Resource::Work, 4)?;
+        let word = u64::from_ne_bytes(*bytes);
+        if zero_byte(word ^ 0x2222_2222_2222_2222)
+            || zero_byte(word ^ 0x5c5c_5c5c_5c5c_5c5c)
+            || zero_byte(word & 0xe0e0_e0e0_e0e0_e0e0)
+        {
+            return Ok(false);
+        }
+    }
+    for &byte in tail {
+        governor.charge(Resource::Work, 1)?;
+        if matches!(byte, 0..=31 | b'"' | b'\\') {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether any byte lane is zero; wrapping subtraction is intentional.
+const fn zero_byte(word: u64) -> bool {
+    word.wrapping_sub(0x0101_0101_0101_0101) & !word & 0x8080_8080_8080_8080 != 0
 }
 
 struct Plain<'a>(&'a mut String);
@@ -216,9 +314,22 @@ fn token<S: Sink>(token: Token<'_>, sink: &mut S) -> Result<(), S::Error> {
 }
 
 fn quoted<S: Sink>(input: &str, sink: &mut S) -> Result<(), S::Error> {
+    if sink.verbatim_quotes(input)? {
+        sink.write("\"")?;
+        sink.write(input)?;
+        return sink.write("\"");
+    }
     sink.scan(input.len())?;
     sink.write("\"")?;
-    for character in input.chars() {
+    let mut start = 0;
+    for (index, character) in input.char_indices() {
+        if !matches!(character, '\0'..='\u{1f}' | '"' | '\\') {
+            continue;
+        }
+        sink.note_escape()?;
+        if start < index {
+            sink.write(&input[start..index])?;
+        }
         match character {
             '"' => sink.write("\\\"")?,
             '\\' => sink.write("\\\\")?,
@@ -227,22 +338,22 @@ fn quoted<S: Sink>(input: &str, sink: &mut S) -> Result<(), S::Error> {
             '\t' => sink.write("\\t")?,
             '\u{8}' => sink.write("\\b")?,
             '\u{c}' => sink.write("\\f")?,
-            '\0'..='\u{1f}' => {
+            _ => {
                 const HEX: [&str; 16] = [
                     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f",
                 ];
-                // This branch contains only ASCII control scalars (0..=31).
+                // All other escaped scalars are ASCII controls (0..=31).
                 let code = usize::try_from(u32::from(character))
                     .expect("INVARIANT: ASCII controls fit usize");
                 sink.write("\\u00")?;
                 sink.write(HEX[code >> 4])?;
                 sink.write(HEX[code & 15])?;
             }
-            _ => {
-                let mut bytes = [0; 4];
-                sink.write(character.encode_utf8(&mut bytes))?;
-            }
         }
+        start = index + character.len_utf8();
+    }
+    if start < input.len() {
+        sink.write(&input[start..])?;
     }
     sink.write("\"")
 }
@@ -290,16 +401,64 @@ pub(super) fn to_json_scratch(
     sink.finish_scratch()
 }
 
+pub(super) fn hash_part(
+    node: &Node,
+    builder: &mut crate::digest::DigestBuilder,
+    governor: &mut Governor,
+) -> Result<(), StopReason> {
+    const CONTROLS: u64 = 384;
+    const _: () = assert!(
+        core::mem::size_of::<(
+            ScratchVec<Frame<'static>>,
+            HashSink<'static>,
+            Frame<'static>,
+            Event<'static>,
+            Token<'static>,
+            ScratchLease,
+            Result<(), StopReason>,
+            (u64, bool),
+            core::slice::Iter<'static, [u8; 8]>,
+            core::slice::Iter<'static, u8>,
+            u64,
+        )>() as u64
+            <= CONTROLS
+    );
+    let _controls = governor.lease_scratch(CONTROLS)?;
+    governor.charge(Resource::Depth, 0)?;
+    let mut frames = ScratchVec::new(governor);
+    frames.push(Frame::new(node))?;
+    let (bytes, unescaped) = {
+        let mut count = HashSink {
+            governor,
+            builder: None,
+            bytes: 0,
+            unescaped: true,
+        };
+        emit_frames(&mut frames, None, &mut count)?;
+        (count.bytes, count.unescaped)
+    };
+    builder.update(&bytes.to_be_bytes());
+    frames.push(Frame::new(node))?;
+    let mut sink = HashSink {
+        governor,
+        builder: Some(builder),
+        bytes: 0,
+        unescaped,
+    };
+    emit_frames(&mut frames, None, &mut sink)?;
+    sink.governor.check()
+}
+
 static NULL: Node = Node::new(Value::Null);
 static OBJECT: Node = Node::new(Value::Object(Vec::new()));
 
-fn emit_frames<'a>(
+fn emit_frames<'a, S: GovernedSink>(
     frames: &mut ScratchVec<Frame<'a>>,
     fields: Option<&'a [JsonField<'a>]>,
-    sink: &mut Governed<'_>,
+    sink: &mut S,
 ) -> Result<(), StopReason> {
     while !frames.is_empty() {
-        sink.governor.charge(Resource::Work, 1)?;
+        sink.governor().charge(Resource::Work, 1)?;
         // The loop condition proves a frame exists, and next_event borrows only
         // immutable source nodes; growing the cursor stack cannot invalidate it.
         let root_fields = if frames.len() == 1 { fields } else { None };
@@ -310,7 +469,7 @@ fn emit_frames<'a>(
             .next_event(root_fields);
         match event {
             Some(Event::Child(child)) => {
-                sink.governor
+                sink.governor()
                     .charge(Resource::Depth, saturating_size(frames.len()))?;
                 frames.push(Frame::new(child))?;
             }

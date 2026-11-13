@@ -105,6 +105,7 @@
 //! charge as documented on them. Every charge is a function of the
 //! recognized turn and the tool set alone.
 use super::rules::{self, Rule};
+use super::stream_capture::{CallSite, NativeTrace};
 use super::{
     ArgOrigin, CallSegment, Closure, CompiledTool, DialectId, Effects, GenerationStop, ObjectShape,
     ParameterShape, Piece, RawCall, ReasoningSegment, RecognizedTurn, Rejection, RepairPolicy,
@@ -112,8 +113,8 @@ use super::{
 };
 use crate::contract::saturating_size as size;
 use crate::contract::{
-    Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Resource, ScratchVec, SourceSpan,
-    StopReason, Validation,
+    Evidence, Governor, Inference, InferenceKind, Loss, Outcome, Resource, ScratchLease,
+    ScratchVec, SourceSpan, StopReason, Validation, invalid_input, push_scratch,
 };
 use crate::digest::{Digest, DigestBuilder};
 use crate::grammar::CaptureKind;
@@ -121,6 +122,7 @@ use crate::grammar::edit::{EditOperator, LossKind};
 use crate::json::{Member, Node, Value, pointer_segment};
 use crate::matching::{self, Candidate, MatchRequest, SelectionPolicy};
 use crate::provenance::{Derivation, Forest, ProvenanceNode};
+use crate::schema::ValidationReport;
 use crate::schema::recovery::{FOLDED_NAME_COST, name_cost};
 use crate::search::{Acceptance, Change, Ledger, Proposals, Search, SearchState};
 use core::fmt;
@@ -889,6 +891,27 @@ pub fn resolve_forest(
     policies: &Policies,
     governor: &mut Governor,
 ) -> Result<ResolvedTurn, StopReason> {
+    resolve_kernel(tools, turn, policies, governor, None)
+}
+
+pub(super) fn resolve_traced(
+    tools: &ToolSet,
+    turn: &RecognizedTurn,
+    policies: &Policies,
+    governor: &mut Governor,
+) -> Result<(ResolvedTurn, NativeTrace), StopReason> {
+    let mut trace = NativeTrace::new(governor);
+    let resolved = resolve_kernel(tools, turn, policies, governor, Some(&mut trace))?;
+    Ok((resolved, trace))
+}
+
+fn resolve_kernel(
+    tools: &ToolSet,
+    turn: &RecognizedTurn,
+    policies: &Policies,
+    governor: &mut Governor,
+    mut trace: Option<&mut NativeTrace>,
+) -> Result<ResolvedTurn, StopReason> {
     governor.check()?;
     policies.validate(tools)?;
     let mut candidates = Vec::with_capacity(tools.tools().len());
@@ -911,16 +934,29 @@ pub fn resolve_forest(
         candidates,
     };
     let mut pieces = Vec::with_capacity(turn.pieces().len());
-    for piece in turn.pieces() {
+    for (piece_index, piece) in turn.pieces().iter().enumerate() {
         governor.charge(Resource::Work, 1)?;
         pieces.push(match piece {
-            Piece::Segment(segment) => ResolvedPiece::Segment(resolver.segment(segment, governor)?),
+            Piece::Segment(segment) => ResolvedPiece::Segment(resolver.segment(
+                segment,
+                CallSite([piece_index, 0, 0, 0]),
+                trace.as_deref_mut(),
+                governor,
+            )?),
             Piece::Choice(choice) => {
                 let mut readings = Vec::with_capacity(choice.readings.len());
-                for reading in &choice.readings {
+                for (branch, reading) in choice.readings.iter().enumerate() {
                     let mut segments = Vec::with_capacity(reading.len());
-                    for segment in reading {
-                        segments.push(resolver.segment(segment, governor)?);
+                    let branch = branch
+                        .checked_add(1)
+                        .ok_or_else(|| invalid_input("capture branch identity overflows"))?;
+                    for (index, segment) in reading.iter().enumerate() {
+                        segments.push(resolver.segment(
+                            segment,
+                            CallSite([piece_index, branch, index, 0]),
+                            trace.as_deref_mut(),
+                            governor,
+                        )?);
                     }
                     readings.push(segments);
                 }
@@ -1149,6 +1185,110 @@ enum Slot {
     Kept(Member),
 }
 
+struct RankedCall {
+    reading: CallReading,
+    ordered: Vec<CallReading>,
+    native_order: ScratchVec<usize>,
+    competing: usize,
+}
+
+fn rank_readings(
+    groups: Vec<Vec<CallReading>>,
+    traced: bool,
+    governor: &mut Governor,
+) -> Result<RankedCall, StopReason> {
+    let total: usize = groups.iter().map(Vec::len).sum();
+    // The ranking records, the selection slots and the distinct
+    // readings are transient: at most two reading slots and two
+    // ranking-sized records per reading.
+    let _ranking =
+        governor.lease_scratch(size(total).saturating_mul(2 * (RANKED_BYTES + READING_BYTES)))?;
+    let mut slots: Vec<Option<CallReading>> = Vec::with_capacity(total);
+    let mut ranked: Vec<(u64, Digest, Digest, usize)> = Vec::with_capacity(total);
+    let mut raw_slots = ScratchVec::new(governor);
+    for (raw, group) in groups.into_iter().enumerate() {
+        for reading in group {
+            if traced {
+                push_scratch(&mut raw_slots, raw, governor)?;
+            }
+            let (content, full) = reading_digests(&reading, governor)?;
+            ranked.push((reading.cost, full, content, slots.len()));
+            slots.push(Some(reading));
+        }
+    }
+    // A total order: least cost first, then by digest; one reading per
+    // distinct call (tool, arguments, blocker), its best derivation.
+    ranked.sort_by_key(|&(cost, full, _, position)| (cost, full, position));
+    let mut unique: Vec<(Digest, usize)> = Vec::with_capacity(ranked.len());
+    for &(_, _, content, position) in &ranked {
+        if !unique.iter().any(|(known, _)| *known == content) {
+            unique.push((content, position));
+        }
+    }
+    let mut readings: Vec<Option<CallReading>> = unique
+        .iter()
+        .map(|&(_, position)| slots[position].take())
+        .collect();
+    drop(slots);
+    let admitted = |reading: &CallReading| {
+        reading.blocker.is_none()
+            && reading
+                .policy
+                .is_some_and(|policy| reading.repairs.unadmitted(policy).is_none())
+    };
+    let viable = |reading: &CallReading| reading.blocker.is_none();
+    let filter: &dyn Fn(&CallReading) -> bool = if readings.iter().flatten().any(admitted) {
+        &admitted
+    } else {
+        &viable
+    };
+    let first = readings
+        .iter()
+        .position(|reading| reading.as_ref().is_some_and(filter))
+        .unwrap_or(0);
+    let cost = readings[first].as_ref().map_or(0, |reading| reading.cost);
+    let tied: Vec<usize> = (0..readings.len())
+        .filter(|&index| {
+            index != first
+                && readings[index]
+                    .as_ref()
+                    .is_some_and(|reading| filter(reading) && reading.cost == cost)
+        })
+        .collect();
+    let competing = 1 + tied.len();
+    let reading = readings[first].take().expect("the selected reading");
+    // The alternatives are retained.
+    governor.charge(
+        Resource::ScratchBytes,
+        size(readings.len()).saturating_mul(READING_BYTES),
+    )?;
+    let mut native_order = ScratchVec::new(governor);
+    if traced {
+        push_scratch(&mut native_order, raw_slots[unique[first].1], governor)?;
+    }
+    let mut ordered: Vec<CallReading> = Vec::with_capacity(readings.len());
+    for index in tied {
+        if traced {
+            push_scratch(&mut native_order, raw_slots[unique[index].1], governor)?;
+        }
+        ordered.push(readings[index].take().expect("a tied reading"));
+    }
+    for (index, reading) in readings.into_iter().enumerate() {
+        if let Some(reading) = reading {
+            if traced {
+                push_scratch(&mut native_order, raw_slots[unique[index].1], governor)?;
+            }
+            ordered.push(reading);
+        }
+    }
+    Ok(RankedCall {
+        reading,
+        ordered,
+        native_order,
+        competing,
+    })
+}
+
 /// What resolution of one call knows about its context.
 struct Scope<'r> {
     raw: &'r RawCall,
@@ -1166,6 +1306,8 @@ impl<'a> Resolver<'a> {
     fn segment(
         &self,
         segment: &Segment,
+        site: CallSite,
+        mut trace: Option<&mut NativeTrace>,
         governor: &mut Governor,
     ) -> Result<ResolvedSegment, StopReason> {
         Ok(match segment {
@@ -1176,8 +1318,13 @@ impl<'a> Resolver<'a> {
                     size(reasoning.embedded.len()).saturating_mul(CALL_BYTES),
                 )?;
                 let mut embedded = Vec::with_capacity(reasoning.embedded.len());
-                for call in &reasoning.embedded {
-                    embedded.push(self.call(call, governor)?);
+                for (index, call) in reasoning.embedded.iter().enumerate() {
+                    embedded.push(self.call(
+                        call,
+                        site.embedded(index)?,
+                        trace.as_deref_mut(),
+                        governor,
+                    )?);
                 }
                 governor.charge(Resource::ScratchBytes, ENTRY_BYTES)?;
                 ResolvedSegment::Reasoning {
@@ -1186,8 +1333,11 @@ impl<'a> Resolver<'a> {
                 }
             }
             Segment::Call(segment) => {
-                let call = self.call(segment, governor)?;
+                let call = self.call(segment, site, trace.as_deref_mut(), governor)?;
                 if declaration_content(segment, &call, self.tools, governor)? {
+                    if let Some(trace) = trace {
+                        trace.discard(site, governor)?;
+                    }
                     ResolvedSegment::Content(segment.span.clone())
                 } else {
                     governor.charge(Resource::ScratchBytes, CALL_BYTES)?;
@@ -1252,6 +1402,8 @@ impl<'a> Resolver<'a> {
     fn call(
         &self,
         segment: &CallSegment,
+        site: CallSite,
+        trace: Option<&mut NativeTrace>,
         governor: &mut Governor,
     ) -> Result<ResolvedCall, StopReason> {
         let mut groups: Vec<Vec<CallReading>> = Vec::with_capacity(segment.readings.len());
@@ -1265,70 +1417,12 @@ impl<'a> Resolver<'a> {
             }
             groups.push(readings);
         }
-        let total: usize = groups.iter().map(Vec::len).sum();
-        // The ranking records, the selection slots and the distinct
-        // readings are transient: at most two reading slots and two
-        // ranking-sized records per reading.
-        let _ranking = governor
-            .lease_scratch(size(total).saturating_mul(2 * (RANKED_BYTES + READING_BYTES)))?;
-        let mut slots: Vec<Option<CallReading>> = Vec::with_capacity(total);
-        let mut ranked: Vec<(u64, Digest, Digest, usize)> = Vec::with_capacity(total);
-        for reading in groups.into_iter().flatten() {
-            let (content, full) = reading_digests(&reading, governor)?;
-            ranked.push((reading.cost, full, content, slots.len()));
-            slots.push(Some(reading));
-        }
-        // A total order: least cost first, then by digest; one reading per
-        // distinct call (tool, arguments, blocker), its best derivation.
-        ranked.sort_by_key(|&(cost, full, _, position)| (cost, full, position));
-        let mut unique: Vec<(Digest, usize)> = Vec::with_capacity(ranked.len());
-        for &(_, _, content, position) in &ranked {
-            if !unique.iter().any(|(known, _)| *known == content) {
-                unique.push((content, position));
-            }
-        }
-        let mut readings: Vec<Option<CallReading>> = unique
-            .iter()
-            .map(|&(_, position)| slots[position].take())
-            .collect();
-        drop(slots);
-        let admitted = |reading: &CallReading| {
-            reading.blocker.is_none()
-                && reading
-                    .policy
-                    .is_some_and(|policy| reading.repairs.unadmitted(policy).is_none())
-        };
-        let viable = |reading: &CallReading| reading.blocker.is_none();
-        let filter: &dyn Fn(&CallReading) -> bool = if readings.iter().flatten().any(admitted) {
-            &admitted
-        } else {
-            &viable
-        };
-        let first = readings
-            .iter()
-            .position(|reading| reading.as_ref().is_some_and(filter))
-            .unwrap_or(0);
-        let cost = readings[first].as_ref().map_or(0, |reading| reading.cost);
-        let tied: Vec<usize> = (0..readings.len())
-            .filter(|&index| {
-                index != first
-                    && readings[index]
-                        .as_ref()
-                        .is_some_and(|reading| filter(reading) && reading.cost == cost)
-            })
-            .collect();
-        let competing = 1 + tied.len();
-        let reading = readings[first].take().expect("the selected reading");
-        // The alternatives are retained.
-        governor.charge(
-            Resource::ScratchBytes,
-            size(readings.len()).saturating_mul(READING_BYTES),
-        )?;
-        let mut ordered: Vec<CallReading> = Vec::with_capacity(readings.len());
-        for index in tied {
-            ordered.push(readings[index].take().expect("a tied reading"));
-        }
-        ordered.extend(readings.into_iter().flatten());
+        let RankedCall {
+            reading,
+            ordered,
+            native_order,
+            competing,
+        } = rank_readings(groups, trace.is_some(), governor)?;
         let distinguishing = if competing > 1 {
             distinguishing(&reading, &ordered[0], governor)?
         } else {
@@ -1343,6 +1437,9 @@ impl<'a> Resolver<'a> {
         });
         let mut reading = reading;
         self.label_repeated_choice(&mut reading, &ordered, competing, governor)?;
+        if let Some(trace) = trace {
+            trace.record(site, segment, &native_order, competing, governor)?;
+        }
         let first = &segment.readings[0];
         Ok(ResolvedCall {
             span: segment.span.clone(),
@@ -1480,23 +1577,6 @@ impl<'a> Resolver<'a> {
         let cost = raw.edits.iter().fold(0_u64, |total, edit| {
             total.saturating_add(rules::of_operator(edit.operator).cost)
         });
-        let policies = self.policies;
-        let unresolved = |blocker: UnresolvedReason, tool: Option<&CompiledTool>, ledger| {
-            let effective = tool.map(|tool| policies.effective(tool));
-            CallReading {
-                tool: tool.map(|tool| tool.name().to_owned()),
-                effects: effective.map(|(effects, _)| effects),
-                policy: effective.map(|(_, policy)| policy),
-                arguments: raw.arguments.root.clone(),
-                cost,
-                repairs: ledger,
-                validations: Vec::new(),
-                blocker: Some(blocker),
-            }
-        };
-        // A reading that stays unresolved copies the arguments (`unresolved`
-        // above); each such copy is charged where it is made.
-        let copied = raw.arguments.root.estimated_bytes();
         let exact = raw
             .name
             .as_ref()
@@ -1516,8 +1596,15 @@ impl<'a> Resolver<'a> {
                 String::new(),
                 governor,
             )?;
-            governor.charge(Resource::ScratchBytes, READING_BYTES.saturating_add(copied))?;
-            return Ok(vec![unresolved(UnresolvedReason::Truncated, exact, ledger)]);
+            governor.charge(Resource::ScratchBytes, READING_BYTES)?;
+            return Ok(vec![self.unresolved_reading(
+                raw,
+                UnresolvedReason::Truncated,
+                exact,
+                ledger,
+                cost,
+                governor,
+            )?]);
         }
         let incomplete = (raw.closure == Closure::Unterminated)
             .then(|| self.incomplete(raw))
@@ -1550,8 +1637,14 @@ impl<'a> Resolver<'a> {
             )?;
             let (tool, change) = match target {
                 Target::Blocked(reason) => {
-                    governor.charge(Resource::ScratchBytes, copied)?;
-                    readings.push(unresolved(early.clone().unwrap_or(reason), None, ledger));
+                    readings.push(self.unresolved_reading(
+                        raw,
+                        early.clone().unwrap_or(reason),
+                        None,
+                        ledger,
+                        cost,
+                        governor,
+                    )?);
                     continue;
                 }
                 Target::Tool(tool, change) => (tool, change),
@@ -1562,10 +1655,14 @@ impl<'a> Resolver<'a> {
                 ledger.record(rule, evidence, String::new(), value, governor)?;
             }
             if let Some(reason) = early.clone() {
-                governor.charge(Resource::ScratchBytes, copied)?;
-                let mut reading = unresolved(reason, Some(tool), ledger);
-                reading.cost = cost;
-                readings.push(reading);
+                readings.push(self.unresolved_reading(
+                    raw,
+                    reason,
+                    Some(tool),
+                    ledger,
+                    cost,
+                    governor,
+                )?);
                 continue;
             }
             let produced = self.arguments(raw, tool, ledger, cost, governor)?;
@@ -1577,6 +1674,36 @@ impl<'a> Resolver<'a> {
             readings.extend(produced);
         }
         Ok(readings)
+    }
+
+    /// Admit each retained unresolved clone at its actual construction site.
+    fn unresolved_reading(
+        &self,
+        raw: &RawCall,
+        blocker: UnresolvedReason,
+        tool: Option<&CompiledTool>,
+        ledger: CallLedger,
+        cost: u64,
+        governor: &mut Governor,
+    ) -> Result<CallReading, StopReason> {
+        governor.charge(
+            Resource::ScratchBytes,
+            raw.arguments
+                .root
+                .estimated_bytes()
+                .saturating_add(size(tool.map_or(0, |tool| tool.name().len()))),
+        )?;
+        let effective = tool.map(|tool| self.policies.effective(tool));
+        Ok(CallReading {
+            tool: tool.map(|tool| tool.name().to_owned()),
+            effects: effective.map(|(effects, _)| effects),
+            policy: effective.map(|(_, policy)| policy),
+            arguments: raw.arguments.root.clone(),
+            cost,
+            repairs: ledger,
+            validations: Vec::new(),
+            blocker: Some(blocker),
+        })
     }
 
     /// Why a call completed by end-of-output closers is not otherwise
@@ -1899,11 +2026,13 @@ impl<'a> Resolver<'a> {
             let mut validations = Vec::new();
             let mut arguments = arguments;
             if blocker.is_none() {
-                let (typed, ledger) = self.schema_typed(raw, tool, arguments, governor)?;
-                arguments = typed;
-                repairs.extend(ledger);
-                let report = tool.schema().validate_with(&arguments, governor)?;
-                let validation = report.to_validation();
+                let typed = self.schema_typed(raw, tool, arguments, governor)?;
+                arguments = typed.arguments;
+                repairs.extend(typed.ledger);
+                // Reusing an already completed validation still observes the
+                // operation's current cancellation or sticky refusal state.
+                governor.check()?;
+                let validation = typed.report.to_validation();
                 governor.charge(
                     Resource::ScratchBytes,
                     size(
@@ -1952,10 +2081,10 @@ impl<'a> Resolver<'a> {
         tool: &CompiledTool,
         mut arguments: Node,
         governor: &mut Governor,
-    ) -> Result<(Node, CallLedger), StopReason> {
+    ) -> Result<TypedArguments, StopReason> {
         let mut ledger = CallLedger::default();
         if !holds_unmodeled(&tool.argument_shape().arguments) {
-            return Ok((arguments, ledger));
+            return TypedArguments::validate(arguments, ledger, tool, governor);
         }
         let mut sites = Vec::new();
         schema_sites(
@@ -1969,17 +2098,15 @@ impl<'a> Resolver<'a> {
             governor,
         )?;
         if sites.is_empty() {
-            return Ok((arguments, ledger));
+            return TypedArguments::validate(arguments, ledger, tool, governor);
         }
         let rule = rules::resolution_rule("tool_call.value.schema-typed");
-        let Some((typed, accepted, both)) =
-            schema_rounds(tool, &sites, arguments.clone(), governor)?
-        else {
-            return Ok((arguments, ledger));
+        let Some(round) = schema_rounds(tool, &sites, arguments.clone(), governor)? else {
+            return TypedArguments::validate(arguments, ledger, tool, governor);
         };
-        arguments = typed;
+        arguments = round.arguments;
         for (index, site) in sites.iter().enumerate() {
-            if !accepted[index] && !both[index] {
+            if !round.accepted[index] && !round.both[index] {
                 continue;
             }
             let keywords: Vec<String> = tool
@@ -1995,7 +2122,7 @@ impl<'a> Resolver<'a> {
             };
             let reading = site.reading.to_json();
             let kind = json_kind(&site.reading.value);
-            let explanation = if accepted[index] {
+            let explanation = if round.accepted[index] {
                 format!(
                     "read XML text `{}` as the JSON {kind} `{reading}`: the exact schema at `{}`{keywords} admits it and not the verbatim string",
                     site.text, site.schema
@@ -2014,7 +2141,12 @@ impl<'a> Resolver<'a> {
             );
             ledger.record(rule, evidence, String::new(), String::new(), governor)?;
         }
-        Ok((arguments, ledger))
+        Ok(TypedArguments {
+            arguments,
+            ledger,
+            report: round.report,
+            _metadata: round.metadata,
+        })
     }
 
     /// Every reading of an object scope's members against `shape`.
@@ -2321,18 +2453,16 @@ impl Resolver<'_> {
             return self.collect(scope, parameter, item, occurrences, &here, governor);
         }
         if occurrences.len() == 1 {
-            let occurrence = &occurrences[0];
+            // The length guard proves this iterator has exactly one owner.
+            let Occurrence { value, source, .. } = occurrences
+                .into_iter()
+                .next()
+                .expect("the occurrence count is one");
             let site = Site {
                 pointer: here.pointer,
-                source: occurrence.source.clone(),
+                source,
             };
-            return self.typed(
-                scope,
-                occurrence.value.clone(),
-                &parameter.value,
-                &site,
-                governor,
-            );
+            return self.typed(scope, value, &parameter.value, &site, governor);
         }
         // A repeated parameter that may not repeat: first and last readings.
         let rule = rules::resolution_rule("tool_call.parameter.repeated");
@@ -2370,6 +2500,12 @@ impl Resolver<'_> {
                     occurrence.value.to_json(),
                     governor,
                 )?;
+            }
+            if matches!(
+                &parameter.value,
+                ValueShape::String(_) | ValueShape::Unmodeled
+            ) {
+                governor.charge(Resource::ScratchBytes, occurrence.value.estimated_bytes())?;
             }
             for mut typed in self.typed(
                 scope,
@@ -2512,7 +2648,11 @@ impl Resolver<'_> {
         governor.charge(Resource::Work, 1)?;
         governor.charge(
             Resource::ScratchBytes,
-            value.estimated_bytes().saturating_add(TYPED_BYTES),
+            if matches!(shape, ValueShape::String(_) | ValueShape::Unmodeled) {
+                TYPED_BYTES
+            } else {
+                value.estimated_bytes().saturating_add(TYPED_BYTES)
+            },
         )?;
         match shape {
             ValueShape::String(_) | ValueShape::Unmodeled => Ok(vec![Typed::plain(value)]),
@@ -2537,6 +2677,9 @@ impl Resolver<'_> {
                     blocker: None,
                 })];
                 for (index, value) in values.iter().enumerate() {
+                    if matches!(item.as_ref(), ValueShape::String(_) | ValueShape::Unmodeled) {
+                        governor.charge(Resource::ScratchBytes, value.estimated_bytes())?;
+                    }
                     let typed = self.typed(
                         scope,
                         value.clone(),
@@ -2888,13 +3031,11 @@ impl Names<'_> {
         state: &Assignment<'_>,
         governor: &mut Governor,
     ) -> Result<Vec<Slot>, StopReason> {
-        let mut slots: Vec<Slot> = Vec::with_capacity(self.members.len() + state.moves.len());
-        let mut members: Vec<Member> = self.members.to_vec();
         // The copied members, and per member its slot, occurrence and
         // source pointer.
         governor.charge(
             Resource::ScratchBytes,
-            members
+            self.members
                 .iter()
                 .map(|member| {
                     MEMBER_BYTES
@@ -2911,6 +3052,8 @@ impl Names<'_> {
                 })
                 .sum(),
         )?;
+        let mut slots: Vec<Slot> = Vec::with_capacity(self.members.len() + state.moves.len());
+        let mut members: Vec<Member> = self.members.to_vec();
         let mut moved: Vec<(usize, Occurrence)> = Vec::new();
         for &(member, child, index) in &state.moves {
             if let Value::Object(children) = &members[member as usize].value.value {
@@ -3170,7 +3313,7 @@ pub(super) fn schema_readback(
     if sites.is_empty() {
         return Ok(Some(raw.root.clone()));
     }
-    Ok(schema_rounds(tool, &sites, raw.root.clone(), governor)?.map(|(typed, _, _)| typed))
+    Ok(schema_rounds(tool, &sites, raw.root.clone(), governor)?.map(|round| round.arguments))
 }
 
 /// Collect every XML-text string inside the unmodeled values of an object
@@ -3295,29 +3438,106 @@ fn unmodeled_sites(
     Ok(())
 }
 
+/// The current report and arguments move together; metadata outlives the
+/// report through ledger construction, publication or refusal.
+struct TypedArguments {
+    arguments: Node,
+    ledger: CallLedger,
+    report: ValidationReport,
+    _metadata: ScratchLease,
+}
+
+impl TypedArguments {
+    fn validate(
+        arguments: Node,
+        ledger: CallLedger,
+        tool: &CompiledTool,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        let metadata = governor.lease_scratch(SCHEMA_REPORT_CONTROL_BYTES)?;
+        let report = tool.schema().validate_with(&arguments, governor)?;
+        Ok(Self {
+            arguments,
+            ledger,
+            report,
+            _metadata: metadata,
+        })
+    }
+}
+
+/// The last actual validation of the current round, with its exact argument
+/// value. Counterfactual quiet-site probes never replace either field.
+struct SchemaRound {
+    arguments: Node,
+    accepted: Vec<bool>,
+    both: Vec<bool>,
+    report: ValidationReport,
+    metadata: ScratchLease,
+}
+
+impl SchemaRound {
+    const fn new(
+        arguments: Node,
+        accepted: Vec<bool>,
+        both: Vec<bool>,
+        report: ValidationReport,
+        metadata: ScratchLease,
+    ) -> Self {
+        Self {
+            arguments,
+            accepted,
+            both,
+            report,
+            metadata,
+        }
+    }
+}
+
+const SCHEMA_REPORT_CONTROL_BYTES: u64 = 640;
+const _: () = assert!(
+    core::mem::size_of::<(
+        TypedArguments,
+        Result<TypedArguments, StopReason>,
+        ScratchLease
+    )>() as u64
+        <= SCHEMA_REPORT_CONTROL_BYTES
+);
+const _: () = assert!(
+    core::mem::size_of::<(
+        SchemaRound,
+        Result<Option<SchemaRound>, StopReason>,
+        ScratchLease,
+    )>() as u64
+        <= SCHEMA_REPORT_CONTROL_BYTES
+);
+
+/// An unevaluable schema types nothing; argument validation retains its
+/// ordinary diagnostic. Resource and cancellation refusals still propagate.
+fn round_validation(
+    tool: &CompiledTool,
+    instance: &Node,
+    governor: &mut Governor,
+) -> Result<Option<ValidationReport>, StopReason> {
+    match tool.schema().validate_with(instance, governor) {
+        Ok(report) => Ok(Some(report)),
+        Err(StopReason::InvalidInput(_)) => Ok(None),
+        Err(reason) => Err(reason),
+    }
+}
+
 /// The schema-typing rounds of [`Resolver::schema_typed`] over `sites`:
 /// the arguments with the accepted JSON readings, and per site whether its
 /// JSON reading was taken and whether the schema admits both readings.
+/// The retained report validates that same current argument value.
 /// `None` when the validator cannot evaluate the schema.
-#[allow(clippy::type_complexity)]
 fn schema_rounds(
     tool: &CompiledTool,
     sites: &[SchemaSite],
     mut arguments: Node,
     governor: &mut Governor,
-) -> Result<Option<(Node, Vec<bool>, Vec<bool>)>, StopReason> {
-    // A schema the validator cannot evaluate (a `$ref` recurring without
-    // instance progress) types nothing: the verbatim text stays, and the
-    // arguments' own validation reports the schema as before.
-    let validate = |instance: &Node, governor: &mut Governor| match tool
-        .schema()
-        .validate_with(instance, governor)
-    {
-        Ok(report) => Ok(Some(report)),
-        Err(StopReason::InvalidInput(_)) => Ok(None),
-        Err(reason) => Err(reason),
-    };
-    let Some(mut report) = validate(&arguments, governor)? else {
+) -> Result<Option<SchemaRound>, StopReason> {
+    let owner = governor.lease_scratch(SCHEMA_REPORT_CONTROL_BYTES)?;
+    let Some(mut report) = round_validation(tool, &arguments, governor)? else {
         return Ok(None);
     };
     let flip = |base: &Node, indices: &[usize], governor: &mut Governor| {
@@ -3344,7 +3564,7 @@ fn schema_rounds(
             break;
         }
         let candidate = flip(&arguments, &implicated, governor)?;
-        let Some(tried) = validate(&candidate, governor)? else {
+        let Some(tried) = round_validation(tool, &candidate, governor)? else {
             break;
         };
         let after = related_counts(&tried.violations, sites, governor)?;
@@ -3363,7 +3583,7 @@ fn schema_rounds(
         }
         if !better.is_empty() {
             let next = flip(&arguments, &better, governor)?;
-            if let Some(next_report) = validate(&next, governor)?
+            if let Some(next_report) = round_validation(tool, &next, governor)?
                 && next_report.violations.len() < report.violations.len()
             {
                 arguments = next;
@@ -3381,7 +3601,7 @@ fn schema_rounds(
                 continue;
             }
             let next = flip(&arguments, &[index], governor)?;
-            let Some(next_report) = validate(&next, governor)? else {
+            let Some(next_report) = round_validation(tool, &next, governor)? else {
                 continue;
             };
             let after = related_counts(&next_report.violations, sites, governor)?;
@@ -3407,14 +3627,15 @@ fn schema_rounds(
     let mut both = vec![false; sites.len()];
     if !quiet.is_empty() {
         let candidate = flip(&arguments, &quiet, governor)?;
-        if let Some(tried) = validate(&candidate, governor)? {
+        if let Some(tried) = round_validation(tool, &candidate, governor)? {
             let after = related_counts(&tried.violations, sites, governor)?;
             for &index in &quiet {
                 both[index] = after[index] == 0;
             }
         }
     }
-    Ok(Some((arguments, accepted, both)))
+    let round = SchemaRound::new(arguments, accepted, both, report, owner);
+    Ok(Some(round))
 }
 
 /// Per site, how many of `violations` concern it: a violation at the
@@ -3770,44 +3991,38 @@ fn reading_digests(
     reading: &CallReading,
     governor: &mut Governor,
 ) -> Result<(Digest, Digest), StopReason> {
-    // The arguments' JSON is the only transient copy: written into a
-    // buffer sized (and leased) by its conservative estimate, so it is
-    // allocated once; every other part streams into the digests.
-    let estimate = reading.arguments.estimated_bytes();
-    let lease = governor.lease_scratch(estimate)?;
-    let mut json = String::with_capacity(usize::try_from(estimate).unwrap_or(usize::MAX));
-    reading.arguments.write_json(&mut json);
+    fn part(
+        builder: &mut DigestBuilder,
+        bytes: &[u8],
+        governor: &mut Governor,
+    ) -> Result<(), StopReason> {
+        governor.charge(Resource::Work, size(bytes.len()).saturating_add(8))?;
+        builder.update(&(bytes.len() as u64).to_be_bytes());
+        builder.update(bytes);
+        Ok(())
+    }
     let blocker = reading
         .blocker
         .as_ref()
         .map_or_else(String::new, ToString::to_string);
     let mut builder = DigestBuilder::new();
-    let mut encoded = 0_usize;
-    let mut spans = 0_usize;
-    let mut part = |builder: &mut DigestBuilder, bytes: &[u8]| {
-        builder.update(&(bytes.len() as u64).to_be_bytes());
-        builder.update(bytes);
-        encoded += 8 + bytes.len();
-    };
     part(
         &mut builder,
         reading.tool.as_deref().unwrap_or("").as_bytes(),
-    );
-    part(&mut builder, json.as_bytes());
-    part(&mut builder, blocker.as_bytes());
-    drop(json);
-    drop(lease);
+        governor,
+    )?;
+    reading.arguments.hash_json_part(&mut builder, governor)?;
+    part(&mut builder, blocker.as_bytes(), governor)?;
     let content = builder.clone().finish();
     for evidence in &reading.repairs.evidence {
-        part(&mut builder, evidence.rule.as_bytes());
-        part(&mut builder, evidence.explanation.as_bytes());
+        part(&mut builder, evidence.rule.as_bytes(), governor)?;
+        part(&mut builder, evidence.explanation.as_bytes(), governor)?;
         if let Some(span) = &evidence.span {
+            governor.charge(Resource::Work, 16)?;
             builder.update(&(span.bytes.start as u64).to_be_bytes());
             builder.update(&(span.bytes.end as u64).to_be_bytes());
-            spans += 16;
         }
     }
-    governor.charge(Resource::Work, size(encoded + spans))?;
     Ok((content, builder.finish()))
 }
 

@@ -710,6 +710,10 @@ pub struct ScratchVec<T> {
     reserved: u64,
 }
 
+/// Capacity from which [`ScratchVec::reserve_compact`] grows by one half
+/// instead of doubling.
+const COMPACT_GROWTH_FROM: usize = 64 * 1024;
+
 /// Admit one insertion and any relocation before growing a scratch vector.
 pub(crate) fn push_scratch<T: ScratchCharge>(
     values: &mut ScratchVec<T>,
@@ -744,6 +748,52 @@ impl<T: ScratchCharge> ScratchVec<T> {
         let Some(target) = grown_capacity(self.inner.len(), capacity, additional) else {
             return Err(StopReason::BudgetExceeded(Resource::ScratchBytes));
         };
+        self.reserve_to(target)
+    }
+
+    /// Relocation work to admit for one element appended under
+    /// [`ScratchVec::reserve_compact`], before it is appended. While capacity
+    /// doubles (below 64 KiB), the elements relocated so far never exceed
+    /// twice the elements appended; once capacity grows by one half, they
+    /// never exceed three times. Admitting two or three units per appended
+    /// element therefore covers every relocation copy before it happens.
+    pub(crate) const fn compact_relocation_work(&self) -> u64 {
+        if self.inner.capacity() < COMPACT_GROWTH_FROM {
+            2
+        } else {
+            3
+        }
+    }
+
+    /// Retained source uses smaller geometric steps while preserving linear
+    /// amortized relocation. Callers admit relocation through
+    /// [`ScratchVec::compact_relocation_work`] for each appended element.
+    pub(crate) fn reserve_compact(&mut self, additional: usize) -> Result<(), StopReason> {
+        let capacity = self.inner.capacity();
+        let needed = self
+            .inner
+            .len()
+            .checked_add(additional)
+            .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes))?;
+        if needed <= capacity {
+            return Ok(());
+        }
+        // Small sources keep the original allocation frequency. Large
+        // retained sources limit spare capacity with compact geometric steps.
+        if capacity < COMPACT_GROWTH_FROM {
+            return self.reserve_to(needed.max(capacity * 2).max(4));
+        }
+        let target = capacity
+            .checked_add(capacity / 2 + capacity % 2)
+            .ok_or(StopReason::BudgetExceeded(Resource::ScratchBytes))?
+            .max(needed)
+            .max(4);
+        self.reserve_to(target)
+    }
+
+    /// Both growth policies share the same admitted fallible allocation.
+    fn reserve_to(&mut self, target: usize) -> Result<(), StopReason> {
+        let capacity = self.inner.capacity();
         if target == capacity {
             return Ok(());
         }
@@ -960,6 +1010,18 @@ pub struct ScratchString {
 }
 
 impl ScratchString {
+    /// Copy text after admitting its work, retaining fallible scratch ownership.
+    /// Empty text still admits one unit of work; refusal preserves its cause.
+    pub(crate) fn copy_from(text: &str, governor: &mut Governor) -> Result<Self, StopReason> {
+        governor.charge(
+            Resource::Work,
+            saturating_size(text.len()).saturating_add(1),
+        )?;
+        let mut output = Self::new(governor);
+        output.push_str(text)?;
+        Ok(output)
+    }
+
     /// An empty string charging against `governor`'s scratch meter.
     #[must_use]
     pub fn new(governor: &Governor) -> Self {

@@ -5,7 +5,8 @@ use purrassist_core::grammar::edit::EditOperator;
 use purrassist_core::grammar::{CaptureKind, GrammarRecipe};
 use purrassist_core::tool_call::{
     DialectId, DialectSet, Effects, GenerationStop, MarkupFamily, Param, ReasoningPolicy,
-    RecognizedTurn, Recognizer, ToolCalls, ToolDefinition, ToolRecoveryRequest, ToolSet,
+    RecognizedTurn, Recognizer, StreamEvent, ToolCalls, ToolDefinition, ToolRecoveryRequest,
+    ToolSet,
 };
 use purrassist_core::{Budget, Governor, Outcome};
 
@@ -138,11 +139,20 @@ fn assert_long_initial_names_retain_calls() {
         (DialectId::KimiK2Stripped, format!("{name}{arguments}")),
         (DialectId::MistralV11Stripped, format!("{name}{arguments}")),
     ] {
-        let result = tools.recover(
-            input.as_bytes(),
-            &ToolRecoveryRequest::default(),
-            &set([dialect.clone()]),
+        let dialects = set([dialect.clone()]);
+        let request = ToolRecoveryRequest::default();
+        let result = tools.recover(input.as_bytes(), &request, &dialects);
+        // Initial class runs belong to candidates, even past the finite
+        // lexical/UTF-8 holdback bound, before a call has committed.
+        let mut stream = tools.stream_with_dialects(request, &dialects);
+        assert!(name.len() > stream.hold_back_bound());
+        let _ = stream.feed_collect(name.as_bytes());
+        assert_eq!(
+            (stream.held_bytes(), stream.candidate_bytes()),
+            (0, name.len())
         );
+        let _ = stream.feed_collect(&input.as_bytes()[name.len()..]);
+        assert_eq!(stream.finish(GenerationStop::Stop), result);
         assert_eq!(result.receipt.sources[0].bytes, input.as_bytes());
         let (Outcome::Resolved(calls) | Outcome::BestGuess(calls)) = &result.outcome else {
             panic!("{}: {:?}", dialect.id(), result.outcome)
@@ -386,7 +396,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
         &ToolRecoveryRequest::default(),
         DialectSet::built_in(),
     );
-    let Outcome::Resolved(calls) = result.outcome else {
+    let Outcome::Resolved(calls) = &result.outcome else {
         panic!("prefer the exact singleton object framing: {result:?}")
     };
     assert_eq!(calls.calls.len(), 1);
@@ -406,6 +416,7 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
             .contains(&DialectId::MistralV3Stripped)
     );
     assert_eq!(result.receipt.alternatives.len(), 0);
+    assert_native_frame_events(&array, &result);
 
     assert_nested_arguments_remain_data();
     assert_failed_native_frame_preserves_content();
@@ -447,6 +458,43 @@ fn exact_bare_json_label_precedes_derived_labels_for_the_same_call() {
     }
     for fenced in [format!("```json\n{array}\n```"), prefaced] {
         assert_fenced_calls_not_usable(&fenced);
+    }
+}
+
+/// Dominated exterior frames retain dialect evidence without blocking the
+/// selected object's complete events or publishing their extraction revisions.
+fn assert_native_frame_events(input: &str, batch: &purrassist_core::AssistResult<ToolCalls>) {
+    let tools = tools();
+    for split in [1, input.len() - 1, input.len()] {
+        let mut stream =
+            tools.stream_with_dialects(ToolRecoveryRequest::default(), DialectSet::built_in());
+        let mut events = Vec::new();
+        stream.feed(&input.as_bytes()[..split], &mut events);
+        stream.feed(&input.as_bytes()[split..], &mut events);
+        assert_eq!(
+            &stream.finish_with_events(GenerationStop::Stop, &mut events),
+            batch
+        );
+        let (mut started, mut completed, mut content, mut arguments) =
+            (0, 0, Vec::new(), Vec::new());
+        for event in events {
+            match event {
+                StreamEvent::CallStarted {
+                    index: 0,
+                    offset: 1,
+                    ..
+                } => started += 1,
+                StreamEvent::CallComplete { index: 0, .. } => completed += 1,
+                StreamEvent::ContentDelta { raw, .. } => content.extend(raw),
+                StreamEvent::ArgumentDelta { index: 0, raw } => arguments.extend(raw),
+                StreamEvent::CallName { index: 0, .. }
+                | StreamEvent::ParameterComplete { index: 0, .. } => {}
+                other => panic!("dominated frame changed native publication: {other:?}"),
+            }
+        }
+        assert_eq!((started, completed), (1, 1));
+        assert_eq!(content, b"[]");
+        assert_eq!(arguments, br#"{"text":"retained"}"#);
     }
 }
 

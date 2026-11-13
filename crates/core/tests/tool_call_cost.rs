@@ -21,7 +21,7 @@ const RESOURCES: &str = include_str!("../../../docs/RESOURCES.md");
 const COST_SOURCE: &str = include_str!("../src/grammar/cost.rs");
 const SECTION: &str = "## Tool-call recovery cost bound";
 /// The published bound, exactly as `docs/RESOURCES.md` states it.
-const BOUND: &str = "work ≤ (2 + K_LEX + Σ_d K_d)·n + K_ERR·E,   K_d = K_THREAD·B_d";
+const BOUND: &str = "work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux,   K_d = K_THREAD·B_d";
 
 /// Every `grammar::cost` constant and its value.
 fn constants() -> Vec<(&'static str, u64)> {
@@ -308,10 +308,11 @@ fn busy_turn(calls: usize) -> String {
 /// every call needs a markup repair, with a contested stray opener after
 /// each, exhausts the fixed `Effort::Standard` preset explicitly, and is
 /// recovered with every call `Resolved` under `ToolRecoveryRequest::sized`:
-/// `⌈128 / 8⌉ = 16` candidates for each of its openers: 448 native ones (64
-/// calls, each opened at `<tool_call>` by three dialects and at `<function=`
-/// by one, and 64 stray lines, each opened by three dialects) plus 128 line-start
-/// name openers of the derived marker-suppressed dialects. Competing segmentations of
+/// `⌈128 / 8⌉ = 16` candidates for each of its 576 sizing occurrences:
+/// 128 `<tool_call>` tokens in three dialects, 64 `<function=` tokens in Qwen,
+/// and 128 `function` tokens in the `deepseek-v3-stripped.v1` opener allow-list.
+/// Sizing counts literal occurrences even where runtime framing forbids an
+/// attempt. Competing segmentations of
 /// the stray lines that recover the same calls are folded per span, so the
 /// readings charged grow with the calls instead of doubling per call.
 #[test]
@@ -324,10 +325,16 @@ fn busy_turn_resolves_every_call_under_sized() {
         purrassist_core::tool_call::DialectSet::built_in(),
     );
     assert_eq!(preset.outcome, Outcome::Unresolved);
+    // The preset's 128 candidates run out before its work does: measured on
+    // this branch, the preset stops after 750,421 work, and the full sized
+    // pass below costs 812,960. Main stops the same way after 783,294 work,
+    // and its full pass costs 951,127.
     assert_eq!(
         preset.receipt.stopped,
-        StopReason::BudgetExceeded(Resource::Candidates)
+        StopReason::BudgetExceeded(Resource::Candidates),
+        "{preset:#?}"
     );
+    assert_eq!(preset.receipt.usage.candidates, 128);
     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());
 
     // The native dialects open 448 times (the doc comment above); each
@@ -348,6 +355,21 @@ fn busy_turn_resolves_every_call_under_sized() {
     assert_eq!(openers - native_openers, 2 * 64);
     let request = ToolRecoveryRequest::sized(Effort::Standard, output.as_bytes());
     assert_eq!(request.budget.candidates, 128 + 16 * openers);
+    // The preset's 128 candidates alone are not enough: with the work the
+    // sized request allows, the candidate limit is what stops it.
+    let mut preset_candidates = ToolRecoveryRequest::new(Effort::Standard);
+    preset_candidates.budget.work = request.budget.work;
+    let limited = tools.recover(
+        output.as_bytes(),
+        &preset_candidates,
+        purrassist_core::tool_call::DialectSet::built_in(),
+    );
+    assert_eq!(limited.outcome, Outcome::Unresolved);
+    assert_eq!(
+        limited.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::Candidates),
+        "{limited:#?}"
+    );
     let result = tools.recover(
         output.as_bytes(),
         &request,

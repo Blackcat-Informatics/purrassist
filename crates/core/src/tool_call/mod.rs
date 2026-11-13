@@ -66,6 +66,9 @@ pub mod resolve;
 pub mod rules;
 mod scope;
 mod shape;
+mod stream;
+mod stream_capture;
+mod stream_finish;
 mod toolset;
 
 pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
@@ -109,7 +112,13 @@ pub use shape::{
     ArgumentShape, NameLiteral, ObjectShape, ParameterDefault, ParameterShape, PatternConstraint,
     ShapeStep, ValueShape,
 };
+pub use stream::{StreamEvent, ToolCallStream};
 pub use toolset::{CompiledTool, ToolSet, ToolSetError, collision_key, is_valid_name};
+
+/// Earliest retained source coordinate, ignoring absent boundaries.
+fn source_min(left: Option<usize>, right: Option<usize>) -> Option<usize> {
+    left.into_iter().chain(right).min()
+}
 
 /// The entry of `items`, sorted by the name `key` gives, whose name is
 /// exactly `name`: one binary search (tools of a set, members of a scope).

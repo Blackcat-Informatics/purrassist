@@ -203,7 +203,7 @@ fn intern_reservation(node: &ProvenanceNode) -> u64 {
     node_bytes(node).saturating_mul(6).saturating_add(512)
 }
 /// A conservative bound on cloning `node` once into a published ledger.
-fn clone_reservation(node: &ProvenanceNode) -> u64 {
+pub(crate) fn clone_reservation(node: &ProvenanceNode) -> u64 {
     node_bytes(node).saturating_mul(2).saturating_add(128)
 }
 
