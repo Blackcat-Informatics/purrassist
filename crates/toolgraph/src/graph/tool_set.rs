@@ -73,7 +73,12 @@ impl ToolGraph {
     ///   file rule, mount rule and capability rule of the execution profile and
     ///   its subprofiles is write-free, no waiver or non-inherit exec transition
     ///   is present, and every nested subtool resolves in this graph and is itself
-    ///   proven. Network egress is not a write;
+    ///   proven. The proof is a static read of the execution-profile tree and the
+    ///   subtool closure only. It is not security admission: `tool.implementation`
+    ///   is not inspected, and network, Unix-socket, signal and ptrace allowances
+    ///   are treated as non-writes. `ReadOnly` also changes how core handles
+    ///   unknown arguments (its default `DropWithLoss`), so the choice is
+    ///   behavioural, not only a label. Admission remains #33 work;
     /// * policy: `RepairPolicy::Structural` when no parameter hint permits edit
     ///   distance, coercion or folding, otherwise `RepairPolicy::Tolerant`.
     ///

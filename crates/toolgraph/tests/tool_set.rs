@@ -6,8 +6,8 @@
 use purrassist_core::{
     Budget, Governor, Outcome, json,
     tool_call::{
-        DeclarationForm, DialectSet, Effects, RepairPolicy, ToolRecoveryRequest, ToolSet,
-        ToolSetError, ToolSource,
+        CallOutcome, DeclarationForm, DialectSet, Effects, RepairPolicy, ToolRecoveryRequest,
+        ToolSet, ToolSetError, UnresolvedReason,
     },
 };
 use purrassist_toolgraph::{
@@ -18,6 +18,8 @@ use purrdf_core::loss::LossProfile;
 
 const NAMESPACE: &str = "https://example.org/toolgraph#";
 const TOOLS: &str = include_str!("../../../docs/tool-graph/TOOLS.md");
+/// The encoder's pinned manifest for the worked example (the byte source of `tool_set`).
+const MANIFEST: &str = include_str!("data/worked_manifest.json");
 
 fn vocabulary() -> Vocabulary {
     Vocabulary::new(
@@ -92,6 +94,26 @@ fn a_reified_alias_recovers_and_the_exact_schema_still_validates() {
         r#"{"customer_id":"customer-17","limit":5}"#
     );
 
+    let forbidden = br#"<tool_call>{"name":"query_customer_orders","arguments":{"customer":"someone-else","limit":5}}</tool_call>"#;
+    let refused = tools.recover(
+        forbidden,
+        &ToolRecoveryRequest::default(),
+        DialectSet::built_in(),
+    );
+    let Outcome::Resolved(refused_calls) = refused.outcome else {
+        panic!("{:?}", refused.outcome);
+    };
+    assert!(
+        matches!(
+            refused_calls.calls[0].outcome,
+            CallOutcome::Unresolved {
+                reason: UnresolvedReason::SchemaValidation
+            }
+        ),
+        "the pattern constraint must hold through the alias: {:?}",
+        refused_calls.calls[0].outcome
+    );
+
     let schema = tools.tool("query_customer_orders").expect("tool").schema();
     let check = |arguments: &str| {
         schema
@@ -115,16 +137,16 @@ fn a_reified_alias_recovers_and_the_exact_schema_still_validates() {
 #[test]
 fn the_original_declaration_renders_back_byte_for_byte() {
     let tools = tool_set(&worked()).expect("tool set");
-    let rendered = tools
-        .render_declaration("edit_file", DeclarationForm::Mcp)
-        .expect("render");
-    let ToolSource::Declaration(declaration) = tools.tool("edit_file").expect("tool").source()
-    else {
-        panic!("adapter-built tools carry their declaration");
-    };
-    assert_eq!(rendered, declaration.text());
-    assert!(rendered.starts_with(r#"{"name":"edit_file","description":"Edit a workspace file.""#));
-    assert!(rendered.contains(r#""_meta":{"security":{"graphBinding":"#));
+    for name in ["edit_file", "query_customer_orders"] {
+        let rendered = tools
+            .render_declaration(name, DeclarationForm::Mcp)
+            .expect("render");
+        assert!(
+            MANIFEST.contains(rendered.as_str()),
+            "{name}: the rendered declaration is not a verbatim slice of the encoded manifest"
+        );
+        assert!(rendered.starts_with(&format!(r#"{{"name":"{name}","#)));
+    }
 }
 
 // Rationale: the hint alone never grants ReadOnly, and a tolerant hint selects the
@@ -172,4 +194,17 @@ fn an_alias_that_collides_with_a_sibling_parameter_is_refused() {
         ),
         "{refused:?}"
     );
+}
+
+// Rationale: ReadOnly covers everything a tool can call. A read-only tool whose
+// subtool grants a write is Mutating, though its own profile is write-free.
+#[test]
+fn a_subtool_that_can_write_revokes_read_only() {
+    let nested = edited(
+        " pa:inputShape ex:QueryInput ;",
+        " pa:subtool ex:edit_file ; pa:inputShape ex:QueryInput ;",
+    );
+    let tools = tool_set(&nested).expect("tool set");
+    let query = tools.tool("query_customer_orders").expect("query");
+    assert_eq!(query.effects(), Effects::Mutating);
 }

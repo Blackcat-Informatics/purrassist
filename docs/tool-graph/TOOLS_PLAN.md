@@ -398,11 +398,13 @@ Unknown tools or property paths, duplicate metadata records, alias collisions,
 unsupported unmodeled hint paths and invalid metadata are `InvalidDefinition`
 or `Collision` errors with the exact tool/path context; exhaustion remains
 `ToolSetError::Resource`. Metadata is supplied only by graph binding, never taken
-as trusted effects authority from MCP hint fields. Before security admission,
-`ToolGraph::tool_set` supplies conservative `Mutating` effects. Once admitted,
-the bridge uses metadata derived from the admission certificate to select proven
-effects; only a true read-only hint and proven no-write implementation select
-`ReadOnly`. Alias metadata does not bypass exact-schema validation. #33 executes
+as trusted effects authority from MCP hint fields. Shipped `ToolGraph::tool_set`
+selects `ReadOnly` only for a true read-only hint and a static read of the
+execution-profile tree and subtool closure that finds no write; it does not
+inspect `tool.implementation`, performs no security admission, and treats
+network, Unix, signal and ptrace allowances as non-writes. Every other tool is
+`Mutating`. Remaining #33 work: once admission exists, the bridge uses metadata
+derived from the admission certificate to select proven effects. Alias metadata does not bypass exact-schema validation. #33 executes
 a consumer importing a schema with keywords outside the typed-definition subset,
 attaches an alias, recovers through it, rejects a value violating an unchanged
 schema constraint and verifies byte-exact source declaration render-back. A
