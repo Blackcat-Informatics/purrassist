@@ -1,0 +1,3 @@
+Report native budget phases when the dense Qwen case fails
+
+Compare the public recognizer and resolver path under the unchanged request budget, reasoning, stop and policies. Print actual setup, push, finish and resolve usage only after the existing Qwen recovery fails. Keep every original assertion and state the comparison limits explicitly.

@@ -1,0 +1,47 @@
+--- crates/core/examples/fuzz_tool_call.rs
++++ crates/core/examples/fuzz_tool_call.rs
+@@ -1240,16 +1240,35 @@
+         // failure, no prose): its markup, however it ends.
+         let body = call_body(output, rejected.span.start, failed, end)
+             || initial_call_body(output, rejected.span.start, failed, end);
++        let owned = closed
++            || body
++            || completed
++            || balanced
++            || misspelled
++            || next_call
++            || cut
++            || invalid
++            || truncated;
++        // F16 also follows a literal completed across the failure. Its body
++        // begins where that literal ends, with the fresh quote state required
++        // by the completed-key golden and the documented markup-body rule.
++        let completed_body = !owned
++            && grammar.call_literals().iter().any(|spelling| {
++                (1..spelling.len()).any(|inside| {
++                    let Some(start) = failed.checked_sub(inside) else {
++                        return false;
++                    };
++                    let Some(stop) = start.checked_add(spelling.len()) else {
++                        return false;
++                    };
++                    start >= rejected.span.start
++                        && stop < end
++                        && output.get(start..stop) == Some(spelling.as_slice())
++                        && call_body(output, stop, stop, end)
++                })
++            });
+         assert!(
+-            closed
+-                || body
+-                || completed
+-                || balanced
+-                || misspelled
+-                || next_call
+-                || cut
+-                || invalid
+-                || truncated,
++            owned || completed_body,
+             "rejected attempt {:?} runs past where it failed ({failed}) without its closer: {:?}; dialect={dialect:?}; reason={:?}; input={output:?}",
+             rejected.span,
+             String::from_utf8_lossy(&output[failed..end]),

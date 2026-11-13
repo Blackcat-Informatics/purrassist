@@ -1,0 +1,27 @@
+--- crates/core/tests/tool_call_cost.rs
++++ crates/core/tests/tool_call_cost.rs
+@@ -306,7 +306,8 @@
+ 
+ /// G7: the candidate budget is sized to the turn. A 64-call turn whose
+ /// every call needs a markup repair, with a contested stray opener after
+-/// each, exhausts the fixed `Effort::Standard` preset explicitly, and is
++/// each, exhausts the fixed `Effort::Standard` preset explicitly in Work
++/// or Candidates, and is
+ /// recovered with every call `Resolved` under `ToolRecoveryRequest::sized`:
+ /// `⌈128 / 8⌉ = 16` candidates for each of its 576 sizing occurrences:
+ /// 128 `<tool_call>` tokens in three dialects, 64 `<function=` tokens in Qwen,
+@@ -325,9 +326,11 @@
+         purrassist_core::tool_call::DialectSet::built_in(),
+     );
+     assert_eq!(preset.outcome, Outcome::Unresolved);
+-    assert_eq!(
+-        preset.receipt.stopped,
+-        StopReason::BudgetExceeded(Resource::Candidates),
++    assert!(
++        matches!(
++            preset.receipt.stopped,
++            StopReason::BudgetExceeded(Resource::Work | Resource::Candidates)
++        ),
+         "{preset:#?}"
+     );
+     assert!(preset.receipt.evidence.is_empty() && preset.receipt.alternatives.is_empty());

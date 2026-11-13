@@ -1,0 +1,3 @@
+Resolve integrated parser lints while preserving cleanup order
+
+Use the same ordered trie iterator through its borrowed for loop and admit that iterator handle. Assemble trail inputs inside the existing matcher constructor and extract the actual resync history phase. Evaluate every payload refund before combining it with the original refusal.

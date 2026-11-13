@@ -1,0 +1,40 @@
+{
+  "binary": "/opt/.cargo/target/16-tool-call-recovery-streaming-recognizer-22432d85/debug/purrassist",
+  "semantic_comparison": "PASS; usage and recorded sized candidate counts only",
+  "sized_candidate_diffs": {
+    "mcp-responses.jsonl": [
+      [
+        "/18/result/content/0/text/receipt/budget/candidates",
+        144,
+        160
+      ],
+      [
+        "/18/result/structuredContent/receipt/budget/candidates",
+        144,
+        160
+      ],
+      [
+        "/19/result/content/0/text/receipt/budget/candidates",
+        272,
+        368
+      ],
+      [
+        "/19/result/structuredContent/receipt/budget/candidates",
+        272,
+        368
+      ],
+      [
+        "/20/result/content/0/text/receipt/budget/candidates",
+        272,
+        368
+      ],
+      [
+        "/20/result/structuredContent/receipt/budget/candidates",
+        272,
+        368
+      ]
+    ],
+    "call-response.json": []
+  },
+  "transcript_replay": "PASS"
+}

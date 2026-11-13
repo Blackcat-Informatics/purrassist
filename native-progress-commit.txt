@@ -1,0 +1,3 @@
+Include consumed bytes and long arguments in native diagnostics
+
+Report the native cursor after push and reuse the failure diagnostic for the existing one-MiB Qwen argument case. Keep the same request settings and original recovery assertions so budget refusal can be distinguished from the amount of input actually consumed.

@@ -1,0 +1,3 @@
+Merge current main into streaming intake
+
+Preserve derived grammar completion envelopes, failure proofs and native origin correlations through consuming report dispatch and traced resolution. Count initial derived class runs as candidate ownership while retaining the finite literal and UTF-8 bound. Admit all source metadata phases and retain actual typed assertions.

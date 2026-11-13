@@ -1,0 +1,1097 @@
+diff --git crates/core/src/contract.rs crates/core/src/contract.rs
+index 87a9826..1cd6dec 100644
+--- crates/core/src/contract.rs
++++ crates/core/src/contract.rs
+@@ -616,6 +616,7 @@ scratch_charge!(u8, 1);
+ scratch_charge!(u32, 4);
+ scratch_charge!(u64, 8);
+ scratch_charge!(usize, 8);
++scratch_charge!(core::ops::Range<usize>, 16);
+ scratch_charge!(&str, 16); // a `&str` is a two-word (ptr, len) fat pointer.
+ scratch_charge!(String, 24); // `Vec<u8>`'s (ptr, len, cap) layout.
+ scratch_charge!(crate::json::Node, 56);
+@@ -721,6 +722,30 @@ pub(crate) fn push_scratch<T: ScratchCharge>(
+ }
+ 
+ impl<T: ScratchCharge> ScratchVec<T> {
++    /// Preserve an existing native buffer's capacity for checked state copying.
++    /// The destination owner is newly admitted against its own meter.
++    pub(crate) fn capacity_copy(&self, governor: &Governor) -> Result<Self, StopReason> {
++        Self::with_exact_capacity(self.inner.capacity(), governor)
++    }
++
++    pub(crate) fn with_exact_capacity(
++        capacity: usize,
++        governor: &Governor,
++    ) -> Result<Self, StopReason> {
++        let mut copied = Self::new(governor);
++        let bytes = saturating_size(capacity).saturating_mul(saturating_size(T::CHARGE.max(1)));
++        copied.meter.charge(bytes)?;
++        copied.reserved = bytes;
++        copied
++            .inner
++            .try_reserve_exact(capacity)
++            .map_err(|error| reserve_failure(&error))?;
++        if copied.inner.capacity() != capacity {
++            return Err(invalid_input("allocator changed copied scratch capacity"));
++        }
++        Ok(copied)
++    }
++
+     /// An empty vector charging against `governor`'s scratch meter.
+     #[must_use]
+     pub fn new(governor: &Governor) -> Self {
+@@ -956,6 +981,30 @@ pub struct ScratchString {
+ }
+ 
+ impl ScratchString {
++    /// Copy a live string's capacity and contents without publishing its charge.
++    pub(crate) fn copy_capacity(
++        source: &String,
++        governor: &mut Governor,
++    ) -> Result<Self, StopReason> {
++        governor.charge(
++            Resource::Work,
++            saturating_size(source.len()).saturating_add(1),
++        )?;
++        let mut copied = Self::new(governor);
++        let bytes = saturating_size(source.capacity());
++        copied.meter.charge(bytes)?;
++        copied.reserved = bytes;
++        copied
++            .inner
++            .try_reserve_exact(source.capacity())
++            .map_err(|error| reserve_failure(&error))?;
++        if copied.inner.capacity() != source.capacity() {
++            return Err(invalid_input("allocator changed copied string capacity"));
++        }
++        copied.inner.push_str(source);
++        Ok(copied)
++    }
++
+     /// An empty string charging against `governor`'s scratch meter.
+     #[must_use]
+     pub fn new(governor: &Governor) -> Self {
+@@ -1279,6 +1328,17 @@ impl Clone for Governor {
+ }
+ 
+ impl Governor {
++    /// Begin an independent physical fork. Only explicit source-owner credits
++    /// may replace inherited live debt; historical and published debt remains.
++    pub(crate) fn fork_accounting(&self) -> ForkAccounting<'static> {
++        let destination = self.clone();
++        ForkAccounting {
++            source: Some(self.scratch_meter()),
++            replaced: ScratchVec::new(&destination),
++            destination: ForkDestination::Independent(destination),
++        }
++    }
++
+     /// Start an operation with explicit limits.
+     #[must_use]
+     pub fn new(limits: Budget) -> Self {
+@@ -1444,6 +1504,137 @@ impl Governor {
+     }
+ }
+ 
++/// A checked accounting transaction for a physical state fork. The destination
++/// begins with the source governor's full snapshot. Each explicitly enumerated
++/// owner is credited at most once, only in that independent destination, before
++/// its replacement storage is admitted. New copying work/storage is cumulative.
++/// Drop the transaction and partial state on any error; the source is read-only.
++#[derive(Debug)]
++pub(crate) struct ForkAccounting<'g> {
++    source: Option<ScratchMeter>,
++    replaced: ScratchVec<usize>,
++    destination: ForkDestination<'g>,
++}
++
++#[derive(Debug)]
++enum ForkDestination<'g> {
++    Independent(Governor),
++    Additional(&'g mut Governor),
++}
++
++impl<'g> ForkAccounting<'g> {
++    /// A sibling configuration inside the same operation needs additional
++    /// physical ownership, not a credit against inherited snapshot debt.
++    pub(crate) fn additional(governor: &'g mut Governor) -> Self {
++        Self {
++            source: None,
++            replaced: ScratchVec::new(governor),
++            destination: ForkDestination::Additional(governor),
++        }
++    }
++
++    pub(crate) fn governor(&mut self) -> &mut Governor {
++        match &mut self.destination {
++            ForkDestination::Independent(governor) => governor,
++            ForkDestination::Additional(governor) => governor,
++        }
++    }
++
++    pub(crate) fn replace_vec<T: ScratchCharge>(
++        &mut self,
++        owner: &ScratchVec<T>,
++    ) -> Result<(), StopReason> {
++        self.replace(
++            owner as *const ScratchVec<T> as usize,
++            &owner.meter,
++            owner.reserved,
++        )
++    }
++
++    pub(crate) fn replace_lease(&mut self, owner: &ScratchLease) -> Result<(), StopReason> {
++        self.replace(
++            owner as *const ScratchLease as usize,
++            &owner.meter,
++            owner.bytes,
++        )
++    }
++
++    fn replace(&mut self, key: usize, meter: &ScratchMeter, bytes: u64) -> Result<(), StopReason> {
++        let governor = match &mut self.destination {
++            ForkDestination::Independent(governor) => governor,
++            ForkDestination::Additional(governor) => governor,
++        };
++        governor.charge(
++            Resource::Work,
++            saturating_size(self.replaced.len())
++                .saturating_mul(2)
++                .saturating_add(2),
++        )?;
++        let Some(source) = &self.source else {
++            return if Arc::ptr_eq(&governor.scratch.0, &meter.0) {
++                Ok(())
++            } else {
++                Err(invalid_input(
++                    "sibling fork owner belongs to a different governor",
++                ))
++            };
++        };
++        if !Arc::ptr_eq(&source.0, &meter.0) {
++            return Err(invalid_input(
++                "fork owner belongs to a different source governor",
++            ));
++        }
++        if bytes == 0 {
++            return Ok(());
++        }
++        if self.replaced.contains(&key) {
++            return Err(invalid_input("fork owner reservation was enumerated twice"));
++        }
++        // Reserve the ledger slot before changing inherited debt. No allocation
++        // or fallible admission remains between credit and recording its owner.
++        self.replaced.reserve(1)?;
++        governor.release_scratch(bytes)?;
++        self.replaced.push(key)
++    }
++
++    pub(crate) fn finish(self) -> Result<Governor, StopReason> {
++        let Self {
++            destination,
++            replaced,
++            source: _,
++        } = self;
++        drop(replaced);
++        match destination {
++            ForkDestination::Independent(governor) => Ok(governor),
++            ForkDestination::Additional(_) => {
++                Err(invalid_input("sibling fork has no independent governor"))
++            }
++        }
++    }
++}
++
++/// Copy a stored failure as internal state, retaining its text under the
++/// destination's aggregate owner rather than publishing another diagnostic.
++pub(crate) fn copy_stop_for_fork(
++    reason: &StopReason,
++    governor: &mut Governor,
++    lease: &mut ScratchLease,
++) -> Result<StopReason, StopReason> {
++    governor.charge(Resource::Work, 1)?;
++    Ok(match reason {
++        StopReason::Completed => StopReason::Completed,
++        StopReason::NoCandidate => StopReason::NoCandidate,
++        StopReason::BudgetExceeded(resource) => StopReason::BudgetExceeded(*resource),
++        StopReason::Cancelled => StopReason::Cancelled,
++        StopReason::InvalidInput(text) => {
++            let (copied, storage) =
++                ScratchString::copy_capacity(text, governor)?.into_owned_parts();
++            lease.absorb(storage);
++            StopReason::InvalidInput(copied)
++        }
++    })
++}
++
+ /// Exact source identity and a half-open byte range.
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub struct SourceSpan {
+diff --git crates/core/src/grammar/codec/json.rs crates/core/src/grammar/codec/json.rs
+index 3f0f19f..272f9fb 100644
+--- crates/core/src/grammar/codec/json.rs
++++ crates/core/src/grammar/codec/json.rs
+@@ -7,7 +7,9 @@ use super::{
+     value,
+ };
+ use crate::contract::saturating_size as size;
+-use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
++use crate::contract::{
++    ForkAccounting, Governor, Resource, ScratchCharge, ScratchLease, ScratchVec, StopReason,
++};
+ use crate::grammar::cost::K_CODEC;
+ use crate::grammar::edit::{EditOperator, MarkupEdit};
+ use crate::json::incremental::{IncrementalRecovery, decode_escape};
+@@ -102,12 +104,23 @@ pub struct JsonCodec {
+     /// Runs of malformed UTF-8 read as U+FFFD: each run's absolute range
+     /// and how many U+FFFD (maximal malformed subparts) it was read as.
+     invalid: Vec<InvalidRun>,
++    /// Physical fork copies of invalid-run storage remain transient.
++    storage: ScratchLease,
++    /// Absolute end of the bytes offered to this codec, including pending UTF-8.
++    fed_end: usize,
+ }
+ 
+ /// A run of malformed UTF-8: its absolute range and how many U+FFFD
+ /// (maximal malformed subparts) it was read as.
+ type InvalidRun = (Range<usize>, usize);
+ 
++struct DecodedJson {
++    decoded: Decoded,
++    invalid: Vec<InvalidRun>,
++    /// The invalid-run buffer drops before this reservation.
++    _storage: ScratchLease,
++}
++
+ /// The leading-byte check of the `json-args` codec ([`CodecKind::JsonArgs`]):
+ /// the value must be an object, or a string that is empty or begins with
+ /// `{` (stringified arguments).
+@@ -138,6 +151,35 @@ pub(super) enum Decoded {
+ }
+ 
+ impl JsonCodec {
++    pub(super) fn fork(&self, accounting: &mut ForkAccounting<'_>) -> Result<Self, StopReason> {
++        accounting.replace_lease(&self.storage)?;
++        let parser = self.parser.fork(accounting)?;
++        let governor = accounting.governor();
++        governor.charge(Resource::Work, size(self.invalid.len()).saturating_add(1))?;
++        let mut invalid = ScratchVec::with_exact_capacity(self.invalid.capacity(), governor)?;
++        for (range, count) in &self.invalid {
++            invalid.push((range.clone(), *count))?;
++        }
++        let (invalid, storage) = invalid.into_owned_parts();
++        governor.check()?;
++        Ok(Self {
++            utf8: self.utf8,
++            held: self.held,
++            held_len: self.held_len,
++            parser,
++            fault: self.fault,
++            stalled: self.stalled,
++            lead: self.lead,
++            invalid,
++            storage,
++            fed_end: self.fed_end,
++        })
++    }
++
++    pub(super) const fn input_end(&self) -> usize {
++        self.fed_end
++    }
++
+     /// The `json-args` codec ([`CodecKind::JsonArgs`]): like
+     /// [`Codec::begin`], but the value must be an object, or a string that
+     /// is empty or whose text begins with `{` after spaces (stringified
+@@ -188,6 +230,8 @@ impl Codec for JsonCodec {
+             stalled: false,
+             lead: Lead::Any,
+             invalid: Vec::new(),
++            storage: ScratchLease::empty(governor),
++            fed_end: at,
+         })
+     }
+ 
+@@ -197,6 +241,10 @@ impl Codec for JsonCodec {
+         at: usize,
+         governor: &mut Governor,
+     ) -> Result<CodecStep, StopReason> {
++        governor.check()?;
++        self.fed_end = at.checked_add(1).ok_or_else(|| {
++            crate::contract::invalid_input("JSON codec input offset exceeds the native domain")
++        })?;
+         if self.stalled {
+             return Ok(CodecStep::Consumed);
+         }
+@@ -252,8 +300,8 @@ impl Codec for JsonCodec {
+         context: CodecContext<'_>,
+         governor: &mut Governor,
+     ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
+-        let (decoded, invalid) = self.decode(end, governor)?;
+-        let (mut tree, mut edits) = match decoded {
++        let decoded = self.decode(end, governor)?;
++        let (mut tree, mut edits) = match decoded.decoded {
+             Decoded::Fault(fault) => (ArgTree::unresolved(fault, span.clone()), Vec::new()),
+             Decoded::Value { node, edits, .. } => {
+                 if matches!(node.value, Value::String(_)) {
+@@ -263,8 +311,8 @@ impl Codec for JsonCodec {
+                 }
+             }
+         };
+-        if !invalid.is_empty() {
+-            edits.extend(invalid_edits(&invalid, body, span.start, governor)?);
++        if !decoded.invalid.is_empty() {
++            edits.extend(invalid_edits(&decoded.invalid, body, span.start, governor)?);
+             edits.sort_by_key(|edit| (edit.span.start, edit.span.end));
+         }
+         tree.tool = context.shape.map(|shape| shape.tool.clone());
+@@ -344,19 +392,20 @@ impl JsonCodec {
+     ///
+     /// Also returns the malformed UTF-8 runs read as U+FFFD (a final
+     /// character cut off by a length stop is dropped, not replaced).
+-    fn decode(
+-        mut self,
+-        end: CodecEnd,
+-        governor: &mut Governor,
+-    ) -> Result<(Decoded, Vec<InvalidRun>), StopReason> {
++    fn decode(mut self, end: CodecEnd, governor: &mut Governor) -> Result<DecodedJson, StopReason> {
+         if !self.stalled
+             && let Some(at) = self.utf8.malformed(end)
+         {
+             let held = usize::from(core::mem::take(&mut self.held_len));
+             self.replace(at, held, governor)?;
+         }
++        let storage = core::mem::replace(&mut self.storage, ScratchLease::empty(governor));
+         let invalid = core::mem::take(&mut self.invalid);
+-        Ok((self.decode_value(governor)?, invalid))
++        Ok(DecodedJson {
++            decoded: self.decode_value(governor)?,
++            invalid,
++            _storage: storage,
++        })
+     }
+ 
+     fn decode_value(self, governor: &mut Governor) -> Result<Decoded, StopReason> {
+@@ -408,12 +457,16 @@ impl JsonCodec {
+         } else {
+             end
+         };
+-        let (decoded, invalid) = codec.decode(end, governor)?;
+-        let edits = invalid_edits(&invalid, bytes, at, governor)?;
+-        Ok((decoded, stop, edits))
++        let decoded = codec.decode(end, governor)?;
++        let edits = invalid_edits(&decoded.invalid, bytes, at, governor)?;
++        Ok((decoded.decoded, stop, edits))
+     }
+ }
+ 
++impl ScratchCharge for JsonCodec {
++    const CHARGE: usize = super::super::cost::JSON_CODEC_STATE as usize;
++}
++
+ /// Malformed UTF-8 runs (absolute ranges, each with how many U+FFFD it was
+ /// read as) as `tool_call.value.invalid-utf8` edits over `body`, which
+ /// starts at `base`. A run past the body (after the value ended) is not
+diff --git crates/core/src/grammar/codec/mod.rs crates/core/src/grammar/codec/mod.rs
+index dd45440..d43c775 100644
+--- crates/core/src/grammar/codec/mod.rs
++++ crates/core/src/grammar/codec/mod.rs
+@@ -95,7 +95,8 @@ pub(crate) const XML_CLOSER_VARIANT: &[u8] = b"</parameters>";
+ 
+ use super::edit::{EditOperator, MarkupEdit};
+ use crate::contract::{
+-    Governor, Resource, ScratchCharge, ScratchLease, ScratchVec, StopReason, saturating_size,
++    ForkAccounting, Governor, Resource, ScratchCharge, ScratchLease, ScratchVec, StopReason,
++    saturating_size,
+ };
+ use crate::tool_call::{ArgTree, ArgumentShape};
+ use core::ops::Range;
+@@ -194,8 +195,13 @@ impl CodecKind {
+     ) -> Result<CodecState, StopReason> {
+         Ok(match self {
+             Self::Raw => CodecState::Raw(RawCodec::begin(at, governor)?),
+-            Self::Json => CodecState::Json(Box::new(JsonCodec::begin(at, governor)?)),
+-            Self::JsonArgs => CodecState::Json(Box::new(JsonCodec::begin_arguments(at, governor)?)),
++            Self::Json => {
++                CodecState::Json(CodecBox::new(JsonCodec::begin(at, governor)?, governor)?)
++            }
++            Self::JsonArgs => CodecState::Json(CodecBox::new(
++                JsonCodec::begin_arguments(at, governor)?,
++                governor,
++            )?),
+             Self::XmlParams => CodecState::XmlParams(XmlParamsCodec::begin(at, governor)?),
+             Self::KvPairs => CodecState::KvPairs(KvPairsCodec::begin(at, governor)?),
+             Self::Pythonic => CodecState::Pythonic(PythonicCodec::begin(at, governor)?),
+@@ -732,13 +738,52 @@ fn value(
+     }))
+ }
+ 
++/// A fallibly allocated single value with its own reservation. A one-element
++/// vector avoids unsafe allocation conversion and admits storage before use.
++#[derive(Debug)]
++pub(crate) struct CodecBox<T> {
++    values: Vec<T>,
++    storage: ScratchLease,
++}
++
++impl<T: ScratchCharge> CodecBox<T> {
++    fn new(value: T, governor: &mut Governor) -> Result<Self, StopReason> {
++        governor.charge(Resource::Work, 1)?;
++        let mut values = ScratchVec::with_exact_capacity(1, governor)?;
++        values.push(value)?;
++        let (values, storage) = values.into_owned_parts();
++        Ok(Self { values, storage })
++    }
++
++    fn into_inner(mut self) -> T {
++        // INVARIANT: construction installs exactly one value and no method
++        // exposes vector mutation; only this consuming operation removes it.
++        self.values
++            .pop()
++            .expect("codec cell contains exactly one value")
++    }
++}
++
++impl<T> core::ops::Deref for CodecBox<T> {
++    type Target = T;
++    fn deref(&self) -> &T {
++        &self.values[0]
++    }
++}
++
++impl<T> core::ops::DerefMut for CodecBox<T> {
++    fn deref_mut(&mut self) -> &mut T {
++        &mut self.values[0]
++    }
++}
++
+ /// The live state of one codec slot: one variant per [`CodecKind`].
+ #[derive(Debug)]
+ pub(crate) enum CodecState {
+     /// A [`RawCodec`].
+     Raw(RawCodec),
+     /// A [`JsonCodec`], boxed: its parser state is large.
+-    Json(Box<JsonCodec>),
++    Json(CodecBox<JsonCodec>),
+     /// An [`XmlParamsCodec`].
+     XmlParams(XmlParamsCodec),
+     /// A [`KvPairsCodec`].
+@@ -748,7 +793,45 @@ pub(crate) enum CodecState {
+ }
+ 
+ impl CodecState {
+-    pub(crate) const fn kind(&self) -> CodecKind {
++    pub(crate) fn fork(&self, accounting: &mut ForkAccounting<'_>) -> Result<Self, StopReason> {
++        match self {
++            Self::Raw(codec) => {
++                accounting.governor().charge(Resource::Work, 1)?;
++                Ok(Self::Raw(*codec))
++            }
++            Self::Json(codec) => {
++                accounting.replace_lease(&codec.storage)?;
++                let copied = JsonCodec::fork(codec, accounting)?;
++                Ok(Self::Json(CodecBox::new(copied, accounting.governor())?))
++            }
++            Self::XmlParams(_) | Self::KvPairs(_) | Self::Pythonic(_) => {
++                Err(crate::contract::invalid_input(
++                    "codec state fork is not implemented for this codec",
++                ))
++            }
++        }
++    }
++
++    /// A JSON fallback at its exact current input boundary copies live parser
++    /// state; it never reconstructs the value by replaying the slot body.
++    pub(crate) fn fork_json_at(
++        &self,
++        end: usize,
++        governor: &mut Governor,
++    ) -> Result<Option<Self>, StopReason> {
++        let Self::Json(codec) = self else {
++            return Ok(None);
++        };
++        if codec.input_end() != end {
++            return Err(crate::contract::invalid_input(
++                "JSON fallback fork is not at the live input boundary",
++            ));
++        }
++        let mut accounting = ForkAccounting::additional(governor);
++        self.fork(&mut accounting).map(Some)
++    }
++
++    pub(crate) fn kind(&self) -> CodecKind {
+         match self {
+             Self::Raw(_) => CodecKind::Raw,
+             Self::Json(codec) if codec.arguments_only() => CodecKind::JsonArgs,
+@@ -759,17 +842,9 @@ impl CodecState {
+         }
+     }
+ 
+-    /// Scratch bytes held out of line, beyond the engine's per-slot charge.
+-    pub(crate) const fn boxed_bytes(&self) -> u64 {
+-        match self {
+-            Self::Json(_) => super::cost::JSON_CODEC_STATE,
+-            Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) | Self::Pythonic(_) => 0,
+-        }
+-    }
+-
+     /// Whether a self-delimiting value is inside one of its strings (see
+     /// [`JsonCodec::in_string`]); `false` for the other codecs.
+-    pub(crate) const fn in_string(&self) -> bool {
++    pub(crate) fn in_string(&self) -> bool {
+         match self {
+             Self::Json(codec) => codec.in_string(),
+             Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) | Self::Pythonic(_) => false,
+@@ -779,7 +854,7 @@ impl CodecState {
+     /// Where a self-delimiting value already complete ends: the end of
+     /// input then ends it with no recovery edit. `None` for a value still
+     /// open, and for the codecs that are not self-delimiting.
+-    pub(crate) const fn complete_end(&self) -> Option<usize> {
++    pub(crate) fn complete_end(&self) -> Option<usize> {
+         match self {
+             Self::Json(codec) => codec.complete_end(),
+             Self::Raw(_) | Self::XmlParams(_) | Self::KvPairs(_) => None,
+@@ -812,7 +887,9 @@ impl CodecState {
+     ) -> Result<Result<CodecValue, CodecFault>, StopReason> {
+         match self {
+             Self::Raw(codec) => codec.finish(body, span, end, context, governor),
+-            Self::Json(codec) => codec.finish(body, span, end, context, governor),
++            Self::Json(codec) => codec
++                .into_inner()
++                .finish(body, span, end, context, governor),
+             Self::XmlParams(codec) => codec.finish(body, span, end, context, governor),
+             Self::KvPairs(codec) => codec.finish(body, span, end, context, governor),
+             Self::Pythonic(codec) => codec.finish(body, span, end, context, governor),
+diff --git crates/core/src/grammar/engine.rs crates/core/src/grammar/engine.rs
+index 7d482c4..7d4e165 100644
+--- crates/core/src/grammar/engine.rs
++++ crates/core/src/grammar/engine.rs
+@@ -332,7 +332,7 @@ pub(crate) struct Arena {
+     /// Bodies ended beside another reading whose codec has not finished
+     /// yet (see `Step::end_early`).
+     pub(crate) deferred: ScratchVec<Deferred>,
+-    /// The scratch charged for `values`, `edits` and `codecs`, released by
++    /// The scratch charged for `values`, `edits` and codec slots, released by
+     /// [`Self::reset`] or, for what is still held, when the arena drops.
+     charged: u64,
+     meter: ScratchMeter,
+@@ -454,7 +454,8 @@ impl Arena {
+         state: CodecState,
+         governor: &mut Governor,
+     ) -> Result<u32, StopReason> {
+-        let bytes = CODEC_SLOT.saturating_add(state.boxed_bytes());
++        // Out-of-line JSON cells admit and own their buffer separately.
++        let bytes = CODEC_SLOT;
+         governor.charge(Resource::ScratchBytes, bytes)?;
+         self.charged = self.charged.saturating_add(bytes);
+         self.codecs.push(Some(state));
+@@ -1805,8 +1806,8 @@ impl<'s> Step<'_, 's> {
+     }
+ 
+     /// A fork of body `thread` ending at `end` (a fallback reading beside
+-    /// the body, which reads on): its codec, when it has one, reads the
+-    /// body's bytes afresh when it finishes.
++    /// the body, which reads on). JSON copies its exact live parser boundary;
++    /// codecs that decode only at finish continue using their retained body.
+     fn end_early(
+         &mut self,
+         thread: Thread,
+@@ -1816,23 +1817,11 @@ impl<'s> Step<'_, 's> {
+         out: &mut Out,
+         governor: &mut Governor,
+     ) -> Result<(), StopReason> {
+-        let kind = match self.program.insts[thread.pc as usize] {
+-            Inst::Slot { codec, .. } => Some(codec),
+-            _ => None,
+-        };
+-        let codec = match kind {
+-            Some(kind) => Some(
+-                self.arena
+-                    .begin_codec(kind.begin(thread.entry, governor)?, governor)?,
+-            ),
+-            None => None,
+-        };
+         let past = thread.beside();
+         if past && self.opens_call(&thread, end, governor)? {
+             return Ok(());
+         }
+-        // A verbatim body that read on past a closer and since read only
+-        // closers and whitespace holds no value text (see [`TEXTED`]).
++        // Reject unused fallback readings before copying any live codec.
+         if let Sub::Body(raw, _) = thread.sub
+             && raw & PAST_REPAIRED != 0
+             && raw & TEXTED == 0
+@@ -1840,6 +1829,30 @@ impl<'s> Step<'_, 's> {
+         {
+             return Ok(());
+         }
++        let kind = match self.program.insts[thread.pc as usize] {
++            Inst::Slot { codec, .. } => Some(codec),
++            _ => None,
++        };
++        let copied = match thread.sub {
++            Sub::Body(_, Some(slot)) => self.arena.codecs[slot as usize]
++                .as_ref()
++                .expect("a live fallback owns its codec state")
++                .fork_json_at(end, governor)?,
++            _ => None,
++        };
++        let codec = match (copied, kind) {
++            (Some(state), _) => Some(self.arena.begin_codec(state, governor)?),
++            (None, Some(CodecKind::Json | CodecKind::JsonArgs)) => {
++                return Err(crate::contract::invalid_input(
++                    "JSON fallback has no live codec state to fork",
++                ));
++            }
++            (None, Some(kind)) => Some(
++                self.arena
++                    .begin_codec(kind.begin(thread.entry, governor)?, governor)?,
++            ),
++            (None, None) => None,
++        };
+         if past
+             && !self.program.grouped
+             && let (Some(slot), Inst::Slot { set, .. }) =
+diff --git crates/core/src/json/document.rs crates/core/src/json/document.rs
+index 8a0ca2b..ca025c1 100644
+--- crates/core/src/json/document.rs
++++ crates/core/src/json/document.rs
+@@ -138,6 +138,103 @@ impl OwnedDocument {
+         governor.check()?;
+         Ok(Self { root, lease })
+     }
++
++    /// Copy internal parser state, preserving every native child capacity.
++    /// Unlike publication, the enclosing state keeps the transient lease.
++    pub(crate) fn copy_for_fork(node: &Node, governor: &mut Governor) -> Result<Self, StopReason> {
++        let mut lease = ScratchLease::empty(governor);
++        let root = copy_state_node(node, governor, &mut lease, 0)?;
++        governor.check()?;
++        Ok(Self { root, lease })
++    }
++}
++
++fn copy_state_node(
++    node: &Node,
++    governor: &mut Governor,
++    lease: &mut ScratchLease,
++    depth: u32,
++) -> Result<Node, StopReason> {
++    governor.charge(Resource::Work, 1)?;
++    governor.charge(Resource::Depth, u64::from(depth))?;
++    if depth > 128 {
++        return Err(governor.stop_resource(Resource::Depth));
++    }
++    let value = match &node.value {
++        Value::Null => Value::Null,
++        Value::Bool(value) => Value::Bool(*value),
++        Value::Number(number) => Value::Number(number.copy_for_fork(governor, lease)?),
++        Value::String(text) => {
++            let (text, storage) = ScratchString::copy_capacity(text, governor)?.into_owned_parts();
++            lease.absorb(storage);
++            Value::String(text)
++        }
++        Value::Array(items) => Value::Array(copy_items_for_fork(
++            items,
++            items.capacity(),
++            governor,
++            lease,
++            depth,
++        )?),
++        Value::Object(members) => Value::Object(copy_members_for_fork(
++            members,
++            members.capacity(),
++            governor,
++            lease,
++            depth,
++        )?),
++    };
++    Ok(Node {
++        value,
++        span: node.span.clone(),
++    })
++}
++
++pub(super) fn copy_items_for_fork(
++    items: &[Node],
++    capacity: usize,
++    governor: &mut Governor,
++    lease: &mut ScratchLease,
++    depth: u32,
++) -> Result<Vec<Node>, StopReason> {
++    governor.charge(Resource::Work, 1)?;
++    let mut copied = ScratchVec::with_exact_capacity(capacity, governor)?;
++    for item in items {
++        let item = copy_state_node(item, governor, lease, depth + 1)?;
++        push(&mut copied, item, governor)?;
++    }
++    let (items, storage) = copied.into_owned_parts();
++    lease.absorb(storage);
++    Ok(items)
++}
++
++pub(super) fn copy_members_for_fork(
++    members: &[Member],
++    capacity: usize,
++    governor: &mut Governor,
++    lease: &mut ScratchLease,
++    depth: u32,
++) -> Result<Vec<Member>, StopReason> {
++    governor.charge(Resource::Work, 1)?;
++    let mut copied = ScratchVec::with_exact_capacity(capacity, governor)?;
++    for member in members {
++        let (key, storage) =
++            ScratchString::copy_capacity(&member.key, governor)?.into_owned_parts();
++        lease.absorb(storage);
++        let value = copy_state_node(&member.value, governor, lease, depth + 1)?;
++        push(
++            &mut copied,
++            Member {
++                key,
++                key_span: member.key_span.clone(),
++                value,
++            },
++            governor,
++        )?;
++    }
++    let (members, storage) = copied.into_owned_parts();
++    lease.absorb(storage);
++    Ok(members)
+ }
+ 
+ fn admit_depth(node: &Node, depth: u32, governor: &mut Governor) -> Result<(), StopReason> {
+diff --git crates/core/src/json/incremental.rs crates/core/src/json/incremental.rs
+index d18987f..2b66dd1 100644
+--- crates/core/src/json/incremental.rs
++++ crates/core/src/json/incremental.rs
+@@ -52,7 +52,10 @@
+ //! proportional to the input.
+ use super::{Member, Node, Number, SyntaxEdit, Value, push_char, reserve_one};
+ use crate::contract::saturating_size as size;
+-use crate::contract::{Governor, Resource, ScratchCharge, ScratchVec, StopReason};
++use crate::contract::{
++    ForkAccounting, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec,
++    StopReason, push_scratch,
++};
+ use core::ops::Range;
+ 
+ /// Recover one value from a complete input: a single-chunk
+@@ -282,6 +285,11 @@ pub struct IncrementalRecovery {
+     /// Where the input became unrecoverable when that is before the
+     /// character that showed it (a bare word that is no key: its start).
+     fault_at: Option<usize>,
++    /// Physical copies of legacy plain buffers stay transient during a fork.
++    /// Ordinary construction has no copied-buffer reservation.
++    storage: ScratchLease,
++    /// A copied sticky diagnostic can escape independently of parser storage.
++    failure_storage: ScratchLease,
+ }
+ 
+ /// A partially decoded UTF-8 scalar.
+@@ -547,6 +555,117 @@ fn invalid_utf8(offset: usize) -> StopReason {
+ }
+ 
+ impl IncrementalRecovery {
++    /// Copy the exact live parser, crediting only its enumerated transient
++    /// source owners in the independent destination before any replacement.
++    /// Plain legacy allocations remain inherited historical debt. The copy's
++    /// physical plain buffers instead have an explicit aggregate storage owner.
++    pub(crate) fn fork(&self, accounting: &mut ForkAccounting<'_>) -> Result<Self, StopReason> {
++        accounting.replace_vec(&self.stack)?;
++        accounting.replace_lease(&self.storage)?;
++        accounting.replace_lease(&self.failure_storage)?;
++        if let Some(containers) = &self.containers {
++            accounting.replace_vec(containers)?;
++        }
++        if let Some(orphans) = &self.orphans {
++            accounting.replace_vec(orphans)?;
++        }
++        let governor = accounting.governor();
++        governor.charge(Resource::Work, 1)?;
++        let mut storage = ScratchLease::empty(governor);
++        let mode = copy_mode(&self.mode, governor, &mut storage)?;
++        let root = self
++            .root
++            .as_ref()
++            .map(|node| {
++                let (node, owned) =
++                    super::OwnedDocument::copy_for_fork(node, governor)?.into_owned_parts();
++                storage.absorb(owned);
++                Ok::<_, StopReason>(node)
++            })
++            .transpose()?;
++        let mut stack = self.stack.capacity_copy(governor)?;
++        for frame in &self.stack {
++            let frame = copy_frame(frame, governor, &mut storage)?;
++            push_scratch(&mut stack, frame, governor)?;
++        }
++        let mut edits = ScratchVec::with_exact_capacity(self.edits.capacity(), governor)?;
++        for edit in &self.edits {
++            let (replacement, owned) =
++                ScratchString::copy_capacity(&edit.replacement, governor)?.into_owned_parts();
++            storage.absorb(owned);
++            push_scratch(
++                &mut edits,
++                SyntaxEdit {
++                    rule: edit.rule,
++                    span: edit.span.clone(),
++                    replacement,
++                    guessed: edit.guessed,
++                },
++                governor,
++            )?;
++        }
++        let (edits, owned) = edits.into_owned_parts();
++        storage.absorb(owned);
++        let mut replaced = ScratchVec::with_exact_capacity(self.replaced.capacity(), governor)?;
++        governor.charge(Resource::Work, size(self.replaced.len()).saturating_add(1))?;
++        replaced.extend(self.replaced.iter().copied())?;
++        let (replaced, owned) = replaced.into_owned_parts();
++        storage.absorb(owned);
++        let containers = self
++            .containers
++            .as_ref()
++            .map(|values| {
++                governor.charge(Resource::Work, size(values.len()).saturating_add(1))?;
++                let mut copied = values.capacity_copy(governor)?;
++                copied.extend(values.iter().copied())?;
++                Ok::<_, StopReason>(copied)
++            })
++            .transpose()?;
++        let orphans = self
++            .orphans
++            .as_ref()
++            .map(|values| {
++                governor.charge(Resource::Work, size(values.len()).saturating_add(1))?;
++                let mut copied = values.capacity_copy(governor)?;
++                copied.extend(values.iter().copied())?;
++                Ok::<_, StopReason>(copied)
++            })
++            .transpose()?;
++        let mut failure_storage = ScratchLease::empty(governor);
++        let failed = self
++            .failed
++            .as_ref()
++            .map(|reason| {
++                crate::contract::copy_stop_for_fork(reason, governor, &mut failure_storage)
++            })
++            .transpose()?;
++        governor.check()?;
++        Ok(Self {
++            base: self.base,
++            fed: self.fed,
++            position: self.position,
++            utf8: self.utf8,
++            mode,
++            stack,
++            root,
++            edits,
++            plain_slash: self.plain_slash,
++            started: self.started,
++            failed,
++            brackets: self.brackets,
++            containers,
++            orphans,
++            opening: self.opening,
++            settling: self.settling,
++            replaced,
++            colon_keys: self.colon_keys,
++            bare_key: self.bare_key,
++            fault_at: self.fault_at,
++            storage,
++            failure_storage,
++        })
++    }
++
+     /// A parser for one value. Its open-container stack charges
+     /// `governor`'s scratch meter as it grows.
+     ///
+@@ -582,6 +701,8 @@ impl IncrementalRecovery {
+             colon_keys: false,
+             bare_key: None,
+             fault_at: None,
++            storage: ScratchLease::empty(governor),
++            failure_storage: ScratchLease::empty(governor),
+         }
+     }
+ 
+@@ -743,6 +864,7 @@ impl IncrementalRecovery {
+         governor: &mut Governor,
+     ) -> Result<(Node, usize, Vec<SyntaxEdit>), StopReason> {
+         if let Some(reason) = self.failed.take() {
++            self.failure_storage.retain();
+             return Err(reason);
+         }
+         self.end(governor)?;
+@@ -750,6 +872,7 @@ impl IncrementalRecovery {
+             .root
+             .take()
+             .ok_or_else(|| StopReason::InvalidInput("recovery ended without a value".into()))?;
++        self.storage.retain();
+         Ok((
+             node,
+             self.position - self.base,
+@@ -1572,6 +1695,96 @@ impl IncrementalRecovery {
+     }
+ }
+ 
++fn copy_mode(
++    mode: &Mode,
++    governor: &mut Governor,
++    storage: &mut ScratchLease,
++) -> Result<Mode, StopReason> {
++    governor.charge(Resource::Work, 1)?;
++    let copy = |text: &String, governor: &mut Governor, storage: &mut ScratchLease| {
++        let (text, owned) = ScratchString::copy_capacity(text, governor)?.into_owned_parts();
++        storage.absorb(owned);
++        Ok::<_, StopReason>(text)
++    };
++    Ok(match mode {
++        Mode::Space(after) => Mode::Space(*after),
++        Mode::Slash { at, then } => Mode::Slash {
++            at: *at,
++            then: *then,
++        },
++        Mode::LineComment { start, then } => Mode::LineComment {
++            start: *start,
++            then: *then,
++        },
++        Mode::BlockComment { start, star, then } => Mode::BlockComment {
++            start: *start,
++            star: *star,
++            then: *then,
++        },
++        Mode::Token { start, key, text } => Mode::Token {
++            start: *start,
++            key: *key,
++            text: copy(text, governor, storage)?,
++        },
++        Mode::Text(text) => Mode::Text(Text {
++            start: text.start,
++            quote: text.quote,
++            key: text.key,
++            canonical: text.canonical,
++            value: copy(&text.value, governor, storage)?,
++            escape: text.escape,
++            slice: text.slice,
++        }),
++        Mode::Done => Mode::Done,
++    })
++}
++
++fn copy_frame(
++    frame: &Frame,
++    governor: &mut Governor,
++    storage: &mut ScratchLease,
++) -> Result<Frame, StopReason> {
++    governor.charge(Resource::Work, 1)?;
++    // Open parser frames are an explicit stack, independent of the physical
++    // recursion needed to copy each already completed child subtree.
++    // `frame.depth` is the next child's prospective depth. Its container's
++    // already admitted depth is one less, even when that frame is still empty.
++    governor.charge(Resource::Depth, u64::from(frame.depth.saturating_sub(1)))?;
++    let depth = 0;
++    let items = super::document::copy_items_for_fork(
++        &frame.items,
++        frame.items.capacity(),
++        governor,
++        storage,
++        depth,
++    )?;
++    let members = super::document::copy_members_for_fork(
++        &frame.members,
++        frame.members.capacity(),
++        governor,
++        storage,
++        depth,
++    )?;
++    let key = frame
++        .key
++        .as_ref()
++        .map(|(key, span)| {
++            let (key, owned) = ScratchString::copy_capacity(key, governor)?.into_owned_parts();
++            storage.absorb(owned);
++            Ok::<_, StopReason>((key, span.clone()))
++        })
++        .transpose()?;
++    Ok(Frame {
++        start: frame.start,
++        depth: frame.depth,
++        object: frame.object,
++        items,
++        members,
++        key,
++        container: frame.container,
++    })
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::{decode_escape, is_canonical_escape, recover_syntax};
+diff --git crates/core/src/json/number.rs crates/core/src/json/number.rs
+index e08d6b7..52e597f 100644
+--- crates/core/src/json/number.rs
++++ crates/core/src/json/number.rs
+@@ -15,6 +15,18 @@ use core::{cmp::Ordering, fmt, str::FromStr};
+ pub struct Number(String);
+ 
+ impl Number {
++    /// Copy an already validated live spelling without reparsing or changing
++    /// its native buffer capacity. The enclosing fork owns the reservation.
++    pub(super) fn copy_for_fork(
++        &self,
++        governor: &mut Governor,
++        lease: &mut ScratchLease,
++    ) -> Result<Self, StopReason> {
++        let (text, storage) = ScratchString::copy_capacity(&self.0, governor)?.into_owned_parts();
++        lease.absorb(storage);
++        Ok(Self(text))
++    }
++
+     /// Construct an exact unsigned 64-bit integer without floating conversion.
+     #[must_use]
+     pub fn from_unsigned(value: u64) -> Self {
+diff --git docs/RESOURCES.md docs/RESOURCES.md
+index ab17a89..0ffbe7b 100644
+--- docs/RESOURCES.md
++++ docs/RESOURCES.md
+@@ -1063,6 +1063,39 @@ delegates to the same producer with a discard sink. Allocation refusal during
+ EOF collection is explicit in the returned result. This facade implements the
+ source facts described above, not the complete streaming event contract.
+ 
++The private JSON state-copy foundation also reaches a production caller:
++when the grammar ends a JSON slot at a repaired delimiter beside the reading
++that continues, `Step::end_early` copies its exact current codec boundary.
++`CodecState` dispatches that copy through `JsonCodec` and `IncrementalRecovery`.
++Partial UTF-8, strings, escapes, comments and tokens, pending object keys, open
++frames, completed child nodes, edits and source/tracking indices are copied
++directly; source bytes are not replayed. Native capacities are preserved, with
++an explicit refusal if allocation cannot preserve them. Node copying keeps its
++real transient reservations and preserves lexical numbers and spans.
++Open-frame depth remains separate from physical child-tree copying: shallow
++children of a deeply nested explicit parser stack do not acquire its absolute
++frame depth as their recursion depth. Copying a completed child tree retains
++the native 128-level Node-copy recursion ceiling, even when the source parser's
++configured depth is higher; such a copy refuses explicitly with `Depth`.
++
++A JSON codec cell now uses a fallible one-element vector with its own
++`JSON_CODEC_STATE` reservation, admitted before allocation. Arena slots admit
++only their slot reservation; the cell releases its storage when consumed.
++Forked parser and codec plain buffers have explicit aggregate owners, while
++their native scratch vectors retain independent ownership. The same-operation
++sibling fork admits all new physical storage and work against the original
++governor; it does not refund a live sibling's reservations.
++
++The typed fork accounting transaction distinguishes those additional sibling
++copies from an independent governor snapshot. Its snapshot mode may replace
++only enumerated source scratch-vector and aggregate-lease reservations in the
++child, validates meter identity and rejects duplicate owner credits. Inherited
++historical or published debt is preserved; physical copying adds new work and
++cumulative storage. The snapshot constructor and finalizer are not yet wired
++through an independent Engine/Recognizer fork. Other owning codec variants,
++complete stream detachment and infallible `Clone` remain unfinished. This JSON
++copy path does not establish clone parity with an unforked execution.
++
+ Each dialect `d` of the explicit prepared allow-list keeps at most `B_d`
+ configurations live per input byte, where `B_d` is
+ `CompiledGrammar::configuration_bound()` (one per program location plus one

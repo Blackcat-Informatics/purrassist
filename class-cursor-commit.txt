@@ -1,0 +1,3 @@
+Reuse the engine cursor for certified class cohorts
+
+Keep cached class proofs without a separate cursor comparison, increment or store on each hit. Consume pre-byte misses and openers at their explicit old position, and use the shared engine cursor only at completed byte boundaries. Reject an occupied proof at an unprepared native split before mutation. Preserve every native certification guard and admit the actual cursor handoff within the retained portable slot reservation.

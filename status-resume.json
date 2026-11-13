@@ -1,0 +1,360 @@
+{
+  "issue": 16,
+  "pr_number": 169,
+  "branch": "paudley/16-tool-call-recovery-streaming-recognizer",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer",
+  "observed_at": "2026-11-04T01:43:51.471861+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "draft",
+      "message": "PR is a draft"
+    },
+    {
+      "code": "dirty",
+      "message": "Source changes remain outside the selected Stage directory"
+    },
+    {
+      "code": "ci_fail",
+      "message": "CI state is fail"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Finish the draft before merge preparation",
+    "Inspect and commit the intended source changes",
+    "Inspect saved failed-job excerpts",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "218ec2be1a5ff4277bb4bf546555487372429e12",
+    "headRefName": "paudley/16-tool-call-recovery-streaming-recognizer",
+    "headRefOid": "30218c7f396d3c6199f51fac3b1a8f6148e51c55",
+    "isDraft": true,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 169,
+    "state": "OPEN",
+    "title": "Draft: share incremental tool-call intake and stream events",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/169"
+  },
+  "checks": {
+    "state": "fail",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316511047",
+        "name": "qualification",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510969",
+        "name": "corpus",
+        "state": "FAILURE"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510983",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316511074",
+        "name": "native (macos-14)",
+        "state": "FAILURE"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510911",
+        "name": "native (ubuntu-24.04)",
+        "state": "FAILURE"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510947",
+        "name": "windows-engines",
+        "state": "FAILURE"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510830",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510684",
+        "name": "release-gate",
+        "state": "FAILURE"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "30218c7f396d3c6199f51fac3b1a8f6148e51c55",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "30218c7f396d3c6199f51fac3b1a8f6148e51c55",
+    "branch": "paudley/16-tool-call-recovery-streaming-recognizer",
+    "dirty_paths": [
+      ".stage/event-ownership/commit.log",
+      ".stage/event-ownership/pr-body.md",
+      ".stage/event-ownership/private-stash.txt",
+      ".stage/event-ownership/push.log",
+      ".stage/stream-draft-publication/doc-commit.log",
+      ".stage/stream-draft-publication/files/crates/core/src/contract.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/codec/json.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/codec/mod.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/engine.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/document.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/incremental.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/number.rs",
+      ".stage/stream-draft-publication/files/docs/RESOURCES.md",
+      ".stage/stream-draft-publication/pr-body.md",
+      ".stage/stream-draft-publication/push.log",
+      ".stage/stream-draft-publication/stash.txt",
+      ".stage/stream-integration-168/files/crates/core/src/contract.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/codec/json.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/codec/mod.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/engine.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/document.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/incremental.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/number.rs",
+      ".stage/stream-integration-168/files/docs/RESOURCES.md",
+      ".stage/stream-integration-168/merge.log",
+      ".stage/stream-integration-168/paths.txt",
+      ".stage/stream-integration-168/pre-sync.patch",
+      ".stage/stream-integration-168/stash.txt",
+      "crates/core/src/grammar/engine.rs"
+    ]
+  },
+  "ci_logs": {
+    "pr": 169,
+    "jobs": [
+      {
+        "name": "corpus",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510969",
+        "path": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510969.log",
+        "excerpt": [
+          "170: 2026-11-04T01:12:56.8944391Z ",
+          "171: 2026-11-04T01:12:56.8945096Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.04s",
+          "172: 2026-11-04T01:12:56.8945731Z ",
+          "173: 2026-11-04T01:12:56.9032921Z      Running tests/corruption_oracle.rs (target/debug/build/purrassist-core/53e853f76407305f/out/corruption_oracle-53e853f76407305f)",
+          "177: 2026-11-04T01:12:57.0701848Z ",
+          "178: 2026-11-04T01:12:57.0702701Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "179: 2026-11-04T01:12:57.0703727Z ",
+          "180: 2026-11-04T01:12:57.0707812Z      Running tests/markdown_corpus.rs (target/debug/build/purrassist-core/83b22452cb911fef/out/markdown_corpus-83b22452cb911fef)",
+          "186: 2026-11-04T01:12:57.0863938Z ",
+          "187: 2026-11-04T01:12:57.0864361Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "188: 2026-11-04T01:12:57.0865179Z ",
+          "189: 2026-11-04T01:12:57.0867627Z      Running tests/matching_oracle.rs (target/debug/build/purrassist-core/8319d771219606ba/out/matching_oracle-8319d771219606ba)",
+          "196: 2026-11-04T01:12:57.8103069Z ",
+          "197: 2026-11-04T01:12:57.8103329Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s",
+          "198: 2026-11-04T01:12:57.8103724Z ",
+          "199: 2026-11-04T01:12:57.8107382Z      Running tests/pattern_corpus.rs (target/debug/build/purrassist-core/8ce4f49095c35fb7/out/pattern_corpus-8ce4f49095c35fb7)",
+          "206: 2026-11-04T01:14:28.1931583Z ",
+          "207: 2026-11-04T01:14:28.1931979Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 90.38s",
+          "208: 2026-11-04T01:14:28.1932520Z ",
+          "209: 2026-11-04T01:14:28.1969283Z      Running tests/schema_conformance.rs (target/debug/build/purrassist-core/c26c0a2f9eaef859/out/schema_conformance-c26c0a2f9eaef859)",
+          "217: 2026-11-04T01:14:28.3143849Z ",
+          "218: 2026-11-04T01:14:28.3144359Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+          "219: 2026-11-04T01:14:28.3145332Z ",
+          "220: 2026-11-04T01:14:28.3150559Z      Running tests/tool_call_scale.rs (target/debug/build/purrassist-core/4e7bce20378b4209/out/tool_call_scale-4e7bce20378b4209)",
+          "227: 2026-11-04T01:15:44.5893519Z test one_mib_argument_work_bound ... ok",
+          "228: 2026-11-04T01:15:44.7006472Z test one_mib_dense_markup_fits_published_budget ... FAILED",
+          "229: 2026-11-04T01:16:28.7099299Z test one_mib_argument_fits_published_budget ... FAILED",
+          "230: 2026-11-04T01:16:28.7101234Z ",
+          "231: 2026-11-04T01:16:28.7101409Z failures:",
+          "(32 further error matches; see saved log)"
+        ]
+      },
+      {
+        "name": "native (macos-14)",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316511074",
+        "path": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316511074.log",
+        "excerpt": [
+          "137: 2026-11-04T01:09:25.7242060Z cargo fmt --all --check",
+          "138: 2026-11-04T01:09:28.0053310Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-repository.py",
+          "139: 2026-11-04T01:09:28.9822300Z     Updating crates.io index",
+          "140: 2026-11-04T01:09:28.9866920Z     Updating git repository `https://github.com/Blackcat-Informatics/purrdf.git`",
+          "213: 2026-11-04T01:10:05.7318900Z Repository attribution, frozen schema data, dependency inventory, core and derive boundaries verified.",
+          "214: 2026-11-04T01:10:05.7397600Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-repository-audit.py",
+          "215: 2026-11-04T01:10:09.6974350Z ....................................................",
+          "216: 2026-11-04T01:10:09.6976770Z ----------------------------------------------------------------------",
+          "224: 2026-11-04T01:10:09.9405390Z Toolchain pins verified: 8 stable occurrences match rust-version 1.98, 12 nightly occurrences match nightly-2026-09-14.",
+          "225: 2026-11-04T01:10:09.9483140Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py",
+          "226: 2026-11-04T01:10:11.5915060Z ...................................................................................................................",
+          "227: 2026-11-04T01:10:11.5917180Z Release gate identity verified: release qualification and the Verify release-gate job both run `make release-gate` on the same toolchains and environment.",
+          "249: 2026-11-04T01:10:11.6046780Z publish.yml verified: tag trigger, crates-io environment, id-token permission, qualification gate, SHA-pinned actions, dependency order, and verify-published step.",
+          "250: 2026-11-04T01:10:11.6058970Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py",
+          "251: 2026-11-04T01:10:13.1772520Z Documentation facts, links, wording and known limitations match their sources.",
+          "252: 2026-11-04T01:10:13.1943450Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py",
+          "253: 2026-11-04T01:12:26.3844800Z ....................................................................................................................................................................................................................................................................",
+          "254: 2026-11-04T01:12:26.3943270Z ----------------------------------------------------------------------",
+          "257: 2026-11-04T01:12:26.4247180Z OK",
+          "258: 2026-11-04T01:12:26.4349660Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py",
+          "259: 2026-11-04T01:13:40.8974360Z ............................................................................",
+          "260: 2026-11-04T01:13:40.8975940Z ----------------------------------------------------------------------",
+          "390: 2026-11-04T01:16:21.1662790Z     Checking typenum v1.20.1",
+          "391: 2026-11-04T01:16:22.0099040Z error: this sequence of operators looks suspiciously like a bug",
+          "392: 2026-11-04T01:16:22.0200200Z     --> crates/core/src/grammar/engine.rs:4997:12",
+          "393: 2026-11-04T01:16:22.0300790Z      |",
+          "424: 2026-11-04T01:16:32.7327130Z     Checking purrdf-cdt v3.0.1 (https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfb)",
+          "425: 2026-11-04T01:16:32.7470910Z error: could not compile `purrassist-core` (lib) due to 1 previous error",
+          "426: 2026-11-04T01:16:32.7474300Z warning: build failed, waiting for other jobs to finish...",
+          "427: 2026-11-04T01:16:33.2812380Z make: *** [lint] Error 101",
+          "(2 further error matches; see saved log)"
+        ]
+      },
+      {
+        "name": "native (ubuntu-24.04)",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510911",
+        "path": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510911.log",
+        "excerpt": [
+          "152: 2026-11-04T01:09:13.7183061Z cargo fmt --all --check",
+          "153: 2026-11-04T01:09:16.2685079Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-repository.py",
+          "154: 2026-11-04T01:09:16.6102592Z     Updating crates.io index",
+          "155: 2026-11-04T01:09:16.6110050Z     Updating git repository `https://github.com/Blackcat-Informatics/purrdf.git`",
+          "228: 2026-11-04T01:09:44.8643059Z Repository attribution, frozen schema data, dependency inventory, core and derive boundaries verified.",
+          "229: 2026-11-04T01:09:44.8721487Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-repository-audit.py",
+          "230: 2026-11-04T01:09:48.7476083Z ....................................................",
+          "231: 2026-11-04T01:09:48.7476552Z ----------------------------------------------------------------------",
+          "239: 2026-11-04T01:09:48.8682420Z Toolchain pins verified: 8 stable occurrences match rust-version 1.98, 12 nightly occurrences match nightly-2026-09-14.",
+          "240: 2026-11-04T01:09:48.8776771Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py",
+          "241: 2026-11-04T01:09:49.8947331Z ...................................................................................................................",
+          "242: 2026-11-04T01:09:49.8948220Z ----------------------------------------------------------------------",
+          "264: 2026-11-04T01:09:49.8970816Z publish.yml verified: tag trigger, crates-io environment, id-token permission, qualification gate, SHA-pinned actions, dependency order, and verify-published step.",
+          "265: 2026-11-04T01:09:49.9082737Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py",
+          "266: 2026-11-04T01:09:51.4291619Z Documentation facts, links, wording and known limitations match their sources.",
+          "267: 2026-11-04T01:09:51.4421063Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py",
+          "268: 2026-11-04T01:12:01.3896560Z ....................................................................................................................................................................................................................................................................",
+          "269: 2026-11-04T01:12:01.3897861Z ----------------------------------------------------------------------",
+          "272: 2026-11-04T01:12:01.3898983Z OK",
+          "273: 2026-11-04T01:12:01.4184236Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py",
+          "274: 2026-11-04T01:13:11.4490876Z ............................................................................",
+          "275: 2026-11-04T01:13:11.4491679Z ----------------------------------------------------------------------",
+          "407: 2026-11-04T01:15:19.9821055Z     Checking purrdf-hash v3.0.1 (https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfb)",
+          "408: 2026-11-04T01:15:20.8290186Z error: this sequence of operators looks suspiciously like a bug",
+          "409: 2026-11-04T01:15:20.8299308Z     --> crates/core/src/grammar/engine.rs:4997:12",
+          "410: 2026-11-04T01:15:20.8299862Z      |",
+          "460: 2026-11-04T01:15:36.6820358Z    Compiling memchr v2.8.3",
+          "461: 2026-11-04T01:15:37.5800724Z error: could not compile `purrassist-core` (lib) due to 1 previous error",
+          "462: 2026-11-04T01:15:37.5802133Z warning: build failed, waiting for other jobs to finish...",
+          "463: 2026-11-04T01:15:46.7694856Z make: *** [Makefile:23: lint] Error 101",
+          "(2 further error matches; see saved log)"
+        ]
+      },
+      {
+        "name": "windows-engines",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510947",
+        "path": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510947.log",
+        "excerpt": [
+          "375: 2026-11-04T01:17:30.3503875Z ",
+          "376: 2026-11-04T01:17:30.3504701Z test result: ok. 182 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s",
+          "377: 2026-11-04T01:17:30.3505436Z ",
+          "378: 2026-11-04T01:17:30.3550052Z      Running tests\\allocation_oracle.rs (target\\debug\\deps\\allocation_oracle-830b7cbba9f72ae1.exe)",
+          "413: 2026-11-04T01:17:30.7507164Z ",
+          "414: 2026-11-04T01:17:30.7507878Z test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s",
+          "415: 2026-11-04T01:17:30.7508301Z ",
+          "416: 2026-11-04T01:17:30.7540656Z      Running tests\\byte_language.rs (target\\debug\\deps\\byte_language-b3c86431de79a073.exe)",
+          "423: 2026-11-04T01:17:30.7668013Z ",
+          "424: 2026-11-04T01:17:30.7668331Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "425: 2026-11-04T01:17:30.7668823Z ",
+          "426: 2026-11-04T01:17:30.7688828Z      Running tests\\cancellation.rs (target\\debug\\deps\\cancellation-7d40ce94c75c4deb.exe)",
+          "432: 2026-11-04T01:17:30.7826141Z ",
+          "433: 2026-11-04T01:17:30.7826941Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "434: 2026-11-04T01:17:30.7827881Z ",
+          "435: 2026-11-04T01:17:30.7847628Z      Running tests\\canonical_print.rs (target\\debug\\deps\\canonical_print-27b248d05103fe72.exe)",
+          "440: 2026-11-04T01:17:30.7990225Z ",
+          "441: 2026-11-04T01:17:30.7990746Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "442: 2026-11-04T01:17:30.7991376Z ",
+          "443: 2026-11-04T01:17:30.8013801Z      Running tests\\draft07.rs (target\\debug\\deps\\draft07-cf7c78dd24434404.exe)",
+          "452: 2026-11-04T01:17:30.8193695Z ",
+          "453: 2026-11-04T01:17:30.8195121Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "454: 2026-11-04T01:17:30.8195773Z ",
+          "455: 2026-11-04T01:17:30.8215349Z      Running tests\\edit_ambiguity.rs (target\\debug\\deps\\edit_ambiguity-ff20b125f51f152a.exe)",
+          "464: 2026-11-04T01:17:30.8418280Z ",
+          "465: 2026-11-04T01:17:30.8418733Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "466: 2026-11-04T01:17:30.8419379Z ",
+          "467: 2026-11-04T01:17:30.8441620Z      Running tests\\edits.rs (target\\debug\\deps\\edits-7cfe45dce02ea80c.exe)",
+          "473: 2026-11-04T01:17:30.8581523Z ",
+          "474: 2026-11-04T01:17:30.8581972Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "475: 2026-11-04T01:17:30.8582915Z ",
+          "476: 2026-11-04T01:17:30.8599744Z      Running tests\\embeddings.rs (target\\debug\\deps\\embeddings-67184179e96d6658.exe)",
+          "(141 further error matches; see saved log)"
+        ]
+      },
+      {
+        "name": "release-gate",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510684",
+        "path": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510684.log",
+        "excerpt": [
+          "165: 2026-11-04T01:05:43.1339389Z cargo fmt --all --check",
+          "166: 2026-11-04T01:05:45.7373550Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-repository.py",
+          "167: 2026-11-04T01:05:46.0812129Z     Updating crates.io index",
+          "168: 2026-11-04T01:05:46.0819724Z     Updating git repository `https://github.com/Blackcat-Informatics/purrdf.git`",
+          "241: 2026-11-04T01:06:14.7251302Z Repository attribution, frozen schema data, dependency inventory, core and derive boundaries verified.",
+          "242: 2026-11-04T01:06:14.7334314Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-repository-audit.py",
+          "243: 2026-11-04T01:06:18.6804959Z ....................................................",
+          "244: 2026-11-04T01:06:18.6806201Z ----------------------------------------------------------------------",
+          "252: 2026-11-04T01:06:18.8013850Z Toolchain pins verified: 8 stable occurrences match rust-version 1.98, 12 nightly occurrences match nightly-2026-09-14.",
+          "253: 2026-11-04T01:06:18.8100580Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py",
+          "254: 2026-11-04T01:06:19.8235224Z ...................................................................................................................",
+          "255: 2026-11-04T01:06:19.8236413Z ----------------------------------------------------------------------",
+          "277: 2026-11-04T01:06:19.8266422Z publish.yml verified: tag trigger, crates-io environment, id-token permission, qualification gate, SHA-pinned actions, dependency order, and verify-published step.",
+          "278: 2026-11-04T01:06:19.8392841Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py",
+          "279: 2026-11-04T01:06:21.4612179Z Documentation facts, links, wording and known limitations match their sources.",
+          "280: 2026-11-04T01:06:21.4739352Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py",
+          "281: 2026-11-04T01:08:31.0720872Z ....................................................................................................................................................................................................................................................................",
+          "282: 2026-11-04T01:08:31.0722391Z ----------------------------------------------------------------------",
+          "285: 2026-11-04T01:08:31.0723331Z OK",
+          "286: 2026-11-04T01:08:31.0987803Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py",
+          "287: 2026-11-04T01:09:43.3845191Z ............................................................................",
+          "288: 2026-11-04T01:09:43.3846420Z ----------------------------------------------------------------------",
+          "420: 2026-11-04T01:11:48.4698802Z     Checking hybrid-array v0.4.15",
+          "421: 2026-11-04T01:11:48.6378436Z error: this sequence of operators looks suspiciously like a bug",
+          "422: 2026-11-04T01:11:48.6467189Z     --> crates/core/src/grammar/engine.rs:4997:12",
+          "423: 2026-11-04T01:11:48.6491903Z      |",
+          "477: 2026-11-04T01:12:06.1787310Z     Checking aead v0.6.1",
+          "478: 2026-11-04T01:12:06.2089484Z error: the loop variable `lane` is used to index `pending`",
+          "479: 2026-11-04T01:12:06.2117255Z    --> crates/core/src/tool_call/recognizer_sources.rs:329:25",
+          "480: 2026-11-04T01:12:06.2118301Z     |",
+          "(4 further error matches; see saved log)"
+        ]
+      }
+    ],
+    "ok": true,
+    "summary": "# PR #169 failed CI logs\n\n## corpus\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510969\n\n/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510969.log\n170: 2026-11-04T01:12:56.8944391Z \n171: 2026-11-04T01:12:56.8945096Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.04s\n172: 2026-11-04T01:12:56.8945731Z \n173: 2026-11-04T01:12:56.9032921Z      Running tests/corruption_oracle.rs (target/debug/build/purrassist-core/53e853f76407305f/out/corruption_oracle-53e853f76407305f)\n177: 2026-11-04T01:12:57.0701848Z \n178: 2026-11-04T01:12:57.0702701Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n179: 2026-11-04T01:12:57.0703727Z \n180: 2026-11-04T01:12:57.0707812Z      Running tests/markdown_corpus.rs (target/debug/build/purrassist-core/83b22452cb911fef/out/markdown_corpus-83b22452cb911fef)\n186: 2026-11-04T01:12:57.0863938Z \n187: 2026-11-04T01:12:57.0864361Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n188: 2026-11-04T01:12:57.0865179Z \n189: 2026-11-04T01:12:57.0867627Z      Running tests/matching_oracle.rs (target/debug/build/purrassist-core/8319d771219606ba/out/matching_oracle-8319d771219606ba)\n196: 2026-11-04T01:12:57.8103069Z \n197: 2026-11-04T01:12:57.8103329Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s\n198: 2026-11-04T01:12:57.8103724Z \n199: 2026-11-04T01:12:57.8107382Z      Running tests/pattern_corpus.rs (target/debug/build/purrassist-core/8ce4f49095c35fb7/out/pattern_corpus-8ce4f49095c35fb7)\n206: 2026-11-04T01:14:28.1931583Z \n207: 2026-11-04T01:14:28.1931979Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 90.38s\n208: 2026-11-04T01:14:28.1932520Z \n209: 2026-11-04T01:14:28.1969283Z      Running tests/schema_conformance.rs (target/debug/build/purrassist-core/c26c0a2f9eaef859/out/schema_conformance-c26c0a2f9eaef859)\n217: 2026-11-04T01:14:28.3143849Z \n218: 2026-11-04T01:14:28.3144359Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s\n219: 2026-11-04T01:14:28.3145332Z \n220: 2026-11-04T01:14:28.3150559Z      Running tests/tool_call_scale.rs (target/debug/build/purrassist-core/4e7bce20378b4209/out/tool_call_scale-4e7bce20378b4209)\n227: 2026-11-04T01:15:44.5893519Z test one_mib_argument_work_bound ... ok\n228: 2026-11-04T01:15:44.7006472Z test one_mib_dense_markup_fits_published_budget ... FAILED\n229: 2026-11-04T01:16:28.7099299Z test one_mib_argument_fits_published_budget ... FAILED\n230: 2026-11-04T01:16:28.7101234Z \n231: 2026-11-04T01:16:28.7101409Z failures:\n(32 further error matches; see saved log)\n\n## native (macos-14)\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316511074\n\n/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316511074.log\n137: 2026-11-04T01:09:25.7242060Z cargo fmt --all --check\n138: 2026-11-04T01:09:28.0053310Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-repository.py\n139: 2026-11-04T01:09:28.9822300Z     Updating crates.io index\n140: 2026-11-04T01:09:28.9866920Z     Updating git repository `https://github.com/Blackcat-Informatics/purrdf.git`\n213: 2026-11-04T01:10:05.7318900Z Repository attribution, frozen schema data, dependency inventory, core and derive boundaries verified.\n214: 2026-11-04T01:10:05.7397600Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-repository-audit.py\n215: 2026-11-04T01:10:09.6974350Z ....................................................\n216: 2026-11-04T01:10:09.6976770Z ----------------------------------------------------------------------\n224: 2026-11-04T01:10:09.9405390Z Toolchain pins verified: 8 stable occurrences match rust-version 1.98, 12 nightly occurrences match nightly-2026-09-14.\n225: 2026-11-04T01:10:09.9483140Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py\n226: 2026-11-04T01:10:11.5915060Z ...................................................................................................................\n227: 2026-11-04T01:10:11.5917180Z Release gate identity verified: release qualification and the Verify release-gate job both run `make release-gate` on the same toolchains and environment.\n249: 2026-11-04T01:10:11.6046780Z publish.yml verified: tag trigger, crates-io environment, id-token permission, qualification gate, SHA-pinned actions, dependency order, and verify-published step.\n250: 2026-11-04T01:10:11.6058970Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py\n251: 2026-11-04T01:10:13.1772520Z Documentation facts, links, wording and known limitations match their sources.\n252: 2026-11-04T01:10:13.1943450Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py\n253: 2026-11-04T01:12:26.3844800Z ....................................................................................................................................................................................................................................................................\n254: 2026-11-04T01:12:26.3943270Z ----------------------------------------------------------------------\n257: 2026-11-04T01:12:26.4247180Z OK\n258: 2026-11-04T01:12:26.4349660Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py\n259: 2026-11-04T01:13:40.8974360Z ............................................................................\n260: 2026-11-04T01:13:40.8975940Z ----------------------------------------------------------------------\n390: 2026-11-04T01:16:21.1662790Z     Checking typenum v1.20.1\n391: 2026-11-04T01:16:22.0099040Z error: this sequence of operators looks suspiciously like a bug\n392: 2026-11-04T01:16:22.0200200Z     --> crates/core/src/grammar/engine.rs:4997:12\n393: 2026-11-04T01:16:22.0300790Z      |\n424: 2026-11-04T01:16:32.7327130Z     Checking purrdf-cdt v3.0.1 (https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfb)\n425: 2026-11-04T01:16:32.7470910Z error: could not compile `purrassist-core` (lib) due to 1 previous error\n426: 2026-11-04T01:16:32.7474300Z warning: build failed, waiting for other jobs to finish...\n427: 2026-11-04T01:16:33.2812380Z make: *** [lint] Error 101\n(2 further error matches; see saved log)\n\n## native (ubuntu-24.04)\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510911\n\n/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510911.log\n152: 2026-11-04T01:09:13.7183061Z cargo fmt --all --check\n153: 2026-11-04T01:09:16.2685079Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-repository.py\n154: 2026-11-04T01:09:16.6102592Z     Updating crates.io index\n155: 2026-11-04T01:09:16.6110050Z     Updating git repository `https://github.com/Blackcat-Informatics/purrdf.git`\n228: 2026-11-04T01:09:44.8643059Z Repository attribution, frozen schema data, dependency inventory, core and derive boundaries verified.\n229: 2026-11-04T01:09:44.8721487Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-repository-audit.py\n230: 2026-11-04T01:09:48.7476083Z ....................................................\n231: 2026-11-04T01:09:48.7476552Z ----------------------------------------------------------------------\n239: 2026-11-04T01:09:48.8682420Z Toolchain pins verified: 8 stable occurrences match rust-version 1.98, 12 nightly occurrences match nightly-2026-09-14.\n240: 2026-11-04T01:09:48.8776771Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py\n241: 2026-11-04T01:09:49.8947331Z ...................................................................................................................\n242: 2026-11-04T01:09:49.8948220Z ----------------------------------------------------------------------\n264: 2026-11-04T01:09:49.8970816Z publish.yml verified: tag trigger, crates-io environment, id-token permission, qualification gate, SHA-pinned actions, dependency order, and verify-published step.\n265: 2026-11-04T01:09:49.9082737Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py\n266: 2026-11-04T01:09:51.4291619Z Documentation facts, links, wording and known limitations match their sources.\n267: 2026-11-04T01:09:51.4421063Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py\n268: 2026-11-04T01:12:01.3896560Z ....................................................................................................................................................................................................................................................................\n269: 2026-11-04T01:12:01.3897861Z ----------------------------------------------------------------------\n272: 2026-11-04T01:12:01.3898983Z OK\n273: 2026-11-04T01:12:01.4184236Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py\n274: 2026-11-04T01:13:11.4490876Z ............................................................................\n275: 2026-11-04T01:13:11.4491679Z ----------------------------------------------------------------------\n407: 2026-11-04T01:15:19.9821055Z     Checking purrdf-hash v3.0.1 (https://github.com/Blackcat-Informatics/purrdf.git?rev=742bbbfbe2240e1fc6f178badd049420753ef358#742bbbfb)\n408: 2026-11-04T01:15:20.8290186Z error: this sequence of operators looks suspiciously like a bug\n409: 2026-11-04T01:15:20.8299308Z     --> crates/core/src/grammar/engine.rs:4997:12\n410: 2026-11-04T01:15:20.8299862Z      |\n460: 2026-11-04T01:15:36.6820358Z    Compiling memchr v2.8.3\n461: 2026-11-04T01:15:37.5800724Z error: could not compile `purrassist-core` (lib) due to 1 previous error\n462: 2026-11-04T01:15:37.5802133Z warning: build failed, waiting for other jobs to finish...\n463: 2026-11-04T01:15:46.7694856Z make: *** [Makefile:23: lint] Error 101\n(2 further error matches; see saved log)\n\n## windows-engines\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510947\n\n/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510947.log\n375: 2026-11-04T01:17:30.3503875Z \n376: 2026-11-04T01:17:30.3504701Z test result: ok. 182 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s\n377: 2026-11-04T01:17:30.3505436Z \n378: 2026-11-04T01:17:30.3550052Z      Running tests\\allocation_oracle.rs (target\\debug\\deps\\allocation_oracle-830b7cbba9f72ae1.exe)\n413: 2026-11-04T01:17:30.7507164Z \n414: 2026-11-04T01:17:30.7507878Z test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s\n415: 2026-11-04T01:17:30.7508301Z \n416: 2026-11-04T01:17:30.7540656Z      Running tests\\byte_language.rs (target\\debug\\deps\\byte_language-b3c86431de79a073.exe)\n423: 2026-11-04T01:17:30.7668013Z \n424: 2026-11-04T01:17:30.7668331Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n425: 2026-11-04T01:17:30.7668823Z \n426: 2026-11-04T01:17:30.7688828Z      Running tests\\cancellation.rs (target\\debug\\deps\\cancellation-7d40ce94c75c4deb.exe)\n432: 2026-11-04T01:17:30.7826141Z \n433: 2026-11-04T01:17:30.7826941Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n434: 2026-11-04T01:17:30.7827881Z \n435: 2026-11-04T01:17:30.7847628Z      Running tests\\canonical_print.rs (target\\debug\\deps\\canonical_print-27b248d05103fe72.exe)\n440: 2026-11-04T01:17:30.7990225Z \n441: 2026-11-04T01:17:30.7990746Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n442: 2026-11-04T01:17:30.7991376Z \n443: 2026-11-04T01:17:30.8013801Z      Running tests\\draft07.rs (target\\debug\\deps\\draft07-cf7c78dd24434404.exe)\n452: 2026-11-04T01:17:30.8193695Z \n453: 2026-11-04T01:17:30.8195121Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n454: 2026-11-04T01:17:30.8195773Z \n455: 2026-11-04T01:17:30.8215349Z      Running tests\\edit_ambiguity.rs (target\\debug\\deps\\edit_ambiguity-ff20b125f51f152a.exe)\n464: 2026-11-04T01:17:30.8418280Z \n465: 2026-11-04T01:17:30.8418733Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n466: 2026-11-04T01:17:30.8419379Z \n467: 2026-11-04T01:17:30.8441620Z      Running tests\\edits.rs (target\\debug\\deps\\edits-7cfe45dce02ea80c.exe)\n473: 2026-11-04T01:17:30.8581523Z \n474: 2026-11-04T01:17:30.8581972Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n475: 2026-11-04T01:17:30.8582915Z \n476: 2026-11-04T01:17:30.8599744Z      Running tests\\embeddings.rs (target\\debug\\deps\\embeddings-67184179e96d6658.exe)\n(141 further error matches; see saved log)\n\n## release-gate\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/41751227020/job/126316510684\n\n/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-logs/github-job-126316510684.log\n165: 2026-11-04T01:05:43.1339389Z cargo fmt --all --check\n166: 2026-11-04T01:05:45.7373550Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-repository.py\n167: 2026-11-04T01:05:46.0812129Z     Updating crates.io index\n168: 2026-11-04T01:05:46.0819724Z     Updating git repository `https://github.com/Blackcat-Informatics/purrdf.git`\n241: 2026-11-04T01:06:14.7251302Z Repository attribution, frozen schema data, dependency inventory, core and derive boundaries verified.\n242: 2026-11-04T01:06:14.7334314Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-repository-audit.py\n243: 2026-11-04T01:06:18.6804959Z ....................................................\n244: 2026-11-04T01:06:18.6806201Z ----------------------------------------------------------------------\n252: 2026-11-04T01:06:18.8013850Z Toolchain pins verified: 8 stable occurrences match rust-version 1.98, 12 nightly occurrences match nightly-2026-09-14.\n253: 2026-11-04T01:06:18.8100580Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py\n254: 2026-11-04T01:06:19.8235224Z ...................................................................................................................\n255: 2026-11-04T01:06:19.8236413Z ----------------------------------------------------------------------\n277: 2026-11-04T01:06:19.8266422Z publish.yml verified: tag trigger, crates-io environment, id-token permission, qualification gate, SHA-pinned actions, dependency order, and verify-published step.\n278: 2026-11-04T01:06:19.8392841Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py\n279: 2026-11-04T01:06:21.4612179Z Documentation facts, links, wording and known limitations match their sources.\n280: 2026-11-04T01:06:21.4739352Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py\n281: 2026-11-04T01:08:31.0720872Z ....................................................................................................................................................................................................................................................................\n282: 2026-11-04T01:08:31.0722391Z ----------------------------------------------------------------------\n285: 2026-11-04T01:08:31.0723331Z OK\n286: 2026-11-04T01:08:31.0987803Z python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py\n287: 2026-11-04T01:09:43.3845191Z ............................................................................\n288: 2026-11-04T01:09:43.3846420Z ----------------------------------------------------------------------\n420: 2026-11-04T01:11:48.4698802Z     Checking hybrid-array v0.4.15\n421: 2026-11-04T01:11:48.6378436Z error: this sequence of operators looks suspiciously like a bug\n422: 2026-11-04T01:11:48.6467189Z     --> crates/core/src/grammar/engine.rs:4997:12\n423: 2026-11-04T01:11:48.6491903Z      |\n477: 2026-11-04T01:12:06.1787310Z     Checking aead v0.6.1\n478: 2026-11-04T01:12:06.2089484Z error: the loop variable `lane` is used to index `pending`\n479: 2026-11-04T01:12:06.2117255Z    --> crates/core/src/tool_call/recognizer_sources.rs:329:25\n480: 2026-11-04T01:12:06.2118301Z     |\n(4 further error matches; see saved log)\n\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

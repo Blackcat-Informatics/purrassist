@@ -1,0 +1,3 @@
+Reuse governed JSON key visitation across literal walks
+
+Use each checked literal PC as a generation tag in one lazily initialized table per program. Preserve complete successor and colon classification, charge actual tag storage and read/comparison/store work, and retain metadata through refusal. Class-only programs allocate no tag table.

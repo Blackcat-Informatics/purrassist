@@ -1,0 +1,45 @@
+//! probe
+use purrassist_core::tool_call::{DialectId, DialectSet, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
+use purrassist_core::{Budget, Effort, StopReason, contract::Resource};
+use std::collections::hash_map::DefaultHasher;
+use std::fmt::Write as _;
+use std::hash::{Hash, Hasher};
+
+const LIST_DIR: &str = r#"[{"type":"function","function":{"name":"list_dir","parameters":{"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer"}},"required":["path"]}}}]"#;
+
+fn h<T: std::fmt::Debug>(v: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    format!("{v:?}").hash(&mut s);
+    s.finish()
+}
+
+#[test]
+fn probe() {
+    let mut out = String::new();
+    let tools = ToolSet::from_openai(LIST_DIR, Budget::default()).unwrap();
+    let mut turn = String::new();
+    for i in 0..64 {
+        let _ = write!(turn, "<tool_call>\n<function=list_dir>\n<parameter=depth>\n{i}\n<parameter=path>\nsrc/{i}\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n");
+    }
+    let preset = tools.recover(turn.as_bytes(), &ToolRecoveryRequest::new(Effort::Standard), DialectSet::built_in());
+    let _ = writeln!(out, "STANDARD stopped={:?} usage={:?}", preset.receipt.stopped, preset.receipt.usage);
+    let full = tools.recover(turn.as_bytes(), &ToolRecoveryRequest::sized(Effort::Standard, turn.as_bytes()), DialectSet::built_in());
+    let _ = writeln!(out, "FULL stopped={:?} work={} candidates={} usage={:?}", full.receipt.stopped, full.receipt.usage.work, full.receipt.usage.candidates, full.receipt.usage);
+    let _ = writeln!(out, "FULL outcome_hash={:x} evidence_hash={:x} alternatives_hash={:x}", h(&full.outcome), h(&full.receipt.evidence), h(&full.receipt.alternatives));
+
+    let tools = ToolSet::compile([ToolDefinition::new("f").param("text", Param::string())], Budget::default()).unwrap();
+    let set = DialectSet::new([DialectId::Hermes], &mut purrassist_core::Governor::new(Budget::default())).unwrap();
+    let mut first = None;
+    for n in 1..=100usize {
+        let output = (0..n)
+            .map(|i| format!("<tool_call>\n{{\"name\":\"f\",\"arguments\":{{\"text\":\"c{i}\"}}}}\n</tool_call>"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let r = tools.recover(output.as_bytes(), &ToolRecoveryRequest::new(Effort::Exact), &set);
+        let stop = r.receipt.stopped == StopReason::BudgetExceeded(Resource::Work);
+        if stop && first.is_none() { first = Some(n); }
+        let _ = writeln!(out, "HERMES n={n} stopped={:?} work={} cand={} outcome={:x} ev={:x} alt={:x}", r.receipt.stopped, r.receipt.usage.work, r.receipt.usage.candidates, h(&r.outcome), h(&r.receipt.evidence), h(&r.receipt.alternatives));
+    }
+    let _ = writeln!(out, "HERMES first_work_stop={first:?}");
+    std::fs::write(std::env::var("PROBE_OUT").unwrap(), out).unwrap();
+}

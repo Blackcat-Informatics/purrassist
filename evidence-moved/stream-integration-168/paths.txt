@@ -1,0 +1,8 @@
+crates/core/src/contract.rs
+crates/core/src/grammar/codec/json.rs
+crates/core/src/grammar/codec/mod.rs
+crates/core/src/grammar/engine.rs
+crates/core/src/json/document.rs
+crates/core/src/json/incremental.rs
+crates/core/src/json/number.rs
+docs/RESOURCES.md

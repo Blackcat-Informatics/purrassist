@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 16,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer",
+  "branch": "paudley/16-tool-call-recovery-streaming-recognizer",
+  "slug": "tool-call-recovery-streaming-recognizer",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "28de2a4b4acd6dd837badba521d547aeb0676801",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer",
+    "branch:paudley/16-tool-call-recovery-streaming-recognizer",
+    "stage:/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer",
+    "issue:/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-31T15:08:09-0600"
+}

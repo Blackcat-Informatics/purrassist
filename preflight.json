@@ -1,0 +1,145 @@
+{
+  "issue": 16,
+  "pr_number": 169,
+  "branch": "paudley/16-tool-call-recovery-streaming-recognizer",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer",
+  "observed_at": "2026-11-04T04:43:37.617611+00:00",
+  "completed": [
+    "pr",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "dirty",
+      "message": "Source changes remain outside the selected Stage directory"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [
+    {
+      "source": "checks",
+      "reason": "gh returned unparseable JSON: Expecting value: line 1 column 1 (char 0)"
+    }
+  ],
+  "next_actions": [
+    "Restore checks evidence: gh returned unparseable JSON: Expecting value: line 1 column 1 (char 0)",
+    "Inspect and commit the intended source changes",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "218ec2be1a5ff4277bb4bf546555487372429e12",
+    "headRefName": "paudley/16-tool-call-recovery-streaming-recognizer",
+    "headRefOid": "42db39597c5c6da53592a2109ff5ecb20865b3ce",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 169,
+    "state": "OPEN",
+    "title": "share incremental tool-call intake and stream events",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/169"
+  },
+  "reviews": {
+    "head": "42db39597c5c6da53592a2109ff5ecb20865b3ce",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "42db39597c5c6da53592a2109ff5ecb20865b3ce",
+    "branch": "paudley/16-tool-call-recovery-streaming-recognizer",
+    "dirty_paths": [
+      ".stage/event-ownership/commit.log",
+      ".stage/event-ownership/pr-body.md",
+      ".stage/event-ownership/private-stash.txt",
+      ".stage/event-ownership/push.log",
+      ".stage/stream-draft-publication/doc-commit.log",
+      ".stage/stream-draft-publication/files/crates/core/src/contract.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/codec/json.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/codec/mod.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/engine.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/document.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/incremental.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/number.rs",
+      ".stage/stream-draft-publication/files/docs/RESOURCES.md",
+      ".stage/stream-draft-publication/pr-body.md",
+      ".stage/stream-draft-publication/push.log",
+      ".stage/stream-draft-publication/stash.txt",
+      ".stage/stream-integration-168/files/crates/core/src/contract.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/codec/json.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/codec/mod.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/engine.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/document.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/incremental.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/number.rs",
+      ".stage/stream-integration-168/files/docs/RESOURCES.md",
+      ".stage/stream-integration-168/merge.log",
+      ".stage/stream-integration-168/paths.txt",
+      ".stage/stream-integration-168/pre-sync.patch",
+      ".stage/stream-integration-168/stash.txt"
+    ]
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 25,
+      "bytes": 215578,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "218ec2be1a5ff4277bb4bf546555487372429e12",
+      "head": "42db39597c5c6da53592a2109ff5ecb20865b3ce",
+      "status": "clean"
+    }
+  }
+}

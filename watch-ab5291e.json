@@ -1,0 +1,163 @@
+{
+  "issue": 16,
+  "pr_number": 169,
+  "branch": "paudley/16-tool-call-recovery-streaming-recognizer",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer",
+  "observed_at": "2026-11-04T10:13:57.681862+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "dirty",
+      "message": "Source changes remain outside the selected Stage directory"
+    },
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Inspect and commit the intended source changes",
+    "Wait for CI changes",
+    "Complete: review-debt.md, validation.md, pr-checks.txt"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/16-tool-call-recovery-streaming-recognizer/.stage/tool-call-recovery-streaming-recognizer/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "ffee73d4dde2d02c77569a41a2e3c85a341b1025",
+    "headRefName": "paudley/16-tool-call-recovery-streaming-recognizer",
+    "headRefOid": "ab5291e064ff36ffc90d99b9b70ee7dc92a7e442",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 169,
+    "state": "OPEN",
+    "title": "share incremental tool-call intake and stream events",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/169"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514434639",
+        "name": "native (macos-14)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514435332",
+        "name": "native (ubuntu-24.04)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514434773",
+        "name": "release-gate",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514436296",
+        "name": "windows-engines",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514434899",
+        "name": "wasm",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514434784",
+        "name": "corpus",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514434485",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/41812344885/job/126514434579",
+        "name": "qualification",
+        "state": "IN_PROGRESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "ab5291e064ff36ffc90d99b9b70ee7dc92a7e442",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "ab5291e064ff36ffc90d99b9b70ee7dc92a7e442",
+    "branch": "paudley/16-tool-call-recovery-streaming-recognizer",
+    "dirty_paths": [
+      ".stage/event-ownership/commit.log",
+      ".stage/event-ownership/pr-body.md",
+      ".stage/event-ownership/private-stash.txt",
+      ".stage/event-ownership/push.log",
+      ".stage/stream-draft-publication/doc-commit.log",
+      ".stage/stream-draft-publication/files/crates/core/src/contract.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/codec/json.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/codec/mod.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/grammar/engine.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/document.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/incremental.rs",
+      ".stage/stream-draft-publication/files/crates/core/src/json/number.rs",
+      ".stage/stream-draft-publication/files/docs/RESOURCES.md",
+      ".stage/stream-draft-publication/pr-body.md",
+      ".stage/stream-draft-publication/push.log",
+      ".stage/stream-draft-publication/stash.txt",
+      ".stage/stream-integration-168/files/crates/core/src/contract.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/codec/json.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/codec/mod.rs",
+      ".stage/stream-integration-168/files/crates/core/src/grammar/engine.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/document.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/incremental.rs",
+      ".stage/stream-integration-168/files/crates/core/src/json/number.rs",
+      ".stage/stream-integration-168/files/docs/RESOURCES.md",
+      ".stage/stream-integration-168/merge.log",
+      ".stage/stream-integration-168/paths.txt",
+      ".stage/stream-integration-168/pre-sync.patch",
+      ".stage/stream-integration-168/stash.txt"
+    ]
+  },
+  "ci_logs": {
+    "pr": 169,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #169 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "watch": "timeout"
+}
