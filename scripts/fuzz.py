@@ -893,6 +893,10 @@ TOOL_CALL_REGRESSIONS = [
     # `"in` of its `"input"` member name (campaign failure: the walk's found
     # end split a literal the attempt began; oracle F7).
     b'[\xe6#{\t\t"type":"tool_use","id"<|tool_call_argument_begin|>\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"input":"{\\"pat<|python_tag[ARGS]|>\\"ratio\\":39.32,\\"count\\":-415,\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"in<|tool:_calls_section_begin|>put":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\":-415,\\"options\\":{\\"backup\\":false}}"\t}]',
+    # Issue #185 (second): a rejected Anthropic attempt whose span holds two
+    # call bodies (a duplicated member after a cut special token) is covered
+    # body by body, each read fresh (INTEGRATION.md:157-172, oracle F16).
+    b'[\xe6#{\t\t"type":"tool_use","id"<|tool_call_argument_begin|>\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"input":"{\\"pat<|python_tag[ARGS]|>\\"ratio\\":39.32,\\"count\\":<|message|>-415,\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"in<|tool:_calls_section_begin|>put":"{\\"message|>-415,\t\t:\t"call_22bb690f",\t\t"name"\t:\t\t"write_file",\t"in<|tool:_calls_section_begin|>put":"{\\"pat<|python_tag|>\\"ratio\\":39.32,\\"count\\"ratio\\":39.32,\\"count\\":-415,\\"options\\":{\\"backup\\":false}}"\t}]',
 ]
 
 # Strict forced tool choice: header `\xe6\x23` (forced `read_file`) plus a
