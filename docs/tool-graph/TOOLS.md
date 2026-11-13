@@ -27,7 +27,9 @@ graph is published. A native storage failure the governor did not record is not
 claimed as a budget: it is a `LoadError::Parse` with code `storage` and the
 native cause (code `storage-accounting` for a rejected scratch release). Native
 work units are finer than this crate's row accounting, so the loader charges one
-work unit per 64 native units, carrying the remainder across charges.
+work unit per 64 native units, carrying the remainder across charges. A remainder
+below 64 native units left at the end of a parse or catalog read is dropped: it is
+never charged, so each governed step can under-charge by at most 63 native units.
 
 Measured rates, from the governor's `usage()` after a load. On the worked example
 (9,518 bytes) a load charges 33,191 work units (3.49 per source byte) and peaks at
