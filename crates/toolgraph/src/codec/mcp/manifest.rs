@@ -220,8 +220,10 @@ impl std::error::Error for CodecError {
 /// # Errors
 /// Returns [`CodecError`] when a tool's shapes have no plain-argument schema,
 /// a context fragment is refused, a recorded loss is not registered, the
-/// dataset cannot be written, or the governor stops the operation. Nothing is
-/// returned on failure.
+/// dataset cannot be written, or the governor stops the operation. A tool whose
+/// input or output shape does not have exactly one `sh:targetClass` is refused
+/// with [`CodecError::Schema`] carrying `ToolSchemaError::InvalidRoot`; no root
+/// class is inferred. Nothing is returned on failure.
 pub fn encode(
     graph: &ToolGraph,
     vocabulary: &Vocabulary,
@@ -304,7 +306,11 @@ pub fn decode(
     let root = json::parse_with(manifest.as_str(), governor).map_err(CodecError::Json)?;
     let envelope = ManifestEnvelope::read(&root, governor).map_err(CodecError::Envelope)?;
     let expected = prefixes(vocabulary);
-    if !envelope.prefixes().equivalent(&expected) {
+    if !envelope
+        .prefixes()
+        .equivalent_governed(&expected, governor)
+        .map_err(CodecError::Resource)?
+    {
         return Err(CodecError::Disagreement {
             tool: None,
             member: "prefixes",
@@ -339,7 +345,7 @@ pub fn decode(
         });
     }
     for (index, (expected, declared)) in projected.iter().zip(&declarations).enumerate() {
-        agree(index, expected, declared)?;
+        agree(index, expected, declared, governor)?;
     }
     Ok((graph, ledger))
 }
@@ -513,12 +519,19 @@ fn root_class(shapes: &Shapes, shape: &str) -> Option<String> {
 }
 
 /// Require a declaration to equal the projection of the loaded graph, member by member.
-fn agree(index: usize, expected: &Node, declared: &ToolEnvelope<'_>) -> Result<(), CodecError> {
+fn agree(
+    index: usize,
+    expected: &Node,
+    declared: &ToolEnvelope<'_>,
+    governor: &mut Governor,
+) -> Result<(), CodecError> {
     for (member, path) in MEMBERS {
         let wanted = lookup(expected, path);
         let found = lookup(declared.original(), path);
         let equal = match (wanted, found) {
-            (Some(wanted), Some(found)) => wanted.equivalent(found),
+            (Some(wanted), Some(found)) => wanted
+                .equivalent_governed(found, governor)
+                .map_err(CodecError::Resource)?,
             _ => false,
         };
         if !equal {

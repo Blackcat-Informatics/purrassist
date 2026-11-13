@@ -30,8 +30,9 @@ and exact per-quad source spans are not yet provided. The Rust shape table is
 not equivalent to the shapes document; its differences and the unchecked
 requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
 the `graph` module documentation. The production
-schema bridge, manifest codecs, authorization and execution remain specified in
+`tool_set` schema bridge, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
+The MCP Extended manifest codec described next is implemented.
 
 `codec::mcp::encode` and `codec::mcp::decode` convert a loaded `ToolGraph` to and
 from the MCP Extended manifest (format `purrassist-toolgraph-v2`) with a native
@@ -122,7 +123,8 @@ masks. It preserves tag values, order and duplicates, accepts mathematical
 integer spellings across the full portable `u64` domain, and emits fixed field
 order with canonical masks and exact byte enforcement. Run
 `cargo run -p purrassist-toolgraph --example roundtrip_context` for an actual
-round trip. Full manifest, RDF and host-release integration remain outstanding.
+round trip. The `tool_set` bridge, governed source parsing, wasm-harness wiring
+and host-release integration remain outstanding.
 
 `codec::mcp::ManifestEnvelope` has a source implementation for borrowing a
 complete v2 bundle envelope from the existing ordered JSON DOM. It checks fixed
