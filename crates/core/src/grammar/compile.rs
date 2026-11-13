@@ -1503,7 +1503,7 @@ fn key_uses(
             stack.push(next)?;
             while let Some(pc) = stack.pop() {
                 // Read/compare the tag, then admit a store only for a new PC.
-                governor.charge(Resource::Work, 2)?;
+                governor.charge(Resource::Work, 1)?;
                 if seen[pc as usize] == generation {
                     continue;
                 }

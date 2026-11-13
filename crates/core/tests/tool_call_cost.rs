@@ -326,8 +326,8 @@ fn busy_turn_resolves_every_call_under_sized() {
     );
     assert_eq!(preset.outcome, Outcome::Unresolved);
     // The preset's 128 candidates run out before its work does: measured on
-    // this branch, the preset stops after 750,422 work, and the full sized
-    // pass below costs 813,025. Main stops the same way after 783,294 work,
+    // this branch, the preset stops after 750,421 work, and the full sized
+    // pass below costs 812,960. Main stops the same way after 783,294 work,
     // and its full pass costs 951,127.
     assert_eq!(
         preset.receipt.stopped,

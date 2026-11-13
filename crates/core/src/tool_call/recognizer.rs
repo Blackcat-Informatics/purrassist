@@ -3286,12 +3286,7 @@ impl<'s> Recognizer<'s> {
 
     /// Weak framing cannot reopen the committed span of a native attempt.
     fn has_exact_outer(&self, start: usize, governor: &mut Governor) -> Result<bool, StopReason> {
-        governor.charge(
-            Resource::Work,
-            size(self.turn.interps.len()).saturating_mul(
-                u64::from(self.turn.weak_headers.len().bit_width()).saturating_add(1),
-            ),
-        )?;
+        governor.charge(Resource::Work, size(self.turn.interps.len()))?;
         Ok(self.turn.interps.iter().any(|(owner, (prefix, _))| {
             *prefix < start && self.turn.weak_headers.get(owner).is_none()
         }))

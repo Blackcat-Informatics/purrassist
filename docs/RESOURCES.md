@@ -1264,21 +1264,21 @@ resolution  = one unit per member, option, alternative and validation step,
             + (unparsed-markup scan: one unit per content byte read)
 ```
 
-Here `r` is the number of maximal invalid UTF-8 runs. Source capture admits,
-for each byte, one unit to store it plus a prepaid relocation allowance of 2
-units while the source capacity is below 64 KiB (65,536) and 3 units from
-then on: `C(n)` is 3 per byte below that capacity and 4 per byte after it.
-The source grows by doubling below 64 KiB capacity and by one half above it,
-so the allowance covers every element copied by a relocation before the copy
-happens. Capacity first reaches 65,536 at byte 32,769, so the per-byte rate
-steps from 3 to 4 at byte 32,770, not at 64 KiB of data. `R(n)` is the number
-of source relocations; each admits 4 further units. `G_ranges` sums the
-occupied lengths charged before each capacity growth of the invalid-range
-vector; the doubling policy gives `G_ranges(r) ≤ 2·r` and `r ≤ n`. Empty
-vectors contribute zero relocation work. UTF-8 classification carries no
-separate unit. These terms describe admitted work. A governor or capture refusal stops admission at its original
-cause; a semantic request error stops interpretation while admitted source
-capture can continue.
+Here `r` is the number of maximal invalid UTF-8 runs. Source capture admits, for
+each byte, one unit to store it plus a prepaid relocation allowance of 2 units
+while the source capacity is below 64 KiB (65,536) and 3 units from then on:
+`C(n)` is 3 per byte below that capacity and 4 per byte after it. The source
+grows by doubling below 64 KiB capacity and by one half above it, so the
+allowance covers every element copied by a relocation before the copy happens.
+Capacity first reaches 65,536 at byte 32,769, so the per-byte rate steps from 3
+to 4 at byte 32,770, not at 64 KiB of data. `R(n)` is the number of source
+relocations; each admits 4 further units. `G_ranges` sums the occupied lengths
+charged before each capacity growth of the invalid-range vector; the doubling
+policy gives `G_ranges(r) ≤ 2·r` and `r ≤ n`. Empty vectors contribute zero
+relocation work. UTF-8 classification carries no separate unit. These terms
+describe admitted work. A governor or capture refusal stops admission at its
+original cause; a semantic request error stops interpretation while admitted
+source capture can continue.
 
 Revision facts prepare one borrowed leaf interval index per raw reading with
 operator payloads. Original leaf positions sort by source interval; balanced
@@ -1311,13 +1311,14 @@ call has no content to scan.
 Tool-call recovery now uses one incremental intake path. It admits the source
 document's metadata before validating the request and constructing the
 recognizer. Each input byte then admits the cumulative input length, source
-storage and copying, and recognition, in that order (UTF-8 classification
-is a fixed step inside the recognition step and carries no unit of its own).
-The source admits its per-byte relocation allowance before each byte, and the
-invalid-range vector admits insertion and relocation work before growth; their capacity schedule depends on the byte sequence, never the number
-or size of caller chunks. The pending UTF-8 scalar holds at most three bytes
-between byte steps. Invalid runs retain their original ranges and receive the
-existing loss records once the complete source digest is available.
+storage and copying, and recognition, in that order (UTF-8 classification is a
+fixed step inside the recognition step and carries no unit of its own). The
+source admits its per-byte relocation allowance before each byte, and the
+invalid-range vector admits insertion and relocation work before growth; their
+capacity schedule depends on the byte sequence, never the number or size of
+caller chunks. The pending UTF-8 scalar holds at most three bytes between byte
+steps. Invalid runs retain their original ranges and receive the existing loss
+records once the complete source digest is available.
 
 This intentionally replaces the earlier ordering that retained the whole
 source and scanned its encoding before recognition began. Usage counters and
@@ -1983,11 +1984,11 @@ one Qwen occurrence for each of 64 `<function=` tokens, and 128 `function`
 occurrences in the stripped DeepSeek allow-list. Sizing includes occurrences
 where runtime framing forbids an attempt. The unmodified
 `Effort::Standard` preset exhausts explicitly on `Candidates`: its 128
-candidates run out after 750,422 work on this branch (main stops the same
+candidates run out after 750,421 work on this branch (main stops the same
 way after 783,294). With the sized work limit its 128 candidates still
 exhaust `Candidates`, and `sized(Effort::Standard, output)`
 (128 + 16 · 576 = 9,344 candidates) recovers every call `Resolved`,
-charging 193 candidates. That full pass costs 813,025 work on this branch
+charging 193 candidates. That full pass costs 812,960 work on this branch
 and 951,127 on main.
 
 Work charges each loop whose trip count depends on the input once per
@@ -1998,8 +1999,8 @@ Retained source admits its relocation copies per appended byte at the
 growth policy's bound: two units while capacity doubles (below 64 KiB) and
 three once it grows by one half, so the admitted work covers every copy
 before it happens and stays linear across the threshold. Native Hermes
-under `Exact`, one call per line, costs 52,265 work for 32 calls on this
-branch (main: 54,401) and completes 58 calls at 94,517 work (main: 98,367).
+under `Exact`, one call per line, costs 52,202 work for 32 calls on this
+branch (main: 54,401) and completes 58 calls at 94,402 work (main: 98,367).
 Both branch figures sit below main's Work times the branch-to-main ratio of
 executed instructions (0.994 for the busy turn, 1.021 for 32 Hermes calls).
 Those ratios were counted with Valgrind callgrind before the charges were
