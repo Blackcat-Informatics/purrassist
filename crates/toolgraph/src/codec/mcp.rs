@@ -9,8 +9,10 @@
 //! These views do not establish graph admission or executable tool identities.
 
 mod execution;
+mod manifest;
 
 pub use execution::{ExecutionMode, ExecutionProfile, ExecutionQuantityProblem};
+pub use manifest::{CodecError, ManifestJson, decode, encode};
 
 use std::{fmt, ops::Range};
 

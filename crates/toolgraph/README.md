@@ -32,8 +32,20 @@ listed in the `graph` module documentation. The Rust shape table is
 not equivalent to the shapes document; its differences and the unchecked
 requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
 the `graph` module documentation. The production
-schema bridge, manifest codecs, authorization and execution remain specified in
+`tool_set` schema bridge, authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
+The MCP Extended manifest codec described next is implemented.
+
+`codec::mcp::encode` and `codec::mcp::decode` convert a loaded `ToolGraph` to and
+from the MCP Extended manifest (format `purrassist-toolgraph-v2`) with a native
+`LossLedger`. Input and output schemas come from the upstream plain-argument
+compiler, whose reported losses are carried into the ledger unchanged; the
+complete source dataset is retained as Turtle in `_meta.security.sourceGraph`.
+Output is byte-deterministic. Decoding loads that source and requires every
+declaration to agree with it; legacy bundle formats and `maxOutputTokens` are
+refused. The pinned golden is `tests/data/worked_manifest.json`.
+`ToolGraph::tool_set`, the core adapter augmentation, governed source parsing and
+wasm-harness wiring remain on #33.
 
 `codec::mcp::ExecutionProfile` reads the complete execution-profile fragment
 from a caller-owned JSON DOM; `ManifestEnvelope::read` checks these fields for
@@ -113,7 +125,8 @@ masks. It preserves tag values, order and duplicates, accepts mathematical
 integer spellings across the full portable `u64` domain, and emits fixed field
 order with canonical masks and exact byte enforcement. Run
 `cargo run -p purrassist-toolgraph --example roundtrip_context` for an actual
-round trip. Full manifest, RDF and host-release integration remain outstanding.
+round trip. The `tool_set` bridge, governed source parsing, wasm-harness wiring
+and host-release integration remain outstanding.
 
 `codec::mcp::ManifestEnvelope` has a source implementation for borrowing a
 complete v2 bundle envelope from the existing ordered JSON DOM. It checks fixed

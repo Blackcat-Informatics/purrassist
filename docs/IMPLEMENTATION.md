@@ -952,8 +952,10 @@ Core operations are synchronous and resumable around supplied helper responses.
 - `purrassist-toolgraph`: internal, unpublished pure vocabulary/loss-profile constructors
   and a complete caller-owned MCP context fragment codec, including field-mask
   parsing and exact output byte-limit enforcement, plus governed AppArmor glob
-  words. Graph loading, full manifests,
-  production schema bridge, authorization and execution remain planned. The direct
+  words, all-or-nothing graph loading into typed tools (#191) and the MCP Extended
+  manifest encoder and decoder with a source-preserving loss ledger (#196). The
+  `tool_set` schema bridge, governed source parsing, wasm-harness wiring, host
+  integration, authorization and execution remain planned. The direct
   `plain_tool_schemas` consumer adopts upstream plain FnO schema compilation and
   validates exact worked schemas with the core engine (#70). G7's numeric
   prerequisite (#43) adopts exact decimals, finite IEEE carriers, registered
