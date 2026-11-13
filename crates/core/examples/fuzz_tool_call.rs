@@ -476,21 +476,34 @@ fn dialect_closers(dialect: &DialectId) -> Vec<Vec<u8>> {
 /// the attempt's markup.
 ///
 /// Prose is judged exactly as `check_no_call_body` and the library judge it
-/// (INTEGRATION.md, stage-3 pass 5, F16: "a call body after the attempt's
-/// markup ... is covered the same way when only markup debris comes between
-/// (... never prose, read with strings opening and closing where the markup
-/// ended), and a member's spelling begins a body wherever it is written"):
-/// the bytes from the failure to the first member, and the body from that
-/// member on, are each read fresh. Reading them with the quotes counted from
-/// the attempt's start instead reads the same bytes differently after a
-/// broken string (`"id": "m4N8: {"path": "notes.txt"` makes `notes.txt` a
-/// word), so this clause and F16 could admit no span at all; the fresh
-/// reading is the one the F16 text states.
+/// (INTEGRATION.md:157-172, F16: "a body left open runs to its last JSON
+/// byte before prose, or to the next segment or the end of output that cuts
+/// it", and "a member's spelling begins a body wherever it is written ...
+/// read with strings opening and closing where the markup ended"; and
+/// FUZZING.md:198-201, F4: "the bytes from the failure to the member and the
+/// body from the member each read with strings opening and closing there").
+/// Each body is its own unit: the bytes from the failure to the first member,
+/// then each body from its member to the next member (or to the end of the
+/// span), are read fresh. A later body is not read through the quote parity of
+/// an earlier one: a span that holds two bodies (a duplicated member after a
+/// cut special token) is judged body by body, as the docs state. Reading the
+/// bytes with the quotes counted from the attempt's start instead reads the
+/// same bytes differently after a broken string (`"id": "m4N8: {"path":
+/// "notes.txt"` makes `notes.txt` a word), so that reading could admit no span
+/// at all; the fresh reading per body is the one the F16 text states.
 fn call_body(output: &[u8], start: usize, failed: usize, end: usize) -> bool {
     let after = &output[failed.clamp(start, end)..end];
-    (0..after.len())
-        .find(|&at| member_at(&after[at..]))
-        .is_some_and(|member| !prose(&after[..member], 0, &[]) && !prose(&after[member..], 0, &[]))
+    let members: Vec<usize> = (0..after.len())
+        .filter(|&at| member_at(&after[at..]))
+        .collect();
+    let Some(&first) = members.first() else {
+        return false;
+    };
+    !prose(&after[..first], 0, &[])
+        && members.iter().enumerate().all(|(index, &member)| {
+            let next = members.get(index + 1).copied().unwrap_or(after.len());
+            !prose(&after[member..next], 0, &[])
+        })
 }
 
 /// F16's initial markup walk retains a string that began before failure.

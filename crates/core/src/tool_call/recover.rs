@@ -2071,6 +2071,14 @@ impl MarkupScan<'_> {
             let end = self.unclosed_end(span, read, markup, boundaries, governor)?;
             return self.call_body_end(end, boundaries, governor);
         };
+        // The found end never splits a literal the attempt began (a prose
+        // cut after a closed string can land inside `"in` of `"input"`).
+        let limit = boundaries
+            .iter()
+            .map(|(range, _)| range.start)
+            .find(|start| *start >= end)
+            .unwrap_or(len);
+        let end = self.complete_literal(&(span.start..end), markup.literals, limit, governor)?;
         // Repeated closers right after the end (whitespace between) are
         // the attempt's stray closers, as after a completed call.
         let end = if brackets.is_empty() {
