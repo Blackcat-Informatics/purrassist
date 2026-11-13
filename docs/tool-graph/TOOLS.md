@@ -14,16 +14,58 @@ implements validated vocabulary/loss-profile inputs and the four-form context
 mask parser, with a standalone governed exact output byte-limit checker;
 it loads a tool graph (below) but does not execute one.
 
-`ToolGraph::load` (#191, the first bounded delivery of #33) reads RDF 1.2 text
-with `purrdf_rdf::parse_dataset` into typed tools, all or nothing, and the
-worked example below loads. It is bounded as follows. This delivery uses the
-ungoverned entry points `purrdf_rdf::parse_dataset` and `FnoCatalog::from_dataset`,
-so the caller's governor meters only this crate's own row accounting. The pinned
-`PurRDF` 4.0.2 also provides `FnoCatalog::from_dataset_with_control` and
-`purrdf_rdf::parse_dataset_controlled` (with exact ordered source occurrences);
-adopting them is the next step, so governed catalog construction and exact
-per-quad source spans are not yet provided and `LoadError` names subject and
-predicate. Only default-graph statements load; a named-graph statement or
+`ToolGraph::load` (#191, the first bounded delivery of #33) reads RDF 1.2 Turtle
+or TriG with `purrdf_rdf::parse_dataset_controlled` into typed tools, all or
+nothing, and the worked example below loads. It is bounded as follows. The FnO
+catalog is built with `FnoCatalog::from_dataset_with_control`. The caller's
+governor supplies both purrdf authorities: parser and reader storage is charged
+to its scratch meter, native steps are polled for cancellation on every step and
+convert to work units at 64 native units per work unit (below), so a work or
+scratch budget the governor recorded as exhausted is `LoadError::Exhausted`, a
+cancellation is `LoadError::Cancelled`, and no partial
+graph is published. A native storage failure the governor did not record is not
+claimed as a budget: it is a `LoadError::Parse` with code `storage` and the
+native cause (code `storage-accounting` for a rejected scratch release). Native
+work units are finer than this crate's row accounting, so the loader charges one
+work unit per 64 native units, carrying the remainder across charges. A remainder
+below 64 native units left at the end of a parse or catalog read is dropped: it is
+never charged, so each governed step can under-charge by at most 63 native units.
+
+Measured rates, from the governor's `usage()` after a load. On the worked example
+(9,518 bytes) a load charges 33,191 work units (3.49 per source byte) and peaks at
+569,829 scratch bytes (59.9 per source byte). On the bulk document (the worked
+example body repeated 114 times under distinct prefixes, names and blank-node
+labels, with one ontology declaration; 1,049,171 bytes) it charges 4,084,594 work
+units (3.89 per source byte) and peaks at 66,933,394 scratch bytes (63.8 per
+source byte). The work rate grows slightly with document size, so the admitted
+sizes below scale with document shape; they are measured on the bulk document, to
+within one repetition (about 9,100 bytes). Every effort level has the same scratch
+limit of 64 MiB (67,108,864 bytes) and the same input limit of 16 MiB, so
+whichever of work and scratch is reached first limits the admitted size. A larger
+document is the explicit `LoadError::Exhausted` outcome.
+
+| Effort | Work budget | Admitted Turtle size (measured) | Binding resource |
+| --- | --- | --- | --- |
+| `Exact` | 100,000 | 27,648 bytes (about 27.6 KB) | work |
+| `Quick` | 250,000 | 63,724 bytes (about 63.7 KB) | work |
+| `Standard` | 1,000,000 | 265,429 bytes (about 265.4 KB) | work |
+| `Deep` | 10,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
+| `Maximum` | 50,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
+
+The worked example loads at every level. `Deep` and `Maximum` admit the same
+size because both are limited by the shared scratch limit, not by work.
+
+`UnknownTerm` and `UnsupportedConstruct` carry the exact source extent (byte
+range, line and column) of the first statement matching the refusal; refusals
+that name a node (shape, hint, profile, FnO binding) name subject and predicate
+only. Other media types than Turtle and TriG are refused as `LoadError::Parse`
+because purrdf governs and retains occurrences for those two alone; the refusal
+code is `unsupported-format` for every such media type. The rows materialised for
+validation, their per-subject index, the `FnO` view dataset built for the catalog
+reader and the owned `RdfDataset` copy returned by `ToolGraph::dataset` (re-interned
+from the parse, not the parser's own dataset) are allocated outside the governor's
+storage account.
+Only default-graph statements load; a named-graph statement or
 reifier is refused. The vocabulary shapes are enforced by a Rust table, not by
 running the shapes document through the SHACL engine, and the table is not
 equivalent to the document. Known differences: `readOnlyHint`, `destructiveHint`,
@@ -34,8 +76,8 @@ enforced; `xsd:integer` is accepted where `xsd:positiveInteger` is specified;
 datatype agreement between `FnO` parameters and shape paths, the content of
 `sh:*` constraints, and `pa:subtool` closure. `owl:imports` and the
 `fnom:Mapping` alias normalization are not handled, and rule values are checked
-for kind but not interpreted. These checks and the governed, span-exact load
-remain on #33. `ToolGraph::tool_set(vocabulary, governor)` is implemented: it
+for kind but not interpreted. These checks remain on #33; the governed load is
+delivered as described above. `ToolGraph::tool_set(vocabulary, governor)` is implemented: it
 imports the encoded manifest through `ToolSet::from_mcp_with_metadata_governed`
 with alias, effects and policy metadata, so the exact schema and declaration
 bytes are kept. It selects `Effects::ReadOnly` only for a true `readOnlyHint`
@@ -350,7 +392,7 @@ FnO reading uses an explicit checked subdataset view: the catalog document's
 FnO properties, labels and admitted additional `rdf:type` values; parameter
 and output FnO properties; implementation format and `rdfs:seeAlso`; blank
 mapping nodes and their FnO/FnOM mapping fields; and the exact list-cell
-closure. This partition is passed to `FnoCatalog::from_dataset` with ontology
+closure. This partition is passed to `FnoCatalog::from_dataset_with_control` with ontology
 `https://example.org/toolgraph#`. All other triples and reifiers stay in the
 original dataset; shape/reifier projections consume that source. No unknown
 FnO/FnOM predicate is filtered away: it remains in the FnO view and the strict

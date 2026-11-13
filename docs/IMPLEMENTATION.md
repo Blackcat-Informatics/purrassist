@@ -636,8 +636,9 @@ graph loading, routing and complete projection ledgers remain under #36 and #47.
 The internal tool-graph crate also admits complete callable FnO bindings from
 caller-prepared upstream catalogs. Its governed checker preserves original
 records and declaration order; the `admit_callable` example exercises the actual
-upstream reader and public API. This does not implement governed RDF/FnO source
-admission, SHACL/G7 integration, graph loading or manifest conversion (#33).
+upstream reader and public API. `ToolGraph::load` reads RDF source through the
+governed `PurRDF` parse and FnO catalog entry points; SHACL/G7 integration and
+manifest conversion remain #33 work.
 
 Governed JSON emission shares the existing serializer's structural/escaping
 authority through `Node::to_json_governed` and `json::quote_governed`. The
@@ -953,7 +954,7 @@ Core operations are synchronous and resumable around supplied helper responses.
   parsing and exact output byte-limit enforcement, plus governed AppArmor glob
   words, all-or-nothing graph loading into typed tools (#191) and the MCP Extended
   manifest encoder and decoder with a source-preserving loss ledger (#196). The
-  `tool_set` schema bridge, governed source parsing, wasm-harness wiring, host
+  `tool_set` schema bridge, wasm-harness wiring, host
   integration, authorization and execution remain planned. The direct
   `plain_tool_schemas` consumer adopts upstream plain FnO schema compilation and
   validates exact worked schemas with the core engine (#70). G7's numeric

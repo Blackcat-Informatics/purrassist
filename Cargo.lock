@@ -352,6 +352,7 @@ version = "0.1.0"
 dependencies = [
  "purrassist-core",
  "purrdf-core",
+ "purrdf-lex",
  "purrdf-rdf",
  "purrdf-shapes",
 ]

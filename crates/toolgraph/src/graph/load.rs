@@ -3,16 +3,20 @@
 
 //! The loading algorithm: materialise rows, own every row, validate, then type.
 
+mod control;
 mod roles;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 
 use purrassist_core::{Governor, StopReason, contract::Resource, output::FieldMask};
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, TermId, TermValue,
+    RdfDatasetBuilder, TermId, TermValue, dataset_from_view,
+    dataset_view::DatasetView,
     fno::{FnoCatalog, FnoReadError, FnoReadFailure},
 };
+use purrdf_lex::control::ControlledError;
 
 use super::{
     Coercion, Construct, Hint, LoadError, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile,
@@ -22,6 +26,7 @@ use crate::{
     CallableBinding, ContextManagement, LoadingStrategy, OutputByteLimit, ResourceLimits,
     Vocabulary, codec::mcp::ExecutionMode,
 };
+use control::{Shared, Storage, Work};
 use roles::{Kind, Role, Spec};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -109,22 +114,27 @@ pub(super) fn load(
             u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         )
         .map_err(stop)?;
-    let dataset = purrdf_rdf::parse_dataset(bytes, media_type, base).map_err(|diagnostic| {
-        let location = diagnostic.location.as_deref();
-        LoadError::Parse {
-            code: diagnostic.code.clone(),
-            message: diagnostic.message.clone(),
-            line: location.and_then(|at| at.line),
-            column: location.and_then(|at| at.column),
+    let format = purrdf_rdf::classify(media_type)
+        .map_err(|found| control::unsupported_format(&found.message))?;
+    let governor = RefCell::new(governor);
+    let parse = control::parse(bytes, format, base, &governor)?;
+    let view = parse
+        .dataset()
+        // INVARIANT: a parse that was not refused retains its dataset.
+        .expect("a successful governed parse retains its dataset");
+    let (tools, catalog) = match analyse(&view, vocabulary, &governor) {
+        Ok(analysed) => analysed,
+        Err(mut error) => {
+            control::locate(&mut error, &parse);
+            return Err(error);
         }
-    })?;
-    let doc = Doc::collect(&dataset, vocabulary, governor)?;
-    doc.scan_vocabulary(governor)?;
-    let nodes = doc.classify(governor)?;
-    doc.own_every_row(&nodes, governor)?;
-    doc.validate_nodes(&nodes, governor)?;
-    let catalog = doc.read_catalog(&nodes, governor)?;
-    let tools = doc.build_tools(&nodes, catalog.as_ref(), governor)?;
+    };
+    // The owned copy is not governed: `PurRDF` offers no governed detach of a
+    // retained parse. It is one of several ungoverned allocations of the load; the
+    // `Doc` rows, the `by_subject` index and the `FnO` view dataset built in
+    // `fno_view` are also outside the governor's storage account.
+    let dataset = dataset_from_view(&view)
+        .map_err(|cause| control::read_failure("dataset-materialisation", cause))?;
     Ok(ToolGraph {
         tools,
         dataset,
@@ -132,27 +142,52 @@ pub(super) fn load(
     })
 }
 
+/// Run every stage over the parsed rows; nothing escapes unless all stages pass.
+fn analyse<V: DatasetView<Id = TermId>>(
+    view: &V,
+    vocabulary: &Vocabulary,
+    governor: &Shared<'_>,
+) -> Result<(Vec<Tool>, Option<FnoCatalog>), LoadError>
+where
+    V::ReadError: std::fmt::Display,
+{
+    let doc = Doc::collect(view, vocabulary, &mut governor.borrow_mut())?;
+    doc.scan_vocabulary(&mut governor.borrow_mut())?;
+    let nodes = doc.classify(&mut governor.borrow_mut())?;
+    doc.own_every_row(&nodes, &mut governor.borrow_mut())?;
+    doc.validate_nodes(&nodes, &mut governor.borrow_mut())?;
+    let catalog = doc.read_catalog(&nodes, governor)?;
+    let tools = doc.build_tools(&nodes, catalog.as_ref(), &mut governor.borrow_mut())?;
+    Ok((tools, catalog))
+}
+
 impl<'v> Doc<'v> {
-    fn collect(
-        dataset: &RdfDataset,
+    fn collect<V: DatasetView<Id = TermId>>(
+        view: &V,
         vocabulary: &'v Vocabulary,
         governor: &mut Governor,
-    ) -> Result<Self, LoadError> {
+    ) -> Result<Self, LoadError>
+    where
+        V::ReadError: std::fmt::Display,
+    {
         let mut names = BTreeMap::new();
         for (name, iri) in &vocabulary.terms().local_names {
             if let Ok(at) = crate::TERM_NAMES.binary_search(&name.as_str()) {
                 names.insert(iri.as_str(), crate::TERM_NAMES[at]);
             }
         }
-        let value = |id| -> TermValue { dataset.term_value(id) };
+        let value = |id| -> Result<TermValue, LoadError> {
+            view.term_value(id)
+                .map_err(|cause| control::read_failure("dataset-read", cause))
+        };
         let mut rows = Vec::new();
         let mut by_subject: BTreeMap<TermValue, Vec<usize>> = BTreeMap::new();
         // Statement rows, then annotation side-table rows: both describe a subject.
-        let statements = dataset.quads().chain(dataset.annotation_quads());
+        let statements = view.quads().chain(view.annotation_quads());
         for quad in statements {
             work(governor, 1)?;
-            let (s, o) = (value(quad.s), value(quad.o));
-            let TermValue::Iri(p) = value(quad.p) else {
+            let (s, o) = (value(quad.s)?, value(quad.o)?);
+            let TermValue::Iri(p) = value(quad.p)? else {
                 return Err(unsupported(&s, "-", Construct::UnownedStatement));
             };
             if quad.g.is_some() {
@@ -162,14 +197,14 @@ impl<'v> Doc<'v> {
             rows.push(Row { s, p, o });
         }
         let mut reifiers = Vec::new();
-        for quad in dataset.reifier_quads() {
+        for quad in view.reifier_quads() {
             work(governor, 1)?;
-            let id = value(quad.s);
+            let id = value(quad.s)?;
             if quad.g.is_some() {
                 // A reifier row in a named graph would need a graph on its hint.
                 return Err(unsupported(&id, "-", Construct::NamedGraph));
             }
-            let TermValue::Triple { s, p, o } = value(quad.o) else {
+            let TermValue::Triple { s, p, o } = value(quad.o)? else {
                 return Err(unsupported(&id, "-", Construct::Reifier));
             };
             let TermValue::Iri(p) = (*p).clone() else {
@@ -247,6 +282,7 @@ impl<'v> Doc<'v> {
                         subject: show(subject),
                         predicate: predicate.to_owned(),
                         term: iri.to_owned(),
+                        at: None,
                     })
                 }
                 _ => Ok(()),
@@ -273,6 +309,7 @@ fn unsupported(subject: &TermValue, predicate: &str, construct: Construct) -> Lo
         subject: show(subject),
         predicate: predicate.to_owned(),
         construct,
+        at: None,
     }
 }
 
@@ -716,15 +753,38 @@ impl Doc<'_> {
 }
 
 impl Doc<'_> {
-    /// Read the strict `FnO` catalog from the rows the `FnO` view owns.
+    /// Read the strict `FnO` catalog from the rows the `FnO` view owns, under the
+    /// governor's storage, work and stop authority.
     fn read_catalog(
         &self,
         nodes: &Nodes,
-        governor: &mut Governor,
+        governor: &Shared<'_>,
     ) -> Result<Option<FnoCatalog>, LoadError> {
         if nodes.fno.is_empty() {
             return Ok(None);
         }
+        let view = {
+            let mut governor = governor.borrow_mut();
+            self.fno_view(nodes, &mut governor)?
+        };
+        let (storage, rejection) = Storage::new(governor);
+        FnoCatalog::from_dataset_with_control(&*view, self.namespace, storage, Work::new(governor))
+            .map(Some)
+            .map_err(|failure| match failure {
+                ControlledError::Control(reason) => stop(reason),
+                ControlledError::Native(purrdf_core::fno::FnoConstructionFailure::Storage(
+                    cause,
+                )) => control::storage_stop(governor, &rejection, &cause),
+                ControlledError::Native(native) => self.fno_error(&native),
+            })
+    }
+
+    /// The default-graph rows the `FnO` reader owns, frozen as a dataset.
+    fn fno_view(
+        &self,
+        nodes: &Nodes,
+        governor: &mut Governor,
+    ) -> Result<std::sync::Arc<purrdf_core::RdfDataset>, LoadError> {
         let mut builder = RdfDatasetBuilder::new();
         let storage = |cause: &dyn std::fmt::Display| LoadError::InvalidFnoBinding {
             subject: self.namespace.to_owned(),
@@ -747,10 +807,7 @@ impl Doc<'_> {
                 .push_quad(s, p, o, None)
                 .map_err(|cause| storage(&cause))?;
         }
-        let view = builder.freeze().map_err(|cause| storage(&cause))?;
-        FnoCatalog::from_dataset(&*view, self.namespace)
-            .map(Some)
-            .map_err(|failure| self.fno_error(&failure))
+        builder.freeze().map_err(|cause| storage(&cause))
     }
 
     fn fno_error(&self, failure: &FnoReadFailure<Infallible>) -> LoadError {
@@ -799,6 +856,7 @@ impl Doc<'_> {
                         subject: function.iri.clone(),
                         predicate: RDF_TYPE.to_owned(),
                         construct: Construct::FunctionWithoutTool,
+                        at: None,
                     });
                 }
             }

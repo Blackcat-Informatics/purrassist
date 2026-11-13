@@ -14,9 +14,37 @@ crates share one version.
 - `ToolGraph::load` in `purrassist-toolgraph` reads RDF 1.2 text into typed
   tools (`FnO` identity, shapes, annotations, reified parameter hints, execution
   profile and context management) with all-or-nothing `LoadError`s naming subject
-  and predicate. Projections outside the field-mask subset are refused. It does
-  not claim governed catalog construction or exact per-quad source spans; both
-  wait on upstream seams (PurRDF issue 1306).
+  and predicate. Projections outside the field-mask subset are refused.
+- `ToolGraph::load` parses through `purrdf_rdf::parse_dataset_controlled` and
+  builds the `FnO` catalog through `FnoCatalog::from_dataset_with_control`, so the
+  caller's `Governor` bounds source parsing and catalog construction (work,
+  scratch storage, cancellation): a recorded exhaustion is `LoadError::Exhausted`, a
+  stop is `LoadError::Cancelled`, a native storage failure the governor did not
+  record is a `LoadError::Parse` (code `storage`) with its native cause rather than
+  a budget claim, and no partial graph escapes. `UnknownTerm` and
+  `UnsupportedConstruct` carry the exact `SourceExtent` of the statement. Only
+  Turtle and TriG load; every other media type is `LoadError::Parse` with code
+  `unsupported-format`. The loader charges one work unit per 64 native units.
+  Measured with a governor's `usage()` after a load:
+  On the worked example (9,518 bytes) a load charges 33,191 work units (3.49 per
+  source byte) and peaks at 569,829 scratch bytes (59.9 per source byte). On the
+  bulk document (the worked example body repeated 114 times under distinct
+  prefixes, names and blank-node labels; 1,049,171 bytes) it charges 4,084,594 work
+  units (3.89 per source byte) and peaks at 66,933,394 scratch bytes (63.8 per
+  source byte). The sizes scale with document shape. Each level has the same
+  scratch limit (64 MiB), so whichever of work and scratch is reached first limits
+  the admitted size, and a larger document is the explicit `Exhausted` outcome.
+
+  | Effort | Work budget | Admitted Turtle size (measured) | Binding resource |
+  | --- | --- | --- | --- |
+  | `Exact` | 100,000 | 27,648 bytes (about 27.6 KB) | work |
+  | `Quick` | 250,000 | 63,724 bytes (about 63.7 KB) | work |
+  | `Standard` | 1,000,000 | 265,429 bytes (about 265.4 KB) | work |
+  | `Deep` | 10,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
+  | `Maximum` | 50,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
+
+  The worked example loads at every level; `Deep` and `Maximum` admit the same
+  size because the scratch limit is shared.
 
 - Gemma 3 `tool_code` fences recover direct Python keyword calls through
   `gemma3-tool-code.v1` and the native Pythonic codec. Multiple fenced calls

@@ -6,7 +6,9 @@
 //! Each refusal test pairs one invalid input, made by a single textual edit of
 //! the worked example, with the unedited example as its neighbouring valid input.
 
-use purrassist_core::{Budget, CancellationToken, Governor, StopReason, contract::Resource};
+use purrassist_core::{
+    Budget, CancellationToken, Effort, Governor, StopReason, contract::Resource,
+};
 use purrassist_toolgraph::codec::mcp::ExecutionMode;
 use purrassist_toolgraph::{
     Coercion, Construct, LoadError, LoadingStrategy, PrefixTable, TERM_NAMES, TermBindings,
@@ -48,13 +50,18 @@ fn worked() -> String {
         .to_owned()
 }
 
+/// The loader charges one work unit per 64 native steps of the governed parser and
+/// `FnO` reader, so the worked example loads under the Standard budget, which
+/// `Budget::default()` is.
+const WORKED_BUDGET: Budget = Effort::Standard.budget();
+
 fn load(source: &str) -> Result<ToolGraph, LoadError> {
     ToolGraph::load(
         source.as_bytes(),
         "text/turtle",
         None,
         &vocabulary(),
-        &mut Governor::new(Budget::default()),
+        &mut Governor::new(WORKED_BUDGET),
     )
 }
 
@@ -181,15 +188,16 @@ fn malformed_turtle_is_a_parse_error_with_its_position() {
 // it is used as a predicate or a class; bound terms load.
 #[test]
 fn a_term_the_vocabulary_does_not_bind_is_refused_with_subject_and_predicate() {
-    let error = load(&edited(
+    let source = edited(
         "pa:title \"Customer orders\"",
         "pa:titel \"Customer orders\"",
-    ))
-    .expect_err("unbound predicate");
+    );
+    let error = load(&source).expect_err("unbound predicate");
     let LoadError::UnknownTerm {
         subject,
         predicate,
         term,
+        at,
     } = error
     else {
         panic!("{error:?}");
@@ -197,6 +205,11 @@ fn a_term_the_vocabulary_does_not_bind_is_refused_with_subject_and_predicate() {
     assert_eq!(subject, format!("{EX}query_customer_orders"));
     assert_eq!(predicate, format!("{NAMESPACE}titel"));
     assert_eq!(term, predicate);
+    // The occurrence is the predicate and object as written in the source, even
+    // though the subject was inherited from an earlier `;`-separated clause.
+    let at = at.expect("the governed parse retains the statement");
+    assert_eq!(&source[at.start..at.end], "pa:titel \"Customer orders\"");
+    assert_eq!(source[..at.start].matches('\n').count() as u64 + 1, at.line);
     let class = load(&edited(
         "ex:customerClaim a pa:Hint",
         "ex:customerClaim a pa:Hunt",
@@ -333,6 +346,7 @@ fn a_statement_no_view_owns_is_refused_not_skipped() {
         subject,
         predicate,
         construct,
+        at,
     } = error
     else {
         panic!("{error:?}");
@@ -340,6 +354,13 @@ fn a_statement_no_view_owns_is_refused_not_skipped() {
     assert_eq!(
         (subject.as_str(), predicate.as_str(), construct),
         ("urn:stray", "urn:stray-p", Construct::UnownedStatement)
+    );
+    // The occurrence is the exact statement text, on the line the stray was appended.
+    let at = at.expect("the governed parse retains the statement");
+    assert_eq!(&stray[at.start..at.end], "<urn:stray-p> <urn:stray-o>");
+    assert_eq!(
+        (at.line, at.column),
+        (worked().matches('\n').count() as u64 + 2, 13)
     );
     let declared = format!("{}\n<urn:declared> a rdfs:Class .\n", worked());
     load(&declared).expect("a class declaration is owned");
@@ -377,6 +398,7 @@ fn a_vocabulary_statement_on_a_node_without_a_concrete_role_is_refused() {
             subject: found,
             predicate,
             construct,
+            ..
         } = error
         else {
             panic!("{statement}: {error:?}");
@@ -420,13 +442,13 @@ fn output_projection_outside_the_field_mask_subset_is_refused() {
 }
 
 // Rationale: budget exhaustion and cancellation are explicit errors, never a partial
-// graph; the same input loads under the default budget.
+// graph; the same input loads under the Standard budget.
 #[test]
 fn exhausted_budget_and_cancellation_are_explicit() {
     let source = worked();
     let tight = Budget {
         work: 3,
-        ..Budget::default()
+        ..WORKED_BUDGET
     };
     let exhausted = ToolGraph::load(
         source.as_bytes(),
@@ -441,7 +463,7 @@ fn exhausted_budget_and_cancellation_are_explicit() {
     );
     let token = CancellationToken::new();
     token.cancel();
-    let mut governor = Governor::with_cancellation(Budget::default(), token);
+    let mut governor = Governor::with_cancellation(WORKED_BUDGET, token);
     let cancelled = ToolGraph::load(
         source.as_bytes(),
         "text/turtle",
@@ -451,4 +473,120 @@ fn exhausted_budget_and_cancellation_are_explicit() {
     );
     assert_eq!(cancelled.unwrap_err(), LoadError::Cancelled);
     load(&source).expect("neighbouring valid input");
+}
+
+// Rationale: the caller's work and scratch-storage limits bound the governed parse and
+// the FnO catalog construction, not only this crate's own rows. A limit one below what
+// the worked example measured refuses with the typed exhaustion error for that
+// resource and publishes no graph; the measured limit itself loads.
+#[test]
+fn a_work_or_storage_limit_below_the_worked_example_refuses_without_a_graph() {
+    let source = worked();
+    let mut measured = Governor::new(WORKED_BUDGET);
+    ToolGraph::load(
+        source.as_bytes(),
+        "text/turtle",
+        None,
+        &vocabulary(),
+        &mut measured,
+    )
+    .expect("worked example loads under the Standard budget");
+    let (work, scratch) = (measured.usage().work, measured.usage().peak_scratch_bytes);
+    assert!(work > 0 && scratch > 0, "the load must be metered");
+    let limited = |budget: Budget| {
+        ToolGraph::load(
+            source.as_bytes(),
+            "text/turtle",
+            None,
+            &vocabulary(),
+            &mut Governor::new(budget),
+        )
+    };
+    for (resource, tight, loose) in [
+        (
+            Resource::Work,
+            Budget {
+                work: work - 1,
+                ..WORKED_BUDGET
+            },
+            Budget {
+                work,
+                ..WORKED_BUDGET
+            },
+        ),
+        (
+            Resource::ScratchBytes,
+            Budget {
+                scratch_bytes: scratch - 1,
+                ..WORKED_BUDGET
+            },
+            Budget {
+                scratch_bytes: scratch,
+                ..WORKED_BUDGET
+            },
+        ),
+    ] {
+        let refused = limited(tight);
+        assert!(
+            matches!(&refused, Err(LoadError::Exhausted(StopReason::BudgetExceeded(got))) if *got == resource),
+            "{resource:?}: {refused:?}"
+        );
+        limited(loose)
+            .unwrap_or_else(|error| panic!("{resource:?} at the measured limit: {error}"));
+    }
+}
+
+// Rationale: a document far above what the Standard budget admits (several hundred
+// kilobytes of Turtle at 64 native units per work unit) refuses with the typed work
+// exhaustion and publishes no graph, rather than loading or being reported as
+// invalid syntax. The document is well-formed Turtle, so only the budget refuses it.
+#[test]
+fn a_document_far_above_the_standard_budget_refuses_with_work_exhaustion() {
+    let source = "<urn:s> <urn:p> <urn:o> .\n".repeat(40_000);
+    assert!(
+        source.len() > 1_000_000,
+        "the document must exceed Standard"
+    );
+    let refused = ToolGraph::load(
+        source.as_bytes(),
+        "text/turtle",
+        None,
+        &vocabulary(),
+        &mut Governor::new(Budget::default()),
+    );
+    assert_eq!(
+        refused.unwrap_err(),
+        LoadError::Exhausted(StopReason::BudgetExceeded(Resource::Work))
+    );
+}
+
+// Rationale: only Turtle and TriG are parsed with exact source occurrences. TriG is
+// accepted and gives the graph Turtle gives for the same default-graph statements;
+// N-Triples and an unknown media type are refused with one stable parse code, never a
+// partial graph and never a guess at the format.
+#[test]
+fn only_turtle_and_trig_media_types_are_loaded() {
+    let source = worked();
+    let load_as = |media_type: &str| {
+        ToolGraph::load(
+            source.as_bytes(),
+            media_type,
+            None,
+            &vocabulary(),
+            &mut Governor::new(WORKED_BUDGET),
+        )
+    };
+    let turtle = load_as("text/turtle").expect("turtle");
+    let trig = load_as("application/trig").expect("a default-graph TriG document loads");
+    assert_eq!(trig.tools().len(), turtle.tools().len());
+    let iris = |graph: &ToolGraph| -> Vec<String> {
+        graph.tools().iter().map(|tool| tool.iri.clone()).collect()
+    };
+    assert_eq!(iris(&trig), iris(&turtle));
+    for media_type in ["application/n-triples", "application/x-unknown"] {
+        let LoadError::Parse { code, .. } = load_as(media_type).unwrap_err() else {
+            panic!("{media_type} must be a parse refusal");
+        };
+        assert_eq!(code, "unsupported-format", "{media_type}");
+    }
 }

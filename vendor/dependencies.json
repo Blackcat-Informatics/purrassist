@@ -947,7 +947,7 @@
         "vendor/licenses/purrdf-4.0.2/third-party/visual-hashing-native/2-LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
         "vendor/licenses/purrdf-4.0.2/third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864"
       },
-      "justification": "Required by the validated tool-graph foundation through purrassist-toolgraph -> purrdf-core -> purrdf-lex."
+      "justification": "Required by the validated tool-graph foundation directly by purrassist-toolgraph (the Admission and Progress traits of the governed load) and through purrassist-toolgraph -> purrdf-core -> purrdf-lex."
     },
     {
       "name": "purrdf-rdf",
