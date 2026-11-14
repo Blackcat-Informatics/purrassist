@@ -13,7 +13,7 @@ use purrassist_core::tool_call::{
     DialectSet, EventFaultClass, EventFaultKind, EventLogRecovery, GenerationStop, Param,
     StreamEvent, ToolDefinition, ToolRecoveryRequest, ToolSet,
 };
-use purrassist_core::{Budget, Outcome};
+use purrassist_core::{Budget, Outcome, StopReason};
 
 fn tools() -> ToolSet {
     ToolSet::compile(
@@ -298,4 +298,108 @@ fn out_of_order_delta_after_stop_is_an_explicit_fault() {
     let bad = recover(&faulted);
     let fault = bad.faults[0];
     assert_eq!((fault.block, fault.event), (Some(0), 4));
+}
+
+/// A log that never states why the turn stopped (a lost `message_delta`, or
+/// a reason this reader does not know) cannot be told from a `max_tokens` cut,
+/// so its calls are not usable; the same bytes with a stated reason are.
+#[test]
+fn missing_or_unrecognized_stop_reason_is_an_explicit_fault() {
+    let valid = head() + &tool_block(0) + &tail("tool_use");
+    let lost = head() + &tool_block(0) + &sse("message_stop", r#"{"type":"message_stop"}"#);
+    negative(
+        &valid,
+        &lost,
+        EventFaultKind::MissingMessageDelta,
+        EventFaultClass::Truncated,
+    );
+    let unknown = head() + &tool_block(0) + &tail("brand_new_reason");
+    negative(
+        &valid,
+        &unknown,
+        EventFaultKind::UnrecognizedStopReason,
+        EventFaultClass::Malformed,
+    );
+}
+
+/// A provider `error` event makes the whole log unusable.
+#[test]
+fn provider_error_event_is_an_explicit_fault() {
+    let valid = head() + &tool_block(0) + &tail("tool_use");
+    let faulted = head()
+        + &tool_block(0)
+        + &sse(
+            "error",
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        );
+    negative(
+        &valid,
+        &faulted,
+        EventFaultKind::ProviderError,
+        EventFaultClass::Provider,
+    );
+}
+
+/// A fault in one block withholds only that block's call: the clean call of
+/// the same log stays usable, strictly and when guesses are accepted.
+#[test]
+fn faulted_block_withholds_only_its_own_call() {
+    let log = head()
+        + &tool_block(0)
+        + &start(1, TOOL_USE)
+        + &json_delta(1, r#"{"path": "b""#)
+        + &stop(1)
+        + &json_delta(1, "}")
+        + &tail("tool_use");
+    let result = recover(&log);
+    let Outcome::Resolved(calls) = &result.recovery.outcome else {
+        panic!("{:#?}", result.recovery.outcome);
+    };
+    assert_eq!(calls.calls.len(), 2);
+    assert_eq!(kinds(&result), [EventFaultKind::DeltaAfterStop]);
+    for usable in [result.usable(), result.usable_accepting_guesses()] {
+        assert_eq!(usable.len(), 1);
+        assert_eq!(result.block_of(usable[0]), Some(0));
+        assert_eq!(
+            usable[0].arguments.to_json(),
+            r#"{"path":"src/main.rs","limit":20}"#
+        );
+    }
+}
+
+/// Governor refusal and cancellation stop interpretation explicitly: the
+/// receipt says why, nothing is usable, and no log is retained.
+#[test]
+fn refusal_and_cancellation_are_explicit_outcomes() {
+    let log = golden_log();
+    let tools = tools();
+
+    let request = ToolRecoveryRequest {
+        budget: Budget {
+            work: 50,
+            ..Budget::default()
+        },
+        ..ToolRecoveryRequest::default()
+    };
+    let refused = tools.recover_anthropic_events(log.as_bytes(), request, DialectSet::built_in());
+    assert!(matches!(
+        refused.recovery.receipt.stopped,
+        StopReason::BudgetExceeded(_)
+    ));
+
+    let mut stream =
+        tools.stream_anthropic_events(ToolRecoveryRequest::default(), DialectSet::built_in());
+    let mut events = Vec::new();
+    let (first, rest) = log.as_bytes().split_at(log.len() / 2);
+    stream.feed(first, &mut events);
+    stream.cancel();
+    stream.feed(rest, &mut events);
+    let cancelled = stream.finish(&mut events);
+    assert_eq!(cancelled.recovery.receipt.stopped, StopReason::Cancelled);
+
+    for result in [refused, cancelled] {
+        assert_eq!(result.recovery.outcome, Outcome::Unresolved);
+        assert_eq!(result.usable().len(), 0);
+        assert_eq!(result.log.len(), 0);
+    }
 }

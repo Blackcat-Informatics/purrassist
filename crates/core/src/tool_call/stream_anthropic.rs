@@ -84,6 +84,9 @@ pub enum EventFaultKind {
     /// A delta whose type does not fit its block, or a `thinking_delta` after
     /// the block's signature began. The delta is skipped.
     MismatchedDelta,
+    /// A `message_delta` whose `stop_reason` is not one this reader knows.
+    /// The stop is read as unknown and no call is usable.
+    UnrecognizedStopReason,
     /// A `tool_use` start whose `input` is not `{}`. The deltas alone build
     /// the input, as the API defines.
     NonEmptyStartInput,
@@ -95,6 +98,10 @@ pub enum EventFaultKind {
     OpenBlock,
     /// The log ended without `message_stop`.
     MissingMessageStop,
+    /// The log never stated a stop reason: no `message_delta` with a
+    /// `stop_reason`. The turn is read with an unknown stop, so a cut by
+    /// `max_tokens` cannot be told from a normal end; no call is usable.
+    MissingMessageDelta,
     /// The first event is not `message_start`.
     MessageStartMissing,
     /// A second `message_start`.
@@ -134,10 +141,12 @@ impl EventFaultKind {
             | Self::UnsupportedEvent
             | Self::UnsupportedBlock
             | Self::MismatchedDelta
+            | Self::UnrecognizedStopReason
             | Self::NonEmptyStartInput => EventFaultClass::Malformed,
-            Self::PartialEvent | Self::OpenBlock | Self::MissingMessageStop => {
-                EventFaultClass::Truncated
-            }
+            Self::PartialEvent
+            | Self::OpenBlock
+            | Self::MissingMessageStop
+            | Self::MissingMessageDelta => EventFaultClass::Truncated,
             Self::MessageStartMissing
             | Self::MessageStartRepeated
             | Self::EventAfterMessageStop
@@ -283,6 +292,14 @@ struct Open {
     start: usize,
 }
 
+/// Where the lexer of a tool input's fragments stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lex {
+    Plain,
+    InString,
+    Escape,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Before,
@@ -330,6 +347,9 @@ pub struct AnthropicEventStream<'s> {
     data: ScratchVec<u8>,
     faults: ScratchVec<EventFault>,
     blocks: ScratchVec<BlockSpan>,
+    /// The closers owed by the open tool input's unclosed containers.
+    closers: ScratchVec<u8>,
+    lex: Lex,
     has_data: bool,
     line_start: usize,
     skip_lf: bool,
@@ -342,7 +362,7 @@ pub struct AnthropicEventStream<'s> {
     next_index: u64,
     emitted: usize,
     message_len: usize,
-    stop: GenerationStop,
+    stop: Option<GenerationStop>,
     halted: bool,
 }
 
@@ -376,8 +396,8 @@ fn index_of(node: &Node) -> Option<u64> {
     }
 }
 
-fn stop_of(node: &Node) -> Option<GenerationStop> {
-    let reason = node.pointer("/delta/stop_reason")?.as_str()?;
+/// The stop a recognized `stop_reason` states; `None` for any other value.
+fn stop_of(node: &Node, reason: &str) -> Option<GenerationStop> {
     Some(match reason {
         "end_turn" => GenerationStop::Stop,
         "tool_use" => GenerationStop::ToolCalls,
@@ -388,7 +408,8 @@ fn stop_of(node: &Node) -> Option<GenerationStop> {
                 .and_then(Node::as_str)
                 .map_or_else(Vec::new, |sequence| sequence.as_bytes().to_vec()),
         ),
-        _ => GenerationStop::Unknown,
+        "pause_turn" => GenerationStop::Unknown,
+        _ => return None,
     })
 }
 
@@ -401,6 +422,8 @@ impl<'s> AnthropicEventStream<'s> {
             data: ScratchVec::new(governor),
             faults: ScratchVec::new(governor),
             blocks: ScratchVec::new(governor),
+            closers: ScratchVec::new(governor),
+            lex: Lex::Plain,
             stream,
             has_data: false,
             line_start: 0,
@@ -413,7 +436,7 @@ impl<'s> AnthropicEventStream<'s> {
             next_index: 0,
             emitted: 0,
             message_len: 0,
-            stop: GenerationStop::Unknown,
+            stop: None,
             halted: false,
         }
     }
@@ -575,13 +598,21 @@ impl<'s> AnthropicEventStream<'s> {
             "content_block_start" => self.block_start(root, text, events),
             "content_block_delta" => self.block_delta(root, text, events),
             "content_block_stop" => self.block_stop(root, events),
-            "message_delta" => match stop_of(root) {
-                Some(stop) => {
-                    self.stop = stop;
-                    Ok(())
+            "message_delta" => {
+                let reason = root.pointer("/delta/stop_reason").and_then(Node::as_str);
+                match reason {
+                    None => self.fault(EventFaultKind::MissingMember("delta.stop_reason"), None),
+                    Some(reason) => {
+                        if let Some(stop) = stop_of(root, reason) {
+                            self.stop = Some(stop);
+                            Ok(())
+                        } else {
+                            self.stop = Some(GenerationStop::Unknown);
+                            self.fault(EventFaultKind::UnrecognizedStopReason, None)
+                        }
+                    }
                 }
-                None => self.fault(EventFaultKind::MissingMember("delta.stop_reason"), None),
-            },
+            }
             "message_stop" => {
                 if let Some(index) = self.open.as_ref().map(|open| open.index) {
                     self.fault(EventFaultKind::OpenBlock, Some(index))?;
@@ -629,6 +660,8 @@ impl<'s> AnthropicEventStream<'s> {
             self.fault(EventFaultKind::BlockIndexSequence, Some(index))?;
         }
         self.next_index = index.saturating_add(1);
+        self.closers.clear();
+        self.lex = Lex::Plain;
         let kind = match block.get("type").and_then(Node::as_str) {
             Some("tool_use") => Kind::ToolUse,
             Some("text") => Kind::Text,
@@ -735,6 +768,7 @@ impl<'s> AnthropicEventStream<'s> {
                     );
                 };
                 if !fragment.is_empty() {
+                    self.scan(fragment.as_bytes())?;
                     self.put(fragment.as_bytes(), events);
                     self.mark_wrote();
                 }
@@ -784,6 +818,35 @@ impl<'s> AnthropicEventStream<'s> {
         }
     }
 
+    /// Track the containers and string a tool input's fragments leave open, so
+    /// a block that ends early can still be closed in place.
+    fn scan(&mut self, fragment: &[u8]) -> Result<(), StopReason> {
+        self.stream
+            .governor_mut()
+            .charge(Resource::Work, size(fragment.len()))?;
+        for &byte in fragment {
+            self.lex = match (self.lex, byte) {
+                (Lex::InString, b'\\') => Lex::Escape,
+                (Lex::InString, b'"') => Lex::Plain,
+                (Lex::Escape | Lex::InString, _) | (Lex::Plain, b'"') => Lex::InString,
+                (Lex::Plain, b'{') => {
+                    self.closers.push(b'}')?;
+                    Lex::Plain
+                }
+                (Lex::Plain, b'[') => {
+                    self.closers.push(b']')?;
+                    Lex::Plain
+                }
+                (Lex::Plain, b'}' | b']') => {
+                    self.closers.pop();
+                    Lex::Plain
+                }
+                (Lex::Plain, _) => Lex::Plain,
+            };
+        }
+        Ok(())
+    }
+
     const fn mark_wrote(&mut self) {
         if let Some(open) = self.open.as_mut() {
             open.wrote = true;
@@ -813,7 +876,16 @@ impl<'s> AnthropicEventStream<'s> {
         match open.kind {
             Kind::Skipped => return Ok(()),
             Kind::ToolUse => {
-                if !open.wrote {
+                if open.wrote {
+                    match self.lex {
+                        Lex::Plain => {}
+                        Lex::InString => self.put(b"\"", events),
+                        Lex::Escape => self.put(b"\\\"", events),
+                    }
+                    while let Some(closer) = self.closers.pop() {
+                        self.put(&[closer], events);
+                    }
+                } else {
                     self.put(b"{}", events);
                 }
                 self.put(b"}", events);
@@ -847,19 +919,28 @@ impl<'s> AnthropicEventStream<'s> {
         if self.phase != Phase::Ended {
             self.fault(EventFaultKind::MissingMessageStop, None)?;
         }
+        if self.stop.is_none() {
+            self.fault(EventFaultKind::MissingMessageDelta, None)?;
+        }
         self.put(MESSAGE_CLOSE, events);
         Ok(())
     }
 
     /// Finish the log. A log that ends early is reported by its faults, and
     /// the message is closed over whatever was assembled; the stop reason is
-    /// the one `message_delta` stated, or unknown when it never arrived.
+    /// the one `message_delta` stated. A log that never stated a recognized one
+    /// is read with an unknown stop and reports [`EventFaultKind::MissingMessageDelta`]
+    /// or [`EventFaultKind::UnrecognizedStopReason`], so none of its calls is usable.
     ///
-    /// A governor refusal or cancellation returns `Unresolved` with the reason
-    /// in the receipt, with no calls and an empty `log`.
+    /// A governor refusal or cancellation, including one raised while the
+    /// message is closed, returns `Unresolved` with the reason in the receipt,
+    /// with no calls and an empty `log`.
     #[must_use]
     pub fn finish(mut self, events: &mut impl Extend<StreamEvent>) -> EventLogRecovery {
         if !self.halted && self.seal(events).is_err() {
+            self.halt();
+        }
+        if !self.halted && self.stream.governor().check().is_err() {
             self.halt();
         }
         let Self {
@@ -871,7 +952,7 @@ impl<'s> AnthropicEventStream<'s> {
             halted,
             ..
         } = self;
-        let recovery = stream.finish_with_events(stop, events);
+        let recovery = stream.finish_with_events(stop.unwrap_or(GenerationStop::Unknown), events);
         EventLogRecovery {
             recovery,
             faults: faults.into_vec(),
