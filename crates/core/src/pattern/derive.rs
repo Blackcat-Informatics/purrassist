@@ -983,7 +983,10 @@ enum Utf8 {
 /// assert!(dfa.accepting(end, &mut governor)?);
 /// # Ok::<(), purrassist_core::StopReason>(())
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// States are ordered by their packed encoding: an arbitrary but stable order,
+/// meaningful only so a caller can key an ordered map by state.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DfaState {
     // Canonical encoding makes exact state equality one logical word
     // comparison, including every assertion and UTF-8 decoding field.
@@ -1333,7 +1336,107 @@ impl<'p> DerivativeDfa<'p> {
     }
 }
 
+/// A run of consecutive Unicode scalar values that leave one state for the same
+/// state; see [`DerivativeDfa::scalar_transitions`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScalarRun {
+    /// The first scalar value of the run.
+    pub first: char,
+    /// The last scalar value of the run, never below `first`.
+    pub last: char,
+    /// The state after any one scalar value of the run.
+    pub target: DfaState,
+}
+
+impl DerivativeDfa<'_> {
+    /// Every transition out of a state at a character boundary, grouped by
+    /// target and ordered by scalar value.
+    ///
+    /// The runs partition all Unicode scalar values (surrogates are not
+    /// scalars), so the automaton can be read as a code-point automaton rather
+    /// than the byte automaton [`Self::step`] drives. A state inside a
+    /// character, or after malformed UTF-8, has no transitions. A state for
+    /// which [`DfaState::is_matched`] holds leaves every scalar for a state
+    /// that is matched as well.
+    ///
+    /// The result is exactly what [`Self::step`] gives for the UTF-8 bytes of
+    /// each scalar: every scalar of one class bucket of the compiled pattern
+    /// behaves alike, so one representative per bucket is stepped.
+    ///
+    /// # Errors
+    /// Returns `BudgetExceeded` or `Cancelled` from the governor, as
+    /// [`Self::step`] does; one `Work` unit is charged for each bucket.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let pattern = Pattern::compile("^[a-c]$").unwrap();
+    /// let mut governor = Governor::new(Budget::default());
+    /// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
+    /// let runs = dfa.scalar_transitions(dfa.start(), &mut governor)?;
+    /// let letters: Vec<_> = runs
+    ///     .iter()
+    ///     .filter(|run| run.first <= 'b' && 'b' <= run.last)
+    ///     .collect();
+    /// assert_eq!((letters[0].first, letters[0].last), ('a', 'c'));
+    /// assert!(dfa.accepting(letters[0].target, &mut governor)?);
+    /// # Ok::<(), purrassist_core::StopReason>(())
+    /// ```
+    pub fn scalar_transitions(
+        &mut self,
+        state: DfaState,
+        governor: &mut Governor,
+    ) -> Result<Vec<ScalarRun>, StopReason> {
+        if state.utf8() != Utf8::Boundary {
+            return Ok(Vec::new());
+        }
+        let mut edges: Vec<u32> = core::iter::once(0)
+            .chain(self.compiled.cuts.values.iter().copied())
+            .chain([0xD800, 0xE000])
+            .filter(|&edge| edge <= 0x10_FFFF)
+            .collect();
+        governor.charge(
+            Resource::Work,
+            crate::contract::saturating_size(edges.len()),
+        )?;
+        edges.sort_unstable();
+        edges.dedup();
+        edges.push(0x11_0000);
+        let mut runs: Vec<ScalarRun> = Vec::new();
+        for pair in edges.windows(2) {
+            let (low, high) = (pair[0], pair[1] - 1);
+            let (Some(first), Some(last)) = (char::from_u32(low), char::from_u32(high)) else {
+                continue; // the surrogate range: its edges bound a bucket of their own
+            };
+            let mut target = state;
+            for &byte in first.encode_utf8(&mut [0; 4]).as_bytes() {
+                target = self.step(target, byte, governor)?;
+            }
+            governor.charge(Resource::Work, 1)?;
+            match runs.last_mut() {
+                Some(previous)
+                    if previous.target == target && u32::from(previous.last) + 1 == low =>
+                {
+                    previous.last = last;
+                }
+                _ => runs.push(ScalarRun {
+                    first,
+                    last,
+                    target,
+                }),
+            }
+        }
+        Ok(runs)
+    }
+}
+
 impl DfaState {
+    /// Whether a match was already established before the last character, so
+    /// the state accepts every continuation.
+    #[must_use]
+    pub const fn is_matched(self) -> bool {
+        self.matched()
+    }
+
     const LIVE_MASK: u64 = 0xFFFF_FFFF;
     const MATCHED: u64 = 1 << 32;
     const AT_START: u64 = 1 << 33;

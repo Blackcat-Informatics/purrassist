@@ -187,7 +187,7 @@ const MEANINGS: &[Meaning] = &[
     Meaning {
         code: "input-shape-not-expressible",
         description: "The complete input shape requires validation before authorization.",
-        lanes: &[A],
+        lanes: &[A, G],
     },
     Meaning {
         code: "context-contract-not-expressible",
