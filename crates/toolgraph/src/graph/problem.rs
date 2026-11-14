@@ -68,7 +68,9 @@ impl fmt::Display for Violation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Construct {
-    /// A statement in a named graph.
+    /// A statement in a named graph, or a declared named graph with no
+    /// statements (a `TriG` `GRAPH <g> {}`). The loader reads the view's declared
+    /// named graphs and refuses the first one, so no graph is dropped silently.
     NamedGraph,
     /// A statement no view owns: not `FnO`, vocabulary, shape or declaration.
     UnownedStatement,

@@ -66,7 +66,11 @@ reader and the owned `RdfDataset` copy returned by `ToolGraph::dataset` (re-inte
 from the parse, not the parser's own dataset) are allocated outside the governor's
 storage account.
 Only default-graph statements load; a named-graph statement or
-reifier is refused. The vocabulary shapes are enforced by a Rust table, not by
+reifier is refused as `UnsupportedConstruct` with the named-graph construct. A
+declared named graph with no statements, such as a TriG `GRAPH <g> {}`, is refused
+the same way: after the statements are read the loader reads the view's declared
+named graphs and refuses the first one (subject the graph name, predicate `-`),
+so a graph it was given is never dropped silently. The vocabulary shapes are enforced by a Rust table, not by
 running the shapes document through the SHACL engine, and the table is not
 equivalent to the document. Known differences: `readOnlyHint`, `destructiveHint`,
 `idempotentHint` and `openWorldHint` are optional in the table but
