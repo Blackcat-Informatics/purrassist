@@ -505,6 +505,7 @@ impl<'a> Builder<'a> {
         carried.extend(CONSTRAINTS);
         let mut names = Vec::with_capacity(types.len());
         for name in &types {
+            self.refuse_untranslated(schema, pointer, name)?;
             match *name {
                 "string" => names.push(self.string(schema, pointer, governor)?),
                 "integer" => names.push(self.numeric(schema, pointer, true, governor)?),
@@ -530,6 +531,49 @@ impl<'a> Builder<'a> {
         }
         self.omitted.extend(uncarried(schema, pointer, &carried));
         Ok(alternation(names))
+    }
+
+    /// Refuse a size, divisibility or uniqueness keyword of the type `name`.
+    ///
+    /// A keyword a grammar can state but this compiler does not translate yet is
+    /// refused as not yet translated; uniqueness of items no context-free
+    /// grammar states, and is refused as not expressible.
+    fn refuse_untranslated(
+        &self,
+        schema: &Node,
+        pointer: &str,
+        name: &str,
+    ) -> Result<(), GbnfError> {
+        let keywords: &[(&str, &'static str)] = match name {
+            "string" => &[
+                ("minLength", "minLength is not yet translated"),
+                ("maxLength", "maxLength is not yet translated"),
+            ],
+            "array" => &[
+                ("minItems", "minItems is not yet translated"),
+                ("maxItems", "maxItems is not yet translated"),
+                (
+                    "uniqueItems",
+                    "uniqueItems is not expressible by a context-free grammar",
+                ),
+            ],
+            "object" => &[
+                ("minProperties", "minProperties is not yet translated"),
+                ("maxProperties", "maxProperties is not yet translated"),
+            ],
+            "integer" | "number" => &[("multipleOf", "multipleOf is not yet translated")],
+            _ => &[],
+        };
+        for &(keyword, reason) in keywords {
+            let present = schema.get(keyword).is_some_and(|node| {
+                // `uniqueItems: false` constrains nothing.
+                !matches!(node.value, Value::Bool(false))
+            });
+            if present {
+                return Err(self.unsupported(&format!("{pointer}/{keyword}"), reason));
+            }
+        }
+        Ok(())
     }
 
     /// A string: the generic JSON string, or the language of its `pattern`.

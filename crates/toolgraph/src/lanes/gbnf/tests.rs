@@ -508,14 +508,14 @@ fn object_members_use_the_canonical_order_and_text() {
 #[test]
 fn uncarried_keywords_and_open_members_are_ledgered_at_their_pointers() {
     let (_, omitted) = compile(
-        r#"{"type":"object","properties":{"s":{"type":"string","minLength":2},"i":{"type":"integer","multipleOf":2}},"required":["s"]}"#,
+        r#"{"type":"object","properties":{"s":{"type":"string","format":"email"},"i":{"type":"integer","default":1}},"required":["s"]}"#,
     );
     assert_eq!(
         omitted,
         [
             "/additionalProperties (members outside properties are not generated)",
-            "/properties/s/minLength",
-            "/properties/i/multipleOf",
+            "/properties/s/format",
+            "/properties/i/default",
         ]
     );
 }
@@ -936,5 +936,56 @@ fn a_look_around_is_refused_by_name() {
             "{reason}"
         );
         assert!(reason.contains("issue 224"), "{reason}");
+    }
+}
+
+// Invariant: a size or divisibility keyword a grammar can state is refused as
+// not yet translated, uniqueness as not expressible, never ledgered or dropped,
+// and an enum left with no member by its sibling constraint is unsatisfiable.
+#[test]
+fn untranslated_keywords_and_an_empty_enum_are_refused_by_name() {
+    for (keywords, reason) in [
+        (
+            r#""type":"string","minLength":2"#,
+            "minLength is not yet translated",
+        ),
+        (
+            r#""type":"string","maxLength":2"#,
+            "maxLength is not yet translated",
+        ),
+        (
+            r#""type":"array","items":{"type":"string"},"minItems":1"#,
+            "minItems is not yet translated",
+        ),
+        (
+            r#""type":"array","items":{"type":"string"},"maxItems":1"#,
+            "maxItems is not yet translated",
+        ),
+        (
+            r#""type":"object","minProperties":1"#,
+            "minProperties is not yet translated",
+        ),
+        (
+            r#""type":"object","maxProperties":1"#,
+            "maxProperties is not yet translated",
+        ),
+        (
+            r#""type":"integer","multipleOf":2"#,
+            "multipleOf is not yet translated",
+        ),
+        (
+            r#""type":"array","items":{"type":"string"},"uniqueItems":true"#,
+            "uniqueItems is not expressible by a context-free grammar",
+        ),
+        (
+            r#""enum":[1,2],"minimum":5"#,
+            "no enum member satisfies its pattern or bounds",
+        ),
+    ] {
+        let refused = try_compile(&member_schema(keywords));
+        let Err(GbnfError::Unsupported { reason: found, .. }) = refused else {
+            panic!("{keywords}: {refused:?}");
+        };
+        assert_eq!(found, reason, "{keywords}");
     }
 }

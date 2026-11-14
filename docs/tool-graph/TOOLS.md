@@ -1188,6 +1188,13 @@ without an exponent and without a sign on zero, every finite decimal in the
 interval and no other, compared digit by digit with no rounding. A number
 without a bound keeps the generic number grammar, which includes exponents.
 
+The G lane records `input-shape-not-expressible` for a back-reference, so the
+code covers G as well as A. A grammar can state these keywords, and the compiler
+refuses each by name as not yet translated: `minLength`, `maxLength`, `minItems`,
+`maxItems`, `minProperties`, `maxProperties` and `multipleOf`. `uniqueItems: true`
+is refused as not expressible by a context-free grammar. An `enum` or `const`
+whose sibling `pattern` or bound leaves no member is refused as unsatisfiable.
+
 The compact lane's versioned, UTF-8 `CompactSignature` for the example is exactly
 the following two LF-separated lines, ordered by tool name bytes, with one final LF. Signatures are a new
 specified projection, not an existing `DeclarationForm`. Optional parameters
@@ -1231,7 +1238,7 @@ constraint and check id; the table is not itself serialized ledger JSON.
 | `confinement-not-expressible` | G, C, P | `DatabaseProfile`, `FileProfile` | `confine-worker`: exact admitted AppArmor label, features and root bindings before dispatch |
 | `resource-ceiling-not-expressible` | G, C, P | five ceiling properties on each execution profile | `confine-worker`: exact rlimits and governed engine ceilings, no truncation or rounding |
 | `output-shape-not-expressible` | A, G, P | `QueryOutput`, `EditOutput` | `validate-output`: full shape check before releasing or projecting output |
-| `input-shape-not-expressible` | A | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
+| `input-shape-not-expressible` | A, G | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
 | `context-contract-not-expressible` | A, G, C, P | `QueryContext`, `EditContext` | `project-context`: field mask after output validation, exact byte cap and retention on release |
 | `tool-annotations-not-expressible` | A, G, C, P | the title and four hints on Q and E | `verify-effects`: admitted implementation agrees; hints never confer permission |
 | `rdf-binding-not-expressible` | A, G, C, P | Q/E FnO mappings, lists and source reifiers | `bind-manifest`: receipt pins graph, tool, implementation, source and projection digests |

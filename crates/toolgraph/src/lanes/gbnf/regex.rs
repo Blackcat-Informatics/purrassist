@@ -16,10 +16,7 @@
 //! look-around. Neither is regular in the engine's sense, so each is named and
 //! left to the caller.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Write as _,
-};
+use std::{collections::BTreeMap, fmt::Write as _};
 
 use purrassist_core::{
     Governor, StopReason,
@@ -178,7 +175,7 @@ fn classify(source: &str) -> Result<Lowered, Failure> {
 }
 
 /// A state of the search automaton, with every matched state as one.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Matched,
     Open(DfaState),
@@ -189,17 +186,17 @@ type Raw = Vec<(bool, Vec<(char, char, usize)>)>;
 /// A state's class and its merged edges, the key of one refined class.
 type Signature = (usize, Vec<(char, char, usize)>);
 
-fn intern(
-    key: Key,
-    index: &mut HashMap<Key, usize>,
-    raw: &mut Raw,
-    pending: &mut Vec<Key>,
-) -> usize {
-    *index.entry(key).or_insert_with(|| {
-        raw.push((false, Vec::new()));
-        pending.push(key);
-        raw.len() - 1
-    })
+/// The index of `key` among the states met so far, adding it when new. `pending`
+/// holds the keys in index order; the state type has no order to key a map by.
+fn intern(key: Key, raw: &mut Raw, pending: &mut Vec<Key>) -> usize {
+    pending
+        .iter()
+        .position(|known| *known == key)
+        .unwrap_or_else(|| {
+            raw.push((false, Vec::new()));
+            pending.push(key);
+            raw.len() - 1
+        })
 }
 
 /// The automaton of a pattern the derivative engine compiles, or `None`.
@@ -207,10 +204,9 @@ fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automa
     let Some(mut dfa) = pattern.byte_dfa(governor)? else {
         return Ok(None);
     };
-    let mut index = HashMap::new();
     let mut raw: Raw = Vec::new();
     let mut pending = Vec::new();
-    intern(Key::Open(dfa.start()), &mut index, &mut raw, &mut pending);
+    intern(Key::Open(dfa.start()), &mut raw, &mut pending);
     let mut cursor = 0;
     while cursor < pending.len() {
         let key = pending[cursor];
@@ -232,7 +228,7 @@ fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automa
             } else {
                 Key::Open(run.target)
             };
-            let target = intern(key, &mut index, &mut raw, &mut pending);
+            let target = intern(key, &mut raw, &mut pending);
             match edges.last_mut() {
                 Some(previous)
                     if previous.2 == target
@@ -308,9 +304,9 @@ fn minimal(raw: &Raw, governor: &mut Governor) -> Result<Automaton, Failure> {
         }
     }
     // Number the classes by a walk from the start, in edge order.
-    let mut number: HashMap<usize, usize> = HashMap::new();
+    let mut number: BTreeMap<usize, usize> = BTreeMap::new();
     let mut order: Vec<usize> = Vec::new();
-    let mut representative: HashMap<usize, usize> = HashMap::new();
+    let mut representative: BTreeMap<usize, usize> = BTreeMap::new();
     for (state, &state_class) in class.iter().enumerate() {
         if productive[state] {
             representative.entry(state_class).or_insert(state);
