@@ -1127,15 +1127,15 @@ beyond context-free syntax. UTF-16 surrogate pairing and the core's exact
 Unicode string validity remain mandatory schema/JSON post-checks.
 
 The compact lane's versioned, UTF-8 `CompactSignature` for the example is exactly
-the following two LF-separated lines, with one final LF. Signatures are a new
+the following two LF-separated lines, ordered by tool name bytes, with one final LF. Signatures are a new
 specified projection, not an existing `DeclarationForm`. Optional parameters
 use `?`, unions use `|`, and arrays use `[]`; all identifiers are quoted when
 they do not match the core name grammar. Unsupported recursive types are a
 typed refusal, rather than truncated descriptions.
 
 ```text
-query_customer_orders(customer_id:string,limit:integer)->{orders:string}
 edit_file(path:string,text:string)->{version:string}
+query_customer_orders(customer_id:string,limit:integer)->{orders:string}
 ```
 
 ### Projection loss profile and mandatory checks — specified
