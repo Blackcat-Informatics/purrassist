@@ -1169,7 +1169,7 @@ constraint and check id; the table is not itself serialized ledger JSON.
 | `confinement-not-expressible` | G, C, P | `DatabaseProfile`, `FileProfile` | `confine-worker`: exact admitted AppArmor label, features and root bindings before dispatch |
 | `resource-ceiling-not-expressible` | G, C, P | five ceiling properties on each execution profile | `confine-worker`: exact rlimits and governed engine ceilings, no truncation or rounding |
 | `output-shape-not-expressible` | A, G, P | `QueryOutput`, `EditOutput` | `validate-output`: full shape check before releasing or projecting output |
-| `input-shape-not-expressible` | A | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
+| `input-shape-not-expressible` | A, G | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
 | `context-contract-not-expressible` | A, G, C, P | `QueryContext`, `EditContext` | `project-context`: field mask after output validation, exact byte cap and retention on release |
 | `tool-annotations-not-expressible` | A, G, C, P | the title and four hints on Q and E | `verify-effects`: admitted implementation agrees; hints never confer permission |
 | `rdf-binding-not-expressible` | A, G, C, P | Q/E FnO mappings, lists and source reifiers | `bind-manifest`: receipt pins graph, tool, implementation, source and projection digests |
@@ -1181,8 +1181,10 @@ The M lane has an empty loss ledger for this example: all source triples,
 reifiers, rule strings, presence information and declaration bytes are in its
 required bundle. The A lane has no confinement or rlimit loss; those constraints
 are represented exactly or synthesis fails. The G lane has no loss for the
-string and integer datatypes and the customer pattern and limit bounds, required argument keys or closed input objects, which
-its grammar represents. The C lane preserves argument/output type names and
+string and integer datatypes, required argument keys or closed input objects, which
+its grammar represents. The implemented `lanes::gbnf` compiler does not yet lower
+`pattern` or numeric bounds; it records the customer pattern and limit bounds as
+`input-shape-not-expressible` entries enforced by `validate-input`. The C lane preserves argument/output type names and
 field names, but its shape-keyword row records cardinality/closure semantics
 that TypeScript-like signatures do not enforce. Every P lane preserves its
 input JSON Schema and descriptions; the common rows record all other omitted
