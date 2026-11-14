@@ -267,6 +267,27 @@ fn an_incomplete_fno_binding_is_refused() {
     load(&worked()).expect("neighbouring valid input");
 }
 
+// Rationale: a predicate outside the caller's vocabulary on an FnO-view subject is refused
+// by the strict FnO reader as a statement; the refusal must name that subject and predicate
+// rather than the vocabulary namespace.
+#[test]
+fn an_fno_view_statement_refusal_names_its_subject_and_predicate() {
+    let source = edited(
+        "pa:title \"Customer orders\"",
+        "pa:title \"Customer orders\" ; ex:custom 1",
+    );
+    let error = load(&source).expect_err("non-vocabulary predicate on an FnO-view subject");
+    let LoadError::InvalidFnoBinding {
+        subject, predicate, ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, format!("{EX}query_customer_orders"));
+    assert_eq!(predicate.as_deref(), Some(&*format!("{EX}custom")));
+    load(&worked()).expect("neighbouring valid input");
+}
+
 // Rationale: a hint missing a required field is refused at the hint, while the
 // complete hint of the worked example loads.
 #[test]
