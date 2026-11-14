@@ -176,12 +176,7 @@ fn malformed_turtle_is_a_parse_error_with_its_position() {
         matches!(broken, LoadError::Parse { line: Some(1), .. }),
         "{broken:?}"
     );
-    // A complete statement parses; it is refused later, by ownership rather than by the parser.
-    let parsed = load("<urn:a> <urn:b> <urn:c> .\n");
-    assert!(
-        matches!(parsed, Err(LoadError::UnsupportedConstruct { .. })),
-        "{parsed:?}"
-    );
+    load(&worked()).expect("neighbouring valid input");
 }
 
 // Rationale: an unbound term in the caller's namespace is out of vocabulary, whether
