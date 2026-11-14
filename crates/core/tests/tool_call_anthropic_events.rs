@@ -416,9 +416,9 @@ fn refusal_and_cancellation_are_explicit_outcomes() {
 
 /// A tool input cut inside a string, after a trailing backslash, or inside
 /// nested containers is never usable. When its block is stopped cleanly the
-/// reader appends nothing and reports the unfinished input; when the next
-/// block forces the close, the owed closers keep that next block a clean,
-/// correctly read call.
+/// reader appends the owed closers and reports the unfinished input; when the
+/// next block forces the close, the owed closers likewise keep that next block
+/// a clean, correctly read call.
 #[test]
 fn unfinished_tool_input_is_withheld_and_never_absorbs_the_next_block() {
     for fragment in [
@@ -465,6 +465,8 @@ fn unfinished_tool_input_is_withheld_and_never_absorbs_the_next_block() {
     }
 }
 
+/// The sweep's range covers the refusal at the final close (the smallest
+/// budgets refuse at intake, the larger ones later, up to completion).
 /// Raising the work budget never turns a completed read back into a refusal,
 /// and every refusal, up to the one at the final close, is an explicit
 /// `Unresolved` with no retained log.

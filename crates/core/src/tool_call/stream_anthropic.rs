@@ -16,9 +16,9 @@
 //!
 //! A `tool_use` block is `{"type":"tool_use","id":ID,"name":NAME,"input":INPUT}`
 //! where `INPUT` is the concatenation of the block's `input_json_delta`
-//! fragments, byte for byte, or `{}` when there are none; a block that is cut
-//! (never stopped) additionally gets the closers its fragments owe, which is a
-//! fault and withholds its call. A `text` block is
+//! fragments, byte for byte, or `{}` when there are none; when the fragments
+//! leave a string or container open, whether the block is stopped or cut, the
+//! closers they owe are appended, which is a fault and withholds its call. A `text` block is
 //! `{"type":"text","text":"..."}` and a `thinking` block is
 //! `{"type":"thinking","thinking":"...","signature":"..."}`; the strings keep
 //! their original JSON escapes. The message bytes are fed, event by event,
@@ -102,9 +102,10 @@ pub enum EventFaultKind {
     /// so later blocks stay readable. The block's call is withheld.
     OpenBlock,
     /// A `content_block_stop` arrived while the tool input's fragments still
-    /// left a string or container open. Nothing is appended in a clean stop,
-    /// so the call is read as the batch reading of those bytes would read it,
-    /// but it is withheld: a repair of cut-off input is not a resolved call.
+    /// left a string or container open. The message gets the closing quote and
+    /// the owed closers, as for [`Self::OpenBlock`], so later blocks stay
+    /// readable, and the call is withheld: a repair of cut-off input is not a
+    /// resolved call.
     UnfinishedInput,
     /// The log ended without `message_stop`.
     MissingMessageStop,
@@ -894,8 +895,9 @@ impl<'s> AnthropicEventStream<'s> {
             Kind::Skipped => return Ok(()),
             Kind::ToolUse => {
                 if open.wrote {
-                    // Only a forced close (already faulted) or an unfinished
-                    // input (faulted at its stop) owes anything here.
+                    // Append what the fragments owe. Only a forced close or an
+                    // unfinished input owes anything, and both are faulted
+                    // (clean stops of finished input append nothing).
                     match self.lex {
                         Lex::Plain => {}
                         Lex::InString => self.put(b"\"", events),
