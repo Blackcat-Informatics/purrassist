@@ -21,7 +21,10 @@ crates share one version.
   scratch storage, cancellation): a recorded exhaustion is `LoadError::Exhausted`, a
   stop is `LoadError::Cancelled`, a native storage failure the governor did not
   record is a `LoadError::Parse` (code `storage`) with its native cause rather than
-  a budget claim, and no partial graph escapes. `UnknownTerm` and
+  a budget claim, and no partial graph escapes. The owned rows, their per-subject
+  index, the `FnO` view dataset and the owned `RdfDataset` copy returned by
+  `ToolGraph::dataset` are allocated outside the governor's storage account,
+  because `PurRDF` offers no governed detach of a retained parse. `UnknownTerm` and
   `UnsupportedConstruct` carry the exact `SourceExtent` of the statement. Only
   Turtle and TriG load; every other media type is `LoadError::Parse` with code
   `unsupported-format`. The loader charges one work unit per 64 native units.
