@@ -644,3 +644,141 @@ fn an_empty_named_graph_is_refused_not_dropped() {
         ("urn:empty-graph", "-", Construct::NamedGraph)
     );
 }
+
+/// Unwrap an `UnsupportedConstruct` refusal into its subject, predicate and construct.
+fn unsupported_construct(error: LoadError) -> (String, String, Construct) {
+    let LoadError::UnsupportedConstruct {
+        subject,
+        predicate,
+        construct,
+        ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    (subject, predicate, construct)
+}
+
+// Rationale: a statement written inside a TriG named graph carries a graph the tool
+// graph has no place for, so it is refused as the named-graph construct rather than
+// folded into the default graph; the unedited worked example loads as TriG.
+#[test]
+fn a_statement_in_a_named_graph_is_refused_as_a_named_graph() {
+    let load_trig = |source: &str| {
+        ToolGraph::load(
+            source.as_bytes(),
+            "application/trig",
+            None,
+            &vocabulary(),
+            &mut Governor::new(WORKED_BUDGET),
+        )
+    };
+    load_trig(&worked()).expect("the unedited worked example loads as TriG");
+    let source = edited(
+        "ex:EditResult a rdfs:Class .",
+        "GRAPH <urn:named> { ex:EditResult a rdfs:Class . }",
+    );
+    let (subject, predicate, construct) = unsupported_construct(load_trig(&source).unwrap_err());
+    assert_eq!(
+        (subject.as_str(), predicate.as_str(), construct),
+        (
+            "https://example.org/tools/EditResult",
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            Construct::NamedGraph
+        )
+    );
+}
+
+// Rationale: a reifier no tool parameter consumes and that is not a typed hint is
+// refused as a reifier, never ignored; the unedited worked example loads.
+#[test]
+fn an_unconsumed_reifier_that_is_not_a_hint_is_refused_as_a_reifier() {
+    load(&worked()).expect("neighbouring valid input");
+    let source = edited(
+        "ex:EditResult a rdfs:Class .",
+        "ex:EditResult a rdfs:Class .\n<< ex:EditResult rdfs:label \"x\" ~ ex:plainReifier >> .\n\
+         ex:plainReifier pa:maxEditDistance 0 ; pa:typeCoercion \"none\" ;\n \
+         pa:caseFold false ; pa:unicodeFold false .",
+    );
+    let (subject, predicate, construct) = unsupported_construct(load(&source).unwrap_err());
+    assert_eq!(
+        (subject.as_str(), predicate.as_str(), construct),
+        (
+            "https://example.org/tools/plainReifier",
+            "http://www.w3.org/2000/01/rdf-schema#label",
+            Construct::Reifier
+        )
+    );
+}
+
+// Rationale: a call-time fact (a session or call predicate, or a runtime class) is not
+// a tool description, so it is refused as a runtime fact whichever form states it.
+#[test]
+fn a_call_time_fact_in_a_tool_graph_is_refused_as_a_runtime_fact() {
+    load(&worked()).expect("neighbouring valid input");
+    let predicate_form = edited(
+        "ex:EditResult a rdfs:Class .",
+        "ex:EditResult a rdfs:Class ; pa:userId \"customer-17\" .",
+    );
+    let (subject, predicate, construct) = unsupported_construct(load(&predicate_form).unwrap_err());
+    assert_eq!(
+        (subject.as_str(), predicate, construct),
+        (
+            "https://example.org/tools/EditResult",
+            format!("{NAMESPACE}userId"),
+            Construct::RuntimeFact
+        )
+    );
+    let class_form = edited(
+        "ex:EditResult a rdfs:Class .",
+        "ex:EditResult a rdfs:Class, pa:Session .",
+    );
+    let (_, _, construct) = unsupported_construct(load(&class_form).unwrap_err());
+    assert_eq!(construct, Construct::RuntimeFact);
+}
+
+// Rationale: an `fno:Function` that is not also a `pa:Tool` has no tool to describe it,
+// so it is refused rather than dropped from the graph; the unedited example loads.
+#[test]
+fn a_function_without_a_tool_is_refused_as_a_function_without_a_tool() {
+    load(&worked()).expect("neighbouring valid input");
+    let source = edited(
+        "ex:EditResult a rdfs:Class .",
+        "ex:EditResult a rdfs:Class .\n\
+         ex:orphanFunction a fno:Function ; rdfs:label \"orphan\" ; fno:expects ( ) ; fno:returns ( ex:orphanOutput ) .\n\
+         ex:orphanOutput a fno:Output ; fno:predicate ex:orphan ; fno:type xsd:string .\n\
+         _:orphanMapping a fno:Mapping ; rdfs:label \"orphan binding\" ; fno:function ex:orphanFunction ;\n \
+         fno:implementation ex:editImplementation ; fno:returnMapping _:orphanReturn .\n\
+         _:orphanReturn a fnom:DefaultReturnMapping ; rdfs:label \"orphan return\" ; fnom:functionOutput ex:orphanOutput ;\n \
+         fnom:implementationProperty \"orphan\" .",
+    );
+    let (subject, predicate, construct) = unsupported_construct(load(&source).unwrap_err());
+    assert_eq!(
+        (subject.as_str(), predicate, construct),
+        (
+            "https://example.org/tools/orphanFunction",
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_owned(),
+            Construct::FunctionWithoutTool
+        )
+    );
+}
+
+// Rationale: only a plain predicate IRI is a parameter path; a `sh:path` that is a
+// blank-node path expression is refused as a complex path, never read as an IRI.
+#[test]
+fn a_non_iri_shape_path_is_refused_as_a_complex_path() {
+    load(&worked()).expect("neighbouring valid input");
+    let source = edited(
+        "ex:customerIdShape a sh:PropertyShape ; sh:path ex:customer_id ;",
+        "ex:customerIdShape a sh:PropertyShape ; sh:path [] ;",
+    );
+    let (subject, predicate, construct) = unsupported_construct(load(&source).unwrap_err());
+    assert_eq!(
+        (subject.as_str(), predicate.as_str(), construct),
+        (
+            "https://example.org/tools/customerIdShape",
+            "http://www.w3.org/ns/shacl#path",
+            Construct::ComplexPath
+        )
+    );
+}
