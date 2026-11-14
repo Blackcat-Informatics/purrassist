@@ -1093,3 +1093,67 @@ fn a_quote_a_backslash_and_a_control_character_are_spelled_escaped() {
         &[(quoted("\"\\\u{1}"), true), (quoted("\"\\"), false)],
     );
 }
+
+// Invariant: a refused keyword is refused in every placement, never routed to
+// the ledger: beside an enum, beside anyOf, and as uniqueness.
+#[test]
+fn refused_keywords_are_refused_beside_enum_and_anyof_too() {
+    for keywords in [
+        r#""enum":["a"],"minLength":1"#,
+        r#""enum":[2],"multipleOf":2"#,
+        r#""const":"a","maxLength":3"#,
+        r#""anyOf":[{"type":"array","items":{"type":"string"}}],"maxItems":2"#,
+        r#""anyOf":[{"type":"array","items":{"type":"string"}}],"uniqueItems":true"#,
+    ] {
+        let refused = try_compile(&member_schema(keywords));
+        assert!(
+            matches!(refused, Err(GbnfError::Unsupported { .. })),
+            "{keywords}: {refused:?}"
+        );
+    }
+}
+
+// Invariant: through `lanes::gbnf`, an open input shape records the
+// `input-shape-not-expressible` entry for the GBNF target, and the ledger passes
+// the registered loss profile. (A back-reference never reaches the lane from a
+// graph: the upstream schema compiler refuses it first.)
+#[test]
+fn the_gbnf_lane_ledgers_input_shape_and_the_ledger_is_sound() {
+    use purrdf_core::loss::check_ledger_sound_in;
+    let (vocabulary, _) = worked_example();
+    let section = TOOLS
+        .split("## End-to-end example")
+        .nth(1)
+        .expect("section");
+    let turtle = section
+        .split("```turtle\n")
+        .nth(1)
+        .and_then(|fence| fence.split("\n```").next())
+        .expect("turtle fence")
+        .replace(
+            "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ; sh:closed true ;",
+            "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ;",
+        );
+    let mut governor = Governor::new(Budget::default());
+    let graph = ToolGraph::load(
+        turtle.as_bytes(),
+        "text/turtle",
+        None,
+        &vocabulary,
+        &mut governor,
+    )
+    .expect("graph loads");
+    let (_, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
+    assert!(
+        ledger.entries().iter().any(|entry| {
+            entry.code == "input-shape-not-expressible" && entry.to == "llama-gbnf"
+        })
+    );
+    check_ledger_sound_in(
+        vocabulary.loss_profile(),
+        &ledger,
+        crate::SOURCE_REPRESENTATION,
+        "llama-gbnf",
+    )
+    .expect("sound ledger");
+}

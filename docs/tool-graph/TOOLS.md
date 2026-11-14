@@ -1192,13 +1192,13 @@ The G lane records `input-shape-not-expressible` for a back-reference, so the
 code covers G as well as A. A grammar can state these keywords, and the compiler
 refuses each by name as not yet translated:
 
-- `minLength`: not yet translated; filed as #225.
-- `maxLength`: not yet translated; filed as #226.
-- `minItems`: not yet translated; filed as #227.
-- `maxItems`: not yet translated; filed as #228.
-- `minProperties`: not yet translated; filed as #229.
-- `maxProperties`: not yet translated; filed as #230.
-- `multipleOf`: not yet translated; filed as #231.
+- `minLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/225`.
+- `maxLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/226`.
+- `minItems`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/227`.
+- `maxItems`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/228`.
+- `minProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/229`.
+- `maxProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/230`.
+- `multipleOf`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/231`.
 
 `uniqueItems: true` is refused as not expressible by a context-free grammar. An `enum` or `const`
 whose sibling `pattern` or bound leaves no member is refused as unsatisfiable.

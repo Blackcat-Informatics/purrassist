@@ -43,9 +43,11 @@
 //! # Losses
 //!
 //! A construct that would make the grammar accept a value the schema rejects
-//! (a length, a `multipleOf`, an open object) is omitted from the grammar and
-//! recorded on the returned ledger at its schema pointer, never dropped
-//! silently; the mandatory `validate-input` check enforces it. A `pattern` with
+//! (an open object, or a keyword such as `format` the grammar does not carry)
+//! is omitted from the grammar and recorded on the returned ledger at its schema
+//! pointer, never dropped silently; the mandatory `validate-input` check
+//! enforces it. A length, item or property count and `multipleOf` are refused by
+//! name as not yet translated, and `uniqueItems: true` as not expressible. A `pattern` with
 //! a back-reference is the one pattern construct treated so, because no
 //! context-free grammar states a repeat of an earlier match. A construct that
 //! cannot be lowered soundly at all is a typed refusal, including a pattern with
@@ -58,7 +60,7 @@ use purrassist_core::{
     contract::Resource,
     json::{self, Node, Number, ParseFailure, Value},
     pattern::PatternError,
-    schema::Schema,
+    schema::{CompilationError, Schema},
 };
 use purrdf_core::loss::{LossLedger, LossSoundnessError, check_ledger_sound_in};
 
@@ -113,8 +115,11 @@ pub enum GbnfError {
     /// schema, a type that names no supported type, an array without `items`, an
     /// `enum` member that is not a scalar or contradicts the type, a required
     /// member without a property schema, `oneOf` alternatives that may overlap,
-    /// a `pattern` or numeric bound beside `anyOf` or `oneOf`, bounds or a
-    /// pattern that admit no value, or a `pattern` with a look-around.
+    /// a `pattern` or numeric bound beside `anyOf` or `oneOf`, bounds, a pattern
+    /// or an `enum` that admit no value (an unsatisfiable enum), a `pattern` with a
+    /// look-around, a keyword not yet translated (`minLength`, `maxLength`,
+    /// `minItems`, `maxItems`, `minProperties`, `maxProperties`, `multipleOf`), or
+    /// `uniqueItems: true`, which no context-free grammar states.
     Unsupported {
         /// The tool's name.
         tool: String,
@@ -132,6 +137,16 @@ pub enum GbnfError {
         pointer: String,
         /// The syntax error and its offset in the pattern.
         cause: PatternError,
+    },
+    /// The `pattern` or numeric bounds beside an `enum` or `const` are not a valid
+    /// schema, so its members cannot be filtered.
+    Constraint {
+        /// The tool's name.
+        tool: String,
+        /// RFC 6901 pointer from the schema root.
+        pointer: String,
+        /// Why the keywords do not compile.
+        cause: Box<CompilationError>,
     },
     /// A recorded loss is not registered in the caller's loss profile.
     Unsound(LossSoundnessError),
@@ -154,6 +169,14 @@ impl fmt::Display for GbnfError {
                 pointer,
                 cause,
             } => write!(output, "tool {tool}: {pointer}: invalid pattern: {cause}"),
+            Self::Constraint {
+                tool,
+                pointer,
+                cause,
+            } => write!(
+                output,
+                "tool {tool}: {pointer}: invalid constraint: {cause}"
+            ),
             Self::Unsound(cause) => write!(output, "unregistered loss: {cause}"),
             Self::Resource(cause) => write!(output, "gbnf stopped: {cause:?}"),
         }
@@ -166,6 +189,7 @@ impl std::error::Error for GbnfError {
             Self::Manifest(cause) => Some(cause.as_ref()),
             Self::Json(cause) => Some(cause),
             Self::Pattern { cause, .. } => Some(cause),
+            Self::Constraint { cause, .. } => Some(cause.as_ref()),
             _ => None,
         }
     }
@@ -407,6 +431,7 @@ impl<'a> Builder<'a> {
         if members.is_empty() {
             return Err(self.unsupported(pointer, "an empty enum admits no value"));
         }
+        self.refuse_untranslated(schema, pointer, "*")?;
         let types = type_names(schema);
         let constraint = self.constraint(schema, pointer, governor)?;
         let mut names = Vec::with_capacity(members.len());
@@ -462,6 +487,7 @@ impl<'a> Builder<'a> {
         let Value::Array(items) = &node.value else {
             return Err(self.unsupported(pointer, "anyOf and oneOf must be arrays"));
         };
+        self.refuse_untranslated(schema, pointer, "*")?;
         if CONSTRAINTS.iter().any(|name| schema.get(name).is_some()) {
             return Err(
                 self.unsupported(pointer, "a pattern or numeric bound beside anyOf or oneOf")
@@ -562,6 +588,20 @@ impl<'a> Builder<'a> {
                 ("maxProperties", "maxProperties is not yet translated"),
             ],
             "integer" | "number" => &[("multipleOf", "multipleOf is not yet translated")],
+            // An `enum`, `const`, `anyOf` or `oneOf` has no type of its own: any is refused.
+            "*" => &[
+                ("minLength", "minLength is not yet translated"),
+                ("maxLength", "maxLength is not yet translated"),
+                ("minItems", "minItems is not yet translated"),
+                ("maxItems", "maxItems is not yet translated"),
+                (
+                    "uniqueItems",
+                    "uniqueItems is not expressible by a context-free grammar",
+                ),
+                ("minProperties", "minProperties is not yet translated"),
+                ("maxProperties", "maxProperties is not yet translated"),
+                ("multipleOf", "multipleOf is not yet translated"),
+            ],
             _ => &[],
         };
         for &(keyword, reason) in keywords {
@@ -751,7 +791,14 @@ impl<'a> Builder<'a> {
         }
         Schema::compile_governed(&format!("{{{}}}", members.join(",")), governor)
             .map(Some)
-            .map_err(|_| self.unsupported(pointer, "a pattern or bound that does not compile"))
+            .map_err(|cause| match cause {
+                CompilationError::Resource(reason) => GbnfError::Resource(reason),
+                invalid @ CompilationError::InvalidSchema(_) => GbnfError::Constraint {
+                    tool: self.tool.to_owned(),
+                    pointer: pointer.to_owned(),
+                    cause: Box::new(invalid),
+                },
+            })
     }
 
     fn array(
