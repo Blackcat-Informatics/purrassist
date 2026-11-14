@@ -52,9 +52,9 @@ the dataset copy sit outside the storage account; node-level refusals carry no
 extent; only Turtle and `TriG`) are listed in the `graph` module documentation. The Rust shape table is
 not equivalent to the shapes document; its differences and the unchecked
 requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
-the `graph` module documentation. The production
-`tool_set` schema bridge, authorization and execution remain specified in
+the `graph` module documentation. Authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
+`ToolGraph::tool_set` is implemented: it builds the core `ToolSet` through the governed MCP adapter.
 The MCP Extended manifest codec described next is implemented.
 
 `codec::mcp::encode` and `codec::mcp::decode` convert a loaded `ToolGraph` to and
@@ -65,7 +65,7 @@ complete source dataset is retained as Turtle in `_meta.security.sourceGraph`.
 Output is byte-deterministic. Decoding loads that source and requires every
 declaration to agree with it; legacy bundle formats and `maxOutputTokens` are
 refused. The pinned golden is `tests/data/worked_manifest.json`.
-`ToolGraph::tool_set`, the core adapter augmentation and wasm-harness wiring
+`ToolGraph::tool_set` is implemented (#198). Wasm-harness wiring and host integration
 remain on #33.
 
 `codec::mcp::ExecutionProfile` reads the complete execution-profile fragment
@@ -146,8 +146,7 @@ masks. It preserves tag values, order and duplicates, accepts mathematical
 integer spellings across the full portable `u64` domain, and emits fixed field
 order with canonical masks and exact byte enforcement. Run
 `cargo run -p purrassist-toolgraph --example roundtrip_context` for an actual
-round trip. The `tool_set` bridge, wasm-harness wiring and host-release
-integration remain outstanding.
+round trip. Wasm-harness wiring and host-release integration remain outstanding.
 
 `codec::mcp::ManifestEnvelope` has a source implementation for borrowing a
 complete v2 bundle envelope from the existing ordered JSON DOM. It checks fixed
