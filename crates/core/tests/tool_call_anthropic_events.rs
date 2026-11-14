@@ -465,11 +465,9 @@ fn unfinished_tool_input_is_withheld_and_never_absorbs_the_next_block() {
     }
 }
 
-/// The sweep's range covers the refusal at the final close (the smallest
-/// budgets refuse at intake, the larger ones later, up to completion).
+/// The smallest budgets refuse at intake and the sweep ends in completion.
 /// Raising the work budget never turns a completed read back into a refusal,
-/// and every refusal, up to the one at the final close, is an explicit
-/// `Unresolved` with no retained log.
+/// and every refusal is an explicit `Unresolved` with no retained log.
 #[test]
 fn work_budget_sweep_ends_in_explicit_refusals_then_completion() {
     let log = golden_log();
