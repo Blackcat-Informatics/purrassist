@@ -65,8 +65,15 @@ validation, their per-subject index, the `FnO` view dataset built for the catalo
 reader and the owned `RdfDataset` copy returned by `ToolGraph::dataset` (re-interned
 from the parse, not the parser's own dataset) are allocated outside the governor's
 storage account.
-Only default-graph statements load; a named-graph statement or
-reifier is refused as `UnsupportedConstruct` with the named-graph construct. A
+Only default-graph statements load. A statement in a named graph is refused as
+`UnsupportedConstruct` with the named-graph construct, and so is a reifier in a
+named graph. A default-graph reifier loads only as a parameter-path reifier: it
+reifies the `sh:path <predicate>` triple of a tool parameter's input shape, and
+that parameter's hint consumes it (two such reifiers for one path are `InvalidHint`
+with violation `Duplicate`). Any other default-graph reifier is refused as
+`UnsupportedConstruct` with the reifier construct, except a reifier typed
+`pa:Hint` whose object is a triple term with an IRI predicate and which no
+parameter consumes; that one is `InvalidHint` with violation `Unresolved`. A
 declared named graph with no statements, such as a TriG `GRAPH <g> {}`, is refused
 the same way: after the statements are read the loader reads the view's declared
 named graphs and refuses the first one (subject the graph name, predicate `-`),
