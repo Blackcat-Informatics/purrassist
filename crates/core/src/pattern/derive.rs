@@ -983,7 +983,10 @@ enum Utf8 {
 /// assert!(dfa.accepting(end, &mut governor)?);
 /// # Ok::<(), purrassist_core::StopReason>(())
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// States are ordered by their packed encoding: an arbitrary but stable order,
+/// meaningful only so a caller can key an ordered map by state.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DfaState {
     // Canonical encoding makes exact state equality one logical word
     // comparison, including every assertion and UTF-8 decoding field.

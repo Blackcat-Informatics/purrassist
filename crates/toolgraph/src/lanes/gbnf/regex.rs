@@ -169,7 +169,7 @@ fn classify(source: &str) -> Result<Lowered, Failure> {
 }
 
 /// A state of the search automaton, with every matched state as one.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
     Matched,
     Open(DfaState),
@@ -180,17 +180,18 @@ type Raw = Vec<(bool, Vec<(char, char, usize)>)>;
 /// A state's class and its merged edges, the key of one refined class.
 type Signature = (usize, Vec<(char, char, usize)>);
 
-/// The index of `key` among the states met so far, adding it when new. `pending`
-/// holds the keys in index order; the state type has no order to key a map by.
-fn intern(key: Key, raw: &mut Raw, pending: &mut Vec<Key>) -> usize {
-    pending
-        .iter()
-        .position(|known| *known == key)
-        .unwrap_or_else(|| {
-            raw.push((false, Vec::new()));
-            pending.push(key);
-            raw.len() - 1
-        })
+/// The index of `key` among the states met so far, adding it when new.
+fn intern(
+    key: Key,
+    index: &mut BTreeMap<Key, usize>,
+    raw: &mut Raw,
+    pending: &mut Vec<Key>,
+) -> usize {
+    *index.entry(key).or_insert_with(|| {
+        raw.push((false, Vec::new()));
+        pending.push(key);
+        raw.len() - 1
+    })
 }
 
 /// The automaton of a pattern the derivative engine compiles, or `None`.
@@ -198,9 +199,10 @@ fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automa
     let Some(mut dfa) = pattern.byte_dfa(governor).map_err(Failure::Resource)? else {
         return Ok(None);
     };
+    let mut index = BTreeMap::new();
     let mut raw: Raw = Vec::new();
     let mut pending = Vec::new();
-    intern(Key::Open(dfa.start()), &mut raw, &mut pending);
+    intern(Key::Open(dfa.start()), &mut index, &mut raw, &mut pending);
     let mut cursor = 0;
     while cursor < pending.len() {
         let key = pending[cursor];
@@ -227,7 +229,7 @@ fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automa
             } else {
                 Key::Open(run.target)
             };
-            let target = intern(key, &mut raw, &mut pending);
+            let target = intern(key, &mut index, &mut raw, &mut pending);
             match edges.last_mut() {
                 Some(previous)
                     if previous.2 == target

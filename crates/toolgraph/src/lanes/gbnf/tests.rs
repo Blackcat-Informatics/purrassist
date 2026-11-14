@@ -989,3 +989,107 @@ fn untranslated_keywords_and_an_empty_enum_are_refused_by_name() {
         assert_eq!(found, reason, "{keywords}");
     }
 }
+
+// Invariant: a pattern whose automaton has thousands of states ends as a
+// resource stop under a small work budget, the same way every time, and never
+// as a grammar or a hang.
+#[test]
+fn a_pattern_with_a_large_automaton_stops_on_the_budget() {
+    let schema = member_schema(r#""type":"string","pattern":"^[ab]*a[ab]{16}$""#);
+    let stop = || {
+        let mut governor = Governor::new(Effort::Quick.budget());
+        let node = json::parse_with(&schema, &mut governor).expect("schema JSON");
+        match Builder::new("t").grammar(&node, &mut governor) {
+            Err(GbnfError::Resource(reason)) => reason,
+            other => panic!("expected a resource stop: {other:?}"),
+        }
+    };
+    assert_eq!(stop(), stop());
+}
+
+/// Whether the lowered automaton of `pattern` accepts `text`.
+fn automaton_accepts(automaton: &super::regex::Automaton, text: &str) -> bool {
+    let mut state = 0;
+    for character in text.chars() {
+        let Some(&(_, _, next)) = automaton.states[state]
+            .edges
+            .iter()
+            .find(|(first, last, _)| (*first..=*last).contains(&character))
+        else {
+            return false;
+        };
+        state = next;
+    }
+    automaton.states[state].accepting
+}
+
+// Differential: over generated strings, the strings the lowered automaton
+// accepts are exactly those `Pattern::is_match` accepts, for no anchor, one
+// anchor, an anchor inside an alternation, `\b`, a negated class and a class
+// over astral characters.
+#[test]
+fn differential_automaton_acceptance_equals_pattern_is_match() {
+    use purrassist_core::pattern::Pattern;
+    let patterns = [
+        r"ab+",
+        r"^ab",
+        r"ab$",
+        r"^a|b$",
+        r"\bab\b",
+        r"[^a]b",
+        r"[\u{1F600}-\u{1F64F}]a",
+    ];
+    let alphabet = ['a', 'b', ' ', '_', '\u{1F600}', '\u{1F680}', 'é'];
+    let mut strings = vec![String::new()];
+    let mut frontier = vec![String::new()];
+    for _ in 0..4 {
+        frontier = frontier
+            .iter()
+            .flat_map(|prefix| alphabet.iter().map(move |c| format!("{prefix}{c}")))
+            .collect();
+        strings.extend(frontier.iter().cloned());
+    }
+    let mut state = 0x2545_F491_4F6C_DD1D_u64;
+    for _ in 0..500 {
+        let mut text = String::new();
+        for _ in 0..12 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            text.push(alphabet[usize::try_from(state >> 33).expect("fits") % alphabet.len()]);
+        }
+        strings.push(text);
+    }
+    for source in patterns {
+        let mut governor = Governor::new(Effort::Deep.budget());
+        let pattern = Pattern::compile_governed(source, &mut governor).expect("pattern");
+        let super::regex::Lowered::Automaton(automaton) =
+            super::regex::lower(source, &mut governor).expect("lowered")
+        else {
+            panic!("{source} is regular");
+        };
+        for text in &strings {
+            assert_eq!(
+                automaton_accepts(&automaton, text),
+                pattern.is_match(text, &mut governor).expect("match"),
+                "{source} on {text:?}"
+            );
+        }
+    }
+}
+
+// Invariant: a match containing a double quote, a backslash and a control
+// character is spelled with JSON escapes in the grammar, and the decoded value
+// matches the pattern.
+#[test]
+fn a_quote_a_backslash_and_a_control_character_are_spelled_escaped() {
+    let keywords = r#""type":"string","pattern":"^\"\\\\\\x01$""#;
+    let (grammar, _) = compile(&member_schema(keywords));
+    for escaped in [r#""\\\"""#, r#""\\\\""#, r#""\\u0001""#] {
+        assert!(grammar.contains(escaped), "{escaped} in\n{grammar}");
+    }
+    assert_member_cases(
+        keywords,
+        &[(quoted("\"\\\u{1}"), true), (quoted("\"\\"), false)],
+    );
+}
