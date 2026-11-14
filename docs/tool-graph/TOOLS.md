@@ -1126,6 +1126,68 @@ characters, without dropping arguments. Labeled post-checks enforce constraints
 beyond context-free syntax. UTF-16 surrogate pairing and the core's exact
 Unicode string validity remain mandatory schema/JSON post-checks.
 
+#### Pattern dialect: translated exactly, ledgered by name, and refused
+
+The `pattern` keyword is read in the ECMAScript dialect with the Unicode (`u`)
+reading, as JSON Schema 2020-12 Core, section 6.4 (Regular Expressions), asks. Where
+the readings differ (`\u{...}`, `\p{...}`, the dot and classes over astral
+characters, a lone surrogate) the `u` meaning wins. A pattern that is invalid
+under `u` only by an identity escape of a character that is not a syntax
+character (an escaped underscore) has one meaning without it and is read as that
+literal character.
+
+A pattern is not anchored: it accepts every string that contains a match, so its
+grammar is any prefix, the pattern, and any suffix. `^` and `$` pin an end only
+where they are written, and may sit inside one alternative. No whole-string rule
+is applied to a pattern that does not write the anchors. The implemented
+compiler takes this language from the core pattern engine's own search
+automaton, read one scalar value at a time, so it is the language `Schema::validate`
+accepts. A string is generated with the escapes JSON requires (the quote, the
+backslash and the control characters) and every other scalar raw; that fixes the
+spelling of a value, not the set of values.
+
+Translated exactly: each of these denotes a language a grammar states, and
+nothing is ledgered for being laborious.
+
+- Literal characters and every escape that denotes one character: `\\`, `\/`,
+  escaped syntax characters, `\f`, `\n`, `\r`, `\t`, `\v`, `\0`, `\xHH`, `\uHHHH`,
+  `\u{H...}` and `\cX`, each a fixed code point.
+- Character classes `[...]`, negated classes `[^...]`, ranges, and the class
+  escapes `\d`, `\D`, `\w`, `\W`, `\s`, `\S`, each a finite set of code points.
+- Unicode property escapes `\p{...}` and `\P{...}`, each a fixed set from the
+  Unicode tables.
+- The dot `.`, every code point except the line terminators.
+- Alternation `|`, groups `(...)`, non-capturing groups `(?:...)` and named
+  groups `(?<name>...)`: capture does not change the accepted set.
+- Every quantifier, `*`, `+`, `?`, `{n}`, `{n,}` and `{n,m}`, greedy and lazy alike:
+  both accept the same strings, and a grammar has no match choice.
+- The anchors `^` and `$`, where they are written.
+- Word boundaries `\b` and `\B`: the accepted set is regular, since each test
+  depends only on the word-ness of the adjacent characters, so each state of the
+  automaton is split by its neighbour's class.
+
+Ledgered by name, with `input-shape-not-expressible` and enforced by
+`validate-input`:
+
+- Back-references `\1` to `\n` and named references `\k<name>`: the accepted set
+  repeats an earlier match, which no context-free grammar can state for all
+  strings. The grammar keeps the generic JSON string for that member.
+
+Refused with a typed error, never ledgered:
+
+- Look-ahead `(?=...)` and `(?!...)` and look-behind `(?<=...)` and `(?<!...)`.
+  Look-around is not yet translated: its exact translation needs an automaton
+  product with a size bound, filed as issue 224
+  (`https://github.com/Blackcat-Informatics/purrassist/issues/224`).
+
+Numeric bounds are represented exactly. An integer bound (`minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum`, including fractional bounds read for an
+`integer`) becomes a digit grammar that spells every integer in the interval and
+no other. A decimal bound becomes a digit grammar that spells, in plain notation
+without an exponent and without a sign on zero, every finite decimal in the
+interval and no other, compared digit by digit with no rounding. A number
+without a bound keeps the generic number grammar, which includes exponents.
+
 The compact lane's versioned, UTF-8 `CompactSignature` for the example is exactly
 the following two LF-separated lines, ordered by tool name bytes, with one final LF. Signatures are a new
 specified projection, not an existing `DeclarationForm`. Optional parameters
@@ -1169,7 +1231,7 @@ constraint and check id; the table is not itself serialized ledger JSON.
 | `confinement-not-expressible` | G, C, P | `DatabaseProfile`, `FileProfile` | `confine-worker`: exact admitted AppArmor label, features and root bindings before dispatch |
 | `resource-ceiling-not-expressible` | G, C, P | five ceiling properties on each execution profile | `confine-worker`: exact rlimits and governed engine ceilings, no truncation or rounding |
 | `output-shape-not-expressible` | A, G, P | `QueryOutput`, `EditOutput` | `validate-output`: full shape check before releasing or projecting output |
-| `input-shape-not-expressible` | A, G | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
+| `input-shape-not-expressible` | A | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
 | `context-contract-not-expressible` | A, G, C, P | `QueryContext`, `EditContext` | `project-context`: field mask after output validation, exact byte cap and retention on release |
 | `tool-annotations-not-expressible` | A, G, C, P | the title and four hints on Q and E | `verify-effects`: admitted implementation agrees; hints never confer permission |
 | `rdf-binding-not-expressible` | A, G, C, P | Q/E FnO mappings, lists and source reifiers | `bind-manifest`: receipt pins graph, tool, implementation, source and projection digests |
@@ -1181,10 +1243,8 @@ The M lane has an empty loss ledger for this example: all source triples,
 reifiers, rule strings, presence information and declaration bytes are in its
 required bundle. The A lane has no confinement or rlimit loss; those constraints
 are represented exactly or synthesis fails. The G lane has no loss for the
-string and integer datatypes, required argument keys or closed input objects, which
-its grammar represents. The implemented `lanes::gbnf` compiler does not yet lower
-`pattern` or numeric bounds; it records the customer pattern and limit bounds as
-`input-shape-not-expressible` entries enforced by `validate-input`. The C lane preserves argument/output type names and
+string and integer datatypes and the customer pattern and limit bounds, required argument keys or closed input objects, which
+its grammar represents. The C lane preserves argument/output type names and
 field names, but its shape-keyword row records cardinality/closure semantics
 that TypeScript-like signatures do not enforce. Every P lane preserves its
 input JSON Schema and descriptions; the common rows record all other omitted

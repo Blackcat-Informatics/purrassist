@@ -18,23 +18,54 @@
 //! `oneOf` lowers when its alternatives cannot overlap. Members outside
 //! `properties` are never generated, which narrows an open object.
 //!
+//! A `pattern` and the numeric bounds (`minimum`, `maximum`,
+//! `exclusiveMinimum`, `exclusiveMaximum`) are represented exactly:
+//!
+//! - A `pattern` is read in the ECMAScript dialect with the Unicode (`u`)
+//!   reading, as JSON Schema 2020-12 Core section 6.4 asks. It is not anchored:
+//!   the string must contain a match, and `^` and `$` pin an end only where they
+//!   are written. The grammar is the automaton of the core pattern engine's own
+//!   search semantics, read one scalar value at a time, so literals and escapes,
+//!   classes, `\p{...}`, the dot, alternation, groups, every quantifier,
+//!   anchors, `\b` and `\B` are all exact. A string is generated with the
+//!   escapes JSON requires (the quote, the backslash and the control
+//!   characters) and every other scalar raw: that narrows the spelling of a
+//!   value, never the set of values. A pattern that is invalid under `u` only
+//!   by an identity escape of a character that is not a syntax character (an
+//!   escaped underscore) is read as that literal character.
+//! - An integer bound is exact: the grammar spells every integer in the
+//!   interval and no other. A decimal bound is exact too: the grammar spells, in
+//!   plain notation without an exponent, every finite decimal in the interval
+//!   and no other, compared digit by digit with no rounding. See `decimal`.
+//! - An `enum` or `const` member that fails a sibling `pattern` or bound is
+//!   omitted from the alternatives, which is the same set the schema admits.
+//!
 //! # Losses
 //!
 //! A construct that would make the grammar accept a value the schema rejects
-//! (a `pattern`, a bound, a length) is omitted from the grammar and recorded on
-//! the returned ledger at its schema pointer, never dropped silently; the
-//! mandatory `validate-input` check enforces it. A construct that cannot be
-//! lowered soundly at all is a typed refusal.
+//! (a length, a `multipleOf`, an open object) is omitted from the grammar and
+//! recorded on the returned ledger at its schema pointer, never dropped
+//! silently; the mandatory `validate-input` check enforces it. A `pattern` with
+//! a back-reference is the one pattern construct treated so, because no
+//! context-free grammar states a repeat of an earlier match. A construct that
+//! cannot be lowered soundly at all is a typed refusal, including a pattern with
+//! a look-around, whose exact translation is not implemented.
 
 use std::fmt::{self, Write as _};
 
 use purrassist_core::{
     Governor, StopReason,
     contract::Resource,
-    json::{self, Node, ParseFailure, Value},
+    json::{self, Node, Number, ParseFailure, Value},
+    pattern::PatternError,
+    schema::Schema,
 };
 use purrdf_core::loss::{LossLedger, LossSoundnessError, check_ledger_sound_in};
 
+use self::{
+    decimal::{Bound, BoundError, Decimal},
+    regex::{Failure, Lowered},
+};
 use super::shared::{entry_for, record_tool, record_upstream, uncarried};
 use crate::{
     ProjectionTarget, SOURCE_REPRESENTATION, Tool, ToolGraph, Vocabulary,
@@ -81,7 +112,9 @@ pub enum GbnfError {
     /// A schema construct the grammar cannot lower soundly: a `$ref`, a boolean
     /// schema, a type that names no supported type, an array without `items`, an
     /// `enum` member that is not a scalar or contradicts the type, a required
-    /// member without a property schema, or `oneOf` alternatives that may overlap.
+    /// member without a property schema, `oneOf` alternatives that may overlap,
+    /// a `pattern` or numeric bound beside `anyOf` or `oneOf`, bounds or a
+    /// pattern that admit no value, or a `pattern` with a look-around.
     Unsupported {
         /// The tool's name.
         tool: String,
@@ -89,6 +122,16 @@ pub enum GbnfError {
         pointer: String,
         /// What the grammar cannot represent.
         reason: &'static str,
+    },
+    /// A `pattern` that is not valid under the Unicode reading of the ECMAScript
+    /// dialect.
+    Pattern {
+        /// The tool's name.
+        tool: String,
+        /// RFC 6901 pointer from the schema root.
+        pointer: String,
+        /// The syntax error and its offset in the pattern.
+        cause: PatternError,
     },
     /// A recorded loss is not registered in the caller's loss profile.
     Unsound(LossSoundnessError),
@@ -106,6 +149,11 @@ impl fmt::Display for GbnfError {
                 pointer,
                 reason,
             } => write!(output, "tool {tool}: {pointer}: {reason}"),
+            Self::Pattern {
+                tool,
+                pointer,
+                cause,
+            } => write!(output, "tool {tool}: {pointer}: invalid pattern: {cause}"),
             Self::Unsound(cause) => write!(output, "unregistered loss: {cause}"),
             Self::Resource(cause) => write!(output, "gbnf stopped: {cause:?}"),
         }
@@ -117,6 +165,7 @@ impl std::error::Error for GbnfError {
         match self {
             Self::Manifest(cause) => Some(cause.as_ref()),
             Self::Json(cause) => Some(cause),
+            Self::Pattern { cause, .. } => Some(cause),
             _ => None,
         }
     }
@@ -239,6 +288,15 @@ const NULL: u8 = 16;
 const ARRAY: u8 = 32;
 const OBJECT: u8 = 64;
 
+/// The keywords this lane lowers exactly, for the types they apply to.
+const CONSTRAINTS: [&str; 5] = [
+    "pattern",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+];
+
 impl<'a> Builder<'a> {
     const fn new(tool: &'a str) -> Self {
         Self {
@@ -350,6 +408,7 @@ impl<'a> Builder<'a> {
             return Err(self.unsupported(pointer, "an empty enum admits no value"));
         }
         let types = type_names(schema);
+        let constraint = self.constraint(schema, pointer, governor)?;
         let mut names = Vec::with_capacity(members.len());
         for member in members {
             let admitted = match &member.value {
@@ -368,13 +427,26 @@ impl<'a> Builder<'a> {
             {
                 return Err(self.unsupported(pointer, "an enum member outside the schema type"));
             }
+            // A member the sibling pattern or bounds reject is not a value.
+            if let Some(constraint) = &constraint
+                && !constraint
+                    .validate_with(member, governor)
+                    .map_err(GbnfError::Resource)?
+                    .valid
+            {
+                continue;
+            }
             let text = member
                 .to_json_governed(governor)
                 .map_err(GbnfError::Resource)?;
             names.push(literal(&text));
         }
-        self.omitted
-            .extend(uncarried(schema, pointer, &[key, "type"]));
+        if names.is_empty() {
+            return Err(self.unsupported(pointer, "no enum member satisfies its pattern or bounds"));
+        }
+        let mut carried = vec![key, "type"];
+        carried.extend(CONSTRAINTS);
+        self.omitted.extend(uncarried(schema, pointer, &carried));
         Ok(alternation(names))
     }
 
@@ -390,6 +462,11 @@ impl<'a> Builder<'a> {
         let Value::Array(items) = &node.value else {
             return Err(self.unsupported(pointer, "anyOf and oneOf must be arrays"));
         };
+        if CONSTRAINTS.iter().any(|name| schema.get(name).is_some()) {
+            return Err(
+                self.unsupported(pointer, "a pattern or numeric bound beside anyOf or oneOf")
+            );
+        }
         if items.is_empty() {
             return Err(self.unsupported(pointer, "an empty anyOf or oneOf admits no value"));
         }
@@ -423,22 +500,15 @@ impl<'a> Builder<'a> {
         let Some(types) = type_names(schema) else {
             return Err(self.unsupported(pointer, "a schema without type, enum, anyOf or oneOf"));
         };
+        // A pattern or bound is lowered, ledgered by name, or inert for the type.
         let mut carried = vec!["type"];
+        carried.extend(CONSTRAINTS);
         let mut names = Vec::with_capacity(types.len());
         for name in &types {
             match *name {
-                "string" => {
-                    self.helpers.string = true;
-                    names.push("string".to_owned());
-                }
-                "integer" => {
-                    self.helpers.integer = true;
-                    names.push("integer".to_owned());
-                }
-                "number" => {
-                    self.helpers.number = true;
-                    names.push("number".to_owned());
-                }
+                "string" => names.push(self.string(schema, pointer, governor)?),
+                "integer" => names.push(self.numeric(schema, pointer, true, governor)?),
+                "number" => names.push(self.numeric(schema, pointer, false, governor)?),
                 "boolean" => names.push(r#"("true" | "false")"#.to_owned()),
                 "null" => names.push(r#""null""#.to_owned()),
                 "array" => {
@@ -460,6 +530,184 @@ impl<'a> Builder<'a> {
         }
         self.omitted.extend(uncarried(schema, pointer, &carried));
         Ok(alternation(names))
+    }
+
+    /// A string: the generic JSON string, or the language of its `pattern`.
+    fn string(
+        &mut self,
+        schema: &Node,
+        pointer: &str,
+        governor: &mut Governor,
+    ) -> Result<String, GbnfError> {
+        let Some(node) = schema.get("pattern") else {
+            self.helpers.string = true;
+            return Ok("string".to_owned());
+        };
+        let child = format!("{pointer}/pattern");
+        let Value::String(source) = &node.value else {
+            return Err(self.unsupported(&child, "a pattern that is not a string"));
+        };
+        match regex::lower(source, governor) {
+            Ok(Lowered::Automaton(automaton)) => {
+                let slots: Vec<usize> = automaton
+                    .states
+                    .iter()
+                    .map(|_| self.reserve("pattern"))
+                    .collect();
+                let names: Vec<String> = slots.iter().map(|&slot| self.rules[slot].0.clone()).collect();
+                for (&slot, state) in slots.iter().zip(&automaton.states) {
+                    let mut alternatives: Vec<String> = state
+                        .edges
+                        .iter()
+                        .map(|&(first, last, target)| {
+                            format!("{} {}", json_edge(first, last), names[target])
+                        })
+                        .collect();
+                    if state.accepting {
+                        alternatives.push(literal("\""));
+                    }
+                    self.define(slot, alternatives.join(" | "));
+                }
+                let entry = self.reserve("string");
+                Ok(self.define(entry, format!("{} {}", literal("\""), names[0])))
+            }
+            Ok(Lowered::Backreference) => {
+                self.helpers.string = true;
+                self.omitted.push(format!(
+                    "{child} (back-reference: the accepted set repeats an earlier match, which no context-free grammar states)"
+                ));
+                Ok("string".to_owned())
+            }
+            Ok(Lowered::Lookaround) => Err(self.unsupported(
+                &child,
+                "look-around is not yet translated: its exact translation needs an automaton product with a size bound, filed as issue 224",
+            )),
+            Err(Failure::Syntax(cause)) => Err(GbnfError::Pattern {
+                tool: self.tool.to_owned(),
+                pointer: child,
+                cause,
+            }),
+            Err(Failure::Empty) => {
+                Err(self.unsupported(&child, "no string contains a match of the pattern"))
+            }
+            Err(Failure::Unnamed) => Err(self.unsupported(
+                &child,
+                "a pattern construct that needs backtracking and is neither a back-reference nor a look-around",
+            )),
+            Err(Failure::Resource(reason)) => Err(GbnfError::Resource(reason)),
+        }
+    }
+
+    /// An integer or number: the generic helper, or the digits its bounds admit.
+    fn numeric(
+        &mut self,
+        schema: &Node,
+        pointer: &str,
+        integer: bool,
+        governor: &mut Governor,
+    ) -> Result<String, GbnfError> {
+        let lower = self.bound(
+            schema,
+            pointer,
+            ["minimum", "exclusiveMinimum"],
+            true,
+            governor,
+        )?;
+        let upper = self.bound(
+            schema,
+            pointer,
+            ["maximum", "exclusiveMaximum"],
+            false,
+            governor,
+        )?;
+        if lower.is_none() && upper.is_none() {
+            if integer {
+                self.helpers.integer = true;
+                return Ok("integer".to_owned());
+            }
+            self.helpers.number = true;
+            return Ok("number".to_owned());
+        }
+        let body = if integer {
+            decimal::integer(lower.as_ref(), upper.as_ref())
+        } else {
+            decimal::number(lower.as_ref(), upper.as_ref())
+        };
+        let Some(body) = body else {
+            return Err(self.unsupported(pointer, "numeric bounds that admit no value"));
+        };
+        let slot = self.reserve(if integer {
+            "bounded-integer"
+        } else {
+            "bounded-number"
+        });
+        Ok(self.define(slot, body))
+    }
+
+    /// The tightest of the inclusive and exclusive forms of one bound.
+    fn bound(
+        &self,
+        schema: &Node,
+        pointer: &str,
+        keys: [&'static str; 2],
+        lower: bool,
+        governor: &mut Governor,
+    ) -> Result<Option<Bound>, GbnfError> {
+        let mut tightest: Option<(&Number, bool)> = None;
+        for (key, exclusive) in keys.into_iter().zip([false, true]) {
+            let Some(node) = schema.get(key) else {
+                continue;
+            };
+            let Value::Number(number) = &node.value else {
+                return Err(
+                    self.unsupported(&format!("{pointer}/{key}"), "a bound that is not a number")
+                );
+            };
+            let wins = tightest.is_none_or(|(held, held_exclusive)| match number.compare(held) {
+                std::cmp::Ordering::Equal => exclusive && !held_exclusive,
+                order => (order.is_gt()) == lower,
+            });
+            if wins {
+                tightest = Some((number, exclusive));
+            }
+        }
+        tightest
+            .map(|(number, exclusive)| {
+                Decimal::read(number, governor)
+                    .map(|value| Bound::new(value, exclusive))
+                    .map_err(|cause| match cause {
+                        BoundError::Resource(reason) => GbnfError::Resource(reason),
+                        BoundError::Exponent => self.unsupported(
+                            pointer,
+                            "a bound whose exponent does not fit a digit grammar",
+                        ),
+                    })
+            })
+            .transpose()
+    }
+
+    /// The sibling `pattern` and bounds of an `enum` or `const` as one schema.
+    fn constraint(
+        &self,
+        schema: &Node,
+        pointer: &str,
+        governor: &mut Governor,
+    ) -> Result<Option<Schema>, GbnfError> {
+        let mut members = Vec::new();
+        for key in CONSTRAINTS {
+            if let Some(node) = schema.get(key) {
+                let text = node
+                    .to_json_governed(governor)
+                    .map_err(GbnfError::Resource)?;
+                members.push(format!("\"{key}\":{text}"));
+            }
+        }
+        if members.is_empty() {
+            return Ok(None);
+        }
+        Schema::compile_governed(&format!("{{{}}}", members.join(",")), governor)
+            .map(Some)
+            .map_err(|_| self.unsupported(pointer, "a pattern or bound that does not compile"))
     }
 
     fn array(
@@ -631,6 +879,73 @@ fn alternation(mut expressions: Vec<String>) -> String {
     }
 }
 
+/// The JSON text of the scalar values `first..=last` inside a string: each raw
+/// unless JSON requires an escape (the quote, the backslash, a control character).
+fn json_edge(first: char, last: char) -> String {
+    let (low, high) = (u32::from(first), u32::from(last));
+    let (mut runs, mut escaped) = (Vec::new(), Vec::new());
+    let mut cursor = low;
+    for (start, end) in [(0, 0x1F), (0x22, 0x22), (0x5C, 0x5C)] {
+        if end < cursor || start > high {
+            continue;
+        }
+        if start > cursor {
+            runs.push((cursor, start - 1));
+        }
+        escaped.extend(start.max(low)..=end.min(high));
+        cursor = end + 1;
+    }
+    if cursor <= high {
+        runs.push((cursor, high));
+    }
+    let mut parts = Vec::new();
+    match runs.as_slice() {
+        [] => {}
+        &[(only, same)] if only == same => {
+            parts.push(literal(&char::from_u32(only).map_or_default(String::from)));
+        }
+        ranges => {
+            let mut class = String::from("[");
+            for &(start, end) in ranges {
+                class.push_str(&class_character(start));
+                if end != start {
+                    class.push('-');
+                    class.push_str(&class_character(end));
+                }
+            }
+            class.push(']');
+            parts.push(class);
+        }
+    }
+    for code in escaped {
+        let text = match code {
+            0x22 => "\\\"".to_owned(),
+            0x5C => "\\\\".to_owned(),
+            0x08 => "\\b".to_owned(),
+            0x09 => "\\t".to_owned(),
+            0x0A => "\\n".to_owned(),
+            0x0C => "\\f".to_owned(),
+            0x0D => "\\r".to_owned(),
+            other => format!("\\u{other:04x}"),
+        };
+        parts.push(literal(&text));
+    }
+    match parts.as_slice() {
+        [only] => only.clone(),
+        _ => format!("({})", parts.join(" | ")),
+    }
+}
+
+/// One scalar value inside a GBNF character class.
+fn class_character(code: u32) -> String {
+    match char::from_u32(code) {
+        Some(character) if character.is_ascii_alphanumeric() => character.to_string(),
+        _ if code <= 0xFF => format!("\\x{code:02X}"),
+        _ if code <= 0xFFFF => format!("\\u{code:04X}"),
+        _ => format!("\\U{code:08X}"),
+    }
+}
+
 /// `text` as a GBNF string literal.
 fn literal(text: &str) -> String {
     let mut output = String::with_capacity(text.len() + 2);
@@ -683,5 +998,7 @@ fn record_schemas(ledger: &mut LossLedger, tool: &Tool, builder: &Builder<'_>) {
     }
 }
 
+mod decimal;
+mod regex;
 #[cfg(test)]
 mod tests;

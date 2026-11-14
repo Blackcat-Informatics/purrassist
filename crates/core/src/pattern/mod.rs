@@ -37,7 +37,7 @@ mod storage;
 mod unicode;
 
 pub use bytes::{ByteCompileError, ByteInclusion, ByteInstruction, ByteLanguage};
-pub use derive::{DerivativeDfa, DfaState};
+pub use derive::{DerivativeDfa, DfaState, ScalarRun};
 
 use crate::contract::{
     Budget, Evidence, Governor, Resource, ScratchString, ScratchVec, StopReason,
