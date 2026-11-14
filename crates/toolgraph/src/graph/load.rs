@@ -823,6 +823,7 @@ impl Doc<'_> {
                 | FnoReadError::Returns {
                     subject, predicate, ..
                 } => (show(subject), Some(predicate.clone())),
+                FnoReadError::Statement { row, .. } => (show(&row.s), Some(show(&row.p))),
                 _ => (self.namespace.to_owned(), None),
             },
             _ => (self.namespace.to_owned(), None),
