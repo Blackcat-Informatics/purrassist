@@ -65,12 +65,6 @@ pub(super) enum Failure {
     Resource(StopReason),
 }
 
-impl From<StopReason> for Failure {
-    fn from(reason: StopReason) -> Self {
-        Self::Resource(reason)
-    }
-}
-
 /// Lower `source` to an automaton, or name the construct that prevents it.
 pub(super) fn lower(source: &str, governor: &mut Governor) -> Result<Lowered, Failure> {
     let pattern = match Pattern::compile_governed(source, governor) {
@@ -201,7 +195,7 @@ fn intern(key: Key, raw: &mut Raw, pending: &mut Vec<Key>) -> usize {
 
 /// The automaton of a pattern the derivative engine compiles, or `None`.
 fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automaton>, Failure> {
-    let Some(mut dfa) = pattern.byte_dfa(governor)? else {
+    let Some(mut dfa) = pattern.byte_dfa(governor).map_err(Failure::Resource)? else {
         return Ok(None);
     };
     let mut raw: Raw = Vec::new();
@@ -212,7 +206,9 @@ fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automa
         let key = pending[cursor];
         let this = cursor;
         cursor += 1;
-        governor.charge(Resource::Work, 1)?;
+        governor
+            .charge(Resource::Work, 1)
+            .map_err(Failure::Resource)?;
         let Key::Open(state) = key else {
             raw[this] = (
                 true,
@@ -220,9 +216,12 @@ fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automa
             );
             continue;
         };
-        let accepting = dfa.accepting(state, governor)?;
+        let accepting = dfa.accepting(state, governor).map_err(Failure::Resource)?;
         let mut edges: Vec<(char, char, usize)> = Vec::new();
-        for run in dfa.scalar_transitions(state, governor)? {
+        for run in dfa
+            .scalar_transitions(state, governor)
+            .map_err(Failure::Resource)?
+        {
             let key = if run.target.is_matched() {
                 Key::Matched
             } else {
@@ -251,7 +250,9 @@ fn minimal(raw: &Raw, governor: &mut Governor) -> Result<Automaton, Failure> {
     // Productive states: those from which an accepting state is reachable.
     let mut productive: Vec<bool> = raw.iter().map(|(accepting, _)| *accepting).collect();
     loop {
-        governor.charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))?;
+        governor
+            .charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))
+            .map_err(Failure::Resource)?;
         let mut changed = false;
         for (state, (_, edges)) in raw.iter().enumerate() {
             if !productive[state] && edges.iter().any(|&(_, _, target)| productive[target]) {
@@ -274,7 +275,9 @@ fn minimal(raw: &Raw, governor: &mut Governor) -> Result<Automaton, Failure> {
         .collect();
     let mut classes = 2;
     loop {
-        governor.charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))?;
+        governor
+            .charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))
+            .map_err(Failure::Resource)?;
         let mut signatures: BTreeMap<Signature, usize> = BTreeMap::new();
         let mut next = Vec::with_capacity(count);
         for (state, (_, edges)) in raw.iter().enumerate() {
