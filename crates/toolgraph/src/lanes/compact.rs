@@ -8,8 +8,8 @@
 //! `name(param:type,optional?:type)->result` followed by one LF, and lines are
 //! ordered by tool name bytes. Types are `string`, `integer`, `number`,
 //! `boolean`, `null`, `T[]` (a union element is parenthesized), `{k:T}` for an
-//! object, and `A|B` for a union. A name that is not an ASCII identifier is a
-//! JSON string literal.
+//! object, and `A|B` for a union. A name outside the core name grammar
+//! (`is_valid_name`) is a JSON string literal.
 //!
 //! Everything else a schema says is omitted from the line and recorded on the
 //! returned ledger, never approximated. Object detail nested deeper than the
@@ -279,7 +279,10 @@ impl<'a> Lowering<'a> {
         };
         let mut parts = Vec::with_capacity(properties.len());
         for member in properties {
-            let child = format!("{pointer}/properties/{}", escape(&member.key));
+            let child = format!(
+                "{pointer}/properties/{}",
+                purrassist_core::json::pointer_segment(&member.key)
+            );
             let mut part = identifier(&member.key, governor)?;
             if !required.contains(&member.key.as_str()) {
                 part.push('?');
@@ -407,7 +410,10 @@ impl<'a> Lowering<'a> {
                 || (key == "$defs"
                     && matches!(&member.value.value, Value::Object(inner) if inner.is_empty()));
             if !metadata && !carried.contains(&key) {
-                self.omitted.push(format!("{pointer}/{}", escape(key)));
+                self.omitted.push(format!(
+                    "{pointer}/{}",
+                    purrassist_core::json::pointer_segment(key)
+                ));
             }
         }
     }
@@ -425,10 +431,6 @@ fn identifier(name: &str, governor: &mut Governor) -> Result<String, CompactErro
 }
 
 /// RFC 6901 token escaping.
-fn escape(token: &str) -> String {
-    token.replace('~', "~0").replace('/', "~1")
-}
-
 fn entry_for(code: &'static str, note: String, subject: Option<(&str, &'static str)>) -> LossEntry {
     LossEntry {
         code: Cow::Borrowed(code),
