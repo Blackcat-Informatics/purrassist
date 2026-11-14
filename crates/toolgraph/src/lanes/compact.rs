@@ -430,7 +430,7 @@ fn identifier(name: &str, governor: &mut Governor) -> Result<String, CompactErro
         .map_err(CompactError::Resource)
 }
 
-/// RFC 6901 token escaping.
+/// Builds one ledger entry: a code, a note and an optional subject location.
 fn entry_for(code: &'static str, note: String, subject: Option<(&str, &'static str)>) -> LossEntry {
     LossEntry {
         code: Cow::Borrowed(code),
