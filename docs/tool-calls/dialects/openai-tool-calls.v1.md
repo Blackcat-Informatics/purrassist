@@ -122,4 +122,6 @@ recorded with its JSON rule ids (covered by the repair goldens).
   the content segment as JSON.
 - Reasoning markers: the format carries no in-band reasoning; in a set with
   dialects that declare `<think>`, the set's markers apply to the whole turn.
-- Streaming deltas (no `delta` production).
+- Streaming deltas (no `delta` production). `ToolSet::stream_openai_chat`
+  reassembles a chat-completions chunk log into the complete message this
+  dialect reads, then recovers it as raw output; see issue #17.
