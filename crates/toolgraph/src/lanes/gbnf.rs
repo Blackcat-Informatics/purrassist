@@ -47,9 +47,13 @@
 //! is omitted from the grammar and recorded on the returned ledger at its schema
 //! pointer, never dropped silently; the mandatory `validate-input` check
 //! enforces it. A length, item or property count and `multipleOf` are refused by
-//! name as not yet translated, and `uniqueItems: true` as not expressible. A `pattern` with
-//! a back-reference is the one pattern construct treated so, because no
-//! context-free grammar states a repeat of an earlier match. A construct that
+//! name as not yet translated, and `uniqueItems: true` as not expressible. A graph's
+//! `sh:pattern` with a back-reference never gets here: the upstream schema
+//! compiler refuses it first, as [`GbnfError::Manifest`]. The back-reference
+//! branch below is a defence for a schema that arrives by another route; it
+//! ledgers the pattern, because no context-free grammar states a repeat of an
+//! earlier match. At the entry point the ledger row for this target is exercised
+//! by open input shapes. A construct that
 //! cannot be lowered soundly at all is a typed refusal, including a pattern with
 //! a look-around, whose exact translation is not implemented.
 

@@ -12,7 +12,9 @@ use std::{
     fmt::Write as _,
 };
 
-use purrassist_core::{Budget, Effort, Governor, json, schema::Schema};
+use purrassist_core::{
+    Budget, Effort, Governor, StopReason, contract::Resource, json, schema::Schema,
+};
 use purrdf_core::loss::LossProfile;
 
 use super::{Builder, GbnfError};
@@ -1005,6 +1007,7 @@ fn a_pattern_with_a_large_automaton_stops_on_the_budget() {
         }
     };
     assert_eq!(stop(), stop());
+    assert_eq!(stop(), StopReason::BudgetExceeded(Resource::Work));
 }
 
 /// Whether the lowered automaton of `pattern` accepts `text`.
@@ -1115,8 +1118,9 @@ fn refused_keywords_are_refused_beside_enum_and_anyof_too() {
 
 // Invariant: through `lanes::gbnf`, an open input shape records the
 // `input-shape-not-expressible` entry for the GBNF target, and the ledger passes
-// the registered loss profile. (A back-reference never reaches the lane from a
-// graph: the upstream schema compiler refuses it first.)
+// the registered loss profile. (The upstream schema compiler refuses a
+// back-reference in a graph's `sh:pattern`, so the row's coverage at this entry
+// point comes from open input shapes.)
 #[test]
 fn the_gbnf_lane_ledgers_input_shape_and_the_ledger_is_sound() {
     use purrdf_core::loss::check_ledger_sound_in;

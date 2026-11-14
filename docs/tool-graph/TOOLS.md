@@ -1167,7 +1167,9 @@ nothing is ledgered for being laborious.
   automaton is split by its neighbour's class.
 
 Ledgered by name, with `input-shape-not-expressible` and enforced by
-`validate-input`:
+`validate-input`, when a schema carrying one reaches the lane by a route other
+than a graph (the upstream schema compiler refuses a back-reference in a graph's
+`sh:pattern`, so the lane's own branch is a defence):
 
 - Back-references `\1` to `\n` and named references `\k<name>`: the accepted set
   repeats an earlier match, which no context-free grammar can state for all
@@ -1188,7 +1190,8 @@ without an exponent and without a sign on zero, every finite decimal in the
 interval and no other, compared digit by digit with no rounding. A number
 without a bound keeps the generic number grammar, which includes exponents.
 
-The G lane records `input-shape-not-expressible` for a back-reference, so the
+The G lane records `input-shape-not-expressible` for an open input shape and, as
+a defence, for a back-reference in a schema that arrives by another route, so the
 code covers G as well as A. A grammar can state these keywords, and the compiler
 refuses each by name as not yet translated:
 
