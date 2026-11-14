@@ -23,9 +23,12 @@ actual_node_version = subprocess.check_output(['node', '--version'], text=True).
 if actual_node_version != 'v' + node_version:
     raise SystemExit(f'Node identity mismatch: expected v{node_version}, got {actual_node_version}')
 
+# The harness crate owns the core and tool-graph transcripts.
+HARNESS_PACKAGES = {'purrassist-core', 'purrassist-toolgraph'}
+
 def artifact(package, target=None, environment=None):
     example = 'portable-' + package.removeprefix('purrassist-')
-    cargo_package = 'wasm-harness' if package == 'purrassist-core' else package
+    cargo_package = 'wasm-harness' if package in HARNESS_PACKAGES else package
     command = ['cargo', 'build', '-p', cargo_package, '--example', example, '--locked', '--message-format=json']
     if target:
         command += ['--target', target]
@@ -76,11 +79,13 @@ def wasi_environment():
 # tree-sitter's C grammars, so it needs the same WASI C sysroot as syntax.
 WASI_PACKAGES = {'purrassist-syntax', 'purrassist-host'}
 core_native_output = None
-for package in ('purrassist-core', 'purrassist-syntax', 'purrassist-host'):
+for package in ('purrassist-core', 'purrassist-toolgraph', 'purrassist-syntax', 'purrassist-host'):
     native_path = artifact(package)
     native = subprocess.check_output([native_path], cwd=ROOT)
     if package == 'purrassist-core':
         core_native_output = native
+    if package == 'purrassist-toolgraph':
+        toolgraph_native_output = native
     environment = wasi_environment() if package in WASI_PACKAGES else None
     wasm = subprocess.check_output(['node', str(ROOT/'scripts/run-wasi.mjs'), artifact(package, 'wasm32-wasip1', environment)], cwd=ROOT)
     if native != wasm:
@@ -94,4 +99,10 @@ if core_native_output != unknown_unknown:
         f'purrassist-core native/wasm32-unknown-unknown mismatch\n'
         f'native={core_native_output!r}\nunknown-unknown={unknown_unknown!r}')
 print('purrassist-core: executed native and wasm32-unknown-unknown transcripts match.')
-print('Native, WASI (core/syntax/host), and browser-WASM (core, executed) acceptance transcripts all match.')
+toolgraph_unknown = subprocess.check_output(['node', str(ROOT/'scripts/run-wasm.mjs'), harness, 'portable_toolgraph_main'], cwd=ROOT)
+if toolgraph_native_output != toolgraph_unknown:
+    raise SystemExit(
+        f'purrassist-toolgraph native/wasm32-unknown-unknown mismatch\n'
+        f'native={toolgraph_native_output!r}\nunknown-unknown={toolgraph_unknown!r}')
+print('purrassist-toolgraph: executed native and wasm32-unknown-unknown transcripts match.')
+print('Native, WASI (core/toolgraph/syntax/host), and browser-WASM (core/toolgraph, executed) acceptance transcripts all match.')

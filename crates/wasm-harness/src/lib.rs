@@ -27,7 +27,10 @@
 //! example and browser export call the same Rust implementation; no source
 //! files are included across package boundaries and the core has no dependency
 //! on this fixture crate.
+mod toolgraph;
 mod transcript;
+
+pub use toolgraph::toolgraph_transcript_text;
 
 pub use transcript::transcript_json;
 
@@ -85,4 +88,16 @@ pub extern "C" fn portable_main() -> u64 {
     let ptr = bytes.as_ptr() as u64;
     let len = bytes.len() as u64;
     (ptr << 32) | len
+}
+
+/// Build the tool-graph transcript and hand its UTF-8 bytes to the caller as a
+/// packed `(pointer, length)` pair, exactly as `portable_main` does for the
+/// core transcript (high 32 bits pointer, low 32 bits length); the bytes are
+/// leaked because the instance is discarded after one run.
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn portable_toolgraph_main() -> u64 {
+    let bytes: &'static [u8] =
+        Box::leak(toolgraph_transcript_text().into_bytes().into_boxed_slice());
+    ((bytes.as_ptr() as u64) << 32) | bytes.len() as u64
 }

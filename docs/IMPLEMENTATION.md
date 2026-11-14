@@ -953,8 +953,9 @@ Core operations are synchronous and resumable around supplied helper responses.
   and a complete caller-owned MCP context fragment codec, including field-mask
   parsing and exact output byte-limit enforcement, plus governed AppArmor glob
   words, all-or-nothing graph loading into typed tools (#191) and the MCP Extended
-  manifest encoder and decoder with a source-preserving loss ledger (#196). The
-  `tool_set` schema bridge, wasm-harness wiring, host
+  manifest encoder and decoder with a source-preserving loss ledger (#196); the
+  wasm harness executes the worked-example load on all three targets (#204). The
+  `tool_set` schema bridge, host
   integration, authorization and execution remain planned. The direct
   `plain_tool_schemas` consumer adopts upstream plain FnO schema compilation and
   validates exact worked schemas with the core engine (#70). G7's numeric

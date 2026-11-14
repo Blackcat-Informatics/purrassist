@@ -20,7 +20,13 @@ workspace = true
 
 [dependencies]
 purrassist-core.workspace = true
+purrassist-toolgraph.workspace = true
+purrdf-core.workspace = true
 
 [[example]]
 name = "portable-core"
 path = "examples/portable.rs"
+
+[[example]]
+name = "portable-toolgraph"
+path = "examples/portable-toolgraph.rs"

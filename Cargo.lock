@@ -909,6 +909,8 @@ name = "wasm-harness"
 version = "0.1.0"
 dependencies = [
  "purrassist-core",
+ "purrassist-toolgraph",
+ "purrdf-core",
 ]
 
 [[package]]
