@@ -1190,9 +1190,17 @@ without a bound keeps the generic number grammar, which includes exponents.
 
 The G lane records `input-shape-not-expressible` for a back-reference, so the
 code covers G as well as A. A grammar can state these keywords, and the compiler
-refuses each by name as not yet translated: `minLength`, `maxLength`, `minItems`,
-`maxItems`, `minProperties`, `maxProperties` and `multipleOf`. `uniqueItems: true`
-is refused as not expressible by a context-free grammar. An `enum` or `const`
+refuses each by name as not yet translated:
+
+- `minLength`: not yet translated; filed as #225.
+- `maxLength`: not yet translated; filed as #226.
+- `minItems`: not yet translated; filed as #227.
+- `maxItems`: not yet translated; filed as #228.
+- `minProperties`: not yet translated; filed as #229.
+- `maxProperties`: not yet translated; filed as #230.
+- `multipleOf`: not yet translated; filed as #231.
+
+`uniqueItems: true` is refused as not expressible by a context-free grammar. An `enum` or `const`
 whose sibling `pattern` or bound leaves no member is refused as unsatisfiable.
 
 The compact lane's versioned, UTF-8 `CompactSignature` for the example is exactly
