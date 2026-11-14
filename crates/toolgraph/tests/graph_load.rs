@@ -590,3 +590,36 @@ fn only_turtle_and_trig_media_types_are_loaded() {
         assert_eq!(code, "unsupported-format", "{media_type}");
     }
 }
+
+// Rationale: a TriG `GRAPH <g> {}` declares a named graph with no statement, so the
+// statement walk sees nothing to refuse. The loader must still refuse it as the
+// named-graph construct, never drop the graph it was given; the unedited worked
+// example is the valid neighbour and loads.
+#[test]
+fn an_empty_named_graph_is_refused_not_dropped() {
+    let load = |source: &str| {
+        ToolGraph::load(
+            source.as_bytes(),
+            "application/trig",
+            None,
+            &vocabulary(),
+            &mut Governor::new(WORKED_BUDGET),
+        )
+    };
+    let source = worked();
+    load(&source).expect("the unedited worked example loads as TriG");
+    let error = load(&format!("{source}\nGRAPH <urn:empty-graph> {{}}\n")).unwrap_err();
+    let LoadError::UnsupportedConstruct {
+        subject,
+        predicate,
+        construct,
+        ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        (subject.as_str(), predicate.as_str(), construct),
+        ("urn:empty-graph", "-", Construct::NamedGraph)
+    );
+}

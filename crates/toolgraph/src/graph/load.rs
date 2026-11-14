@@ -217,6 +217,12 @@ impl<'v> Doc<'v> {
                 o: (*o).clone(),
             });
         }
+        // A declared named graph with no statements has no quad to refuse above, so
+        // read the view's declared graphs and refuse any that remain.
+        if let Some(graph) = view.named_graphs().next() {
+            work(governor, 1)?;
+            return Err(unsupported(&value(graph)?, "-", Construct::NamedGraph));
+        }
         Ok(Self {
             vocabulary,
             namespace: vocabulary.terms().namespace_iri.as_str(),
