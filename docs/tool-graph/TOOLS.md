@@ -1222,7 +1222,13 @@ Define `Oq` and `Oe` as the following two complete declaration objects, each
 without a final LF. These are the exact bytes from the existing renderer with
 the input-schema key order shown here. The RDF → JSON Schema lane must freeze
 this canonical ordering for the worked fixture; alternate raw declaration
-ordering is preserved on decode but cannot alter canonical artifacts.
+ordering is preserved on decode but cannot alter canonical artifacts. The
+worked fixture's `pattern` `^customer-[0-9]+$` is written in the XML Schema
+(XPath) regular-expression flavour, the flavour of a SHACL `sh:pattern`; JSON
+Schema's `pattern` is the ECMAScript flavour. The two agree on the common subset
+this pattern uses, and the lane translates a pattern to ECMAScript through the
+core translator, which must leave a pattern unchanged when it is already valid
+and equivalent in both flavours and rewrite only what must be rewritten.
 
 ```json
 {"type":"function","function":{"name":"query_customer_orders","description":"Query customer orders.","parameters":{"type":"object","properties":{"customer_id":{"type":"string","pattern":"^customer-[0-9]+$"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["customer_id","limit"],"additionalProperties":false}}}
