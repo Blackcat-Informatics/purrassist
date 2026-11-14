@@ -142,3 +142,37 @@ fn a_result_object_beyond_the_depth_is_ledgered() {
                 && subject.as_deref() == Some("https://example.org/tools/QueryOutput"))
     );
 }
+
+// Invariant: lines follow tool-name order even when the graph's IRI order is the
+// reverse, and each line carries its own tool's schemas.
+#[test]
+fn signature_lines_follow_name_order_not_graph_order() {
+    let renamed = worked().replace("pa:name \"edit_file\"", "pa:name \"zz_edit_file\"");
+    assert_ne!(renamed, worked(), "the fixture renames edit_file");
+    let vocabulary = vocabulary();
+    let mut governor = Governor::new(Budget::default());
+    let graph = ToolGraph::load(
+        renamed.as_bytes(),
+        "text/turtle",
+        None,
+        &vocabulary,
+        &mut governor,
+    )
+    .expect("graph loads");
+    let (signature, _) =
+        lanes::compact(&graph, &vocabulary, 2, &mut governor).expect("compact lane");
+    let lines: Vec<&str> = signature.as_str().lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines[0].starts_with("query_customer_orders(customer_id:string,limit:integer)->")
+            && lines[0].contains("orders:string"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].starts_with("zz_edit_file(path:string,text:string)->")
+            && lines[1].contains("version:string"),
+        "{}",
+        lines[1]
+    );
+}

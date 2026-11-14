@@ -22,6 +22,7 @@ use purrassist_core::{
     Governor, StopReason,
     contract::Resource,
     json::{self, Node, ParseFailure, Value},
+    tool_call::is_valid_name,
 };
 use purrdf_core::{
     diagnostic::RdfLocation,
@@ -412,14 +413,10 @@ impl<'a> Lowering<'a> {
     }
 }
 
-/// `name` bare when it is an ASCII identifier, otherwise a JSON string literal.
+/// `name` bare when it matches the core name grammar
+/// ([`purrassist_core::tool_call::is_valid_name`]), otherwise a JSON string literal.
 fn identifier(name: &str, governor: &mut Governor) -> Result<String, CompactError> {
-    let mut characters = name.chars();
-    let bare = characters
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-        && characters.all(|next| next.is_ascii_alphanumeric() || next == '_');
-    if bare {
+    if is_valid_name(name) {
         return Ok(name.to_owned());
     }
     Node::new(Value::String(name.to_owned()))
@@ -581,17 +578,17 @@ mod tests {
     }
 
     // Invariant: unions, arrays of unions and optional members keep their
-    // documented spelling, and a keyword the line cannot carry is ledgered by pointer.
+    // documented spelling, names in the core name grammar stay bare and others are quoted, and a keyword the line cannot carry is ledgered by pointer.
     #[test]
     fn unions_arrays_and_optional_members_keep_their_spelling_and_uncarried_keywords_are_recorded()
     {
         let (line, omitted) = lower(
-            r#"{"type":"object","required":["a"],"properties":{"a":{"type":["string","null"]},"b c":{"type":"array","items":{"anyOf":[{"type":"integer"},{"type":"string","maxLength":3}]}}}}"#,
+            r#"{"type":"object","required":["a"],"properties":{"a":{"type":["string","null"]},"b c":{"type":"array","items":{"anyOf":[{"type":"integer"},{"type":"string","maxLength":3}]}},"fs.read_file":{"type":"string"},"read-file":{"type":"string"}}}"#,
             1,
         );
         assert_eq!(
             line.unwrap(),
-            r#"{a:string|null,"b c"?:(integer|string)[]}"#
+            r#"{a:string|null,"b c"?:(integer|string)[],fs.read_file?:string,read-file?:string}"#
         );
         assert_eq!(omitted, ["/properties/b c/items/anyOf/1/maxLength"]);
     }
