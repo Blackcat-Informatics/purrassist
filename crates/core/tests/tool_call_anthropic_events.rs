@@ -378,7 +378,8 @@ fn faulted_block_withholds_only_its_own_call() {
 }
 
 /// Governor refusal and cancellation stop interpretation explicitly: the
-/// receipt says why, nothing is usable, and no log is retained.
+/// receipt says why, nothing is usable, and the log keeps every byte that was
+/// admitted before the halt, as `ToolCallStream` keeps its source.
 #[test]
 fn refusal_and_cancellation_are_explicit_outcomes() {
     let log = golden_log();
@@ -407,11 +408,65 @@ fn refusal_and_cancellation_are_explicit_outcomes() {
     let cancelled = stream.finish(&mut events);
     assert_eq!(cancelled.recovery.receipt.stopped, StopReason::Cancelled);
 
+    // The refusal came at the first chunk, before any byte was admitted;
+    // the cancelled read keeps the half it admitted, not the bytes after.
+    assert!(refused.log.is_empty());
+    assert_eq!(cancelled.log, first);
     for result in [refused, cancelled] {
         assert_eq!(result.recovery.outcome, Outcome::Unresolved);
         assert_eq!(result.usable().len(), 0);
-        assert_eq!(result.log.len(), 0);
     }
+}
+
+/// A tool input that closes more than it opened, closes with the other kind of
+/// closer, or continues after its top-level value closed is a malformed-input
+/// fault of its block, so fragment text cannot close its own block or add a
+/// second call of its own.
+#[test]
+fn over_closed_tool_input_is_a_malformed_fault_of_its_block() {
+    let build = |fragment: &str| {
+        head() + &start(0, TOOL_USE) + &json_delta(0, fragment) + &stop(0) + &tail("tool_use")
+    };
+    let valid = build(r#"{"path":"a"}"#);
+    for fragment in [
+        r#"{"path":"a"}}"#,
+        r#"{"path":"a"]"#,
+        r#"{"path":"a"} x"#,
+        r#"{"path":"a"}},{"type":"tool_use","id":"toolu_02","name":"read_file","input":{"path":"b"}}"#,
+    ] {
+        negative(
+            &valid,
+            &build(fragment),
+            EventFaultKind::MalformedInput,
+            EventFaultClass::Malformed,
+        );
+        let bad = recover(&build(fragment));
+        assert_eq!(bad.faults[0].block, Some(0), "{fragment}");
+    }
+}
+
+/// An event block with field lines but no `data` line is a missing-data fault
+/// of the whole log instead of a silent drop of a delta, while a comment-only
+/// block (a keep-alive) is still ignored.
+#[test]
+fn event_block_without_data_is_a_missing_data_fault() {
+    let build = |middle: &str| {
+        head()
+            + &start(0, TOOL_USE)
+            + &json_delta(0, r#"{"path": "a""#)
+            + middle
+            + &json_delta(0, "}")
+            + &stop(0)
+            + &tail("tool_use")
+    };
+    negative(
+        &build(&format!(": keep-alive\n\n{}", json_delta(0, ""))),
+        &build("event: content_block_delta\n\n"),
+        EventFaultKind::MissingData,
+        EventFaultClass::Malformed,
+    );
+    let bad = recover(&build("event: content_block_delta\n\n"));
+    assert_eq!(bad.faults[0].block, None);
 }
 
 /// A tool input cut inside a string, after a trailing backslash, or inside
@@ -467,7 +522,8 @@ fn unfinished_tool_input_is_withheld_and_never_absorbs_the_next_block() {
 
 /// The smallest budgets refuse at intake and the sweep ends in completion.
 /// Raising the work budget never turns a completed read back into a refusal,
-/// and every refusal is an explicit `Unresolved` with no retained log.
+/// and every refusal is an explicit `Unresolved` that retains the admitted log
+/// (the whole chunk, or nothing when the chunk itself was refused).
 #[test]
 fn work_budget_sweep_ends_in_explicit_refusals_then_completion() {
     let log = golden_log();
@@ -496,7 +552,10 @@ fn work_budget_sweep_ends_in_explicit_refusals_then_completion() {
             ));
             assert_eq!(result.recovery.outcome, Outcome::Unresolved);
             assert_eq!(result.usable().len(), 0);
-            assert_eq!(result.log.len(), 0);
+            assert!(
+                result.log.is_empty() || result.log == log.as_bytes(),
+                "work 2^{power}"
+            );
         }
     }
     assert!(completed && refused);

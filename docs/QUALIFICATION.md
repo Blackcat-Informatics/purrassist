@@ -118,8 +118,10 @@ establishes behavior on those cases rather than a production error rate.
 Twenty-three dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
 `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
 `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-`anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`). Streaming recognition (#16) and provider
-streaming events (#17) remain tracked. Current qualification of the added
+`anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`). Streaming recognition (#16) remains tracked. Of
+provider streaming events (#17), Anthropic Messages event logs are read and
+reassembled by the Rust API; the OpenAI delta reading, CLI and MCP inputs,
+provider-log fixtures, fuzz seeds and WASM parity remain tracked. Current qualification of the added
 recipes is pending automatic CI; the recorded evaluation numbers above
 refer to the prior source.
 

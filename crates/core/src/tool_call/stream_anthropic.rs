@@ -107,6 +107,17 @@ pub enum EventFaultKind {
     /// readable, and the call is withheld: a repair of cut-off input is not a
     /// resolved call.
     UnfinishedInput,
+    /// A tool input's fragments are not one well-formed value: a closer with
+    /// no container open, a closer of the other kind than the innermost
+    /// opener, or non-whitespace after the top-level value closed. Reported
+    /// once per block, which is withheld, so fragment text cannot close its own
+    /// block or form further message structure.
+    MalformedInput,
+    /// An event block that has field lines (such as `event:`) but no `data`
+    /// line, so nothing says what the event carried. It is skipped, and the
+    /// fault belongs to the whole log: a dropped delta would silently change a
+    /// call's arguments. Comment-only blocks (keep-alives) are not events.
+    MissingData,
     /// The log ended without `message_stop`.
     MissingMessageStop,
     /// The log never stated a stop reason: no `message_delta` with a
@@ -153,7 +164,9 @@ impl EventFaultKind {
             | Self::UnsupportedBlock
             | Self::MismatchedDelta
             | Self::UnrecognizedStopReason
-            | Self::NonEmptyStartInput => EventFaultClass::Malformed,
+            | Self::NonEmptyStartInput
+            | Self::MalformedInput
+            | Self::MissingData => EventFaultClass::Malformed,
             Self::PartialEvent
             | Self::OpenBlock
             | Self::UnfinishedInput
@@ -222,8 +235,11 @@ pub struct EventLogRecovery {
     pub faults: Vec<EventFault>,
     /// The blocks that were assembled into the message, in order.
     pub blocks: Vec<BlockSpan>,
-    /// The original event log, exactly as supplied. Empty when the governor
-    /// refused its retention; the receipt's `stopped` then says why.
+    /// The original event log, exactly as supplied up to the end of what was
+    /// admitted: cancellation and a refusal raised after admission keep every
+    /// admitted byte. Shorter than the supplied log (possibly empty) only when
+    /// the governor refused the log's own retention or bytes arrived after a
+    /// halt; the receipt's `stopped` then says why.
     pub log: Vec<u8>,
 }
 
@@ -362,7 +378,13 @@ pub struct AnthropicEventStream<'s> {
     /// The closers owed by the open tool input's unclosed containers.
     closers: ScratchVec<u8>,
     lex: Lex,
+    /// Whether the open tool input's top-level container has closed.
+    input_closed: bool,
+    /// Whether the open tool input was already reported as malformed.
+    input_faulted: bool,
     has_data: bool,
+    /// Whether the event block being read has a field line (not a comment).
+    has_fields: bool,
     line_start: usize,
     skip_lf: bool,
     /// The offset of the line terminator being handled.
@@ -436,8 +458,11 @@ impl<'s> AnthropicEventStream<'s> {
             blocks: ScratchVec::new(governor),
             closers: ScratchVec::new(governor),
             lex: Lex::Plain,
+            input_closed: false,
+            input_faulted: false,
             stream,
             has_data: false,
+            has_fields: false,
             line_start: 0,
             skip_lf: false,
             at: 0,
@@ -515,6 +540,10 @@ impl<'s> AnthropicEventStream<'s> {
         if start == end {
             return if self.has_data {
                 self.dispatch(events)
+            } else if core::mem::take(&mut self.has_fields) {
+                self.current = self.events;
+                self.events += 1;
+                self.fault(EventFaultKind::MissingData, None)
             } else {
                 Ok(())
             };
@@ -530,6 +559,7 @@ impl<'s> AnthropicEventStream<'s> {
         if value < end && self.log.as_slice()[value] == b' ' {
             value += 1;
         }
+        self.has_fields = true;
         if !is_data {
             return Ok(()); // `event`, `id`, `retry`: the data's own `type` governs
         }
@@ -544,6 +574,7 @@ impl<'s> AnthropicEventStream<'s> {
     fn dispatch(&mut self, events: &mut impl Extend<StreamEvent>) -> Result<(), StopReason> {
         let mut data = core::mem::replace(&mut self.data, ScratchVec::new(self.stream.governor()));
         self.has_data = false;
+        self.has_fields = false;
         self.current = self.events;
         self.events += 1;
         let result = self.event(data.as_slice(), events);
@@ -674,6 +705,8 @@ impl<'s> AnthropicEventStream<'s> {
         self.next_index = index.saturating_add(1);
         self.closers.clear();
         self.lex = Lex::Plain;
+        self.input_closed = false;
+        self.input_faulted = false;
         let kind = match block.get("type").and_then(Node::as_str) {
             Some("tool_use") => Kind::ToolUse,
             Some("text") => Kind::Text,
@@ -780,7 +813,7 @@ impl<'s> AnthropicEventStream<'s> {
                     );
                 };
                 if !fragment.is_empty() {
-                    self.scan(fragment.as_bytes())?;
+                    self.scan(fragment.as_bytes(), index)?;
                     self.put(fragment.as_bytes(), events);
                     self.mark_wrote();
                 }
@@ -831,12 +864,20 @@ impl<'s> AnthropicEventStream<'s> {
     }
 
     /// Track the containers and string a tool input's fragments leave open, so
-    /// a block that ends early can still be closed in place.
-    fn scan(&mut self, fragment: &[u8]) -> Result<(), StopReason> {
+    /// a block that ends early can still be closed in place, and fault input
+    /// that is not one well-formed value (see [`EventFaultKind::MalformedInput`]).
+    fn scan(&mut self, fragment: &[u8], index: u64) -> Result<(), StopReason> {
         self.stream
             .governor_mut()
             .charge(Resource::Work, size(fragment.len()))?;
+        let mut malformed = false;
         for &byte in fragment {
+            if self.input_closed
+                && self.lex == Lex::Plain
+                && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
+            {
+                malformed = true;
+            }
             self.lex = match (self.lex, byte) {
                 (Lex::InString, b'\\') => Lex::Escape,
                 (Lex::InString, b'"') => Lex::Plain,
@@ -850,11 +891,18 @@ impl<'s> AnthropicEventStream<'s> {
                     Lex::Plain
                 }
                 (Lex::Plain, b'}' | b']') => {
-                    self.closers.pop();
+                    match self.closers.pop() {
+                        Some(owed) if owed == byte => self.input_closed = self.closers.is_empty(),
+                        // Nothing open, or the wrong kind of closer.
+                        _ => malformed = true,
+                    }
                     Lex::Plain
                 }
                 (Lex::Plain, _) => Lex::Plain,
             };
+        }
+        if malformed && !core::mem::replace(&mut self.input_faulted, true) {
+            self.fault(EventFaultKind::MalformedInput, Some(index))?;
         }
         Ok(())
     }
@@ -930,7 +978,7 @@ impl<'s> AnthropicEventStream<'s> {
     fn seal(&mut self, events: &mut impl Extend<StreamEvent>) -> Result<(), StopReason> {
         self.current = self.events;
         self.at = self.log.len();
-        if self.line_start < self.log.len() || self.has_data {
+        if self.line_start < self.log.len() || self.has_data || self.has_fields {
             self.fault(EventFaultKind::PartialEvent, None)?;
         }
         if let Some(index) = self.open.as_ref().map(|open| open.index) {
@@ -955,8 +1003,9 @@ impl<'s> AnthropicEventStream<'s> {
     ///
     /// A governor refusal or cancellation, including one raised while the
     /// message is closed, returns `Unresolved` with the reason in the receipt,
-    /// with no calls and an empty `log`, whichever stage raised it, including
-    /// the final recovery.
+    /// with no calls, whichever stage raised it, including the final recovery.
+    /// The `log` keeps every admitted byte, as the source of a halted
+    /// [`ToolCallStream`] is kept.
     #[must_use]
     pub fn finish(mut self, events: &mut impl Extend<StreamEvent>) -> EventLogRecovery {
         if !self.halted && self.seal(events).is_err() {
@@ -971,23 +1020,14 @@ impl<'s> AnthropicEventStream<'s> {
             faults,
             blocks,
             stop,
-            halted,
             ..
         } = self;
         let recovery = stream.finish_with_events(stop.unwrap_or(GenerationStop::Unknown), events);
-        let refused = matches!(
-            recovery.receipt.stopped,
-            StopReason::BudgetExceeded(_) | StopReason::Cancelled
-        );
         EventLogRecovery {
             recovery,
             faults: faults.into_vec(),
             blocks: blocks.into_vec(),
-            log: if halted || refused {
-                Vec::new()
-            } else {
-                log.into_vec()
-            },
+            log: log.into_vec(),
         }
     }
 }
