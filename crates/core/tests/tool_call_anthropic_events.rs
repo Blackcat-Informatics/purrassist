@@ -296,7 +296,11 @@ fn out_of_order_delta_after_stop_is_an_explicit_fault() {
         EventFaultClass::OutOfOrder,
     );
     let bad = recover(&faulted);
-    let fault = bad.faults[0];
+    let fault = *bad
+        .faults
+        .iter()
+        .find(|fault| fault.kind == EventFaultKind::DeltaAfterStop)
+        .expect("stray delta is reported");
     assert_eq!((fault.block, fault.event), (Some(0), 4));
 }
 
@@ -356,7 +360,13 @@ fn faulted_block_withholds_only_its_own_call() {
         panic!("{:#?}", result.recovery.outcome);
     };
     assert_eq!(calls.calls.len(), 2);
-    assert_eq!(kinds(&result), [EventFaultKind::DeltaAfterStop]);
+    assert_eq!(
+        kinds(&result),
+        [
+            EventFaultKind::UnfinishedInput,
+            EventFaultKind::DeltaAfterStop
+        ]
+    );
     for usable in [result.usable(), result.usable_accepting_guesses()] {
         assert_eq!(usable.len(), 1);
         assert_eq!(result.block_of(usable[0]), Some(0));
@@ -402,4 +412,92 @@ fn refusal_and_cancellation_are_explicit_outcomes() {
         assert_eq!(result.usable().len(), 0);
         assert_eq!(result.log.len(), 0);
     }
+}
+
+/// A tool input cut inside a string, after a trailing backslash, or inside
+/// nested containers is never usable. When its block is stopped cleanly the
+/// reader appends nothing and reports the unfinished input; when the next
+/// block forces the close, the owed closers keep that next block a clean,
+/// correctly read call.
+#[test]
+fn unfinished_tool_input_is_withheld_and_never_absorbs_the_next_block() {
+    for fragment in [
+        r#"{"path": "a"#,
+        r#"{"path": "a\"#,
+        r#"{"a":{"b":[1"#,
+        r#"{"path": "a""#,
+    ] {
+        let cut = head() + &start(0, TOOL_USE) + &json_delta(0, fragment);
+
+        let clean_stop = cut.clone() + &stop(0) + &tail("tool_use");
+        let result = recover(&clean_stop);
+        assert_eq!(
+            kinds(&result),
+            [EventFaultKind::UnfinishedInput],
+            "{fragment}"
+        );
+        assert_eq!(result.faults[0].block, Some(0));
+        let Outcome::Resolved(calls) = &result.recovery.outcome else {
+            panic!("{:#?}", result.recovery.outcome);
+        };
+        assert_eq!(calls.calls.len(), 1, "{fragment}");
+        assert_eq!(result.usable().len(), 0);
+        assert_eq!(result.usable_accepting_guesses().len(), 0);
+
+        let forced = cut + &tool_block(1) + &tail("tool_use");
+        let result = recover(&forced);
+        assert!(
+            kinds(&result).contains(&EventFaultKind::BlockStartWhileOpen),
+            "{fragment}"
+        );
+        let usable = result.usable();
+        assert_eq!(
+            usable.len(),
+            1,
+            "{fragment}: {:#?}",
+            result.recovery.outcome
+        );
+        assert_eq!(result.block_of(usable[0]), Some(1));
+        assert_eq!(
+            usable[0].arguments.to_json(),
+            r#"{"path":"src/main.rs","limit":20}"#
+        );
+    }
+}
+
+/// Raising the work budget never turns a completed read back into a refusal,
+/// and every refusal, up to the one at the final close, is an explicit
+/// `Unresolved` with no retained log.
+#[test]
+fn work_budget_sweep_ends_in_explicit_refusals_then_completion() {
+    let log = golden_log();
+    let tools = tools();
+    let mut completed = false;
+    let mut refused = false;
+    for power in 0..28 {
+        let request = ToolRecoveryRequest {
+            budget: Budget {
+                work: 1 << power,
+                ..Budget::default()
+            },
+            ..ToolRecoveryRequest::default()
+        };
+        let result =
+            tools.recover_anthropic_events(log.as_bytes(), request, DialectSet::built_in());
+        if result.recovery.receipt.stopped == StopReason::Completed {
+            completed = true;
+            assert_eq!(result.usable().len(), 1, "work 2^{power}");
+        } else {
+            assert!(!completed, "refused after completing at 2^{power}");
+            refused = true;
+            assert!(matches!(
+                result.recovery.receipt.stopped,
+                StopReason::BudgetExceeded(_)
+            ));
+            assert_eq!(result.recovery.outcome, Outcome::Unresolved);
+            assert_eq!(result.usable().len(), 0);
+            assert_eq!(result.log.len(), 0);
+        }
+    }
+    assert!(completed && refused);
 }

@@ -16,7 +16,9 @@
 //!
 //! A `tool_use` block is `{"type":"tool_use","id":ID,"name":NAME,"input":INPUT}`
 //! where `INPUT` is the concatenation of the block's `input_json_delta`
-//! fragments, byte for byte, or `{}` when there are none. A `text` block is
+//! fragments, byte for byte, or `{}` when there are none; a block that is cut
+//! (never stopped) additionally gets the closers its fragments owe, which is a
+//! fault and withholds its call. A `text` block is
 //! `{"type":"text","text":"..."}` and a `thinking` block is
 //! `{"type":"thinking","thinking":"...","signature":"..."}`; the strings keep
 //! their original JSON escapes. The message bytes are fed, event by event,
@@ -94,8 +96,16 @@ pub enum EventFaultKind {
     /// line. The event is discarded, as server-sent events require.
     PartialEvent,
     /// A content block was never stopped (the log ended, or `message_stop`
-    /// arrived). The block is closed by its own closers in the message.
+    /// arrived). On this forced close the message gets a closing quote for an
+    /// unfinished string (and a second backslash for a trailing one), the
+    /// closers of the input's open containers, then the block's own closer,
+    /// so later blocks stay readable. The block's call is withheld.
     OpenBlock,
+    /// A `content_block_stop` arrived while the tool input's fragments still
+    /// left a string or container open. Nothing is appended in a clean stop,
+    /// so the call is read as the batch reading of those bytes would read it,
+    /// but it is withheld: a repair of cut-off input is not a resolved call.
+    UnfinishedInput,
     /// The log ended without `message_stop`.
     MissingMessageStop,
     /// The log never stated a stop reason: no `message_delta` with a
@@ -145,6 +155,7 @@ impl EventFaultKind {
             | Self::NonEmptyStartInput => EventFaultClass::Malformed,
             Self::PartialEvent
             | Self::OpenBlock
+            | Self::UnfinishedInput
             | Self::MissingMessageStop
             | Self::MissingMessageDelta => EventFaultClass::Truncated,
             Self::MessageStartMissing
@@ -861,7 +872,13 @@ impl<'s> AnthropicEventStream<'s> {
         let Some(index) = index_of(root) else {
             return self.fault(EventFaultKind::MissingMember("index"), None);
         };
-        if self.open.as_ref().is_some_and(|open| open.index == index) {
+        if let Some(open) = self.open.as_ref().filter(|open| open.index == index) {
+            if open.kind == Kind::ToolUse
+                && open.wrote
+                && (self.lex != Lex::Plain || !self.closers.is_empty())
+            {
+                self.fault(EventFaultKind::UnfinishedInput, Some(index))?;
+            }
             self.close(events)
         } else {
             self.fault(EventFaultKind::StopWithoutOpenBlock, Some(index))
@@ -877,6 +894,8 @@ impl<'s> AnthropicEventStream<'s> {
             Kind::Skipped => return Ok(()),
             Kind::ToolUse => {
                 if open.wrote {
+                    // Only a forced close (already faulted) or an unfinished
+                    // input (faulted at its stop) owes anything here.
                     match self.lex {
                         Lex::Plain => {}
                         Lex::InString => self.put(b"\"", events),
@@ -934,7 +953,8 @@ impl<'s> AnthropicEventStream<'s> {
     ///
     /// A governor refusal or cancellation, including one raised while the
     /// message is closed, returns `Unresolved` with the reason in the receipt,
-    /// with no calls and an empty `log`.
+    /// with no calls and an empty `log`, whichever stage raised it, including
+    /// the final recovery.
     #[must_use]
     pub fn finish(mut self, events: &mut impl Extend<StreamEvent>) -> EventLogRecovery {
         if !self.halted && self.seal(events).is_err() {
@@ -953,11 +973,19 @@ impl<'s> AnthropicEventStream<'s> {
             ..
         } = self;
         let recovery = stream.finish_with_events(stop.unwrap_or(GenerationStop::Unknown), events);
+        let refused = matches!(
+            recovery.receipt.stopped,
+            StopReason::BudgetExceeded(_) | StopReason::Cancelled
+        );
         EventLogRecovery {
             recovery,
             faults: faults.into_vec(),
             blocks: blocks.into_vec(),
-            log: if halted { Vec::new() } else { log.into_vec() },
+            log: if halted || refused {
+                Vec::new()
+            } else {
+                log.into_vec()
+            },
         }
     }
 }
