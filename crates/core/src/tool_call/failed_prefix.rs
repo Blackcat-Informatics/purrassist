@@ -46,15 +46,14 @@ impl Certificate {
         }
         let framing = if native {
             frame.start == span.start && witness.header.dropped.is_none()
-        } else if *dialect == DialectId::HermesStripped {
-            witness.header.dropped.is_some_and(|dropped| {
-                dropped.start == span.start
-                    && dropped.start < frame.start
-                    && frame.end <= dropped.end
-                    && dropped.end <= witness.header.first_retained
-            })
         } else {
-            false
+            *dialect == DialectId::HermesStripped
+                && witness.header.dropped.is_some_and(|dropped| {
+                    dropped.start == span.start
+                        && dropped.start < frame.start
+                        && frame.end <= dropped.end
+                        && dropped.end <= witness.header.first_retained
+                })
         };
         Ok(framing.then_some(Self {
             witness,
