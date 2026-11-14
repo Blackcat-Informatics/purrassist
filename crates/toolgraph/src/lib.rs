@@ -12,6 +12,7 @@ mod glob_language;
 mod graph;
 mod internet;
 mod ipc;
+pub mod lanes;
 mod policy_document;
 mod policy_trust;
 mod privilege_rule;
