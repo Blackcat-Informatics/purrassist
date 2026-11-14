@@ -1228,6 +1228,16 @@ impl<'s> ToolCallStream<'s> {
         }
     }
 
+    /// The stream's governor, for producers that charge their own intake work.
+    pub(super) const fn governor(&self) -> &Governor {
+        &self.governor
+    }
+
+    /// The stream's governor, mutably, for the same producers.
+    pub(super) const fn governor_mut(&mut self) -> &mut Governor {
+        &mut self.governor
+    }
+
     /// Feed raw output bytes and append each newly settled event to `events`.
     /// Empty feeds do not allocate events or charge work. Sink memory belongs
     /// to the caller from inception; each event admits its portable record and

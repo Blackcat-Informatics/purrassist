@@ -67,6 +67,7 @@ pub mod rules;
 mod scope;
 mod shape;
 mod stream;
+mod stream_anthropic;
 mod stream_capture;
 mod stream_finish;
 mod toolset;
@@ -113,6 +114,9 @@ pub use shape::{
     ShapeStep, ValueShape,
 };
 pub use stream::{StreamEvent, ToolCallStream};
+pub use stream_anthropic::{
+    AnthropicEventStream, BlockSpan, EventFault, EventFaultClass, EventFaultKind, EventLogRecovery,
+};
 pub use toolset::{CompiledTool, ToolSet, ToolSetError, collision_key, is_valid_name};
 
 /// Earliest retained source coordinate, ignoring absent boundaries.
