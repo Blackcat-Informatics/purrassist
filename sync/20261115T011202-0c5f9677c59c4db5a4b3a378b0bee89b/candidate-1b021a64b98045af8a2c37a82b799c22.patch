@@ -1,0 +1,4099 @@
+diff --git AGENTS.md AGENTS.md
+index 58b770fc..d8519298 100644
+--- AGENTS.md
++++ AGENTS.md
+@@ -10,29 +10,35 @@
+ 
+ # Contributing as an agent
+ 
+-Read `.goals` and `docs/IMPLEMENTATION.md` before changing behavior. Work in
+-Rust. Preserve unrelated work. Implement the complete accepted capability;
+-tests and public documentation must distinguish implemented behavior from plans.
++Read `docs/IMPLEMENTATION.md` before changing behavior. Work in Rust. Preserve
++unrelated work. Implement the complete accepted capability; tests and public
++documentation must distinguish implemented behavior from plans.
+ 
+-## Guiding principles
++## Goals
+ 
+-When requests conflict, these decide. They decide between conflicting requests;
+-they do not replace the standing rules in this file.
++`.goals` is the record; this is its content.
+ 
+-- **GREENFIELD:** we always correct the mistakes of the past. Others' mistakes
+-  are our lessons, not our limits.
+-- **SOTA:** always choose the state of the art over the bones of the past.
+-- **OPTIMAL:** choose the Pareto frontier of the quality, speed, efficiency and
+-  other axes.
+-- **MAXIMAL:** support the broadest functionality possible after the other
+-  choices are made.
++- **Greenfield first.** Take the best available design. Learn from the limits
++  of earlier work without accepting them. Correct past mistakes when found.
++- **Rust first.** All core functionality is high-quality Rust. Python, wasm
++  and the C ABI are interfaces to it, not places where work happens.
++- **Subsume, extend, enhance.** If something we use holds us back, take over
++  its function, extend it, then improve it past the original.
++- **Low optionality, hard failures.** No optional components, conditional
++  imports or swallowed errors; fail early with an actionable message. This is
++  a rule about project components and dependencies, not about code constructs.
+ 
+-## Verification
++Three maximums bound every choice: **utility** (err toward the broadest
++function), **performance** (seek the optimal Rust solution) and
++**portability** (code that compiles to wasm is the core value).
+ 
+-Never bypass commit hooks, including through `--no-verify`, `-n`, environment
+-variables, or alternative commit creation paths. Fix failed checks or stop
+-without committing. A focused test is not the full gate. `make check` is the
+-local verification gate; packaging and publication require their own evidence.
++When requests conflict, decide in this order. This order settles conflicts; it
++does not replace the standing rules in this file.
++
++1. **Greenfield:** correct the mistake, do not preserve it.
++2. **State of the art** over inherited practice.
++3. **Optimal:** the Pareto frontier of quality, speed and efficiency.
++4. **Maximal:** the broadest function left after the choices above.
+ 
+ ## Contracts
+ 
+@@ -43,29 +49,126 @@ local verification gate; packaging and publication require their own evidence.
+ - Resource exhaustion is an explicit outcome; it must not become a success,
+   an unsupported claim of impossibility, or a swallowed error.
+ - Target optimizations must preserve the documented result contract.
+-- Register and justify third-party dependencies, including transitive,
+-  build-only, test-only, generated-data, and vendored dependencies.
+-- Preserve license and source provenance when reusing material.
++- Register and justify third-party dependencies in `docs/DEPENDENCIES.md`,
++  including transitive, build-only, test-only, generated-data, and vendored
++  dependencies. Pin exact versions.
++- Preserve license and source provenance when reusing material. Research
++  informs the work; it is never copied or closely paraphrased into it.
+ - No user-specific services, credentials, or private infrastructure belong in
+   source, fixtures, documentation, or publication metadata.
+ 
+-All source files carry SPDX headers. Public APIs have Rustdoc with meaningful
+-examples and error semantics. Capability claims require executable evidence.
++All source files carry SPDX headers; files that cannot are annotated in
++`REUSE.toml`. Public APIs have Rustdoc with meaningful examples and error
++semantics. Capability claims require executable evidence.
++
++## Rust
++
++Optimize for reading, maintenance and compile-time guarantees.
++
++**Workspace**
++
++- Layering runs one way: `purrassist-core` (pure, no I/O) depends on no
++  other workspace crate; `syntax` and `toolgraph` build on it; `purrassist`
++  is the facade; `host` owns ambient access; `cli` is a thin binary that
++  parses input and calls libraries. A lower crate never depends on a higher
++  one.
++- Prefer small crates. Keep hand-written files under 5,000 lines; split a
++  file that grows past that when you are already changing it.
++- Default to private, then `pub(crate)`. Every `pub` item is a maintenance
++  commitment, and `unreachable_pub` is linted.
++- Before writing a helper, look for an existing one: `docs/HELPER-CENSUS.md`,
++  `docs/HELPERS.md` and `helpers-ledger.toml`. The gate rejects duplicates.
++  For RDF work, use what the pinned purrdf crates provide before building
++  a local equivalent.
++
++**Types**
++
++- Make illegal states unrepresentable. Parse into a domain type at the
++  boundary and pass that type on; do not pass a raw `String` or integer that
++  carries domain meaning across modules.
++- Encode lifecycles in types, not in runtime booleans.
++- Accept `&str`, `&[T]` and `impl AsRef<Path>` over `&String`, `&Vec<T>` and
++  `&PathBuf`. Use `Cow` when a function rarely changes its input.
++- Use `let ... else` for early returns. Put `#[must_use]` on pure functions,
++  builders and result types.
++
++**Errors and output**
++
++- Library errors are typed enums a caller can match on, and they keep their
++  source. Never flatten a cause into a string.
++- New non-test code does not call `unwrap`. An `expect` there states the
++  invariant that makes failure impossible.
++- Libraries do not print. Only the binaries write to standard output or
++  standard error.
++- `unsafe_code` is denied workspace-wide. An exception is scoped to one
++  file, justified there, and registered in `docs/DEPENDENCIES.md`.
++
++## Tests
++
++A permanent test runs on every change, forever, so it must earn its place.
++
++- Each added test protects a named behavior, regression, boundary or
++  invariant, and says which in its doc comment. If you cannot state that
++  easily, do not add the test.
++- Test behavior through the public entry point, not the implementation. No
++  tests for accessors, plain data mappers, or what the compiler guarantees.
++- Prefer one test over a generated range of inputs to many copied cases.
++  Prefer an in-memory fake to a mock that asserts how it was called.
++- Recovery changes test uncertainty, resource exhaustion, original-source
++  retention and whole-output validation as well as the successful correction.
++  Editing changes test stale inputs and exact undo.
++- Remove tests that are outdated or overlap. Do not use mutation testing.
++
++## Verification
++
++- `make check` is the local gate: formatting, repository hygiene, the helper
++  census, Clippy, tests and docs, all with warnings as errors. Packaging and
++  publication require their own evidence (`docs/RELEASE.md`).
++- While developing, run the narrowest command that proves the change: one
++  test, one crate. Run `make check` when the change is ready to land, not
++  after every edit. A focused test is not the gate.
++- Evidence comes from the gate's own command, flag for flag. A hand-written
++  cargo command with other flags proves nothing about the gate.
++- Never bypass commit hooks: not by a commit option that skips verification,
++  an environment variable, or another way of creating the commit. Fix the
++  failed check or stop without committing.
++- Take an exit status from the tool itself, never through a pipe. Write long
++  output to a log with the status after it, and read the log once the command
++  has ended. Start the log with the working directory and the commit.
++- Run one build or test job at a time. Parallel workers share one lock file.
++- Do not poll. Run a command in the foreground with a sufficient timeout, or
++  in the background and act when it completes.
++
++## Working practice
++
++- Do git work in a worktree under `.worktrees/`. Keep notes, logs, evidence
++  and scratch files in the repository's git-ignored scratch directory. Keep
++  nothing you need in a temporary directory, and write nothing outside the
++  repository.
++- Track work in issues and pull requests. Work is done when it merges to
++  `main`. Land open work, oldest first, before starting more.
++- Keep the documentation current in the same change as the behavior.
++- Check the design against SOLID as part of planning and review. Refactor
++  what you touch when that is the better result.
++- A brief to another agent is all it knows: the goal, what is ruled out, the
++  files, the exact scope, the worktree and the rules that bind it. A reviewer
++  gets the change and the requirement, never your conclusion. Treat any
++  agent's report as a claim, and read its evidence before you rely on it.
++- Take times from the clock, not from memory.
+ 
+ ## Shell commands
+ 
+-1. One shell call does one thing. Several related commands may share a call,
+-   but a long chain joined with `&&` or `;` is never written. If a step needs
+-   a script, write it as a file in a git-ignored local scratch directory and
+-   run that file.
+-2. A deletion is never inside a chain. Do not use recursive removal,
+-   `find -delete`, `git clean`, or forced worktree removal alongside other
+-   commands. A deletion is its own call on one exact path inside the
+-   repository, and that path must have been listed in an earlier call.
+-   Worktrees and branches are removed with the repository's stagectl cleanup
+-   or a plain `git worktree remove`.
+-3. Do not send anything that could raise an authorization prompt: no deletion
+-   by glob or variable, no path outside the repository, and no long compound
+-   command. If a call is refused, do not send it again in another form. Use
+-   the plain, small version, or tell the operator.
+-4. Briefs to sub-agents carry rules 1 to 3.
++1. One shell call does one thing. Related commands may share a call, but do
++   not write a long chain joined with `&&` or `;`. If a step needs a script,
++   write it as a file in the git-ignored scratch directory and run that
++   file.
++2. A deletion is its own call on one exact path inside the repository, and
++   that path was listed in an earlier call. No recursive removal,
++   `find -delete`, `git clean` or forced worktree removal inside a chain.
++   Remove worktrees and branches with the repository's stagectl cleanup or a
++   plain `git worktree remove`.
++3. Send nothing that could raise an authorization prompt: no deletion by glob
++   or variable, no path outside the repository, no long compound command. If
++   a call is refused, do not resend it in another form. Use the plain, small
++   version or tell the operator.
++4. Briefs to other agents carry rules 1 to 3.
+diff --git crates/core/src/pattern/derive.rs crates/core/src/pattern/derive.rs
+index b86cc878..b21a08ec 100644
+--- crates/core/src/pattern/derive.rs
++++ crates/core/src/pattern/derive.rs
+@@ -983,7 +983,10 @@ enum Utf8 {
+ /// assert!(dfa.accepting(end, &mut governor)?);
+ /// # Ok::<(), purrassist_core::StopReason>(())
+ /// ```
+-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
++///
++/// States are ordered by their packed encoding: an arbitrary but stable order,
++/// meaningful only so a caller can key an ordered map by state.
++#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+ pub struct DfaState {
+     // Canonical encoding makes exact state equality one logical word
+     // comparison, including every assertion and UTF-8 decoding field.
+@@ -1333,7 +1336,107 @@ impl<'p> DerivativeDfa<'p> {
+     }
+ }
+ 
++/// A run of consecutive Unicode scalar values that leave one state for the same
++/// state; see [`DerivativeDfa::scalar_transitions`].
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct ScalarRun {
++    /// The first scalar value of the run.
++    pub first: char,
++    /// The last scalar value of the run, never below `first`.
++    pub last: char,
++    /// The state after any one scalar value of the run.
++    pub target: DfaState,
++}
++
++impl DerivativeDfa<'_> {
++    /// Every transition out of a state at a character boundary, grouped by
++    /// target and ordered by scalar value.
++    ///
++    /// The runs partition all Unicode scalar values (surrogates are not
++    /// scalars), so the automaton can be read as a code-point automaton rather
++    /// than the byte automaton [`Self::step`] drives. A state inside a
++    /// character, or after malformed UTF-8, has no transitions. A state for
++    /// which [`DfaState::is_matched`] holds leaves every scalar for a state
++    /// that is matched as well.
++    ///
++    /// The result is exactly what [`Self::step`] gives for the UTF-8 bytes of
++    /// each scalar: every scalar of one class bucket of the compiled pattern
++    /// behaves alike, so one representative per bucket is stepped.
++    ///
++    /// # Errors
++    /// Returns `BudgetExceeded` or `Cancelled` from the governor, as
++    /// [`Self::step`] does; one `Work` unit is charged for each bucket.
++    ///
++    /// ```
++    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
++    /// let pattern = Pattern::compile("^[a-c]$").unwrap();
++    /// let mut governor = Governor::new(Budget::default());
++    /// let mut dfa = pattern.byte_dfa(&mut governor)?.expect("derivative pattern");
++    /// let runs = dfa.scalar_transitions(dfa.start(), &mut governor)?;
++    /// let letters: Vec<_> = runs
++    ///     .iter()
++    ///     .filter(|run| run.first <= 'b' && 'b' <= run.last)
++    ///     .collect();
++    /// assert_eq!((letters[0].first, letters[0].last), ('a', 'c'));
++    /// assert!(dfa.accepting(letters[0].target, &mut governor)?);
++    /// # Ok::<(), purrassist_core::StopReason>(())
++    /// ```
++    pub fn scalar_transitions(
++        &mut self,
++        state: DfaState,
++        governor: &mut Governor,
++    ) -> Result<Vec<ScalarRun>, StopReason> {
++        if state.utf8() != Utf8::Boundary {
++            return Ok(Vec::new());
++        }
++        let mut edges: Vec<u32> = core::iter::once(0)
++            .chain(self.compiled.cuts.values.iter().copied())
++            .chain([0xD800, 0xE000])
++            .filter(|&edge| edge <= 0x10_FFFF)
++            .collect();
++        governor.charge(
++            Resource::Work,
++            crate::contract::saturating_size(edges.len()),
++        )?;
++        edges.sort_unstable();
++        edges.dedup();
++        edges.push(0x11_0000);
++        let mut runs: Vec<ScalarRun> = Vec::new();
++        for pair in edges.windows(2) {
++            let (low, high) = (pair[0], pair[1] - 1);
++            let (Some(first), Some(last)) = (char::from_u32(low), char::from_u32(high)) else {
++                continue; // the surrogate range: its edges bound a bucket of their own
++            };
++            let mut target = state;
++            for &byte in first.encode_utf8(&mut [0; 4]).as_bytes() {
++                target = self.step(target, byte, governor)?;
++            }
++            governor.charge(Resource::Work, 1)?;
++            match runs.last_mut() {
++                Some(previous)
++                    if previous.target == target && u32::from(previous.last) + 1 == low =>
++                {
++                    previous.last = last;
++                }
++                _ => runs.push(ScalarRun {
++                    first,
++                    last,
++                    target,
++                }),
++            }
++        }
++        Ok(runs)
++    }
++}
++
+ impl DfaState {
++    /// Whether a match was already established before the last character, so
++    /// the state accepts every continuation.
++    #[must_use]
++    pub const fn is_matched(self) -> bool {
++        self.matched()
++    }
++
+     const LIVE_MASK: u64 = 0xFFFF_FFFF;
+     const MATCHED: u64 = 1 << 32;
+     const AT_START: u64 = 1 << 33;
+diff --git crates/core/src/pattern/mod.rs crates/core/src/pattern/mod.rs
+index f9bc8b68..69195785 100644
+--- crates/core/src/pattern/mod.rs
++++ crates/core/src/pattern/mod.rs
+@@ -37,7 +37,7 @@ mod storage;
+ mod unicode;
+ 
+ pub use bytes::{ByteCompileError, ByteInclusion, ByteInstruction, ByteLanguage};
+-pub use derive::{DerivativeDfa, DfaState};
++pub use derive::{DerivativeDfa, DfaState, ScalarRun};
+ 
+ use crate::contract::{
+     Budget, Evidence, Governor, Resource, ScratchString, ScratchVec, StopReason,
+diff --git crates/toolgraph/src/lanes.rs crates/toolgraph/src/lanes.rs
+index 302a099f..ade28de9 100644
+--- crates/toolgraph/src/lanes.rs
++++ crates/toolgraph/src/lanes.rs
+@@ -4,9 +4,12 @@
+ //! Projection lanes over a loaded [`ToolGraph`](crate::ToolGraph).
+ //!
+ //! Each lane returns its artifact together with a `LossLedger` that names every
+-//! constraint the artifact does not carry. Only the compact signature lane is
+-//! implemented here.
++//! constraint the artifact does not carry. The compact signature lane and the
++//! GBNF argument grammar lane are implemented here.
+ 
+ mod compact;
++mod gbnf;
++mod shared;
+ 
+ pub use compact::{CompactError, CompactSignature, compact};
++pub use gbnf::{GbnfError, ToolGrammar, gbnf};
+diff --git crates/toolgraph/src/lanes/compact.rs crates/toolgraph/src/lanes/compact.rs
+index aba48f7c..60af2399 100644
+--- crates/toolgraph/src/lanes/compact.rs
++++ crates/toolgraph/src/lanes/compact.rs
+@@ -15,7 +15,6 @@
+ //! returned ledger, never approximated. Object detail nested deeper than the
+ //! caller's depth renders as `object` and is ledgered the same way.
+ 
+-use std::borrow::Cow;
+ use std::fmt;
+ 
+ use purrassist_core::{
+@@ -24,11 +23,9 @@ use purrassist_core::{
+     json::{self, Node, ParseFailure, Value},
+     tool_call::is_valid_name,
+ };
+-use purrdf_core::{
+-    diagnostic::RdfLocation,
+-    loss::{LossEntry, LossLedger, LossSoundnessError, check_ledger_sound_in},
+-};
++use purrdf_core::loss::{LossLedger, LossSoundnessError, check_ledger_sound_in};
+ 
++use super::shared::{entry_for, record_tool, record_upstream, uncarried};
+ use crate::{
+     ProjectionTarget, SOURCE_REPRESENTATION, Tool, ToolGraph, Vocabulary,
+     codec::mcp::{self, CodecError},
+@@ -191,18 +188,15 @@ pub fn compact(
+         text.push_str(")->");
+         text.push_str(&result);
+         text.push('\n');
+-        record_tool(&mut ledger, tool, &input, &output);
+-    }
+-    for entry in upstream.entries() {
+-        let note = format!(
+-            "upstream schema compiler omitted a construct ({}): {}",
+-            entry.code, entry.note
+-        );
+-        ledger.record(LossEntry {
+-            location: entry.location.clone(),
+-            ..entry_for("schema-keyword-not-expressible", note, None)
+-        });
++        record_tool(&mut ledger, tool, ProjectionTarget::CompactSignature);
++        record_schemas(&mut ledger, tool, &input, &output);
+     }
++    record_upstream(
++        &mut ledger,
++        &upstream,
++        ProjectionTarget::CompactSignature,
++        "schema-keyword-not-expressible",
++    );
+     check_ledger_sound_in(
+         vocabulary.loss_profile(),
+         &ledger,
+@@ -401,21 +395,7 @@ impl<'a> Lowering<'a> {
+     /// Record every keyword of `schema` that is neither `carried` nor schema
+     /// metadata (`$schema`, an empty `$defs`).
+     fn note_uncarried(&mut self, schema: &Node, pointer: &str, carried: &[&str]) {
+-        let Value::Object(members) = &schema.value else {
+-            return;
+-        };
+-        for member in members {
+-            let key = member.key.as_str();
+-            let metadata = key == "$schema"
+-                || (key == "$defs"
+-                    && matches!(&member.value.value, Value::Object(inner) if inner.is_empty()));
+-            if !metadata && !carried.contains(&key) {
+-                self.omitted.push(format!(
+-                    "{pointer}/{}",
+-                    purrassist_core::json::pointer_segment(key)
+-                ));
+-            }
+-        }
++        self.omitted.extend(uncarried(schema, pointer, carried));
+     }
+ }
+ 
+@@ -430,111 +410,6 @@ fn identifier(name: &str, governor: &mut Governor) -> Result<String, CompactErro
+         .map_err(CompactError::Resource)
+ }
+ 
+-/// Builds one ledger entry: a code, a note and an optional subject location.
+-fn entry_for(code: &'static str, note: String, subject: Option<(&str, &'static str)>) -> LossEntry {
+-    LossEntry {
+-        code: Cow::Borrowed(code),
+-        from: Cow::Borrowed(SOURCE_REPRESENTATION),
+-        to: Cow::Borrowed(ProjectionTarget::CompactSignature.representation()),
+-        note: Cow::Owned(note),
+-        location: subject.map(|(iri, member)| {
+-            Box::new(RdfLocation {
+-                subject: Some(iri.to_owned()),
+-                logical: Some(member.to_owned()),
+-                ..RdfLocation::default()
+-            })
+-        }),
+-    }
+-}
+-
+-/// The ledger rows of one tool, in the documented order.
+-fn record_tool(ledger: &mut LossLedger, tool: &Tool, input: &Lowering<'_>, output: &Lowering<'_>) {
+-    let mut row = |code, note: &str, iri: &str, member| {
+-        ledger.record(entry_for(code, note.to_owned(), Some((iri, member))));
+-    };
+-    let hints = || tool.parameters.iter().filter_map(|p| p.hint.as_ref());
+-    if !tool.parameter_constraints.is_empty() {
+-        row(
+-            "authorization-not-expressible",
+-            "parameterConstraints are not enforced by the signature; mandatory check authorize-call",
+-            &tool.iri,
+-            "parameterConstraints",
+-        );
+-    }
+-    for hint in hints().filter(|hint| hint.session_binding.is_some()) {
+-        row(
+-            "session-binding-not-expressible",
+-            "the session binding is not enforced by the signature; mandatory check bind-session",
+-            &hint.reifier,
+-            "sessionBinding",
+-        );
+-    }
+-    for hint in hints().filter(|hint| !hint.taints.is_empty()) {
+-        row(
+-            "taint-not-expressible",
+-            "taint labels are not enforced by the signature; mandatory check taint-policy",
+-            &hint.reifier,
+-            "taint",
+-        );
+-    }
+-    for hint in hints() {
+-        row(
+-            "recovery-hints-not-expressible",
+-            "recovery tolerances are not carried by the signature; mandatory check recovery-tolerance",
+-            &hint.reifier,
+-            "recoveryHint",
+-        );
+-    }
+-    let profile = &tool.execution_profile.iri;
+-    row(
+-        "confinement-not-expressible",
+-        "the execution profile is not enforced by the signature; mandatory check confine-worker",
+-        profile,
+-        "executionProfile",
+-    );
+-    row(
+-        "resource-ceiling-not-expressible",
+-        "the five resource ceilings are not enforced by the signature; mandatory check confine-worker",
+-        profile,
+-        "resourceCeilings",
+-    );
+-    row(
+-        "context-contract-not-expressible",
+-        "the output projection, byte cap and retention are not carried by the signature; mandatory check project-context",
+-        &tool.iri,
+-        "contextManagement",
+-    );
+-    let annotations = &tool.annotations;
+-    if annotations.title.is_some()
+-        || annotations.read_only_hint.is_some()
+-        || annotations.destructive_hint.is_some()
+-        || annotations.idempotent_hint.is_some()
+-        || annotations.open_world_hint.is_some()
+-    {
+-        row(
+-            "tool-annotations-not-expressible",
+-            "the title and behavior hints are not carried by the signature; mandatory check verify-effects",
+-            &tool.iri,
+-            "annotations",
+-        );
+-    }
+-    row(
+-        "rdf-binding-not-expressible",
+-        "the FnO mappings and source reifiers are not carried by the signature; mandatory check bind-manifest",
+-        &tool.iri,
+-        "fnoBinding",
+-    );
+-    if !tool.description.is_empty() {
+-        row(
+-            "description-not-expressible",
+-            "the description is not carried by the signature; mandatory check bind-manifest",
+-            &tool.iri,
+-            "description",
+-        );
+-    }
+-    record_schemas(ledger, tool, input, output);
+-}
+-
+ /// The `schema-keyword-not-expressible` rows of a tool's input and output shape.
+ fn record_schemas(
+     ledger: &mut LossLedger,
+@@ -557,6 +432,7 @@ fn record_schemas(
+                 lowering.omitted.join(", ")
+             );
+             ledger.record(entry_for(
++                ProjectionTarget::CompactSignature,
+                 "schema-keyword-not-expressible",
+                 note,
+                 Some((shape, member)),
+diff --git crates/toolgraph/src/lanes/gbnf.rs crates/toolgraph/src/lanes/gbnf.rs
+new file mode 100644
+index 00000000..58e69abc
+--- /dev/null
++++ crates/toolgraph/src/lanes/gbnf.rs
+@@ -0,0 +1,1099 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! The GBNF lane: one grammar per tool for its argument object.
++//!
++//! The grammar is derived from the input JSON Schema the MCP Extended manifest
++//! carries, the same schema the compact lane reads, so it cannot disagree with
++//! it. It generates the argument object only; the model family's call envelope
++//! belongs to the prompt projector.
++//!
++//! # Language
++//!
++//! The grammar admits one canonical serialization of each schema-valid value:
++//! object members appear in schema property order with required members first,
++//! optional members follow in order, and whitespace between tokens is JSON
++//! whitespace. Integers, numbers, strings, booleans, `null`, arrays,
++//! objects, `enum` and `const` scalars, type arrays and `anyOf` lower exactly.
++//! `oneOf` lowers when its alternatives cannot overlap. Members outside
++//! `properties` are never generated, which narrows an open object.
++//!
++//! A `pattern` and the numeric bounds (`minimum`, `maximum`,
++//! `exclusiveMinimum`, `exclusiveMaximum`) are represented exactly:
++//!
++//! - A `pattern` is read in the ECMAScript dialect with the Unicode (`u`)
++//!   reading, as JSON Schema 2020-12 Core section 6.4 asks. It is not anchored:
++//!   the string must contain a match, and `^` and `$` pin an end only where they
++//!   are written. The grammar is the automaton of the core pattern engine's own
++//!   search semantics, read one scalar value at a time, so literals and escapes,
++//!   classes, `\p{...}`, the dot, alternation, groups, every quantifier,
++//!   anchors, `\b` and `\B` are all exact. A string is generated with the
++//!   escapes JSON requires (the quote, the backslash and the control
++//!   characters) and every other scalar raw: that narrows the spelling of a
++//!   value, never the set of values. A pattern that is invalid under `u` only
++//!   by an identity escape of a character that is not a syntax character (an
++//!   escaped underscore) is read as that literal character.
++//! - An integer bound is exact: the grammar spells every integer in the
++//!   interval and no other. A decimal bound is exact too: the grammar spells, in
++//!   plain notation without an exponent, every finite decimal in the interval
++//!   and no other, compared digit by digit with no rounding. See `decimal`.
++//! - An `enum` or `const` member that fails a sibling `pattern` or bound is
++//!   omitted from the alternatives, which is the same set the schema admits.
++//!
++//! # Losses
++//!
++//! A construct that would make the grammar accept a value the schema rejects
++//! (an open object, or a keyword such as `format` the grammar does not carry)
++//! is omitted from the grammar and recorded on the returned ledger at its schema
++//! pointer, never dropped silently; the mandatory `validate-input` check
++//! enforces it. A length, item or property count and `multipleOf` are refused by
++//! name as not yet translated, and `uniqueItems: true` as not expressible. A graph's
++//! `sh:pattern` with a back-reference never gets here: the upstream schema
++//! compiler refuses it first, as [`GbnfError::Manifest`]. The back-reference
++//! branch below is a defence for a schema that arrives by another route; it
++//! ledgers the pattern, because no context-free grammar states a repeat of an
++//! earlier match. At the entry point the ledger row for this target is exercised
++//! by open input shapes. A construct that
++//! cannot be lowered soundly at all is a typed refusal, including a pattern with
++//! a look-around, whose exact translation is not implemented.
++
++use std::fmt::{self, Write as _};
++
++use purrassist_core::{
++    Governor, StopReason,
++    contract::Resource,
++    json::{self, Node, Number, ParseFailure, Value},
++    pattern::PatternError,
++    schema::{CompilationError, Schema},
++};
++use purrdf_core::loss::{LossLedger, LossSoundnessError, check_ledger_sound_in};
++
++use self::{
++    decimal::{Bound, BoundError, Decimal},
++    regex::{Failure, Lowered},
++};
++use super::shared::{entry_for, record_tool, record_upstream, uncarried};
++use crate::{
++    ProjectionTarget, SOURCE_REPRESENTATION, Tool, ToolGraph, Vocabulary,
++    codec::mcp::{self, CodecError},
++};
++
++/// A validated, owned GBNF grammar for one tool's argument object.
++///
++/// The start rule is `root`. Its representation identity is `llama-gbnf`.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct ToolGrammar {
++    tool: String,
++    text: String,
++}
++
++impl ToolGrammar {
++    /// The tool's name.
++    #[must_use]
++    pub fn tool(&self) -> &str {
++        &self.tool
++    }
++
++    /// The grammar text: one rule per line, each ending in LF.
++    #[must_use]
++    pub fn as_str(&self) -> &str {
++        &self.text
++    }
++
++    /// Take the owned grammar text.
++    #[must_use]
++    pub fn into_string(self) -> String {
++        self.text
++    }
++}
++
++/// A refusal to compile a graph to argument grammars. Nothing partial escapes.
++#[derive(Debug)]
++#[non_exhaustive]
++pub enum GbnfError {
++    /// The graph has no MCP Extended manifest projection to derive schemas from.
++    Manifest(Box<CodecError>),
++    /// The projected manifest could not be read back as JSON.
++    Json(ParseFailure),
++    /// A schema construct the grammar cannot lower soundly: a `$ref`, a boolean
++    /// schema, a type that names no supported type, an array without `items`, an
++    /// `enum` member that is not a scalar or contradicts the type, a required
++    /// member without a property schema, `oneOf` alternatives that may overlap,
++    /// a `pattern` or numeric bound beside `anyOf` or `oneOf`, bounds, a pattern
++    /// or an `enum` that admit no value (an unsatisfiable enum), a `pattern` with a
++    /// look-around, a keyword not yet translated (`minLength`, `maxLength`,
++    /// `minItems`, `maxItems`, `minProperties`, `maxProperties`, `multipleOf`), or
++    /// `uniqueItems: true`, which no context-free grammar states.
++    Unsupported {
++        /// The tool's name.
++        tool: String,
++        /// RFC 6901 pointer from the schema root.
++        pointer: String,
++        /// What the grammar cannot represent.
++        reason: &'static str,
++    },
++    /// A `pattern` that is not valid under the Unicode reading of the ECMAScript
++    /// dialect.
++    Pattern {
++        /// The tool's name.
++        tool: String,
++        /// RFC 6901 pointer from the schema root.
++        pointer: String,
++        /// The syntax error and its offset in the pattern.
++        cause: PatternError,
++    },
++    /// The `pattern` or numeric bounds beside an `enum` or `const` are not a valid
++    /// schema, so its members cannot be filtered.
++    Constraint {
++        /// The tool's name.
++        tool: String,
++        /// RFC 6901 pointer from the schema root.
++        pointer: String,
++        /// Why the keywords do not compile.
++        cause: Box<CompilationError>,
++    },
++    /// A recorded loss is not registered in the caller's loss profile.
++    Unsound(LossSoundnessError),
++    /// The caller refused further work or cancelled the operation.
++    Resource(StopReason),
++}
++
++impl fmt::Display for GbnfError {
++    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Manifest(cause) => write!(output, "gbnf manifest: {cause}"),
++            Self::Json(cause) => write!(output, "gbnf schema JSON: {cause}"),
++            Self::Unsupported {
++                tool,
++                pointer,
++                reason,
++            } => write!(output, "tool {tool}: {pointer}: {reason}"),
++            Self::Pattern {
++                tool,
++                pointer,
++                cause,
++            } => write!(output, "tool {tool}: {pointer}: invalid pattern: {cause}"),
++            Self::Constraint {
++                tool,
++                pointer,
++                cause,
++            } => write!(
++                output,
++                "tool {tool}: {pointer}: invalid constraint: {cause}"
++            ),
++            Self::Unsound(cause) => write!(output, "unregistered loss: {cause}"),
++            Self::Resource(cause) => write!(output, "gbnf stopped: {cause:?}"),
++        }
++    }
++}
++
++impl std::error::Error for GbnfError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::Manifest(cause) => Some(cause.as_ref()),
++            Self::Json(cause) => Some(cause),
++            Self::Pattern { cause, .. } => Some(cause),
++            Self::Constraint { cause, .. } => Some(cause.as_ref()),
++            _ => None,
++        }
++    }
++}
++
++/// Compile every tool of `graph` to the GBNF grammar of its argument object.
++///
++/// Grammars are ordered by tool name bytes and are deterministic: the same graph
++/// yields the same bytes. The ledger holds one `LossLedger` entry per omitted
++/// source construct under the registered representation `llama-gbnf`, in this
++/// order for each tool: the rows common to every lane (authorization, session
++/// binding, taint, recovery hints, confinement, resource ceilings, context
++/// contract, annotations, RDF binding and description, each located at its
++/// source node), `json-string-validity-not-expressible` when the grammar
++/// generates a string, `output-shape-not-expressible`, and
++/// `input-shape-not-expressible` listing every schema keyword the grammar did not
++/// carry by pointer. A construct the upstream schema compiler already dropped is
++/// carried as an `input-shape-not-expressible` entry quoting its note. The ledger
++/// is checked against the vocabulary's loss profile before it is returned.
++///
++/// ```
++/// use purrassist_core::{Budget, Governor};
++/// use purrassist_toolgraph::{ToolGraph, lanes};
++/// # use purrassist_toolgraph::{PrefixTable, TermBindings, Vocabulary, TERM_NAMES, register_loss_profile};
++/// # use purrdf_core::loss::LossProfile;
++/// # let namespace = "https://example.org/toolgraph#";
++/// # let vocabulary = Vocabulary::new("pa", PrefixTable(vec![("pa".into(), namespace.into())]),
++/// #     TermBindings { namespace_iri: namespace.into(), local_names: TERM_NAMES.iter()
++/// #         .map(|name| ((*name).into(), format!("{namespace}{name}"))).collect() },
++/// #     register_loss_profile(LossProfile::builtin()).unwrap()).unwrap();
++/// let mut governor = Governor::new(Budget::default());
++/// let graph = ToolGraph::load(b"", "text/turtle", None, &vocabulary, &mut governor).unwrap();
++/// let (grammars, losses) = lanes::gbnf(&graph, &vocabulary, &mut governor).unwrap();
++/// assert!(grammars.is_empty());
++/// assert!(losses.is_empty());
++/// ```
++///
++/// # Errors
++/// [`GbnfError::Manifest`] when the graph has no manifest projection (for
++/// example a shape without exactly one `sh:targetClass`),
++/// [`GbnfError::Unsupported`] for a schema construct the grammar cannot lower
++/// soundly, [`GbnfError::Unsound`] when a ledger entry is not registered, and
++/// [`GbnfError::Resource`] when the governor stops the operation. Nothing is
++/// returned on failure.
++pub fn gbnf(
++    graph: &ToolGraph,
++    vocabulary: &Vocabulary,
++    governor: &mut Governor,
++) -> Result<(Vec<ToolGrammar>, LossLedger), GbnfError> {
++    let (manifest, upstream) = mcp::encode(graph, vocabulary, governor)
++        .map_err(|cause| GbnfError::Manifest(Box::new(cause)))?;
++    let root = json::parse_with(manifest.as_str(), governor).map_err(GbnfError::Json)?;
++    let declarations = match root.get("tools").map(|node| &node.value) {
++        Some(Value::Array(items)) => items.as_slice(),
++        _ => &[],
++    };
++    let mut order: Vec<usize> = (0..graph.tools().len()).collect();
++    order.sort_by(|&left, &right| graph.tools()[left].name.cmp(&graph.tools()[right].name));
++    let mut grammars = Vec::with_capacity(order.len());
++    let mut ledger = LossLedger::new();
++    for index in order {
++        let tool = &graph.tools()[index];
++        let schema = declarations
++            .get(index)
++            .and_then(|node| node.get("inputSchema"))
++            .ok_or_else(|| GbnfError::Unsupported {
++                tool: tool.name.clone(),
++                pointer: "/inputSchema".to_owned(),
++                reason: "the manifest declaration has no such schema",
++            })?;
++        let mut builder = Builder::new(&tool.name);
++        let text = builder.grammar(schema, governor)?;
++        record_tool(&mut ledger, tool, ProjectionTarget::Gbnf);
++        record_schemas(&mut ledger, tool, &builder);
++        grammars.push(ToolGrammar {
++            tool: tool.name.clone(),
++            text,
++        });
++    }
++    record_upstream(
++        &mut ledger,
++        &upstream,
++        ProjectionTarget::Gbnf,
++        "input-shape-not-expressible",
++    );
++    check_ledger_sound_in(
++        vocabulary.loss_profile(),
++        &ledger,
++        SOURCE_REPRESENTATION,
++        ProjectionTarget::Gbnf.representation(),
++    )
++    .map_err(|cause| GbnfError::Unsound(cause.into_owned()))?;
++    Ok((grammars, ledger))
++}
++
++/// Which helper rules a grammar references.
++#[derive(Default)]
++struct Helpers {
++    string: bool,
++    integer: bool,
++    number: bool,
++}
++
++/// One tool's grammar under construction.
++struct Builder<'a> {
++    tool: &'a str,
++    /// Named rules in creation order; a reserved rule has an empty body until filled.
++    rules: Vec<(String, String)>,
++    helpers: Helpers,
++    /// Pointers of omitted constructs, in schema order.
++    omitted: Vec<String>,
++}
++
++// Bits of the JSON kinds an alternative can generate, for `oneOf` overlap.
++const STRING: u8 = 1;
++const INTEGER: u8 = 2;
++const NUMBER: u8 = 4 | INTEGER;
++const BOOLEAN: u8 = 8;
++const NULL: u8 = 16;
++const ARRAY: u8 = 32;
++const OBJECT: u8 = 64;
++
++/// The keywords this lane lowers exactly, for the types they apply to.
++const CONSTRAINTS: [&str; 5] = [
++    "pattern",
++    "minimum",
++    "maximum",
++    "exclusiveMinimum",
++    "exclusiveMaximum",
++];
++
++impl<'a> Builder<'a> {
++    const fn new(tool: &'a str) -> Self {
++        Self {
++            tool,
++            rules: Vec::new(),
++            helpers: Helpers {
++                string: false,
++                integer: false,
++                number: false,
++            },
++            omitted: Vec::new(),
++        }
++    }
++
++    fn unsupported(&self, pointer: &str, reason: &'static str) -> GbnfError {
++        GbnfError::Unsupported {
++            tool: self.tool.to_owned(),
++            pointer: pointer.to_owned(),
++            reason,
++        }
++    }
++
++    /// The complete grammar text of an input schema, which must be an object.
++    fn grammar(&mut self, schema: &Node, governor: &mut Governor) -> Result<String, GbnfError> {
++        match schema.get("type").map(|node| &node.value) {
++            Some(Value::String(name)) if name == "object" => {}
++            _ => return Err(self.unsupported("", "an input schema must have type object")),
++        }
++        let start = self.lower(schema, "", governor)?;
++        let mut text = format!("root ::= {start}\n");
++        for (name, body) in &self.rules {
++            let _ = writeln!(text, "{name} ::= {body}");
++        }
++        text.push_str("ws ::= [ \\t\\n\\r]*\n");
++        if self.helpers.string {
++            text.push_str(STRING_RULES);
++        }
++        if self.helpers.integer || self.helpers.number {
++            text.push_str("integer ::= \"-\"? (\"0\" | [1-9] [0-9]*)\n");
++        }
++        if self.helpers.number {
++            text.push_str("number ::= integer (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n");
++        }
++        Ok(text)
++    }
++
++    /// Reserve a rule name, fill it later with [`Self::define`].
++    fn reserve(&mut self, kind: &str) -> usize {
++        self.rules
++            .push((format!("{kind}-{}", self.rules.len() + 1), String::new()));
++        self.rules.len() - 1
++    }
++
++    fn define(&mut self, slot: usize, body: String) -> String {
++        self.rules[slot].1 = body;
++        self.rules[slot].0.clone()
++    }
++
++    /// The expression generating every value of `schema`.
++    fn lower(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        governor
++            .charge(Resource::Work, 1)
++            .map_err(GbnfError::Resource)?;
++        if !matches!(schema.value, Value::Object(_)) {
++            return Err(self.unsupported(pointer, "a boolean schema has no grammar"));
++        }
++        if schema.get("$ref").is_some() {
++            return Err(self.unsupported(pointer, "a schema reference has no grammar"));
++        }
++        let fixed: Vec<(&'static str, &Node)> = ["enum", "const"]
++            .into_iter()
++            .filter_map(|key| schema.get(key).map(|node| (key, node)))
++            .collect();
++        let alternatives: Vec<(&'static str, &Node)> = ["anyOf", "oneOf"]
++            .into_iter()
++            .filter_map(|key| schema.get(key).map(|node| (key, node)))
++            .collect();
++        match (fixed.as_slice(), alternatives.as_slice()) {
++            ([(key, node)], _) => self.literals(schema, pointer, key, node, governor),
++            ([], [(key, node)]) => self.union(schema, pointer, key, node, governor),
++            ([], []) => self.typed(schema, pointer, governor),
++            _ => Err(self.unsupported(
++                pointer,
++                "enum and const together, or anyOf and oneOf together",
++            )),
++        }
++    }
++
++    /// An `enum` or `const`: the exact JSON text of each scalar member.
++    fn literals(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        key: &'static str,
++        node: &Node,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        let members: &[Node] = match (&node.value, key) {
++            (Value::Array(items), "enum") => items,
++            (_, "const") => std::slice::from_ref(node),
++            _ => return Err(self.unsupported(pointer, "enum must be an array")),
++        };
++        if members.is_empty() {
++            return Err(self.unsupported(pointer, "an empty enum admits no value"));
++        }
++        self.refuse_untranslated(schema, pointer, "*")?;
++        let types = type_names(schema);
++        let constraint = self.constraint(schema, pointer, governor)?;
++        let mut names = Vec::with_capacity(members.len());
++        for member in members {
++            let admitted = match &member.value {
++                Value::String(_) => ["string"].as_slice(),
++                Value::Bool(_) => &["boolean"],
++                Value::Null => &["null"],
++                Value::Number(number) if number.is_integer() => &["integer", "number"],
++                Value::Number(_) => &["number"],
++                _ => {
++                    return Err(self.unsupported(pointer, "an enum member that is not a scalar"));
++                }
++            };
++            if types
++                .as_ref()
++                .is_some_and(|types| !types.iter().any(|name| admitted.contains(name)))
++            {
++                return Err(self.unsupported(pointer, "an enum member outside the schema type"));
++            }
++            // A member the sibling pattern or bounds reject is not a value.
++            if let Some(constraint) = &constraint
++                && !constraint
++                    .validate_with(member, governor)
++                    .map_err(GbnfError::Resource)?
++                    .valid
++            {
++                continue;
++            }
++            let text = member
++                .to_json_governed(governor)
++                .map_err(GbnfError::Resource)?;
++            names.push(literal(&text));
++        }
++        if names.is_empty() {
++            return Err(self.unsupported(pointer, "no enum member satisfies its pattern or bounds"));
++        }
++        let mut carried = vec![key, "type"];
++        carried.extend(CONSTRAINTS);
++        self.omitted.extend(uncarried(schema, pointer, &carried));
++        Ok(alternation(names))
++    }
++
++    /// An `anyOf` or `oneOf`; `oneOf` alternatives must not overlap.
++    fn union(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        key: &str,
++        node: &Node,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        let Value::Array(items) = &node.value else {
++            return Err(self.unsupported(pointer, "anyOf and oneOf must be arrays"));
++        };
++        self.refuse_untranslated(schema, pointer, "*")?;
++        if CONSTRAINTS.iter().any(|name| schema.get(name).is_some()) {
++            return Err(
++                self.unsupported(pointer, "a pattern or numeric bound beside anyOf or oneOf")
++            );
++        }
++        if items.is_empty() {
++            return Err(self.unsupported(pointer, "an empty anyOf or oneOf admits no value"));
++        }
++        let mut seen = 0_u8;
++        let mut names = Vec::with_capacity(items.len());
++        for (position, item) in items.iter().enumerate() {
++            let child = format!("{pointer}/{key}/{position}");
++            if key == "oneOf" {
++                let kinds = kinds(item).ok_or_else(|| {
++                    self.unsupported(&child, "a oneOf alternative whose overlap is undecidable")
++                })?;
++                if seen & kinds != 0 {
++                    return Err(self.unsupported(&child, "oneOf alternatives that overlap"));
++                }
++                seen |= kinds;
++            }
++            names.push(self.lower(item, &child, governor)?);
++        }
++        self.omitted
++            .extend(uncarried(schema, pointer, &["anyOf", "oneOf"]));
++        Ok(alternation(names))
++    }
++
++    /// A schema selected by its `type` keyword.
++    fn typed(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        let Some(types) = type_names(schema) else {
++            return Err(self.unsupported(pointer, "a schema without type, enum, anyOf or oneOf"));
++        };
++        // A pattern or bound is lowered, ledgered by name, or inert for the type.
++        let mut carried = vec!["type"];
++        carried.extend(CONSTRAINTS);
++        let mut names = Vec::with_capacity(types.len());
++        for name in &types {
++            self.refuse_untranslated(schema, pointer, name)?;
++            match *name {
++                "string" => names.push(self.string(schema, pointer, governor)?),
++                "integer" => names.push(self.numeric(schema, pointer, true, governor)?),
++                "number" => names.push(self.numeric(schema, pointer, false, governor)?),
++                "boolean" => names.push(r#"("true" | "false")"#.to_owned()),
++                "null" => names.push(r#""null""#.to_owned()),
++                "array" => {
++                    carried.push("items");
++                    names.push(self.array(schema, pointer, governor)?);
++                }
++                "object" => {
++                    carried.extend(["properties", "required"]);
++                    if matches!(
++                        schema.get("additionalProperties").map(|node| &node.value),
++                        Some(Value::Bool(false))
++                    ) {
++                        carried.push("additionalProperties");
++                    }
++                    names.push(self.object(schema, pointer, governor)?);
++                }
++                _ => return Err(self.unsupported(pointer, "an unknown type name")),
++            }
++        }
++        self.omitted.extend(uncarried(schema, pointer, &carried));
++        Ok(alternation(names))
++    }
++
++    /// Refuse a size, divisibility or uniqueness keyword of the type `name`.
++    ///
++    /// A keyword a grammar can state but this compiler does not translate yet is
++    /// refused as not yet translated; uniqueness of items no context-free
++    /// grammar states, and is refused as not expressible.
++    fn refuse_untranslated(
++        &self,
++        schema: &Node,
++        pointer: &str,
++        name: &str,
++    ) -> Result<(), GbnfError> {
++        let keywords: &[(&str, &'static str)] = match name {
++            "string" => &[
++                ("minLength", "minLength is not yet translated"),
++                ("maxLength", "maxLength is not yet translated"),
++            ],
++            "array" => &[
++                ("minItems", "minItems is not yet translated"),
++                ("maxItems", "maxItems is not yet translated"),
++                (
++                    "uniqueItems",
++                    "uniqueItems is not expressible by a context-free grammar",
++                ),
++            ],
++            "object" => &[
++                ("minProperties", "minProperties is not yet translated"),
++                ("maxProperties", "maxProperties is not yet translated"),
++            ],
++            "integer" | "number" => &[("multipleOf", "multipleOf is not yet translated")],
++            // An `enum`, `const`, `anyOf` or `oneOf` has no type of its own: any is refused.
++            "*" => &[
++                ("minLength", "minLength is not yet translated"),
++                ("maxLength", "maxLength is not yet translated"),
++                ("minItems", "minItems is not yet translated"),
++                ("maxItems", "maxItems is not yet translated"),
++                (
++                    "uniqueItems",
++                    "uniqueItems is not expressible by a context-free grammar",
++                ),
++                ("minProperties", "minProperties is not yet translated"),
++                ("maxProperties", "maxProperties is not yet translated"),
++                ("multipleOf", "multipleOf is not yet translated"),
++            ],
++            _ => &[],
++        };
++        for &(keyword, reason) in keywords {
++            let present = schema.get(keyword).is_some_and(|node| {
++                // `uniqueItems: false` constrains nothing.
++                !matches!(node.value, Value::Bool(false))
++            });
++            if present {
++                return Err(self.unsupported(&format!("{pointer}/{keyword}"), reason));
++            }
++        }
++        Ok(())
++    }
++
++    /// A string: the generic JSON string, or the language of its `pattern`.
++    fn string(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        let Some(node) = schema.get("pattern") else {
++            self.helpers.string = true;
++            return Ok("string".to_owned());
++        };
++        let child = format!("{pointer}/pattern");
++        let Value::String(source) = &node.value else {
++            return Err(self.unsupported(&child, "a pattern that is not a string"));
++        };
++        match regex::lower(source, governor) {
++            Ok(Lowered::Automaton(automaton)) => {
++                let slots: Vec<usize> = automaton
++                    .states
++                    .iter()
++                    .map(|_| self.reserve("pattern"))
++                    .collect();
++                let names: Vec<String> = slots.iter().map(|&slot| self.rules[slot].0.clone()).collect();
++                for (&slot, state) in slots.iter().zip(&automaton.states) {
++                    let mut alternatives: Vec<String> = state
++                        .edges
++                        .iter()
++                        .map(|&(first, last, target)| {
++                            format!("{} {}", json_edge(first, last), names[target])
++                        })
++                        .collect();
++                    if state.accepting {
++                        alternatives.push(literal("\""));
++                    }
++                    self.define(slot, alternatives.join(" | "));
++                }
++                let entry = self.reserve("string");
++                Ok(self.define(entry, format!("{} {}", literal("\""), names[0])))
++            }
++            Ok(Lowered::Backreference) => {
++                self.helpers.string = true;
++                self.omitted.push(format!(
++                    "{child} (back-reference: the accepted set repeats an earlier match, which no context-free grammar states)"
++                ));
++                Ok("string".to_owned())
++            }
++            Ok(Lowered::Lookaround) => Err(self.unsupported(
++                &child,
++                "look-around is not yet translated: its exact translation needs an automaton product with a size bound, filed as issue 224",
++            )),
++            Err(Failure::Syntax(cause)) => Err(GbnfError::Pattern {
++                tool: self.tool.to_owned(),
++                pointer: child,
++                cause,
++            }),
++            Err(Failure::Empty) => {
++                Err(self.unsupported(&child, "no string contains a match of the pattern"))
++            }
++            Err(Failure::Unnamed) => Err(self.unsupported(
++                &child,
++                "a pattern construct that needs backtracking and is neither a back-reference nor a look-around",
++            )),
++            Err(Failure::Resource(reason)) => Err(GbnfError::Resource(reason)),
++        }
++    }
++
++    /// An integer or number: the generic helper, or the digits its bounds admit.
++    fn numeric(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        integer: bool,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        let lower = self.bound(
++            schema,
++            pointer,
++            ["minimum", "exclusiveMinimum"],
++            true,
++            governor,
++        )?;
++        let upper = self.bound(
++            schema,
++            pointer,
++            ["maximum", "exclusiveMaximum"],
++            false,
++            governor,
++        )?;
++        if lower.is_none() && upper.is_none() {
++            if integer {
++                self.helpers.integer = true;
++                return Ok("integer".to_owned());
++            }
++            self.helpers.number = true;
++            return Ok("number".to_owned());
++        }
++        let body = if integer {
++            decimal::integer(lower.as_ref(), upper.as_ref())
++        } else {
++            decimal::number(lower.as_ref(), upper.as_ref())
++        };
++        let Some(body) = body else {
++            return Err(self.unsupported(pointer, "numeric bounds that admit no value"));
++        };
++        let slot = self.reserve(if integer {
++            "bounded-integer"
++        } else {
++            "bounded-number"
++        });
++        Ok(self.define(slot, body))
++    }
++
++    /// The tightest of the inclusive and exclusive forms of one bound.
++    fn bound(
++        &self,
++        schema: &Node,
++        pointer: &str,
++        keys: [&'static str; 2],
++        lower: bool,
++        governor: &mut Governor,
++    ) -> Result<Option<Bound>, GbnfError> {
++        let mut tightest: Option<(&Number, bool)> = None;
++        for (key, exclusive) in keys.into_iter().zip([false, true]) {
++            let Some(node) = schema.get(key) else {
++                continue;
++            };
++            let Value::Number(number) = &node.value else {
++                return Err(
++                    self.unsupported(&format!("{pointer}/{key}"), "a bound that is not a number")
++                );
++            };
++            let wins = tightest.is_none_or(|(held, held_exclusive)| match number.compare(held) {
++                std::cmp::Ordering::Equal => exclusive && !held_exclusive,
++                order => (order.is_gt()) == lower,
++            });
++            if wins {
++                tightest = Some((number, exclusive));
++            }
++        }
++        tightest
++            .map(|(number, exclusive)| {
++                Decimal::read(number, governor)
++                    .map(|value| Bound::new(value, exclusive))
++                    .map_err(|cause| match cause {
++                        BoundError::Resource(reason) => GbnfError::Resource(reason),
++                        BoundError::Exponent => self.unsupported(
++                            pointer,
++                            "a bound whose exponent does not fit a digit grammar",
++                        ),
++                    })
++            })
++            .transpose()
++    }
++
++    /// The sibling `pattern` and bounds of an `enum` or `const` as one schema.
++    fn constraint(
++        &self,
++        schema: &Node,
++        pointer: &str,
++        governor: &mut Governor,
++    ) -> Result<Option<Schema>, GbnfError> {
++        let mut members = Vec::new();
++        for key in CONSTRAINTS {
++            if let Some(node) = schema.get(key) {
++                let text = node
++                    .to_json_governed(governor)
++                    .map_err(GbnfError::Resource)?;
++                members.push(format!("\"{key}\":{text}"));
++            }
++        }
++        if members.is_empty() {
++            return Ok(None);
++        }
++        Schema::compile_governed(&format!("{{{}}}", members.join(",")), governor)
++            .map(Some)
++            .map_err(|cause| match cause {
++                CompilationError::Resource(reason) => GbnfError::Resource(reason),
++                invalid @ CompilationError::InvalidSchema(_) => GbnfError::Constraint {
++                    tool: self.tool.to_owned(),
++                    pointer: pointer.to_owned(),
++                    cause: Box::new(invalid),
++                },
++            })
++    }
++
++    fn array(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        let Some(items) = schema.get("items") else {
++            return Err(self.unsupported(pointer, "an array schema without items"));
++        };
++        let slot = self.reserve("array");
++        let item = self.lower(items, &format!("{pointer}/items"), governor)?;
++        Ok(self.define(
++            slot,
++            format!(r#""[" ws ({item} (ws "," ws {item})*)? ws "]""#),
++        ))
++    }
++
++    /// Required members first, then optional members, each in property order.
++    fn object(
++        &mut self,
++        schema: &Node,
++        pointer: &str,
++        governor: &mut Governor,
++    ) -> Result<String, GbnfError> {
++        let required: Vec<&str> = match schema.get("required").map(|node| &node.value) {
++            Some(Value::Array(items)) => items.iter().filter_map(Node::as_str).collect(),
++            _ => Vec::new(),
++        };
++        let properties: &[json::Member] = match schema.get("properties").map(|node| &node.value) {
++            Some(Value::Object(members)) => members,
++            _ => &[],
++        };
++        if required
++            .iter()
++            .any(|key| !properties.iter().any(|member| member.key == *key))
++        {
++            let child = format!("{pointer}/required");
++            return Err(self.unsupported(&child, "a required member without a property schema"));
++        }
++        if !matches!(
++            schema.get("additionalProperties").map(|node| &node.value),
++            Some(Value::Bool(false))
++        ) {
++            self.omitted.push(format!(
++                "{pointer}/additionalProperties (members outside properties are not generated)"
++            ));
++        }
++        let slot = self.reserve("object");
++        let (mut mandatory, mut optional) = (Vec::new(), Vec::new());
++        for member in properties {
++            let child = format!(
++                "{pointer}/properties/{}",
++                json::pointer_segment(&member.key)
++            );
++            let value = self.lower(&member.value, &child, governor)?;
++            let key = json::quote_governed(&member.key, governor).map_err(GbnfError::Resource)?;
++            let rule = self.reserve("member");
++            let rule = self.define(rule, format!(r#"{} ws ":" ws {value}"#, literal(&key)));
++            if required.contains(&member.key.as_str()) {
++                mandatory.push(rule);
++            } else {
++                optional.push(rule);
++            }
++        }
++        let comma = r#"ws "," ws"#;
++        let mut inner = mandatory.join(&format!(" {comma} "));
++        if mandatory.is_empty() {
++            // The first member present opens the object, so each choice owns the
++            // optional members that follow it.
++            let choices: Vec<String> = (0..optional.len())
++                .map(|first| {
++                    let mut choice = optional[first].clone();
++                    for rule in &optional[first + 1..] {
++                        let _ = write!(choice, " ({comma} {rule})?");
++                    }
++                    choice
++                })
++                .collect();
++            if !choices.is_empty() {
++                inner = format!("({})?", choices.join(" | "));
++            }
++        } else {
++            for rule in &optional {
++                let _ = write!(inner, " ({comma} {rule})?");
++            }
++        }
++        let body = if inner.is_empty() {
++            r#""{" ws "}""#.to_owned()
++        } else {
++            format!(r#""{{" ws {inner} ws "}}""#)
++        };
++        Ok(self.define(slot, body))
++    }
++}
++
++/// The helper rules a grammar with strings references.
++const STRING_RULES: &str = concat!(
++    "string ::= \"\\\"\" character* \"\\\"\"\n",
++    "character ::= [^\"\\\\\\x00-\\x1f] | \"\\\\\" ([\"\\\\/bfnrt] | \"u\" hex hex hex hex)\n",
++    "hex ::= [0-9a-fA-F]\n",
++);
++
++/// The `type` names of a schema, whether one string or an array of strings.
++fn type_names(schema: &Node) -> Option<Vec<&str>> {
++    match schema.get("type").map(|node| &node.value) {
++        Some(Value::String(name)) => Some(vec![name.as_str()]),
++        Some(Value::Array(items)) => items.iter().map(Node::as_str).collect(),
++        _ => None,
++    }
++}
++
++/// The JSON kinds a schema can generate, or `None` when they cannot be told.
++fn kinds(schema: &Node) -> Option<u8> {
++    for key in ["enum", "const"] {
++        if let Some(node) = schema.get(key) {
++            let members = match &node.value {
++                Value::Array(items) if key == "enum" => items.as_slice(),
++                _ if key == "const" => std::slice::from_ref(node),
++                _ => return None,
++            };
++            return members.iter().try_fold(0, |all, member| {
++                Some(
++                    all | match &member.value {
++                        Value::String(_) => STRING,
++                        Value::Bool(_) => BOOLEAN,
++                        Value::Null => NULL,
++                        Value::Number(number) if number.is_integer() => INTEGER,
++                        Value::Number(_) => NUMBER,
++                        _ => return None,
++                    },
++                )
++            });
++        }
++    }
++    for key in ["anyOf", "oneOf"] {
++        if let Some(node) = schema.get(key) {
++            let Value::Array(items) = &node.value else {
++                return None;
++            };
++            return items
++                .iter()
++                .try_fold(0, |all, item| Some(all | kinds(item)?));
++        }
++    }
++    type_names(schema)?.iter().try_fold(0, |all, name| {
++        Some(
++            all | match *name {
++                "string" => STRING,
++                "integer" => INTEGER,
++                "number" => NUMBER,
++                "boolean" => BOOLEAN,
++                "null" => NULL,
++                "array" => ARRAY,
++                "object" => OBJECT,
++                _ => return None,
++            },
++        )
++    })
++}
++
++/// `expressions` as one parenthesized alternation, or the single expression itself.
++fn alternation(mut expressions: Vec<String>) -> String {
++    expressions.dedup();
++    match expressions.as_slice() {
++        [only] => only.clone(),
++        _ => format!("({})", expressions.join(" | ")),
++    }
++}
++
++/// The JSON text of the scalar values `first..=last` inside a string: each raw
++/// unless JSON requires an escape (the quote, the backslash, a control character).
++fn json_edge(first: char, last: char) -> String {
++    let (low, high) = (u32::from(first), u32::from(last));
++    let (mut runs, mut escaped) = (Vec::new(), Vec::new());
++    let mut cursor = low;
++    for (start, end) in [(0, 0x1F), (0x22, 0x22), (0x5C, 0x5C)] {
++        if end < cursor || start > high {
++            continue;
++        }
++        if start > cursor {
++            runs.push((cursor, start - 1));
++        }
++        escaped.extend(start.max(low)..=end.min(high));
++        cursor = end + 1;
++    }
++    if cursor <= high {
++        runs.push((cursor, high));
++    }
++    let mut parts = Vec::new();
++    match runs.as_slice() {
++        [] => {}
++        &[(only, same)] if only == same => {
++            parts.push(literal(&char::from_u32(only).map_or_default(String::from)));
++        }
++        ranges => {
++            let mut class = String::from("[");
++            for &(start, end) in ranges {
++                class.push_str(&class_character(start));
++                if end != start {
++                    class.push('-');
++                    class.push_str(&class_character(end));
++                }
++            }
++            class.push(']');
++            parts.push(class);
++        }
++    }
++    for code in escaped {
++        let text = match code {
++            0x22 => "\\\"".to_owned(),
++            0x5C => "\\\\".to_owned(),
++            0x08 => "\\b".to_owned(),
++            0x09 => "\\t".to_owned(),
++            0x0A => "\\n".to_owned(),
++            0x0C => "\\f".to_owned(),
++            0x0D => "\\r".to_owned(),
++            other => format!("\\u{other:04x}"),
++        };
++        parts.push(literal(&text));
++    }
++    match parts.as_slice() {
++        [only] => only.clone(),
++        _ => format!("({})", parts.join(" | ")),
++    }
++}
++
++/// One scalar value inside a GBNF character class.
++fn class_character(code: u32) -> String {
++    match char::from_u32(code) {
++        Some(character) if character.is_ascii_alphanumeric() => character.to_string(),
++        _ if code <= 0xFF => format!("\\x{code:02X}"),
++        _ if code <= 0xFFFF => format!("\\u{code:04X}"),
++        _ => format!("\\U{code:08X}"),
++    }
++}
++
++/// `text` as a GBNF string literal.
++fn literal(text: &str) -> String {
++    let mut output = String::with_capacity(text.len() + 2);
++    output.push('"');
++    for character in text.chars() {
++        match character {
++            '"' => output.push_str("\\\""),
++            '\\' => output.push_str("\\\\"),
++            '\n' => output.push_str("\\n"),
++            '\r' => output.push_str("\\r"),
++            '\t' => output.push_str("\\t"),
++            control if control.is_control() => {
++                let _ = write!(output, "\\x{:02X}", u32::from(control));
++            }
++            other => output.push(other),
++        }
++    }
++    output.push('"');
++    output
++}
++
++/// The omission rows of a tool's grammar, in the documented order.
++fn record_schemas(ledger: &mut LossLedger, tool: &Tool, builder: &Builder<'_>) {
++    let target = ProjectionTarget::Gbnf;
++    if builder.helpers.string {
++        ledger.record(entry_for(
++            target,
++            "json-string-validity-not-expressible",
++            "the string grammar admits lone UTF-16 surrogate escapes and does not check Unicode validity; mandatory check validate-input".to_owned(),
++            Some((&tool.input_shape, "inputSchema")),
++        ));
++    }
++    ledger.record(entry_for(
++        target,
++        "output-shape-not-expressible",
++        "the grammar covers arguments only; mandatory check validate-output".to_owned(),
++        Some((&tool.output_shape, "outputSchema")),
++    ));
++    if !builder.omitted.is_empty() {
++        let note = format!(
++            "schema constructs omitted from the grammar at {}; mandatory check validate-input",
++            builder.omitted.join(", ")
++        );
++        ledger.record(entry_for(
++            target,
++            "input-shape-not-expressible",
++            note,
++            Some((&tool.input_shape, "inputSchema")),
++        ));
++    }
++}
++
++mod decimal;
++mod regex;
++#[cfg(test)]
++mod tests;
+diff --git crates/toolgraph/src/lanes/gbnf/decimal.rs crates/toolgraph/src/lanes/gbnf/decimal.rs
+new file mode 100644
+index 00000000..e50e7e7f
+--- /dev/null
++++ crates/toolgraph/src/lanes/gbnf/decimal.rs
+@@ -0,0 +1,608 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Numeric bounds as digit grammars.
++//!
++//! A bound is read from its exact decimal spelling, so `1e2`, `100.0` and `100`
++//! are one bound and nothing is rounded through a machine float.
++//!
++//! # Exactness
++//!
++//! For `integer` the grammar generates the plain decimal spelling of every
++//! integer in the interval and of no other value. For `number` it generates the
++//! plain decimal spelling (a sign, an integer part without a leading zero and
++//! an optional fraction of at least one digit, trailing zeros allowed) of every
++//! decimal in the interval and of no other value. The value set is the exact
++//! set of finite decimals the bounds admit, with no rounding at either end: a
++//! strict bound excludes its own value and a fraction is compared digit by
++//! digit, so `0.1` against a bound of `0.10` and against `0.1000000001` is
++//! decided exactly. A number with an exponent is not generated when a bound is
++//! present: the relation between an exponent's value and a mantissa's length is
++//! not context-free, and every finite decimal already has a plain spelling, so
++//! the set of values is unchanged and only the spelling is canonical.
++
++use purrassist_core::{Governor, contract::Resource, json::Number};
++
++/// An exact decimal: a sign, the integer digits without leading zeros and the
++/// fraction digits without trailing zeros. Zero is never negative.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(super) struct Decimal {
++    negative: bool,
++    int: String,
++    frac: String,
++}
++
++/// A bound: a decimal and whether the bound's own value is excluded.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(super) struct Bound {
++    value: Decimal,
++    exclusive: bool,
++}
++
++/// Why a bound could not be read.
++#[derive(Debug)]
++pub(super) enum BoundError {
++    /// The spelling has an exponent that does not fit the digit grammar.
++    Exponent,
++    /// The governor refused the digits.
++    Resource(purrassist_core::StopReason),
++}
++
++impl Decimal {
++    /// Read the exact value of `number`, charging one work unit per digit.
++    pub(super) fn read(number: &Number, governor: &mut Governor) -> Result<Self, BoundError> {
++        let text = number.as_str();
++        let (negative, text) = text
++            .strip_prefix('-')
++            .map_or((false, text), |rest| (true, rest));
++        let (mantissa, exponent) = match text.split_once(['e', 'E']) {
++            Some((mantissa, exponent)) => (
++                mantissa,
++                exponent.parse::<i64>().map_err(|_| BoundError::Exponent)?,
++            ),
++            None => (text, 0),
++        };
++        let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
++        let digits = format!("{whole}{fraction}");
++        let point = i64::try_from(whole.len())
++            .map_err(|_| BoundError::Exponent)?
++            .checked_add(exponent)
++            .ok_or(BoundError::Exponent)?;
++        // The zeros an exponent spells out are admitted before they are built.
++        governor
++            .charge(
++                Resource::Work,
++                point
++                    .unsigned_abs()
++                    .saturating_add(u64::try_from(digits.len()).unwrap_or(u64::MAX)),
++            )
++            .map_err(BoundError::Resource)?;
++        let (int, frac) = match usize::try_from(point) {
++            Ok(point) if point >= digits.len() => (
++                format!("{digits}{}", "0".repeat(point - digits.len())),
++                String::new(),
++            ),
++            Ok(point) => (digits[..point].to_owned(), digits[point..].to_owned()),
++            Err(_) => {
++                let lead = usize::try_from(-point).map_err(|_| BoundError::Exponent)?;
++                (String::new(), format!("{}{digits}", "0".repeat(lead)))
++            }
++        };
++        let int = int.trim_start_matches('0');
++        let frac = frac.trim_end_matches('0');
++        let zero = int.is_empty() && frac.is_empty();
++        Ok(Self {
++            negative: negative && !zero,
++            int: if int.is_empty() { "0" } else { int }.to_owned(),
++            frac: frac.to_owned(),
++        })
++    }
++
++    const fn is_zero(&self) -> bool {
++        self.int.len() == 1 && self.int.as_bytes()[0] == b'0' && self.frac.is_empty()
++    }
++}
++
++impl Bound {
++    pub(super) const fn new(value: Decimal, exclusive: bool) -> Self {
++        Self { value, exclusive }
++    }
++}
++
++/// `"text"` as a GBNF literal of ASCII digits and signs.
++fn lit(text: &str) -> String {
++    if text.is_empty() {
++        String::new()
++    } else {
++        format!("\"{text}\"")
++    }
++}
++
++fn digit_class(low: u8, high: u8) -> String {
++    if low == high {
++        lit(&char::from(b'0' + low).to_string())
++    } else {
++        format!("[{}-{}]", char::from(b'0' + low), char::from(b'0' + high))
++    }
++}
++
++/// `expressions` as one parenthesized alternation, or the single expression.
++fn alt(mut expressions: Vec<String>) -> Option<String> {
++    match expressions.len() {
++        0 => None,
++        1 => expressions.pop(),
++        _ => Some(format!("({})", expressions.join(" | "))),
++    }
++}
++
++fn digits_of(text: &str) -> impl Iterator<Item = u8> + '_ {
++    text.bytes().map(|byte| byte - b'0')
++}
++
++/// `count` copies of any digit.
++fn any_digits(count: usize) -> String {
++    vec!["[0-9]"; count].join(" ")
++}
++
++fn sequence(parts: &[String]) -> String {
++    parts
++        .iter()
++        .filter(|part| !part.is_empty())
++        .cloned()
++        .collect::<Vec<_>>()
++        .join(" ")
++}
++
++/// Add one to an integer written in digits without a leading zero.
++fn successor(text: &str) -> String {
++    let mut digits: Vec<u8> = text.bytes().collect();
++    for digit in digits.iter_mut().rev() {
++        if *digit == b'9' {
++            *digit = b'0';
++        } else {
++            *digit += 1;
++            return String::from_utf8(digits).unwrap_or_default();
++        }
++    }
++    format!("1{}", String::from_utf8(digits).unwrap_or_default())
++}
++
++/// Subtract one from a positive integer written in digits without a leading zero.
++fn predecessor(text: &str) -> String {
++    let mut digits: Vec<u8> = text.bytes().collect();
++    for digit in digits.iter_mut().rev() {
++        if *digit == b'0' {
++            *digit = b'9';
++        } else {
++            *digit -= 1;
++            break;
++        }
++    }
++    let text = String::from_utf8(digits).unwrap_or_default();
++    match text.trim_start_matches('0') {
++        "" => "0".to_owned(),
++        trimmed => trimmed.to_owned(),
++    }
++}
++
++/// Order of two integers written in digits without a leading zero.
++fn compare(left: &str, right: &str) -> std::cmp::Ordering {
++    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
++}
++
++/// Strings of exactly `text.len()` digits that are at least `text`.
++fn same_length_from(text: &str) -> String {
++    let digits: Vec<u8> = digits_of(text).collect();
++    let mut alternatives = Vec::new();
++    for (index, &digit) in digits.iter().enumerate() {
++        if digit < 9 {
++            alternatives.push(sequence(&[
++                lit(&text[..index]),
++                digit_class(digit + 1, 9),
++                any_digits(digits.len() - index - 1),
++            ]));
++        }
++    }
++    alternatives.push(lit(text));
++    alt(alternatives).unwrap_or_default()
++}
++
++/// Strings of exactly `text.len()` digits that are at most `text`.
++fn same_length_to(text: &str, first_nonzero: bool) -> String {
++    let digits: Vec<u8> = digits_of(text).collect();
++    let mut alternatives = Vec::new();
++    for (index, &digit) in digits.iter().enumerate() {
++        let floor = u8::from(index == 0 && first_nonzero);
++        if digit > floor {
++            alternatives.push(sequence(&[
++                lit(&text[..index]),
++                digit_class(floor, digit - 1),
++                any_digits(digits.len() - index - 1),
++            ]));
++        }
++    }
++    alternatives.push(lit(text));
++    alt(alternatives).unwrap_or_default()
++}
++
++/// Up to `count` further digits, each present only after the one before it.
++fn optional_digits(count: usize) -> String {
++    match count {
++        0 => String::new(),
++        1 => "([0-9])?".to_owned(),
++        _ => format!("([0-9] {})?", optional_digits(count - 1)),
++    }
++}
++
++/// Integers without a leading zero whose length is `from..=to`, `from >= 2`.
++fn lengths(from: usize, to: usize) -> Option<String> {
++    (from <= to).then(|| {
++        sequence(&[
++            "[1-9]".to_owned(),
++            any_digits(from - 1),
++            optional_digits(to - from),
++        ])
++    })
++}
++
++/// The decimal integers `low..=high` (`high` is unbounded when `None`),
++/// written without a leading zero.
++fn integers(low: &str, high: Option<&str>) -> Option<String> {
++    let Some(high) = high else {
++        let longer = sequence(&[
++            "[1-9]".to_owned(),
++            any_digits(low.len()),
++            "[0-9]*".to_owned(),
++        ]);
++        return alt(vec![same_length_from(low), longer]);
++    };
++    match compare(low, high) {
++        std::cmp::Ordering::Greater => None,
++        std::cmp::Ordering::Equal => Some(lit(low)),
++        std::cmp::Ordering::Less => {
++            let mut alternatives = Vec::new();
++            if low.len() == high.len() {
++                alternatives.push(same_length_range(low, high));
++            } else {
++                alternatives.push(same_length_from(low));
++                alternatives.extend(lengths(low.len() + 1, high.len() - 1));
++                alternatives.push(same_length_to(high, high.len() > 1));
++            }
++            alt(alternatives)
++        }
++    }
++}
++
++/// Strings of `low.len()` digits between two equal-length bounds.
++fn same_length_range(low: &str, high: &str) -> String {
++    if low == high {
++        return lit(low);
++    }
++    let (first, last) = (low.as_bytes()[0] - b'0', high.as_bytes()[0] - b'0');
++    if first == last {
++        return sequence(&[lit(&low[..1]), same_length_range(&low[1..], &high[1..])]);
++    }
++    let rest = low.len() - 1;
++    let mut alternatives = vec![sequence(&[
++        lit(&low[..1]),
++        if rest == 0 {
++            String::new()
++        } else {
++            same_length_from(&low[1..])
++        },
++    ])];
++    if first + 1 < last {
++        alternatives.push(sequence(&[
++            digit_class(first + 1, last - 1),
++            any_digits(rest),
++        ]));
++    }
++    alternatives.push(sequence(&[
++        lit(&high[..1]),
++        if rest == 0 {
++            String::new()
++        } else {
++            same_length_to(&high[1..], false)
++        },
++    ]));
++    alt(alternatives).unwrap_or_default()
++}
++
++/// The set of strings that can follow a decimal point (and the empty string).
++struct Fraction {
++    /// Nonempty digit strings, or `None` when there are none.
++    nonempty: Option<String>,
++    /// Whether the empty string, the value zero, belongs.
++    empty: bool,
++}
++
++impl Fraction {
++    /// `digit` followed by every string of `rest`.
++    fn after(digit: u8, rest: &Self) -> Option<String> {
++        let head = lit(&char::from(b'0' + digit).to_string());
++        match (&rest.nonempty, rest.empty) {
++            (Some(tail), true) => Some(format!("{head} ({tail})?")),
++            (Some(tail), false) => Some(format!("{head} {tail}")),
++            (None, true) => Some(head),
++            (None, false) => None,
++        }
++    }
++}
++
++/// A bound on the fraction digits, trailing zeros removed, and whether strict.
++type FractionBound<'a> = Option<(&'a str, bool)>;
++
++/// `digits` without its first digit.
++fn drop_first(digits: &str) -> &str {
++    digits.get(1..).unwrap_or("")
++}
++
++/// The fractions `0.R` at or above (or strictly above) `lower` and at or below
++/// (or strictly below) `upper`, each as a padded digit string.
++fn fractions(lower: FractionBound<'_>, upper: FractionBound<'_>) -> Fraction {
++    // A nonstrict bound at zero constrains nothing.
++    let lower = lower.filter(|&(digits, strict)| !digits.is_empty() || strict);
++    if let (Some((low, low_strict)), Some((high, high_strict))) = (lower, upper)
++        && low.is_empty()
++        && high.is_empty()
++    {
++        // Only zero is both above and below zero.
++        let only_zero = !low_strict && !high_strict;
++        return Fraction {
++            nonempty: only_zero.then(|| "\"0\"+".to_owned()),
++            empty: only_zero,
++        };
++    }
++    let zero_allowed = lower.is_none_or(|(digits, strict)| digits.is_empty() && !strict)
++        && upper.is_none_or(|(digits, strict)| !digits.is_empty() || !strict);
++    let lower_tail = lower.map(|(digits, strict)| (drop_first(digits), strict));
++    let upper_tail = upper.map(|(digits, strict)| (drop_first(digits), strict));
++    let first = |bound: FractionBound<'_>| bound.and_then(|(digits, _)| digits.bytes().next());
++    let (low, high) = (
++        first(lower).map(|b| b - b'0'),
++        first(upper).map(|b| b - b'0'),
++    );
++    let mut alternatives = Vec::new();
++    match (lower, upper) {
++        (None, None) => {
++            return Fraction {
++                nonempty: Some("[0-9]+".to_owned()),
++                empty: true,
++            };
++        }
++        (Some(_), None) => {
++            let digit = low.unwrap_or(0);
++            if lower.is_some_and(|(digits, _)| digits.is_empty()) {
++                // Only the strictness of the zero bound is left.
++                let strict = lower.is_some_and(|(_, strict)| strict);
++                return Fraction {
++                    nonempty: Some(if strict {
++                        "\"0\"* [1-9] [0-9]*".to_owned()
++                    } else {
++                        "[0-9]+".to_owned()
++                    }),
++                    empty: !strict,
++                };
++            }
++            if digit < 9 {
++                alternatives.push(sequence(&[digit_class(digit + 1, 9), "[0-9]*".to_owned()]));
++            }
++            alternatives.extend(Fraction::after(digit, &fractions(lower_tail, None)));
++        }
++        (None, Some(_)) => {
++            let digit = high.unwrap_or(0);
++            if upper.is_some_and(|(digits, _)| digits.is_empty()) {
++                let strict = upper.is_some_and(|(_, strict)| strict);
++                return Fraction {
++                    nonempty: (!strict).then(|| "\"0\"+".to_owned()),
++                    empty: !strict,
++                };
++            }
++            if digit > 0 {
++                alternatives.push(sequence(&[digit_class(0, digit - 1), "[0-9]*".to_owned()]));
++            }
++            alternatives.extend(Fraction::after(digit, &fractions(None, upper_tail)));
++        }
++        (Some(_), Some(_)) => {
++            let (low, high) = (low.unwrap_or(0), high.unwrap_or(0));
++            if low > high {
++                return Fraction {
++                    nonempty: None,
++                    empty: false,
++                };
++            }
++            if low == high {
++                alternatives.extend(Fraction::after(low, &fractions(lower_tail, upper_tail)));
++            } else {
++                alternatives.extend(Fraction::after(low, &fractions(lower_tail, None)));
++                if low + 1 < high {
++                    alternatives.push(sequence(&[
++                        digit_class(low + 1, high - 1),
++                        "[0-9]*".to_owned(),
++                    ]));
++                }
++                alternatives.extend(Fraction::after(high, &fractions(None, upper_tail)));
++            }
++        }
++    }
++    Fraction {
++        nonempty: alt(alternatives),
++        empty: zero_allowed,
++    }
++}
++
++/// The spelling of the fraction part: absent, or a point and the digits.
++fn fraction_part(lower: FractionBound<'_>, upper: FractionBound<'_>) -> Option<String> {
++    let set = fractions(lower, upper);
++    match (set.nonempty, set.empty) {
++        (Some(digits), true) => Some(format!("(\".\" {digits})?")),
++        (Some(digits), false) => Some(format!("\".\" {digits}")),
++        (None, true) => Some(String::new()),
++        (None, false) => None,
++    }
++}
++
++/// A bound on a nonnegative magnitude: integer digits, fraction digits, strict.
++type Magnitude<'a> = (&'a str, &'a str, bool);
++
++/// Nonnegative decimals within the magnitudes `lower` (at least zero when
++/// `None`) and `upper` (unbounded when `None`).
++fn magnitudes(lower: Option<Magnitude<'_>>, upper: Option<Magnitude<'_>>) -> Option<String> {
++    let (low_int, low_frac, low_strict) = lower.unwrap_or(("0", "", false));
++    let lower_fraction = Some((low_frac, low_strict));
++    let any_fraction = "(\".\" [0-9]+)?";
++    let mut alternatives = Vec::new();
++    let mut with_fraction = |integer: String, fraction: Option<String>| {
++        if let Some(fraction) = fraction {
++            alternatives.push(sequence(&[integer, fraction]));
++        }
++    };
++    match upper {
++        None => {
++            with_fraction(lit(low_int), fraction_part(lower_fraction, None));
++            with_fraction(
++                integers(&successor(low_int), None).unwrap_or_default(),
++                Some(any_fraction.to_owned()),
++            );
++        }
++        Some((high_int, high_frac, high_strict)) => {
++            let upper_fraction = Some((high_frac, high_strict));
++            match compare(low_int, high_int) {
++                std::cmp::Ordering::Greater => {}
++                std::cmp::Ordering::Equal => {
++                    with_fraction(lit(low_int), fraction_part(lower_fraction, upper_fraction));
++                }
++                std::cmp::Ordering::Less => {
++                    with_fraction(lit(low_int), fraction_part(lower_fraction, None));
++                    let next = successor(low_int);
++                    if compare(&next, high_int).is_lt() {
++                        with_fraction(
++                            integers(&next, Some(&predecessor(high_int))).unwrap_or_default(),
++                            Some(any_fraction.to_owned()),
++                        );
++                    }
++                    with_fraction(lit(high_int), fraction_part(None, upper_fraction));
++                }
++            }
++        }
++    }
++    alt(alternatives)
++}
++
++const fn magnitude(bound: &Bound) -> Magnitude<'_> {
++    (
++        bound.value.int.as_str(),
++        bound.value.frac.as_str(),
++        bound.exclusive,
++    )
++}
++
++/// The grammar of every decimal within the bounds, or `None` when no decimal is.
++pub(super) fn number(lower: Option<&Bound>, upper: Option<&Bound>) -> Option<String> {
++    let mut alternatives = Vec::new();
++    // Nonnegative values: a negative upper bound leaves none.
++    if upper.is_none_or(|bound| !(bound.value.negative || bound.exclusive && bound.value.is_zero()))
++    {
++        let floor = lower.filter(|bound| !bound.value.negative).map(magnitude);
++        alternatives.extend(magnitudes(floor, upper.map(magnitude)));
++    }
++    // Negative values: their magnitudes run from the upper bound's to the
++    // lower bound's, and exclude zero, which the nonnegative arm spells.
++    if lower.is_none_or(|bound| bound.value.negative) {
++        let least = upper
++            .filter(|bound| bound.value.negative)
++            .map_or(("0", "", true), magnitude);
++        let most = lower.map(magnitude);
++        if let Some(negative) = magnitudes(Some(least), most) {
++            alternatives.push(sequence(&[lit("-"), negative]));
++        }
++    }
++    alt(alternatives)
++}
++
++/// An integer: a sign and the digits of its magnitude without a leading zero.
++struct Whole {
++    negative: bool,
++    magnitude: String,
++}
++
++/// The least integer at or above a bound (`ceiling`), or the greatest at or
++/// below it, after a strict bound moves one step inward.
++fn whole(bound: &Bound, upper: bool) -> Whole {
++    let value = &bound.value;
++    let has_fraction = !value.frac.is_empty();
++    // Truncate toward zero, then correct toward the requested side.
++    let mut result = Whole {
++        negative: value.negative,
++        magnitude: value.int.clone(),
++    };
++    let away = has_fraction && (value.negative == upper);
++    if away {
++        result.magnitude = successor(&result.magnitude);
++    }
++    // `result` is now the floor of the value when `upper`, else its ceiling.
++    if bound.exclusive && !has_fraction {
++        result = step(&result, upper);
++    }
++    result.negative &= result.magnitude != "0";
++    result
++}
++
++/// One integer toward negative infinity when `upper`, else toward positive.
++fn step(value: &Whole, down: bool) -> Whole {
++    let zero = value.magnitude == "0";
++    match (value.negative && !zero, down) {
++        (false, true) if zero => Whole {
++            negative: true,
++            magnitude: "1".to_owned(),
++        },
++        (false, true) => Whole {
++            negative: false,
++            magnitude: predecessor(&value.magnitude),
++        },
++        (false, false) => Whole {
++            negative: false,
++            magnitude: successor(&value.magnitude),
++        },
++        (true, true) => Whole {
++            negative: true,
++            magnitude: successor(&value.magnitude),
++        },
++        (true, false) => {
++            let magnitude = predecessor(&value.magnitude);
++            Whole {
++                negative: magnitude != "0",
++                magnitude,
++            }
++        }
++    }
++}
++
++/// The grammar of every integer within the bounds, or `None` when none is.
++pub(super) fn integer(lower: Option<&Bound>, upper: Option<&Bound>) -> Option<String> {
++    let low = lower.map(|bound| whole(bound, false));
++    let high = upper.map(|bound| whole(bound, true));
++    let mut alternatives = Vec::new();
++    // Zero and above.
++    let floor = low
++        .as_ref()
++        .filter(|low| !low.negative)
++        .map_or("0", |low| low.magnitude.as_str());
++    match high.as_ref() {
++        Some(high) if high.negative => {}
++        Some(high) => alternatives.extend(integers(floor, Some(&high.magnitude))),
++        None => alternatives.extend(integers(floor, None)),
++    }
++    // Below zero: magnitudes from one (or the upper bound's) to the lower bound's.
++    if low.as_ref().is_none_or(|low| low.negative) {
++        let least = high
++            .as_ref()
++            .filter(|high| high.negative)
++            .map_or("1", |high| high.magnitude.as_str());
++        let most = low.as_ref().map(|low| low.magnitude.as_str());
++        if let Some(negative) = integers(least, most) {
++            alternatives.push(sequence(&[lit("-"), negative]));
++        }
++    }
++    alt(alternatives)
++}
+diff --git crates/toolgraph/src/lanes/gbnf/regex.rs crates/toolgraph/src/lanes/gbnf/regex.rs
+new file mode 100644
+index 00000000..9da1221f
+--- /dev/null
++++ crates/toolgraph/src/lanes/gbnf/regex.rs
+@@ -0,0 +1,353 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! A `pattern` as a finite automaton over Unicode scalar values.
++//!
++//! The pattern is compiled by the core pattern engine, in the ECMAScript
++//! dialect with the Unicode (`u`) reading, as JSON Schema 2020-12 Core section
++//! 6.4 (Regular Expressions) asks of `pattern`. The automaton is that engine's
++//! own unanchored-search automaton, read one scalar value at a time, so it
++//! accepts exactly the strings [`Pattern::is_match`] accepts: a pattern with no
++//! anchor accepts every string that contains a match, and `^` and `$` pin an end
++//! only where they are written, including inside an alternative. Quantifiers,
++//! classes, `\p{...}`, `\b` and `\B` need no translation of their own.
++//!
++//! A pattern the derivative engine cannot compile has a back-reference or a
++//! look-around. Neither is regular in the engine's sense, so each is named and
++//! left to the caller.
++
++use std::{collections::BTreeMap, fmt::Write as _};
++
++use purrassist_core::{
++    Governor, StopReason,
++    contract::Resource,
++    pattern::{DfaState, Pattern, PatternCompileError, PatternError},
++};
++
++/// A deterministic automaton: state 0 is the start, every state reaches an
++/// accepting state, and the edges of one state are disjoint and ordered.
++#[derive(Debug, PartialEq, Eq)]
++pub(super) struct Automaton {
++    pub(super) states: Vec<State>,
++}
++
++/// One state: whether the text so far is accepted, and its outgoing runs of
++/// scalar values as `(first, last, target)`.
++#[derive(Debug, PartialEq, Eq)]
++pub(super) struct State {
++    pub(super) accepting: bool,
++    pub(super) edges: Vec<(char, char, usize)>,
++}
++
++/// What a pattern becomes.
++#[derive(Debug)]
++pub(super) enum Lowered {
++    /// The pattern's language as an automaton.
++    Automaton(Automaton),
++    /// The pattern repeats an earlier match, which no context-free grammar states.
++    Backreference,
++    /// The pattern tests the text around a position; its exact translation is not
++    /// implemented.
++    Lookaround,
++}
++
++/// Why a pattern could not be lowered.
++#[derive(Debug)]
++pub(super) enum Failure {
++    /// The pattern is not valid under the Unicode reading.
++    Syntax(PatternError),
++    /// No string contains a match.
++    Empty,
++    /// The engine needs backtracking for a construct that is neither a
++    /// back-reference nor a look-around.
++    Unnamed,
++    /// The governor stopped the work.
++    Resource(StopReason),
++}
++
++/// Lower `source` to an automaton, or name the construct that prevents it.
++pub(super) fn lower(source: &str, governor: &mut Governor) -> Result<Lowered, Failure> {
++    let pattern = match Pattern::compile_governed(source, governor) {
++        Ok(pattern) => pattern,
++        Err(PatternCompileError::Resource(reason)) => return Err(Failure::Resource(reason)),
++        Err(PatternCompileError::Syntax(error)) => {
++            // An identity escape of a character that is not a syntax character is
++            // invalid under the Unicode reading and has one meaning without it:
++            // that character. It is read so.
++            let rewritten = literal_identity_escapes(source);
++            if rewritten == source {
++                return Err(Failure::Syntax(error));
++            }
++            match Pattern::compile_governed(&rewritten, governor) {
++                Ok(pattern) => pattern,
++                Err(PatternCompileError::Resource(reason)) => {
++                    return Err(Failure::Resource(reason));
++                }
++                Err(PatternCompileError::Syntax(_)) => return Err(Failure::Syntax(error)),
++            }
++        }
++    };
++    automaton(&pattern, governor)?.map_or_else(
++        || classify(source),
++        |automaton| Ok(Lowered::Automaton(automaton)),
++    )
++}
++
++/// `source` with every `\` followed by an ASCII punctuation character that the
++/// Unicode reading does not allow as an identity escape replaced by `\u{...}`.
++fn literal_identity_escapes(source: &str) -> String {
++    let mut output = String::with_capacity(source.len());
++    let mut chars = source.chars();
++    let mut in_class = false;
++    while let Some(character) = chars.next() {
++        match character {
++            '\\' => match chars.next() {
++                Some(next)
++                    if next.is_ascii_punctuation()
++                        && !"^$\\.*+?()[]{}|/".contains(next)
++                        && !(in_class && next == '-') =>
++                {
++                    let _ = write!(output, "\\u{{{:X}}}", u32::from(next));
++                }
++                Some(next) => {
++                    output.push('\\');
++                    output.push(next);
++                }
++                None => output.push('\\'),
++            },
++            '[' => {
++                in_class = true;
++                output.push(character);
++            }
++            ']' => {
++                in_class = false;
++                output.push(character);
++            }
++            other => output.push(other),
++        }
++    }
++    output
++}
++
++/// Which construct keeps a pattern off the derivative engine. A look-around
++/// wins over a back-reference: only the back-reference is left to the schema
++/// check.
++fn classify(source: &str) -> Result<Lowered, Failure> {
++    let characters: Vec<char> = source.chars().collect();
++    let (mut backreference, mut lookaround) = (false, false);
++    let (mut index, mut in_class) = (0, false);
++    while index < characters.len() {
++        match characters[index] {
++            '\\' => {
++                if !in_class
++                    && characters
++                        .get(index + 1)
++                        .is_some_and(|next| matches!(next, '1'..='9' | 'k'))
++                {
++                    backreference = true;
++                }
++                index += 1;
++            }
++            '[' => in_class = true,
++            ']' => in_class = false,
++            '(' if !in_class && characters.get(index + 1) == Some(&'?') => {
++                lookaround |= match characters.get(index + 2) {
++                    Some('=' | '!') => true,
++                    Some('<') => matches!(characters.get(index + 3), Some('=' | '!')),
++                    _ => false,
++                };
++            }
++            _ => {}
++        }
++        index += 1;
++    }
++    match (lookaround, backreference) {
++        (true, _) => Ok(Lowered::Lookaround),
++        (false, true) => Ok(Lowered::Backreference),
++        (false, false) => Err(Failure::Unnamed),
++    }
++}
++
++/// A state of the search automaton, with every matched state as one.
++#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
++enum Key {
++    Matched,
++    Open(DfaState),
++}
++
++type Raw = Vec<(bool, Vec<(char, char, usize)>)>;
++
++/// A state's class and its merged edges, the key of one refined class.
++type Signature = (usize, Vec<(char, char, usize)>);
++
++/// The index of `key` among the states met so far, adding it when new.
++fn intern(
++    key: Key,
++    index: &mut BTreeMap<Key, usize>,
++    raw: &mut Raw,
++    pending: &mut Vec<Key>,
++) -> usize {
++    *index.entry(key).or_insert_with(|| {
++        raw.push((false, Vec::new()));
++        pending.push(key);
++        raw.len() - 1
++    })
++}
++
++/// The automaton of a pattern the derivative engine compiles, or `None`.
++fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automaton>, Failure> {
++    let Some(mut dfa) = pattern.byte_dfa(governor).map_err(Failure::Resource)? else {
++        return Ok(None);
++    };
++    let mut index = BTreeMap::new();
++    let mut raw: Raw = Vec::new();
++    let mut pending = Vec::new();
++    intern(Key::Open(dfa.start()), &mut index, &mut raw, &mut pending);
++    let mut cursor = 0;
++    while cursor < pending.len() {
++        let key = pending[cursor];
++        let this = cursor;
++        cursor += 1;
++        governor
++            .charge(Resource::Work, 1)
++            .map_err(Failure::Resource)?;
++        let Key::Open(state) = key else {
++            raw[this] = (
++                true,
++                vec![('\0', '\u{D7FF}', this), ('\u{E000}', char::MAX, this)],
++            );
++            continue;
++        };
++        let accepting = dfa.accepting(state, governor).map_err(Failure::Resource)?;
++        let mut edges: Vec<(char, char, usize)> = Vec::new();
++        for run in dfa
++            .scalar_transitions(state, governor)
++            .map_err(Failure::Resource)?
++        {
++            let key = if run.target.is_matched() {
++                Key::Matched
++            } else {
++                Key::Open(run.target)
++            };
++            let target = intern(key, &mut index, &mut raw, &mut pending);
++            match edges.last_mut() {
++                Some(previous)
++                    if previous.2 == target
++                        && u32::from(previous.1) + 1 == u32::from(run.first) =>
++                {
++                    previous.1 = run.last;
++                }
++                _ => edges.push((run.first, run.last, target)),
++            }
++        }
++        raw[this] = (accepting, edges);
++    }
++    minimal(&raw, governor).map(Some)
++}
++
++/// Drop the states that reach no accepting state, merge equivalent states and
++/// number the rest in the order a walk from the start meets them.
++fn minimal(raw: &Raw, governor: &mut Governor) -> Result<Automaton, Failure> {
++    let count = raw.len();
++    // Productive states: those from which an accepting state is reachable.
++    let mut productive: Vec<bool> = raw.iter().map(|(accepting, _)| *accepting).collect();
++    loop {
++        governor
++            .charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))
++            .map_err(Failure::Resource)?;
++        let mut changed = false;
++        for (state, (_, edges)) in raw.iter().enumerate() {
++            if !productive[state] && edges.iter().any(|&(_, _, target)| productive[target]) {
++                productive[state] = true;
++                changed = true;
++            }
++        }
++        if !changed {
++            break;
++        }
++    }
++    if !productive[0] {
++        return Err(Failure::Empty);
++    }
++    // Moore refinement: states are equivalent when they accept alike and reach
++    // equivalent states over the same scalar values.
++    let mut class: Vec<usize> = raw
++        .iter()
++        .map(|(accepting, _)| usize::from(*accepting))
++        .collect();
++    let mut classes = 2;
++    loop {
++        governor
++            .charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))
++            .map_err(Failure::Resource)?;
++        let mut signatures: BTreeMap<Signature, usize> = BTreeMap::new();
++        let mut next = Vec::with_capacity(count);
++        for (state, (_, edges)) in raw.iter().enumerate() {
++            let mut merged: Vec<(char, char, usize)> = Vec::new();
++            for &(first, last, target) in edges {
++                if !productive[target] {
++                    continue;
++                }
++                match merged.last_mut() {
++                    Some(previous)
++                        if previous.2 == class[target]
++                            && u32::from(previous.1) + 1 == u32::from(first) =>
++                    {
++                        previous.1 = last;
++                    }
++                    _ => merged.push((first, last, class[target])),
++                }
++            }
++            let fresh = signatures.len();
++            next.push(*signatures.entry((class[state], merged)).or_insert(fresh));
++        }
++        let settled = signatures.len() == classes;
++        classes = signatures.len();
++        class = next;
++        if settled {
++            break;
++        }
++    }
++    // Number the classes by a walk from the start, in edge order.
++    let mut number: BTreeMap<usize, usize> = BTreeMap::new();
++    let mut order: Vec<usize> = Vec::new();
++    let mut representative: BTreeMap<usize, usize> = BTreeMap::new();
++    for (state, &state_class) in class.iter().enumerate() {
++        if productive[state] {
++            representative.entry(state_class).or_insert(state);
++        }
++    }
++    number.insert(class[0], 0);
++    order.push(class[0]);
++    let mut cursor = 0;
++    let mut states = Vec::new();
++    while cursor < order.len() {
++        let member = representative[&order[cursor]];
++        cursor += 1;
++        let mut edges: Vec<(char, char, usize)> = Vec::new();
++        for &(first, last, target) in &raw[member].1 {
++            if !productive[target] {
++                continue;
++            }
++            let target_class = class[target];
++            let target_number = *number.entry(target_class).or_insert_with(|| {
++                order.push(target_class);
++                order.len() - 1
++            });
++            match edges.last_mut() {
++                Some(previous)
++                    if previous.2 == target_number
++                        && u32::from(previous.1) + 1 == u32::from(first) =>
++                {
++                    previous.1 = last;
++                }
++                _ => edges.push((first, last, target_number)),
++            }
++        }
++        states.push(State {
++            accepting: raw[member].0,
++            edges,
++        });
++    }
++    Ok(Automaton { states })
++}
+diff --git crates/toolgraph/src/lanes/gbnf/tests.rs crates/toolgraph/src/lanes/gbnf/tests.rs
+new file mode 100644
+index 00000000..83d89093
+--- /dev/null
++++ crates/toolgraph/src/lanes/gbnf/tests.rs
+@@ -0,0 +1,1163 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Behaviour of the GBNF lane: accepted strings validate, losses are ledgered,
++//! unsupported constructs are refused and output is deterministic.
++//!
++//! The sampler below reads the emitted grammar text itself, so a test exercises
++//! the language the grammar defines and not the compiler's internal state.
++
++use std::{
++    collections::{BTreeMap, BTreeSet},
++    fmt::Write as _,
++};
++
++use purrassist_core::{
++    Budget, Effort, Governor, StopReason, contract::Resource, json, schema::Schema,
++};
++use purrdf_core::loss::LossProfile;
++
++use super::{Builder, GbnfError};
++use crate::{
++    PrefixTable, TERM_NAMES, TermBindings, ToolGraph, Vocabulary, codec::mcp, lanes,
++    register_loss_profile,
++};
++
++const NAMESPACE: &str = "https://example.org/toolgraph#";
++const TOOLS: &str = include_str!("../../../../../docs/tool-graph/TOOLS.md");
++
++enum Expr {
++    Literal(String),
++    Class(bool, Vec<(u32, u32)>),
++    Rule(String),
++    Sequence(Vec<Self>),
++    Choice(Vec<Self>),
++    Repeat(Box<Self>, usize, Option<usize>),
++}
++
++/// A recursive-descent reader for the subset of GBNF the compiler emits.
++struct Reader<'a> {
++    chars: std::iter::Peekable<std::str::Chars<'a>>,
++}
++
++impl Reader<'_> {
++    fn hex(&mut self, digits: usize) -> char {
++        let hex: String = (0..digits)
++            .map(|_| self.chars.next().expect("hex"))
++            .collect();
++        char::from_u32(u32::from_str_radix(&hex, 16).expect("hex")).expect("char")
++    }
++
++    fn escaped(&mut self) -> char {
++        match self.chars.next().expect("escape") {
++            'n' => '\n',
++            'r' => '\r',
++            't' => '\t',
++            'x' => self.hex(2),
++            'u' => self.hex(4),
++            'U' => self.hex(8),
++            other => other,
++        }
++    }
++
++    fn choice(&mut self) -> Expr {
++        let mut branches = vec![self.sequence()];
++        while self.chars.peek() == Some(&'|') {
++            self.chars.next();
++            branches.push(self.sequence());
++        }
++        Expr::Choice(branches)
++    }
++
++    fn sequence(&mut self) -> Expr {
++        let mut items = Vec::new();
++        loop {
++            while self.chars.peek() == Some(&' ') {
++                self.chars.next();
++            }
++            if matches!(self.chars.peek(), None | Some('|' | ')')) {
++                return Expr::Sequence(items);
++            }
++            let mut atom = self.atom();
++            while let Some(&mark @ ('*' | '+' | '?')) = self.chars.peek() {
++                self.chars.next();
++                let (low, high) = match mark {
++                    '*' => (0, None),
++                    '+' => (1, None),
++                    _ => (0, Some(1)),
++                };
++                atom = Expr::Repeat(Box::new(atom), low, high);
++            }
++            items.push(atom);
++        }
++    }
++
++    fn atom(&mut self) -> Expr {
++        match self.chars.next().expect("atom") {
++            '"' => {
++                let mut text = String::new();
++                loop {
++                    match self.chars.next().expect("closed literal") {
++                        '"' => return Expr::Literal(text),
++                        '\\' => text.push(self.escaped()),
++                        other => text.push(other),
++                    }
++                }
++            }
++            '[' => {
++                let negated = self.chars.peek() == Some(&'^');
++                if negated {
++                    self.chars.next();
++                }
++                let mut ranges = Vec::new();
++                loop {
++                    let low = match self.chars.next().expect("closed class") {
++                        ']' => return Expr::Class(negated, ranges),
++                        '\\' => self.escaped(),
++                        other => other,
++                    };
++                    let mut ahead = self.chars.clone();
++                    let high = if ahead.next() == Some('-') && ahead.peek() != Some(&']') {
++                        self.chars.next();
++                        match self.chars.next().expect("range end") {
++                            '\\' => self.escaped(),
++                            other => other,
++                        }
++                    } else {
++                        low
++                    };
++                    ranges.push((u32::from(low), u32::from(high)));
++                }
++            }
++            '(' => {
++                let inner = self.choice();
++                assert_eq!(self.chars.next(), Some(')'));
++                inner
++            }
++            first => {
++                let mut name = first.to_string();
++                while let Some(&next) = self.chars.peek() {
++                    if next.is_ascii_alphanumeric() || next == '-' {
++                        name.push(next);
++                        self.chars.next();
++                    } else {
++                        break;
++                    }
++                }
++                Expr::Rule(name)
++            }
++        }
++    }
++}
++
++fn read(grammar: &str) -> BTreeMap<String, Expr> {
++    grammar
++        .lines()
++        .map(|line| {
++            let (name, body) = line.split_once(" ::= ").expect("rule line");
++            (
++                name.to_owned(),
++                Reader {
++                    chars: body.chars().peekable(),
++                }
++                .choice(),
++            )
++        })
++        .collect()
++}
++
++struct Sampler<'a> {
++    rules: &'a BTreeMap<String, Expr>,
++    state: u64,
++    /// The fewest characters each rule can still generate, so a long walk can finish.
++    costs: BTreeMap<String, usize>,
++}
++
++fn cost(expr: &Expr, costs: &BTreeMap<String, usize>) -> usize {
++    match expr {
++        Expr::Literal(text) => text.chars().count(),
++        Expr::Class(..) => 1,
++        Expr::Rule(name) => costs.get(name).copied().unwrap_or(usize::MAX / 4),
++        Expr::Sequence(items) => items.iter().fold(0, |total, item| {
++            usize::saturating_add(total, cost(item, costs))
++        }),
++        Expr::Choice(branches) => branches
++            .iter()
++            .map(|branch| cost(branch, costs))
++            .min()
++            .unwrap_or(0),
++        Expr::Repeat(inner, low, _) => low.saturating_mul(cost(inner, costs)),
++    }
++}
++
++impl<'a> Sampler<'a> {
++    fn new(rules: &'a BTreeMap<String, Expr>) -> Self {
++        let mut costs: BTreeMap<String, usize> = BTreeMap::new();
++        loop {
++            let next: BTreeMap<String, usize> = rules
++                .iter()
++                .map(|(name, expr)| (name.clone(), cost(expr, &costs)))
++                .collect();
++            if next == costs {
++                break;
++            }
++            costs = next;
++        }
++        Self {
++            rules,
++            state: 0x9E37_79B9_7F4A_7C15,
++            costs,
++        }
++    }
++
++    fn next(&mut self, bound: usize) -> usize {
++        self.state ^= self.state << 13;
++        self.state ^= self.state >> 7;
++        self.state ^= self.state << 17;
++        usize::try_from(self.state >> 11).expect("fits") % bound
++    }
++
++    fn emit(&mut self, expr: &Expr, output: &mut String) {
++        match expr {
++            Expr::Literal(text) => output.push_str(text),
++            Expr::Rule(name) => self.emit(self.rules.get(name).expect("defined rule"), output),
++            Expr::Sequence(items) => items.iter().for_each(|item| self.emit(item, output)),
++            Expr::Choice(branches) => {
++                // Past a long output, take the branch that ends soonest.
++                let pick = if output.len() > 64 {
++                    (0..branches.len())
++                        .min_by_key(|&index| cost(&branches[index], &self.costs))
++                        .expect("a branch")
++                } else {
++                    self.next(branches.len())
++                };
++                self.emit(&branches[pick], output);
++            }
++            Expr::Repeat(inner, low, high) => {
++                let span = high.map_or(3, |high| high - low);
++                for _ in 0..low + self.next(span + 1) {
++                    self.emit(inner, output);
++                }
++            }
++            Expr::Class(false, ranges) => {
++                let (low, high) = ranges[self.next(ranges.len())];
++                let span = usize::try_from(high - low).expect("small") + 1;
++                let code = low + u32::try_from(self.next(span)).expect("small");
++                output.push(char::from_u32(code).expect("scalar"));
++            }
++            Expr::Class(true, ranges) => {
++                let pool = ['a', 'Z', ' ', '/', 'é', '日', '😀', '{'];
++                let allowed: Vec<char> = pool
++                    .into_iter()
++                    .filter(|c| {
++                        !ranges
++                            .iter()
++                            .any(|(l, h)| (*l..=*h).contains(&u32::from(*c)))
++                    })
++                    .collect();
++                output.push(allowed[self.next(allowed.len())]);
++            }
++        }
++    }
++
++    fn sample(&mut self) -> String {
++        let mut output = String::new();
++        self.emit(self.rules.get("root").expect("root rule"), &mut output);
++        output
++    }
++}
++
++/// The positions at which `expr` can stop after starting at `from` in `text`.
++fn ends(
++    rules: &BTreeMap<String, Expr>,
++    expr: &Expr,
++    text: &[char],
++    from: usize,
++) -> BTreeSet<usize> {
++    match expr {
++        Expr::Literal(literal) => {
++            let length = literal.chars().count();
++            if text
++                .get(from..from + length)
++                .is_some_and(|slice| slice.iter().copied().eq(literal.chars()))
++            {
++                BTreeSet::from([from + length])
++            } else {
++                BTreeSet::new()
++            }
++        }
++        Expr::Class(negated, ranges) => text
++            .get(from)
++            .filter(|c| {
++                ranges
++                    .iter()
++                    .any(|(low, high)| (*low..=*high).contains(&u32::from(**c)))
++                    != *negated
++            })
++            .map_or_else(BTreeSet::new, |_| BTreeSet::from([from + 1])),
++        Expr::Rule(name) => ends(rules, rules.get(name).expect("defined rule"), text, from),
++        Expr::Sequence(items) => items.iter().fold(BTreeSet::from([from]), |at, item| {
++            at.iter()
++                .flat_map(|&position| ends(rules, item, text, position))
++                .collect()
++        }),
++        Expr::Choice(branches) => branches
++            .iter()
++            .flat_map(|branch| ends(rules, branch, text, from))
++            .collect(),
++        Expr::Repeat(inner, low, high) => {
++            let (mut results, mut seen) = (BTreeSet::<usize>::new(), BTreeSet::<usize>::new());
++            let mut frontier = BTreeSet::from([from]);
++            for count in 0.. {
++                if count >= *low {
++                    results.extend(&frontier);
++                }
++                if *high == Some(count) || frontier.is_empty() {
++                    break;
++                }
++                let mut next: BTreeSet<usize> = frontier
++                    .iter()
++                    .flat_map(|&position| ends(rules, inner, text, position))
++                    .collect();
++                if count >= *low {
++                    seen.extend(&frontier);
++                    next.retain(|position| !seen.contains(position));
++                }
++                frontier = next;
++            }
++            results
++        }
++    }
++}
++
++/// Whether the language of `grammar` contains all of `text`.
++fn accepts(grammar: &str, text: &str) -> bool {
++    let rules = read(grammar);
++    let characters: Vec<char> = text.chars().collect();
++    ends(
++        &rules,
++        rules.get("root").expect("root rule"),
++        &characters,
++        0,
++    )
++    .contains(&characters.len())
++}
++
++fn compile(schema: &str) -> (String, Vec<String>) {
++    try_compile(schema).expect("schema lowers")
++}
++
++fn try_compile(schema: &str) -> Result<(String, Vec<String>), GbnfError> {
++    let mut governor = Governor::new(Effort::Deep.budget());
++    let node = json::parse_with(schema, &mut governor).expect("schema JSON");
++    let mut builder = Builder::new("t");
++    let text = builder.grammar(&node, &mut governor)?;
++    Ok((text, builder.omitted))
++}
++
++/// Sample `count` strings of `grammar` and return those that fail `schema`,
++/// each with the keywords that failed. A string the JSON reader rejects is a
++/// lone surrogate escape, the documented `json-string-validity` loss.
++fn rejected(schema: &str, grammar: &str, count: usize) -> Vec<(String, Vec<String>)> {
++    let schema = Schema::compile(schema).expect("compiled schema");
++    let rules = read(grammar);
++    let mut sampler = Sampler::new(&rules);
++    let mut rejected = Vec::new();
++    for _ in 0..count {
++        let text = sampler.sample();
++        match json::parse(&text) {
++            Ok(instance) => {
++                let report = schema.validate(&instance).expect("validation");
++                if !report.valid {
++                    let keywords = report.violations.into_iter().map(|v| v.keyword).collect();
++                    rejected.push((text, keywords));
++                }
++            }
++            Err(_) => assert!(
++                text.to_ascii_lowercase().contains("\\ud"),
++                "unparseable and not a surrogate escape: {text}"
++            ),
++        }
++    }
++    rejected
++}
++
++// Invariant: every string the grammar accepts validates against the schema it was
++// compiled from, across scalars, enums, arrays, nested objects with optional
++// members, type arrays, anyOf and disjoint oneOf.
++#[test]
++fn every_accepted_string_validates_against_its_schema() {
++    let schemas = [
++        r#"{"type":"object","properties":{"s":{"type":"string"},"i":{"type":"integer"},"n":{"type":"number"},"b":{"type":"boolean"},"z":{"type":"null"}},"required":["s","i"],"additionalProperties":false}"#,
++        r#"{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"integer"},"c":{"type":"boolean"}},"additionalProperties":false}"#,
++        r#"{"type":"object","properties":{"mode":{"enum":["r","w\"x"]},"fixed":{"const":7},"flag":{"type":"string","enum":["a"]}},"required":["mode","fixed"],"additionalProperties":false}"#,
++        r#"{"type":"object","properties":{"rows":{"type":"array","items":{"type":"object","properties":{"k":{"type":["string","null"]},"v":{"anyOf":[{"type":"integer"},{"type":"string"}]}},"required":["k"],"additionalProperties":false}},"pick":{"oneOf":[{"type":"string"},{"type":"integer"},{"type":"null"}]}},"required":["rows"],"additionalProperties":false}"#,
++        r#"{"type":"object","additionalProperties":false}"#,
++    ];
++    for schema in schemas {
++        let (grammar, omitted) = compile(schema);
++        assert_eq!(omitted, Vec::<String>::new(), "{schema}");
++        assert_eq!(rejected(schema, &grammar, 300), [], "{schema}\n{grammar}");
++    }
++}
++
++/// The worked example's vocabulary and graph.
++fn worked_example() -> (Vocabulary, ToolGraph) {
++    let vocabulary = Vocabulary::new(
++        "pa",
++        PrefixTable(vec![("pa".into(), NAMESPACE.into())]),
++        TermBindings {
++            namespace_iri: NAMESPACE.into(),
++            local_names: TERM_NAMES
++                .iter()
++                .map(|name| ((*name).into(), format!("{NAMESPACE}{name}")))
++                .collect(),
++        },
++        register_loss_profile(LossProfile::builtin()).expect("loss profile"),
++    )
++    .expect("vocabulary");
++    let section = TOOLS
++        .split("## End-to-end example")
++        .nth(1)
++        .expect("section");
++    let turtle = section
++        .split("```turtle\n")
++        .nth(1)
++        .and_then(|fence| fence.split("\n```").next())
++        .expect("turtle fence");
++    let mut governor = Governor::new(Budget::default());
++    let graph = ToolGraph::load(
++        turtle.as_bytes(),
++        "text/turtle",
++        None,
++        &vocabulary,
++        &mut governor,
++    )
++    .expect("graph loads");
++    (vocabulary, graph)
++}
++
++// Invariant: every string a worked-example grammar accepts validates against the
++// schema it came from, including the customer pattern and the limit bounds, the
++// output is byte-identical across runs, and the only ledgered losses are the
++// surrogate escapes and the output shape.
++#[test]
++fn the_worked_example_grammars_accept_only_schema_valid_strings() {
++    let (vocabulary, graph) = worked_example();
++    let mut governor = Governor::new(Budget::default());
++    let (grammars, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
++    let (again, _) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
++    assert_eq!(grammars, again);
++    assert_eq!(
++        grammars
++            .iter()
++            .map(lanes::ToolGrammar::tool)
++            .collect::<Vec<_>>(),
++        ["edit_file", "query_customer_orders"]
++    );
++
++    let (manifest, _) = mcp::encode(&graph, &vocabulary, &mut governor).expect("manifest");
++    let root = json::parse(manifest.as_str()).expect("manifest JSON");
++    let json::Value::Array(declarations) = &root.get("tools").expect("tools").value else {
++        panic!("tools array");
++    };
++    for grammar in &grammars {
++        let declaration = declarations
++            .iter()
++            .find(|d| d.get("name").and_then(json::Node::as_str) == Some(grammar.tool()))
++            .expect("declaration");
++        let schema = declaration
++            .get("inputSchema")
++            .expect("input schema")
++            .to_json();
++        assert_eq!(
++            rejected(&schema, grammar.as_str(), 200),
++            [],
++            "{}",
++            grammar.tool()
++        );
++    }
++    let codes = |code: &str| ledger.entries().iter().filter(|e| e.code == code).count();
++    assert_eq!(codes("json-string-validity-not-expressible"), 1);
++    assert_eq!(codes("output-shape-not-expressible"), 2);
++    assert_eq!(codes("input-shape-not-expressible"), 0);
++}
++
++// Invariant: required members come first in property order, optional members
++// follow with their own separators, and the text is the stable canonical form.
++#[test]
++fn object_members_use_the_canonical_order_and_text() {
++    let (grammar, omitted) = compile(
++        r#"{"type":"object","properties":{"b":{"type":"integer"},"a":{"type":"boolean"},"c":{"type":"null"}},"required":["a","b"],"additionalProperties":false}"#,
++    );
++    assert_eq!(omitted, Vec::<String>::new());
++    assert_eq!(
++        grammar,
++        concat!(
++            "root ::= object-1\n",
++            "object-1 ::= \"{\" ws member-2 ws \",\" ws member-3 (ws \",\" ws member-4)? ws \"}\"\n",
++            "member-2 ::= \"\\\"b\\\"\" ws \":\" ws integer\n",
++            "member-3 ::= \"\\\"a\\\"\" ws \":\" ws (\"true\" | \"false\")\n",
++            "member-4 ::= \"\\\"c\\\"\" ws \":\" ws \"null\"\n",
++            "ws ::= [ \\t\\n\\r]*\n",
++            "integer ::= \"-\"? (\"0\" | [1-9] [0-9]*)\n",
++        )
++    );
++}
++
++// Invariant: a keyword the grammar does not carry and a member outside
++// `properties` are recorded at their pointers, not silently dropped.
++#[test]
++fn uncarried_keywords_and_open_members_are_ledgered_at_their_pointers() {
++    let (_, omitted) = compile(
++        r#"{"type":"object","properties":{"s":{"type":"string","format":"email"},"i":{"type":"integer","default":1}},"required":["s"]}"#,
++    );
++    assert_eq!(
++        omitted,
++        [
++            "/additionalProperties (members outside properties are not generated)",
++            "/properties/s/format",
++            "/properties/i/default",
++        ]
++    );
++}
++
++// Invariant: a construct that cannot be lowered soundly is a typed refusal and
++// yields no grammar.
++#[test]
++fn inexpressible_constructs_are_refused_with_a_typed_error() {
++    let refused = [
++        r##"{"type":"object","properties":{"r":{"$ref":"#/$defs/r"}}}"##,
++        r#"{"type":"object","properties":{"a":{"type":"array"}}}"#,
++        r#"{"type":"object","properties":{"o":{"oneOf":[{"type":"number"},{"type":"integer"}]}}}"#,
++        r#"{"type":"object","properties":{"e":{"type":"string","enum":[1]}}}"#,
++        r#"{"type":"object","properties":{"e":{"enum":[{"x":1}]}}}"#,
++        r#"{"type":"object","required":["ghost"]}"#,
++        r#"{"type":"object","properties":{"t":true}}"#,
++        r#"{"type":"array","items":{"type":"string"}}"#,
++    ];
++    for schema in refused {
++        assert!(
++            matches!(try_compile(schema), Err(GbnfError::Unsupported { .. })),
++            "{schema}"
++        );
++    }
++}
++
++/// `text` as a JSON string literal, as the schema or an instance spells it.
++fn quoted(text: &str) -> String {
++    let mut output = String::from('"');
++    for character in text.chars() {
++        match character {
++            '"' => output.push_str("\\\""),
++            '\\' => output.push_str("\\\\"),
++            '\n' => output.push_str("\\n"),
++            '\t' => output.push_str("\\t"),
++            '\r' => output.push_str("\\r"),
++            '\u{0C}' => output.push_str("\\f"),
++            control if control < ' ' => {
++                let _ = write!(output, "\\u{:04x}", u32::from(control));
++            }
++            other => output.push(other),
++        }
++    }
++    output.push('"');
++    output
++}
++
++/// The input schema with one member `v` constrained by `keywords`.
++fn member_schema(keywords: &str) -> String {
++    format!(
++        r#"{{"type":"object","properties":{{"v":{{{keywords}}}}},"required":["v"],"additionalProperties":false}}"#
++    )
++}
++
++/// Each `(value, expected)` pair: the grammar accepts the serialization of the
++/// object holding `value` exactly when `expected`, and the schema agrees.
++fn assert_member_cases(keywords: &str, cases: &[(String, bool)]) {
++    let schema = member_schema(keywords);
++    let (grammar, omitted) = compile(&schema);
++    assert_eq!(omitted, Vec::<String>::new(), "{keywords}");
++    let compiled = Schema::compile(&schema).expect("compiled schema");
++    for (value, expected) in cases {
++        let text = format!("{{\"v\":{value}}}");
++        assert_eq!(
++            accepts(&grammar, &text),
++            *expected,
++            "grammar: {keywords}: {text}"
++        );
++        let instance = json::parse(&text).expect("instance JSON");
++        assert_eq!(
++            compiled.validate(&instance).expect("validation").valid,
++            *expected,
++            "schema: {keywords}: {text}"
++        );
++    }
++    assert_eq!(
++        rejected(&schema, &grammar, 300),
++        [],
++        "{keywords}\n{grammar}"
++    );
++}
++
++/// Cases of a string-valued pattern: each decoded string and whether it matches.
++fn assert_pattern(pattern: &str, cases: &[(&str, bool)]) {
++    let keywords = format!(r#""type":"string","pattern":{}"#, quoted(pattern));
++    let cases: Vec<(String, bool)> = cases
++        .iter()
++        .map(|(value, expected)| (quoted(value), *expected))
++        .collect();
++    assert_member_cases(&keywords, &cases);
++}
++
++// Invariant: literal characters and every escape that denotes one character
++// (`\.`, `\/`, `\xHH`, `\uHHHH`, `\u{...}` over an astral scalar, `\n`, `\t`, `\v`,
++// `\f`, `\r`, `\0`, `\cX`) are translated exactly, and JSON-escaped controls round-trip.
++#[test]
++fn pattern_literals_and_character_escapes_are_translated_exactly() {
++    assert_pattern(
++        r"^a\.\x41B\u{1F600}\n\t\/$",
++        &[
++            ("a.AB\u{1F600}\n\t/", true),
++            ("axAB\u{1F600}\n\t/", false),
++            ("a.AB\u{1F600}\n\t", false),
++        ],
++    );
++    assert_pattern(
++        r"^\0\v\f\r\cA$",
++        &[
++            ("\0\u{0B}\u{0C}\r\u{01}", true),
++            ("\0\u{0B}\u{0C}\r\u{02}", false),
++        ],
++    );
++}
++
++// Invariant: classes, negated classes, ranges and the class escapes denote
++// exactly their code points.
++#[test]
++fn pattern_classes_and_class_escapes_are_translated_exactly() {
++    assert_pattern(
++        r"^[a-c\d_]+[^x-z]$",
++        &[
++            ("ab1_q", true),
++            ("ab1x", false),
++            ("dq", false),
++            ("a\"", true),
++        ],
++    );
++    assert_pattern(
++        r"^\d\D\w\W\s\S$",
++        &[("1a_ \tx", true), ("a1_ \tx", false), ("1a_ \t ", false)],
++    );
++}
++
++// Invariant: `\p{...}` and `\P{...}` denote their Unicode table sets, over
++// scalars outside the Basic Multilingual Plane as well.
++#[test]
++fn pattern_unicode_properties_are_translated_exactly() {
++    assert_pattern(
++        r"^\p{Lu}\P{L}\p{Script=Greek}\p{Emoji_Presentation}$",
++        &[
++            ("A1\u{3B1}\u{1F600}", true),
++            ("a1\u{3B1}\u{1F600}", false),
++            ("AA\u{3B1}\u{1F600}", false),
++        ],
++    );
++}
++
++// Invariant: the dot is every scalar except the line terminators, so an
++// astral scalar is one character under the Unicode reading.
++#[test]
++fn pattern_dot_excludes_only_line_terminators() {
++    assert_pattern(
++        r"^.$",
++        &[
++            ("x", true),
++            ("\u{1F600}", true),
++            ("\"", true),
++            ("\n", false),
++            ("\r", false),
++            ("\u{2028}", false),
++            ("xy", false),
++        ],
++    );
++}
++
++// Invariant: alternation, groups, non-capturing groups and named groups accept
++// the union of their branches.
++#[test]
++fn pattern_alternation_and_groups_are_translated_exactly() {
++    assert_pattern(
++        r"^(?:ab|cd)(?<n>e|f)(g)$",
++        &[
++            ("abeg", true),
++            ("cdfg", true),
++            ("abgg", false),
++            ("abe", false),
++        ],
++    );
++}
++
++// Invariant: every quantifier, greedy or lazy, accepts the same whole strings.
++#[test]
++fn pattern_quantifiers_are_translated_exactly() {
++    assert_pattern(
++        r"^a*b+c?d{2}e{2,}f{1,3}?$",
++        &[
++            ("bddeef", true),
++            ("aabbcddeeeff", true),
++            ("bdeef", false),
++            ("bddef", false),
++            ("bddeeffff", false),
++            ("ddeef", false),
++        ],
++    );
++    assert_pattern(r"^a+?b*?$", &[("aab", true), ("b", false), ("a", true)]);
++}
++
++// Invariant: a pattern is not anchored, so its grammar is any prefix, the
++// pattern and any suffix, and the string need only contain a match.
++#[test]
++fn an_unanchored_pattern_accepts_a_longer_string() {
++    assert_pattern(
++        r"ab+c",
++        &[
++            ("xxabbcyy", true),
++            ("abc", true),
++            ("acb", false),
++            ("", false),
++        ],
++    );
++}
++
++// Invariant: `^` or `$` alone pins only the end where it is written.
++#[test]
++fn a_pattern_anchored_at_one_end_pins_only_that_end() {
++    assert_pattern(r"^ab", &[("abzzz", true), ("zab", false)]);
++    assert_pattern(r"ab$", &[("zzab", true), ("abz", false)]);
++}
++
++// Invariant: an anchor inside one alternative pins only that alternative.
++#[test]
++fn an_anchor_inside_an_alternative_pins_only_that_alternative() {
++    assert_pattern(
++        r"^a|b$",
++        &[("azz", true), ("zzb", true), ("zaz", false), ("bz", false)],
++    );
++}
++
++// Invariant: `\b` and `\B` test the word-ness of the adjacent characters, so a
++// whole-string grammar splits each rule by its neighbour's class.
++#[test]
++fn pattern_word_boundaries_are_translated_exactly() {
++    assert_pattern(
++        r"\bcat\b",
++        &[
++            ("a cat!", true),
++            ("cat", true),
++            ("concatenate", false),
++            ("cats", false),
++        ],
++    );
++    assert_pattern(r"\Bat", &[("cat", true), ("at", false), (" at", false)]);
++}
++
++// Invariant: an identity escape of a character that is not a syntax character
++// is invalid under the Unicode reading and is taken as that literal.
++#[test]
++fn an_escaped_underscore_is_read_as_the_literal_character() {
++    let (grammar, omitted) = compile(&member_schema(r#""type":"string","pattern":"^a\\_b\\-$""#));
++    assert_eq!(omitted, Vec::<String>::new());
++    assert!(accepts(&grammar, r#"{"v":"a_b-"}"#));
++    assert!(!accepts(&grammar, r#"{"v":"axb-"}"#));
++}
++
++// Invariant: an invalid pattern and one no string matches are typed refusals.
++#[test]
++fn an_invalid_or_unsatisfiable_pattern_is_a_typed_refusal() {
++    let invalid = try_compile(&member_schema(r#""type":"string","pattern":"(""#));
++    assert!(
++        matches!(invalid, Err(GbnfError::Pattern { .. })),
++        "{invalid:?}"
++    );
++    let empty = try_compile(&member_schema(r#""type":"string","pattern":"[^\\s\\S]""#));
++    assert!(
++        matches!(empty, Err(GbnfError::Unsupported { .. })),
++        "{empty:?}"
++    );
++}
++
++/// The decimal integers as the instance text and the integer value.
++fn integer_cases(range: std::ops::RangeInclusive<i64>, keywords: &str) -> Vec<(String, bool)> {
++    let schema = Schema::compile(&member_schema(keywords)).expect("schema");
++    range
++        .map(|value| {
++            let text = value.to_string();
++            let instance = json::parse(&format!("{{\"v\":{text}}}")).expect("instance");
++            (text, schema.validate(&instance).expect("validation").valid)
++        })
++        .collect()
++}
++
++// Invariant: integer bounds, inclusive, exclusive, fractional and open at either
++// end, admit exactly the integers the schema admits, across digit-length changes.
++#[test]
++fn integer_bounds_are_represented_exactly() {
++    for bounds in [
++        r#""minimum":-3,"maximum":12"#,
++        r#""exclusiveMinimum":0,"exclusiveMaximum":100"#,
++        r#""minimum":5"#,
++        r#""maximum":-5"#,
++        r#""minimum":1.5,"maximum":9.5"#,
++        r#""exclusiveMinimum":-2.5,"exclusiveMaximum":2.5"#,
++        r#""minimum":7,"maximum":7"#,
++        r#""minimum":99,"maximum":1000"#,
++        r#""minimum":-1000,"maximum":-99"#,
++        r#""minimum":1e2,"maximum":1.5e2"#,
++        r#""minimum":0,"exclusiveMinimum":3"#,
++    ] {
++        let keywords = format!(r#""type":"integer",{bounds}"#);
++        let cases = integer_cases(-1200..=1200, &keywords);
++        assert!(cases.iter().any(|(_, valid)| *valid), "{bounds}");
++        assert_member_cases(&keywords, &cases);
++    }
++}
++
++// Invariant: decimal bounds admit exactly the finite decimals the schema admits,
++// compared digit by digit with no rounding, and a decimal at the edge's own
++// value or one digit beyond it falls on the schema's side of the bound.
++#[test]
++fn decimal_bounds_are_represented_exactly() {
++    for bounds in [
++        r#""minimum":0.5,"maximum":2.25"#,
++        r#""exclusiveMinimum":-1.5,"exclusiveMaximum":0"#,
++        r#""exclusiveMinimum":0.1"#,
++        r#""maximum":0.30"#,
++        r#""minimum":-0.05,"maximum":0.05"#,
++        r#""minimum":1e1,"exclusiveMaximum":1.2e1"#,
++    ] {
++        let keywords = format!(r#""type":"number",{bounds}"#);
++        let schema = Schema::compile(&member_schema(&keywords)).expect("schema");
++        let mut texts: Vec<String> = Vec::new();
++        for hundredths in 1..=1500_i64 {
++            let (whole, fraction) = (hundredths / 100, hundredths % 100);
++            for sign in ["", "-"] {
++                texts.push(format!("{sign}{whole}.{fraction:02}"));
++                texts.push(format!("{sign}{whole}.{fraction:02}0"));
++                texts.push(format!("{sign}{whole}.{fraction:02}1"));
++                if fraction % 10 == 0 {
++                    texts.push(format!("{sign}{whole}.{}", fraction / 10));
++                }
++                if fraction == 0 {
++                    texts.push(format!("{sign}{whole}"));
++                }
++            }
++        }
++        texts.extend([
++            "0".to_owned(),
++            "0.0".to_owned(),
++            "0.0000001".to_owned(),
++            "-0.0000001".to_owned(),
++        ]);
++        let cases: Vec<(String, bool)> = texts
++            .into_iter()
++            .map(|text| {
++                let instance = json::parse(&format!("{{\"v\":{text}}}")).expect("instance");
++                let valid = schema.validate(&instance).expect("validation").valid;
++                (text, valid)
++            })
++            .collect();
++        assert!(cases.iter().any(|(_, valid)| *valid), "{bounds}");
++        assert_member_cases(&keywords, &cases);
++    }
++}
++
++// Invariant: an `enum` member that fails a sibling bound or pattern is not
++// generated, so nothing is ledgered for either keyword.
++#[test]
++fn an_enum_member_failing_a_sibling_constraint_is_not_generated() {
++    assert_member_cases(
++        r#""enum":[1,5,10],"minimum":3"#,
++        &[
++            ("1".to_owned(), false),
++            ("5".to_owned(), true),
++            ("10".to_owned(), true),
++        ],
++    );
++    assert_member_cases(
++        r#""enum":["ab","cd"],"pattern":"^a""#,
++        &[(quoted("ab"), true), (quoted("cd"), false)],
++    );
++}
++
++// Invariant: a back-reference, whose accepted set repeats an earlier match and
++// is not context-free, is ledgered by name at its pointer, the string stays the
++// generic string, and the schema check (`validate-input`) still refuses a
++// violating value that the grammar accepts.
++#[test]
++fn a_back_reference_is_ledgered_and_validate_input_refuses_a_violation() {
++    for pattern in [r"^(a|b)\1$", r"^(?<x>a|b)\k<x>$"] {
++        let schema = member_schema(&format!(r#""type":"string","pattern":{}"#, quoted(pattern)));
++        let (grammar, omitted) = compile(&schema);
++        assert_eq!(omitted.len(), 1, "{pattern}");
++        assert!(
++            omitted[0].starts_with("/properties/v/pattern (back-reference"),
++            "{omitted:?}"
++        );
++        assert!(
++            accepts(&grammar, r#"{"v":"ab"}"#),
++            "the grammar does not carry the pattern"
++        );
++        let instance = json::parse(r#"{"v":"ab"}"#).expect("instance");
++        let report = Schema::compile(&schema)
++            .expect("schema")
++            .validate(&instance)
++            .expect("validation");
++        assert!(!report.valid, "validate-input refuses {pattern}");
++    }
++}
++
++// Invariant: a look-around is refused by name and never ledgered, so no grammar
++// that omits it is returned.
++#[test]
++fn a_look_around_is_refused_by_name() {
++    for pattern in [r"a(?=b)", r"a(?!b)", r"(?<=a)b", r"(?<!a)b"] {
++        let refused = try_compile(&member_schema(&format!(
++            r#""type":"string","pattern":{}"#,
++            quoted(pattern)
++        )));
++        let Err(GbnfError::Unsupported {
++            pointer, reason, ..
++        }) = refused
++        else {
++            panic!("{pattern}: {refused:?}");
++        };
++        assert_eq!(pointer, "/properties/v/pattern");
++        assert!(
++            reason.contains("look-around is not yet translated"),
++            "{reason}"
++        );
++        assert!(reason.contains("issue 224"), "{reason}");
++    }
++}
++
++// Invariant: a size or divisibility keyword a grammar can state is refused as
++// not yet translated, uniqueness as not expressible, never ledgered or dropped,
++// and an enum left with no member by its sibling constraint is unsatisfiable.
++#[test]
++fn untranslated_keywords_and_an_empty_enum_are_refused_by_name() {
++    for (keywords, reason) in [
++        (
++            r#""type":"string","minLength":2"#,
++            "minLength is not yet translated",
++        ),
++        (
++            r#""type":"string","maxLength":2"#,
++            "maxLength is not yet translated",
++        ),
++        (
++            r#""type":"array","items":{"type":"string"},"minItems":1"#,
++            "minItems is not yet translated",
++        ),
++        (
++            r#""type":"array","items":{"type":"string"},"maxItems":1"#,
++            "maxItems is not yet translated",
++        ),
++        (
++            r#""type":"object","minProperties":1"#,
++            "minProperties is not yet translated",
++        ),
++        (
++            r#""type":"object","maxProperties":1"#,
++            "maxProperties is not yet translated",
++        ),
++        (
++            r#""type":"integer","multipleOf":2"#,
++            "multipleOf is not yet translated",
++        ),
++        (
++            r#""type":"array","items":{"type":"string"},"uniqueItems":true"#,
++            "uniqueItems is not expressible by a context-free grammar",
++        ),
++        (
++            r#""enum":[1,2],"minimum":5"#,
++            "no enum member satisfies its pattern or bounds",
++        ),
++    ] {
++        let refused = try_compile(&member_schema(keywords));
++        let Err(GbnfError::Unsupported { reason: found, .. }) = refused else {
++            panic!("{keywords}: {refused:?}");
++        };
++        assert_eq!(found, reason, "{keywords}");
++    }
++}
++
++// Invariant: a pattern whose automaton has thousands of states ends as a
++// resource stop under a small work budget, the same way every time, and never
++// as a grammar or a hang.
++#[test]
++fn a_pattern_with_a_large_automaton_stops_on_the_budget() {
++    let schema = member_schema(r#""type":"string","pattern":"^[ab]*a[ab]{16}$""#);
++    let stop = || {
++        let mut governor = Governor::new(Effort::Quick.budget());
++        let node = json::parse_with(&schema, &mut governor).expect("schema JSON");
++        match Builder::new("t").grammar(&node, &mut governor) {
++            Err(GbnfError::Resource(reason)) => reason,
++            other => panic!("expected a resource stop: {other:?}"),
++        }
++    };
++    assert_eq!(stop(), stop());
++    assert_eq!(stop(), StopReason::BudgetExceeded(Resource::Work));
++}
++
++/// Whether the lowered automaton of `pattern` accepts `text`.
++fn automaton_accepts(automaton: &super::regex::Automaton, text: &str) -> bool {
++    let mut state = 0;
++    for character in text.chars() {
++        let Some(&(_, _, next)) = automaton.states[state]
++            .edges
++            .iter()
++            .find(|(first, last, _)| (*first..=*last).contains(&character))
++        else {
++            return false;
++        };
++        state = next;
++    }
++    automaton.states[state].accepting
++}
++
++// Differential: over generated strings, the strings the lowered automaton
++// accepts are exactly those `Pattern::is_match` accepts, for no anchor, one
++// anchor, an anchor inside an alternation, `\b`, a negated class and a class
++// over astral characters.
++#[test]
++fn differential_automaton_acceptance_equals_pattern_is_match() {
++    use purrassist_core::pattern::Pattern;
++    let patterns = [
++        r"ab+",
++        r"^ab",
++        r"ab$",
++        r"^a|b$",
++        r"\bab\b",
++        r"[^a]b",
++        r"[\u{1F600}-\u{1F64F}]a",
++    ];
++    let alphabet = ['a', 'b', ' ', '_', '\u{1F600}', '\u{1F680}', 'é'];
++    let mut strings = vec![String::new()];
++    let mut frontier = vec![String::new()];
++    for _ in 0..4 {
++        frontier = frontier
++            .iter()
++            .flat_map(|prefix| alphabet.iter().map(move |c| format!("{prefix}{c}")))
++            .collect();
++        strings.extend(frontier.iter().cloned());
++    }
++    let mut state = 0x2545_F491_4F6C_DD1D_u64;
++    for _ in 0..500 {
++        let mut text = String::new();
++        for _ in 0..12 {
++            state ^= state << 13;
++            state ^= state >> 7;
++            state ^= state << 17;
++            text.push(alphabet[usize::try_from(state >> 33).expect("fits") % alphabet.len()]);
++        }
++        strings.push(text);
++    }
++    for source in patterns {
++        let mut governor = Governor::new(Effort::Deep.budget());
++        let pattern = Pattern::compile_governed(source, &mut governor).expect("pattern");
++        let super::regex::Lowered::Automaton(automaton) =
++            super::regex::lower(source, &mut governor).expect("lowered")
++        else {
++            panic!("{source} is regular");
++        };
++        for text in &strings {
++            assert_eq!(
++                automaton_accepts(&automaton, text),
++                pattern.is_match(text, &mut governor).expect("match"),
++                "{source} on {text:?}"
++            );
++        }
++    }
++}
++
++// Invariant: a match containing a double quote, a backslash and a control
++// character is spelled with JSON escapes in the grammar, and the decoded value
++// matches the pattern.
++#[test]
++fn a_quote_a_backslash_and_a_control_character_are_spelled_escaped() {
++    let keywords = r#""type":"string","pattern":"^\"\\\\\\x01$""#;
++    let (grammar, _) = compile(&member_schema(keywords));
++    for escaped in [r#""\\\"""#, r#""\\\\""#, r#""\\u0001""#] {
++        assert!(grammar.contains(escaped), "{escaped} in\n{grammar}");
++    }
++    assert_member_cases(
++        keywords,
++        &[(quoted("\"\\\u{1}"), true), (quoted("\"\\"), false)],
++    );
++}
++
++// Invariant: a refused keyword is refused in every placement, never routed to
++// the ledger: beside an enum, beside anyOf, and as uniqueness.
++#[test]
++fn refused_keywords_are_refused_beside_enum_and_anyof_too() {
++    for keywords in [
++        r#""enum":["a"],"minLength":1"#,
++        r#""enum":[2],"multipleOf":2"#,
++        r#""const":"a","maxLength":3"#,
++        r#""anyOf":[{"type":"array","items":{"type":"string"}}],"maxItems":2"#,
++        r#""anyOf":[{"type":"array","items":{"type":"string"}}],"uniqueItems":true"#,
++    ] {
++        let refused = try_compile(&member_schema(keywords));
++        assert!(
++            matches!(refused, Err(GbnfError::Unsupported { .. })),
++            "{keywords}: {refused:?}"
++        );
++    }
++}
++
++// Invariant: through `lanes::gbnf`, an open input shape records the
++// `input-shape-not-expressible` entry for the GBNF target, and the ledger passes
++// the registered loss profile. (The upstream schema compiler refuses a
++// back-reference in a graph's `sh:pattern`, so the row's coverage at this entry
++// point comes from open input shapes.)
++#[test]
++fn the_gbnf_lane_ledgers_input_shape_and_the_ledger_is_sound() {
++    use purrdf_core::loss::check_ledger_sound_in;
++    let (vocabulary, _) = worked_example();
++    let section = TOOLS
++        .split("## End-to-end example")
++        .nth(1)
++        .expect("section");
++    let turtle = section
++        .split("```turtle\n")
++        .nth(1)
++        .and_then(|fence| fence.split("\n```").next())
++        .expect("turtle fence")
++        .replace(
++            "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ; sh:closed true ;",
++            "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ;",
++        );
++    let mut governor = Governor::new(Budget::default());
++    let graph = ToolGraph::load(
++        turtle.as_bytes(),
++        "text/turtle",
++        None,
++        &vocabulary,
++        &mut governor,
++    )
++    .expect("graph loads");
++    let (_, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
++    assert!(
++        ledger.entries().iter().any(|entry| {
++            entry.code == "input-shape-not-expressible" && entry.to == "llama-gbnf"
++        })
++    );
++    check_ledger_sound_in(
++        vocabulary.loss_profile(),
++        &ledger,
++        crate::SOURCE_REPRESENTATION,
++        "llama-gbnf",
++    )
++    .expect("sound ledger");
++}
+diff --git crates/toolgraph/src/lanes/shared.rs crates/toolgraph/src/lanes/shared.rs
+new file mode 100644
+index 00000000..50cef0fa
+--- /dev/null
++++ crates/toolgraph/src/lanes/shared.rs
+@@ -0,0 +1,176 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Ledger rows and schema bookkeeping common to the projection lanes.
++//!
++//! Every lane derives from the same `mcp::encode` schemas and names the same
++//! source constructs it cannot carry, so the rows and the uncarried-keyword scan
++//! live here once.
++
++use std::borrow::Cow;
++
++use purrassist_core::json::{self, Node, Value};
++use purrdf_core::{
++    diagnostic::RdfLocation,
++    loss::{LossEntry, LossLedger},
++};
++
++use crate::{ProjectionTarget, SOURCE_REPRESENTATION, Tool};
++
++/// Builds one ledger entry: a code, a note and an optional subject location.
++pub(super) fn entry_for(
++    target: ProjectionTarget,
++    code: &'static str,
++    note: String,
++    subject: Option<(&str, &'static str)>,
++) -> LossEntry {
++    LossEntry {
++        code: Cow::Borrowed(code),
++        from: Cow::Borrowed(SOURCE_REPRESENTATION),
++        to: Cow::Borrowed(target.representation()),
++        note: Cow::Owned(note),
++        location: subject.map(|(iri, member)| {
++            Box::new(RdfLocation {
++                subject: Some(iri.to_owned()),
++                logical: Some(member.to_owned()),
++                ..RdfLocation::default()
++            })
++        }),
++    }
++}
++
++/// Carry each construct the upstream schema compiler already dropped as one
++/// entry under `code`, quoting its note and keeping its source location.
++pub(super) fn record_upstream(
++    ledger: &mut LossLedger,
++    upstream: &LossLedger,
++    target: ProjectionTarget,
++    code: &'static str,
++) {
++    for entry in upstream.entries() {
++        let note = format!(
++            "upstream schema compiler omitted a construct ({}): {}",
++            entry.code, entry.note
++        );
++        ledger.record(LossEntry {
++            location: entry.location.clone(),
++            ..entry_for(target, code, note, None)
++        });
++    }
++}
++
++/// The pointers of every keyword of `schema` that is neither `carried` nor
++/// schema metadata (`$schema`, an empty `$defs`), in schema order.
++pub(super) fn uncarried(schema: &Node, pointer: &str, carried: &[&str]) -> Vec<String> {
++    let Value::Object(members) = &schema.value else {
++        return Vec::new();
++    };
++    members
++        .iter()
++        .filter(|member| {
++            let key = member.key.as_str();
++            let metadata = key == "$schema"
++                || (key == "$defs"
++                    && matches!(&member.value.value, Value::Object(inner) if inner.is_empty()));
++            !metadata && !carried.contains(&key)
++        })
++        .map(|member| format!("{pointer}/{}", json::pointer_segment(&member.key)))
++        .collect()
++}
++
++/// The ledger rows every lane records for one tool, in the documented order:
++/// authorization, session binding, taint, recovery hints, confinement, resource
++/// ceilings, context contract, annotations, RDF binding and description. Hint
++/// rows are located at the hint's reifier and the other rows at the tool or
++/// profile IRI. Each note names the mandatory check that enforces the omitted
++/// constraint.
++pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: ProjectionTarget) {
++    let mut row = |code, note: &str, iri: &str, member| {
++        ledger.record(entry_for(
++            target,
++            code,
++            note.to_owned(),
++            Some((iri, member)),
++        ));
++    };
++    let hints = || tool.parameters.iter().filter_map(|p| p.hint.as_ref());
++    if !tool.parameter_constraints.is_empty() {
++        row(
++            "authorization-not-expressible",
++            "parameterConstraints are not enforced by the projection; mandatory check authorize-call",
++            &tool.iri,
++            "parameterConstraints",
++        );
++    }
++    for hint in hints().filter(|hint| hint.session_binding.is_some()) {
++        row(
++            "session-binding-not-expressible",
++            "the session binding is not enforced by the projection; mandatory check bind-session",
++            &hint.reifier,
++            "sessionBinding",
++        );
++    }
++    for hint in hints().filter(|hint| !hint.taints.is_empty()) {
++        row(
++            "taint-not-expressible",
++            "taint labels are not enforced by the projection; mandatory check taint-policy",
++            &hint.reifier,
++            "taint",
++        );
++    }
++    for hint in hints() {
++        row(
++            "recovery-hints-not-expressible",
++            "recovery tolerances are not carried by the projection; mandatory check recovery-tolerance",
++            &hint.reifier,
++            "recoveryHint",
++        );
++    }
++    let profile = &tool.execution_profile.iri;
++    row(
++        "confinement-not-expressible",
++        "the execution profile is not enforced by the projection; mandatory check confine-worker",
++        profile,
++        "executionProfile",
++    );
++    row(
++        "resource-ceiling-not-expressible",
++        "the five resource ceilings are not enforced by the projection; mandatory check confine-worker",
++        profile,
++        "resourceCeilings",
++    );
++    row(
++        "context-contract-not-expressible",
++        "the output projection, byte cap and retention are not carried by the projection; mandatory check project-context",
++        &tool.iri,
++        "contextManagement",
++    );
++    let annotations = &tool.annotations;
++    if annotations.title.is_some()
++        || annotations.read_only_hint.is_some()
++        || annotations.destructive_hint.is_some()
++        || annotations.idempotent_hint.is_some()
++        || annotations.open_world_hint.is_some()
++    {
++        row(
++            "tool-annotations-not-expressible",
++            "the title and behavior hints are not carried by the projection; mandatory check verify-effects",
++            &tool.iri,
++            "annotations",
++        );
++    }
++    row(
++        "rdf-binding-not-expressible",
++        "the FnO mappings and source reifiers are not carried by the projection; mandatory check bind-manifest",
++        &tool.iri,
++        "fnoBinding",
++    );
++    if !tool.description.is_empty() {
++        row(
++            "description-not-expressible",
++            "the description is not carried by the projection; mandatory check bind-manifest",
++            &tool.iri,
++            "description",
++        );
++    }
++}
+diff --git crates/toolgraph/src/vocab/profile.rs crates/toolgraph/src/vocab/profile.rs
+index 3fdc156d..2786c42b 100644
+--- crates/toolgraph/src/vocab/profile.rs
++++ crates/toolgraph/src/vocab/profile.rs
+@@ -187,7 +187,7 @@ const MEANINGS: &[Meaning] = &[
+     Meaning {
+         code: "input-shape-not-expressible",
+         description: "The complete input shape requires validation before authorization.",
+-        lanes: &[A],
++        lanes: &[A, G],
+     },
+     Meaning {
+         code: "context-contract-not-expressible",
+diff --git docs/tool-graph/TOOLS.md docs/tool-graph/TOOLS.md
+index 55baeef9..36160b50 100644
+--- docs/tool-graph/TOOLS.md
++++ docs/tool-graph/TOOLS.md
+@@ -1133,6 +1133,86 @@ characters, without dropping arguments. Labeled post-checks enforce constraints
+ beyond context-free syntax. UTF-16 surrogate pairing and the core's exact
+ Unicode string validity remain mandatory schema/JSON post-checks.
+ 
++#### Pattern dialect: translated exactly, ledgered by name, and refused
++
++The `pattern` keyword is read in the ECMAScript dialect with the Unicode (`u`)
++reading, as JSON Schema 2020-12 Core, section 6.4 (Regular Expressions), asks. Where
++the readings differ (`\u{...}`, `\p{...}`, the dot and classes over astral
++characters, a lone surrogate) the `u` meaning wins. A pattern that is invalid
++under `u` only by an identity escape of a character that is not a syntax
++character (an escaped underscore) has one meaning without it and is read as that
++literal character.
++
++A pattern is not anchored: it accepts every string that contains a match, so its
++grammar is any prefix, the pattern, and any suffix. `^` and `$` pin an end only
++where they are written, and may sit inside one alternative. No whole-string rule
++is applied to a pattern that does not write the anchors. The implemented
++compiler takes this language from the core pattern engine's own search
++automaton, read one scalar value at a time, so it is the language `Schema::validate`
++accepts. A string is generated with the escapes JSON requires (the quote, the
++backslash and the control characters) and every other scalar raw; that fixes the
++spelling of a value, not the set of values.
++
++Translated exactly: each of these denotes a language a grammar states, and
++nothing is ledgered for being laborious.
++
++- Literal characters and every escape that denotes one character: `\\`, `\/`,
++  escaped syntax characters, `\f`, `\n`, `\r`, `\t`, `\v`, `\0`, `\xHH`, `\uHHHH`,
++  `\u{H...}` and `\cX`, each a fixed code point.
++- Character classes `[...]`, negated classes `[^...]`, ranges, and the class
++  escapes `\d`, `\D`, `\w`, `\W`, `\s`, `\S`, each a finite set of code points.
++- Unicode property escapes `\p{...}` and `\P{...}`, each a fixed set from the
++  Unicode tables.
++- The dot `.`, every code point except the line terminators.
++- Alternation `|`, groups `(...)`, non-capturing groups `(?:...)` and named
++  groups `(?<name>...)`: capture does not change the accepted set.
++- Every quantifier, `*`, `+`, `?`, `{n}`, `{n,}` and `{n,m}`, greedy and lazy alike:
++  both accept the same strings, and a grammar has no match choice.
++- The anchors `^` and `$`, where they are written.
++- Word boundaries `\b` and `\B`: the accepted set is regular, since each test
++  depends only on the word-ness of the adjacent characters, so each state of the
++  automaton is split by its neighbour's class.
++
++Ledgered by name, with `input-shape-not-expressible` and enforced by
++`validate-input`, when a schema carrying one reaches the lane by a route other
++than a graph (the upstream schema compiler refuses a back-reference in a graph's
++`sh:pattern`, so the lane's own branch is a defence):
++
++- Back-references `\1` to `\n` and named references `\k<name>`: the accepted set
++  repeats an earlier match, which no context-free grammar can state for all
++  strings. The grammar keeps the generic JSON string for that member.
++
++Refused with a typed error, never ledgered:
++
++- Look-ahead `(?=...)` and `(?!...)` and look-behind `(?<=...)` and `(?<!...)`.
++  Look-around is not yet translated: its exact translation needs an automaton
++  product with a size bound, filed as issue 224
++  (`https://github.com/Blackcat-Informatics/purrassist/issues/224`).
++
++Numeric bounds are represented exactly. An integer bound (`minimum`, `maximum`,
++`exclusiveMinimum`, `exclusiveMaximum`, including fractional bounds read for an
++`integer`) becomes a digit grammar that spells every integer in the interval and
++no other. A decimal bound becomes a digit grammar that spells, in plain notation
++without an exponent and without a sign on zero, every finite decimal in the
++interval and no other, compared digit by digit with no rounding. A number
++without a bound keeps the generic number grammar, which includes exponents.
++
++The G lane records `input-shape-not-expressible` for an open input shape and, as
++a defence, for a back-reference in a schema that arrives by another route, so the
++code covers G as well as A. A grammar can state these keywords, and the compiler
++refuses each by name as not yet translated:
++
++- `minLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/225`.
++- `maxLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/226`.
++- `minItems`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/227`.
++- `maxItems`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/228`.
++- `minProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/229`.
++- `maxProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/230`.
++- `multipleOf`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/231`.
++
++`uniqueItems: true` is refused as not expressible by a context-free grammar. An `enum` or `const`
++whose sibling `pattern` or bound leaves no member is refused as unsatisfiable.
++
+ The compact lane's versioned, UTF-8 `CompactSignature` for the example is exactly
+ the following two LF-separated lines, ordered by tool name bytes, with one final LF. Signatures are a new
+ specified projection, not an existing `DeclarationForm`. Optional parameters
+@@ -1176,7 +1256,7 @@ constraint and check id; the table is not itself serialized ledger JSON.
+ | `confinement-not-expressible` | G, C, P | `DatabaseProfile`, `FileProfile` | `confine-worker`: exact admitted AppArmor label, features and root bindings before dispatch |
+ | `resource-ceiling-not-expressible` | G, C, P | five ceiling properties on each execution profile | `confine-worker`: exact rlimits and governed engine ceilings, no truncation or rounding |
+ | `output-shape-not-expressible` | A, G, P | `QueryOutput`, `EditOutput` | `validate-output`: full shape check before releasing or projecting output |
+-| `input-shape-not-expressible` | A | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
++| `input-shape-not-expressible` | A, G | `QueryInput`, `EditInput` | `validate-input`: complete candidate against original shapes before authorization |
+ | `context-contract-not-expressible` | A, G, C, P | `QueryContext`, `EditContext` | `project-context`: field mask after output validation, exact byte cap and retention on release |
+ | `tool-annotations-not-expressible` | A, G, C, P | the title and four hints on Q and E | `verify-effects`: admitted implementation agrees; hints never confer permission |
+ | `rdf-binding-not-expressible` | A, G, C, P | Q/E FnO mappings, lists and source reifiers | `bind-manifest`: receipt pins graph, tool, implementation, source and projection digests |

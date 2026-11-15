@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 17,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider",
+  "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+  "slug": "tool-call-recovery-reassemble-provider",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "c9455f33051ede870aa1e6318884269ae6ef94d8",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider",
+    "branch:paudley/17-tool-call-recovery-reassemble-provider",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:skipping busy source /opt/.cargo/42/c45b66525ad738: /opt/.cargo/42/c45b66525ad738/debug/.cargo-build-lock; reflinked /home/paudley/Active/purrassist/.worktrees/234-tool-graph-model-family-prompt caches into /home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider plus 0 dependency units from 0 other checkouts in 293.1s; 2231 unchanged files keep their built mtimes; 2 other files take the seed time and rebuild; 71 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider",
+    "issue:/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-14T11:55:16-0600",
+  "seed_error": ""
+}

@@ -1,0 +1,135 @@
+{
+  "issue": 17,
+  "pr_number": 237,
+  "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider",
+  "observed_at": "2026-11-15T00:27:31.284311+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_fail",
+      "message": "CI state is fail"
+    }
+  ],
+  "unavailable": [
+    {
+      "source": "ci_logs",
+      "reason": "one or more failed-job logs unavailable; see inventory"
+    }
+  ],
+  "next_actions": [
+    "Inspect saved failed-job excerpts"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "5d325d6660eb12df1bde0900fdf2f797f73e54eb",
+    "headRefName": "paudley/17-tool-call-recovery-reassemble-provider",
+    "headRefOid": "356e9e5934658c3a69bead372db8e8e0e6077275",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 237,
+    "state": "OPEN",
+    "title": "Read Anthropic streaming events into tool calls",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/237"
+  },
+  "checks": {
+    "state": "fail",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135139",
+        "name": "native (ubuntu-24.04)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135116",
+        "name": "release-gate",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135212",
+        "name": "wasm",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639134923",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135180",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135202",
+        "name": "qualification",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135205",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135112",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135108",
+        "name": "native (macos-14)",
+        "state": "CANCELLED"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "356e9e5934658c3a69bead372db8e8e0e6077275",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "356e9e5934658c3a69bead372db8e8e0e6077275",
+    "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 237,
+    "jobs": [
+      {
+        "name": "native (macos-14)",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135108",
+        "path": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/ci-logs/github-job-132639135108.log",
+        "error": "Log download failed (exit 1): gh: HTTP 404\n"
+      }
+    ],
+    "ok": false,
+    "summary": "# PR #237 failed CI logs\n\n## native (macos-14)\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/43657479907/job/132639135108\n\nLOG UNAVAILABLE: Log download failed (exit 1): gh: HTTP 404\n\n\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

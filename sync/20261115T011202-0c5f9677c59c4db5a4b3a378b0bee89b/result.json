@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider",
+  "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+  "base_ref": "origin/main",
+  "head": "356e9e5934658c3a69bead372db8e8e0e6077275",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/sync/20261115T011202-0c5f9677c59c4db5a4b3a378b0bee89b",
+  "conflicts": [],
+  "status": "completed",
+  "base": "9fc8ba1d9846da25ada726ccf11751ce0324d48d",
+  "merge_bases": [
+    "c9455f33051ede870aa1e6318884269ae6ef94d8"
+  ],
+  "merge_index": "1bad4aa678a1dadfec498e0aa16c9248e15e95875d71da51f94b4f60da06eab0",
+  "candidate_tree": "c7f4214de4bdb0a643b31d8a007afe904143b12b",
+  "candidate_patch": "candidate-1b021a64b98045af8a2c37a82b799c22.patch",
+  "validation_records": [],
+  "commit": "3d3d7d428530ad94bac4d8d5ae02177ede88c07f",
+  "tree": "c7f4214de4bdb0a643b31d8a007afe904143b12b"
+}
