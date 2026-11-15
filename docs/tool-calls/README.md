@@ -44,8 +44,11 @@ Callers add their own dialects with the grammar DSL
 derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
 `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
 `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
-[README](../../crates/derive/README.md)). Streaming recognition (#16) and
-provider streaming events (#17) remain tracked.
+[README](../../crates/derive/README.md)). Streaming recognition (#16) is implemented.
+Provider streaming events (#17): the Rust API reads Anthropic Messages event
+logs (`ToolSet::stream_anthropic_events`); the OpenAI `tool_calls` delta
+reading, the batch CLI and MCP input, the provider-log fixtures, fuzz seeds
+and WASM parity remain tracked.
 
 ## Marker-suppressed variants
 
