@@ -15,7 +15,6 @@
 //! returned ledger, never approximated. Object detail nested deeper than the
 //! caller's depth renders as `object` and is ledgered the same way.
 
-use std::borrow::Cow;
 use std::fmt;
 
 use purrassist_core::{
@@ -24,11 +23,9 @@ use purrassist_core::{
     json::{self, Node, ParseFailure, Value},
     tool_call::is_valid_name,
 };
-use purrdf_core::{
-    diagnostic::RdfLocation,
-    loss::{LossEntry, LossLedger, LossSoundnessError, check_ledger_sound_in},
-};
+use purrdf_core::loss::{LossLedger, LossSoundnessError, check_ledger_sound_in};
 
+use super::shared::{entry_for, record_tool, record_upstream, uncarried};
 use crate::{
     ProjectionTarget, SOURCE_REPRESENTATION, Tool, ToolGraph, Vocabulary,
     codec::mcp::{self, CodecError},
@@ -191,18 +188,15 @@ pub fn compact(
         text.push_str(")->");
         text.push_str(&result);
         text.push('\n');
-        record_tool(&mut ledger, tool, &input, &output);
+        record_tool(&mut ledger, tool, ProjectionTarget::CompactSignature);
+        record_schemas(&mut ledger, tool, &input, &output);
     }
-    for entry in upstream.entries() {
-        let note = format!(
-            "upstream schema compiler omitted a construct ({}): {}",
-            entry.code, entry.note
-        );
-        ledger.record(LossEntry {
-            location: entry.location.clone(),
-            ..entry_for("schema-keyword-not-expressible", note, None)
-        });
-    }
+    record_upstream(
+        &mut ledger,
+        &upstream,
+        ProjectionTarget::CompactSignature,
+        "schema-keyword-not-expressible",
+    );
     check_ledger_sound_in(
         vocabulary.loss_profile(),
         &ledger,
@@ -401,21 +395,7 @@ impl<'a> Lowering<'a> {
     /// Record every keyword of `schema` that is neither `carried` nor schema
     /// metadata (`$schema`, an empty `$defs`).
     fn note_uncarried(&mut self, schema: &Node, pointer: &str, carried: &[&str]) {
-        let Value::Object(members) = &schema.value else {
-            return;
-        };
-        for member in members {
-            let key = member.key.as_str();
-            let metadata = key == "$schema"
-                || (key == "$defs"
-                    && matches!(&member.value.value, Value::Object(inner) if inner.is_empty()));
-            if !metadata && !carried.contains(&key) {
-                self.omitted.push(format!(
-                    "{pointer}/{}",
-                    purrassist_core::json::pointer_segment(key)
-                ));
-            }
-        }
+        self.omitted.extend(uncarried(schema, pointer, carried));
     }
 }
 
@@ -428,111 +408,6 @@ fn identifier(name: &str, governor: &mut Governor) -> Result<String, CompactErro
     Node::new(Value::String(name.to_owned()))
         .to_json_governed(governor)
         .map_err(CompactError::Resource)
-}
-
-/// Builds one ledger entry: a code, a note and an optional subject location.
-fn entry_for(code: &'static str, note: String, subject: Option<(&str, &'static str)>) -> LossEntry {
-    LossEntry {
-        code: Cow::Borrowed(code),
-        from: Cow::Borrowed(SOURCE_REPRESENTATION),
-        to: Cow::Borrowed(ProjectionTarget::CompactSignature.representation()),
-        note: Cow::Owned(note),
-        location: subject.map(|(iri, member)| {
-            Box::new(RdfLocation {
-                subject: Some(iri.to_owned()),
-                logical: Some(member.to_owned()),
-                ..RdfLocation::default()
-            })
-        }),
-    }
-}
-
-/// The ledger rows of one tool, in the documented order.
-fn record_tool(ledger: &mut LossLedger, tool: &Tool, input: &Lowering<'_>, output: &Lowering<'_>) {
-    let mut row = |code, note: &str, iri: &str, member| {
-        ledger.record(entry_for(code, note.to_owned(), Some((iri, member))));
-    };
-    let hints = || tool.parameters.iter().filter_map(|p| p.hint.as_ref());
-    if !tool.parameter_constraints.is_empty() {
-        row(
-            "authorization-not-expressible",
-            "parameterConstraints are not enforced by the signature; mandatory check authorize-call",
-            &tool.iri,
-            "parameterConstraints",
-        );
-    }
-    for hint in hints().filter(|hint| hint.session_binding.is_some()) {
-        row(
-            "session-binding-not-expressible",
-            "the session binding is not enforced by the signature; mandatory check bind-session",
-            &hint.reifier,
-            "sessionBinding",
-        );
-    }
-    for hint in hints().filter(|hint| !hint.taints.is_empty()) {
-        row(
-            "taint-not-expressible",
-            "taint labels are not enforced by the signature; mandatory check taint-policy",
-            &hint.reifier,
-            "taint",
-        );
-    }
-    for hint in hints() {
-        row(
-            "recovery-hints-not-expressible",
-            "recovery tolerances are not carried by the signature; mandatory check recovery-tolerance",
-            &hint.reifier,
-            "recoveryHint",
-        );
-    }
-    let profile = &tool.execution_profile.iri;
-    row(
-        "confinement-not-expressible",
-        "the execution profile is not enforced by the signature; mandatory check confine-worker",
-        profile,
-        "executionProfile",
-    );
-    row(
-        "resource-ceiling-not-expressible",
-        "the five resource ceilings are not enforced by the signature; mandatory check confine-worker",
-        profile,
-        "resourceCeilings",
-    );
-    row(
-        "context-contract-not-expressible",
-        "the output projection, byte cap and retention are not carried by the signature; mandatory check project-context",
-        &tool.iri,
-        "contextManagement",
-    );
-    let annotations = &tool.annotations;
-    if annotations.title.is_some()
-        || annotations.read_only_hint.is_some()
-        || annotations.destructive_hint.is_some()
-        || annotations.idempotent_hint.is_some()
-        || annotations.open_world_hint.is_some()
-    {
-        row(
-            "tool-annotations-not-expressible",
-            "the title and behavior hints are not carried by the signature; mandatory check verify-effects",
-            &tool.iri,
-            "annotations",
-        );
-    }
-    row(
-        "rdf-binding-not-expressible",
-        "the FnO mappings and source reifiers are not carried by the signature; mandatory check bind-manifest",
-        &tool.iri,
-        "fnoBinding",
-    );
-    if !tool.description.is_empty() {
-        row(
-            "description-not-expressible",
-            "the description is not carried by the signature; mandatory check bind-manifest",
-            &tool.iri,
-            "description",
-        );
-    }
-    record_schemas(ledger, tool, input, output);
 }
 
 /// The `schema-keyword-not-expressible` rows of a tool's input and output shape.
@@ -557,6 +432,7 @@ fn record_schemas(
                 lowering.omitted.join(", ")
             );
             ledger.record(entry_for(
+                ProjectionTarget::CompactSignature,
                 "schema-keyword-not-expressible",
                 note,
                 Some((shape, member)),

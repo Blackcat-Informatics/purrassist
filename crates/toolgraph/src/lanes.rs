@@ -4,9 +4,12 @@
 //! Projection lanes over a loaded [`ToolGraph`](crate::ToolGraph).
 //!
 //! Each lane returns its artifact together with a `LossLedger` that names every
-//! constraint the artifact does not carry. Only the compact signature lane is
-//! implemented here.
+//! constraint the artifact does not carry. The compact signature lane and the
+//! GBNF argument grammar lane are implemented here.
 
 mod compact;
+mod gbnf;
+mod shared;
 
 pub use compact::{CompactError, CompactSignature, compact};
+pub use gbnf::{GbnfError, ToolGrammar, gbnf};
