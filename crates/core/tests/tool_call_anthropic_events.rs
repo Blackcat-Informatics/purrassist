@@ -410,7 +410,7 @@ fn refusal_and_cancellation_are_explicit_outcomes() {
 
     // The refusal came at the first chunk, before any byte was admitted;
     // the cancelled read keeps the half it admitted, not the bytes after.
-    assert!(refused.log.is_empty());
+    assert_eq!(refused.log, [] as [u8; 0]);
     assert_eq!(cancelled.log, first);
     for result in [refused, cancelled] {
         assert_eq!(result.recovery.outcome, Outcome::Unresolved);
@@ -432,6 +432,7 @@ fn over_closed_tool_input_is_a_malformed_fault_of_its_block() {
         r#"{"path":"a"}}"#,
         r#"{"path":"a"]"#,
         r#"{"path":"a"} x"#,
+        r#""{\"path\":\"a\"}","caller":{"x":1}"#,
         r#"{"path":"a"}},{"type":"tool_use","id":"toolu_02","name":"read_file","input":{"path":"b"}}"#,
     ] {
         negative(

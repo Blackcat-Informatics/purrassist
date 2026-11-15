@@ -172,7 +172,7 @@ Current surfaces include:
   their own with the grammar DSL. Typed tool definitions derive from Rust
   structs and enums with `#[derive(ToolDefinition)]` and `#[derive(ToolEnum)]`
   (the zero-dependency `purrassist-derive` crate, re-exported by the facade;
-  see the example below). Streaming recognition (#16) remains tracked. Of provider
+  see the example below). Streaming recognition (#16) is implemented. Of provider
   streaming events (#17), Anthropic Messages event logs are read and
   reassembled by the Rust API; the OpenAI delta reading, CLI and MCP inputs,
   provider-log fixtures, fuzz seeds and WASM parity remain tracked. See

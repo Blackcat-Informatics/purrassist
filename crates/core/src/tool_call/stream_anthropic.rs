@@ -107,8 +107,8 @@ pub enum EventFaultKind {
     /// readable, and the call is withheld: a repair of cut-off input is not a
     /// resolved call.
     UnfinishedInput,
-    /// A tool input's fragments are not one well-formed value: a closer with
-    /// no container open, a closer of the other kind than the innermost
+    /// A tool input's fragments are not one well-formed JSON object: a first
+    /// non-whitespace byte other than `{`, a closer with no container open, a closer of the other kind than the innermost
     /// opener, or non-whitespace after the top-level value closed. Reported
     /// once per block, which is withheld, so fragment text cannot close its own
     /// block or form further message structure.
@@ -328,6 +328,25 @@ enum Lex {
     Escape,
 }
 
+/// How far a tool input's top-level object has come.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Input {
+    /// No non-whitespace byte yet.
+    Unstarted,
+    Open,
+    /// The top-level container closed; only whitespace may follow.
+    Closed,
+}
+
+/// What an event block has so far; a comment line adds nothing.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Lines {
+    Empty,
+    /// Field lines other than `data`.
+    Fields,
+    Data,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Before,
@@ -378,13 +397,12 @@ pub struct AnthropicEventStream<'s> {
     /// The closers owed by the open tool input's unclosed containers.
     closers: ScratchVec<u8>,
     lex: Lex,
-    /// Whether the open tool input's top-level container has closed.
-    input_closed: bool,
+    /// How far the open tool input's top-level object has come.
+    input: Input,
     /// Whether the open tool input was already reported as malformed.
     input_faulted: bool,
-    has_data: bool,
-    /// Whether the event block being read has a field line (not a comment).
-    has_fields: bool,
+    /// What the event block being read has so far.
+    lines: Lines,
     line_start: usize,
     skip_lf: bool,
     /// The offset of the line terminator being handled.
@@ -458,11 +476,10 @@ impl<'s> AnthropicEventStream<'s> {
             blocks: ScratchVec::new(governor),
             closers: ScratchVec::new(governor),
             lex: Lex::Plain,
-            input_closed: false,
+            input: Input::Unstarted,
             input_faulted: false,
             stream,
-            has_data: false,
-            has_fields: false,
+            lines: Lines::Empty,
             line_start: 0,
             skip_lf: false,
             at: 0,
@@ -538,9 +555,9 @@ impl<'s> AnthropicEventStream<'s> {
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
         if start == end {
-            return if self.has_data {
+            return if self.lines == Lines::Data {
                 self.dispatch(events)
-            } else if core::mem::take(&mut self.has_fields) {
+            } else if core::mem::replace(&mut self.lines, Lines::Empty) == Lines::Fields {
                 self.current = self.events;
                 self.events += 1;
                 self.fault(EventFaultKind::MissingData, None)
@@ -559,22 +576,21 @@ impl<'s> AnthropicEventStream<'s> {
         if value < end && self.log.as_slice()[value] == b' ' {
             value += 1;
         }
-        self.has_fields = true;
         if !is_data {
+            self.lines = self.lines.max(Lines::Fields);
             return Ok(()); // `event`, `id`, `retry`: the data's own `type` governs
         }
-        if self.has_data {
+        if self.lines == Lines::Data {
             self.data.push(b'\n')?;
         }
-        self.has_data = true;
+        self.lines = Lines::Data;
         self.data
             .extend(self.log.as_slice()[value..end].iter().copied())
     }
 
     fn dispatch(&mut self, events: &mut impl Extend<StreamEvent>) -> Result<(), StopReason> {
         let mut data = core::mem::replace(&mut self.data, ScratchVec::new(self.stream.governor()));
-        self.has_data = false;
-        self.has_fields = false;
+        self.lines = Lines::Empty;
         self.current = self.events;
         self.events += 1;
         let result = self.event(data.as_slice(), events);
@@ -705,7 +721,7 @@ impl<'s> AnthropicEventStream<'s> {
         self.next_index = index.saturating_add(1);
         self.closers.clear();
         self.lex = Lex::Plain;
-        self.input_closed = false;
+        self.input = Input::Unstarted;
         self.input_faulted = false;
         let kind = match block.get("type").and_then(Node::as_str) {
             Some("tool_use") => Kind::ToolUse,
@@ -872,10 +888,13 @@ impl<'s> AnthropicEventStream<'s> {
             .charge(Resource::Work, size(fragment.len()))?;
         let mut malformed = false;
         for &byte in fragment {
-            if self.input_closed
-                && self.lex == Lex::Plain
-                && !matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
-            {
+            let space = matches!(byte, b' ' | b'\t' | b'\n' | b'\r');
+            if self.input == Input::Unstarted && !space {
+                self.input = Input::Open;
+                // A tool input is always a JSON object.
+                malformed |= byte != b'{';
+            }
+            if self.input == Input::Closed && self.lex == Lex::Plain && !space {
                 malformed = true;
             }
             self.lex = match (self.lex, byte) {
@@ -891,10 +910,15 @@ impl<'s> AnthropicEventStream<'s> {
                     Lex::Plain
                 }
                 (Lex::Plain, b'}' | b']') => {
-                    match self.closers.pop() {
-                        Some(owed) if owed == byte => self.input_closed = self.closers.is_empty(),
-                        // Nothing open, or the wrong kind of closer.
-                        _ => malformed = true,
+                    // Nothing open, or the wrong kind of closer; the owed closer
+                    // stays, so an in-place close is still complete.
+                    if self.closers.as_slice().last() == Some(&byte) {
+                        self.closers.pop();
+                        if self.closers.is_empty() {
+                            self.input = Input::Closed;
+                        }
+                    } else {
+                        malformed = true;
                     }
                     Lex::Plain
                 }
@@ -978,7 +1002,7 @@ impl<'s> AnthropicEventStream<'s> {
     fn seal(&mut self, events: &mut impl Extend<StreamEvent>) -> Result<(), StopReason> {
         self.current = self.events;
         self.at = self.log.len();
-        if self.line_start < self.log.len() || self.has_data || self.has_fields {
+        if self.line_start < self.log.len() || self.lines != Lines::Empty {
             self.fault(EventFaultKind::PartialEvent, None)?;
         }
         if let Some(index) = self.open.as_ref().map(|open| open.index) {
