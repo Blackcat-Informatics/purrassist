@@ -42,6 +42,9 @@
 //! - `minItems` and `maxItems` admit exactly the stated number of items in an
 //!   array. Count rules reuse the item grammar and grow with the bit width of
 //!   the bounds rather than with the number of items.
+//! - `minLength` and `maxLength` count Unicode scalar values. The canonical
+//!   spelling of one scalar consumes one count, including an escaped scalar.
+//!   A pattern shares its scalar automaton with a length counter.
 //!
 //! # Losses
 //!
@@ -49,7 +52,7 @@
 //! (an open object, or a keyword such as `format` the grammar does not carry)
 //! is omitted from the grammar and recorded on the returned ledger at its schema
 //! pointer, never dropped silently; the mandatory `validate-input` check
-//! enforces it. A length or property count and `multipleOf` are refused by
+//! enforces it. A property count and `multipleOf` are refused by
 //! name as not yet translated, and `uniqueItems: true` as not expressible. A graph's
 //! `sh:pattern` with a back-reference never gets here: the upstream schema
 //! compiler refuses it first, as [`GbnfError::Manifest`]. The back-reference
@@ -122,10 +125,10 @@ pub enum GbnfError {
     /// schema, a type that names no supported type, an array without `items`, an
     /// `enum` member that is not a scalar or contradicts the type, a required
     /// member without a property schema, `oneOf` alternatives that may overlap,
-    /// a `pattern`, numeric bound or item count beside `anyOf` or `oneOf`,
+    /// a `pattern` or bound beside `anyOf` or `oneOf`,
     /// bounds, a pattern or an `enum` that admit no value, an invalid or
-    /// oversized item count, a `pattern` with a look-around, a keyword not yet
-    /// translated (`minLength`, `maxLength`, `minProperties`, `maxProperties`, `multipleOf`), or
+    /// oversized count, a `pattern` with a look-around, a keyword not yet
+    /// translated (`minProperties`, `maxProperties`, `multipleOf`), or
     /// `uniqueItems: true`, which no context-free grammar states.
     Unsupported {
         /// The tool's name.
@@ -145,7 +148,7 @@ pub enum GbnfError {
         /// The syntax error and its offset in the pattern.
         cause: PatternError,
     },
-    /// The `pattern` or numeric bounds beside an `enum` or `const` are not a valid
+    /// The `pattern` or bounds beside an `enum` or `const` are not a valid
     /// schema, so its members cannot be filtered.
     Constraint {
         /// The tool's name.
@@ -306,7 +309,7 @@ struct Builder<'a> {
     /// Named rules in creation order; a reserved rule has an empty body until filled.
     rules: Vec<(String, String)>,
     /// Reservations for the count rules and their serialization scratch.
-    array_storage: Vec<ScratchLease>,
+    count_storage: Vec<ScratchLease>,
     helpers: Helpers,
     /// Pointers of omitted constructs, in schema order.
     omitted: Vec<String>,
@@ -330,19 +333,45 @@ const CONSTRAINTS: [&str; 5] = [
     "exclusiveMaximum",
 ];
 const ARRAY_COUNTS: [&str; 2] = ["minItems", "maxItems"];
+const STRING_LENGTHS: [&str; 2] = ["minLength", "maxLength"];
 /// Portable admission for either arena record moved by count-rule growth.
-const ARRAY_RECORD_BYTES: u64 = 64;
+const COUNT_RECORD_BYTES: u64 = 64;
 const _: () = {
-    assert!(std::mem::size_of::<(String, String)>() as u64 <= ARRAY_RECORD_BYTES);
-    assert!(std::mem::size_of::<ScratchLease>() as u64 <= ARRAY_RECORD_BYTES);
+    assert!(std::mem::size_of::<(String, String)>() as u64 <= COUNT_RECORD_BYTES);
+    assert!(std::mem::size_of::<ScratchLease>() as u64 <= COUNT_RECORD_BYTES);
 };
+
+#[derive(Clone, Copy)]
+struct CountBounds {
+    minimum: u64,
+    maximum: Option<u64>,
+}
+
+impl CountBounds {
+    const fn unrestricted(self) -> bool {
+        self.minimum == 0 && self.maximum.is_none()
+    }
+
+    /// Additional occurrences after the required prefix.
+    fn additional(self) -> Option<u64> {
+        self.maximum.map(|maximum| maximum - self.minimum)
+    }
+
+    fn power_bits(self) -> usize {
+        self.minimum.max(self.additional().unwrap_or(0)).bit_width() as usize
+    }
+
+    fn rule_count(self) -> usize {
+        self.power_bits() + 2 * self.additional().unwrap_or(0).bit_width() as usize
+    }
+}
 
 impl<'a> Builder<'a> {
     const fn new(tool: &'a str) -> Self {
         Self {
             tool,
             rules: Vec::new(),
-            array_storage: Vec::new(),
+            count_storage: Vec::new(),
             helpers: Helpers {
                 string: false,
                 integer: false,
@@ -489,6 +518,7 @@ impl<'a> Builder<'a> {
         let mut carried = vec![key, "type"];
         carried.extend(CONSTRAINTS);
         carried.extend(ARRAY_COUNTS);
+        carried.extend(STRING_LENGTHS);
         self.omitted.extend(uncarried(schema, pointer, &carried));
         Ok(alternation(names))
     }
@@ -511,6 +541,14 @@ impl<'a> Builder<'a> {
                 return Err(self.unsupported(
                     &format!("{pointer}/{name}"),
                     "an item count beside anyOf or oneOf",
+                ));
+            }
+        }
+        for name in STRING_LENGTHS {
+            if schema.get(name).is_some() {
+                return Err(self.unsupported(
+                    &format!("{pointer}/{name}"),
+                    "a string length beside anyOf or oneOf",
                 ));
             }
         }
@@ -556,6 +594,7 @@ impl<'a> Builder<'a> {
         let mut carried = vec!["type"];
         carried.extend(CONSTRAINTS);
         carried.extend(ARRAY_COUNTS);
+        carried.extend(STRING_LENGTHS);
         let mut names = Vec::with_capacity(types.len());
         for name in &types {
             self.refuse_untranslated(schema, pointer, name)?;
@@ -598,10 +637,6 @@ impl<'a> Builder<'a> {
         name: &str,
     ) -> Result<(), GbnfError> {
         let keywords: &[(&str, &'static str)] = match name {
-            "string" => &[
-                ("minLength", "minLength is not yet translated"),
-                ("maxLength", "maxLength is not yet translated"),
-            ],
             "array" => &[(
                 "uniqueItems",
                 "uniqueItems is not expressible by a context-free grammar",
@@ -613,8 +648,6 @@ impl<'a> Builder<'a> {
             "integer" | "number" => &[("multipleOf", "multipleOf is not yet translated")],
             // An `enum`, `const`, `anyOf` or `oneOf` has no type of its own: any is refused.
             "*" => &[
-                ("minLength", "minLength is not yet translated"),
-                ("maxLength", "maxLength is not yet translated"),
                 (
                     "uniqueItems",
                     "uniqueItems is not expressible by a context-free grammar",
@@ -637,16 +670,30 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    /// A string: the generic JSON string, or the language of its `pattern`.
+    /// A string with its optional exact scalar count and pattern.
     fn string(
         &mut self,
         schema: &Node,
         pointer: &str,
         governor: &mut Governor,
     ) -> Result<String, GbnfError> {
+        let counts = CountBounds {
+            minimum: self
+                .count_bound(schema, pointer, "minLength", governor)?
+                .unwrap_or(0),
+            maximum: self.count_bound(schema, pointer, "maxLength", governor)?,
+        };
+        if counts
+            .maximum
+            .is_some_and(|maximum| maximum < counts.minimum)
+        {
+            return Err(self.unsupported(
+                &format!("{pointer}/maxLength"),
+                "maxLength is less than minLength",
+            ));
+        }
         let Some(node) = schema.get("pattern") else {
-            self.helpers.string = true;
-            return Ok("string".to_owned());
+            return self.string_without_pattern(counts, governor);
         };
         let child = format!("{pointer}/pattern");
         let Value::String(source) = &node.value else {
@@ -654,34 +701,13 @@ impl<'a> Builder<'a> {
         };
         match regex::lower(source, governor) {
             Ok(Lowered::Automaton(automaton)) => {
-                let slots: Vec<usize> = automaton
-                    .states
-                    .iter()
-                    .map(|_| self.reserve("pattern"))
-                    .collect();
-                let names: Vec<String> = slots.iter().map(|&slot| self.rules[slot].0.clone()).collect();
-                for (&slot, state) in slots.iter().zip(&automaton.states) {
-                    let mut alternatives: Vec<String> = state
-                        .edges
-                        .iter()
-                        .map(|&(first, last, target)| {
-                            format!("{} {}", json_edge(first, last), names[target])
-                        })
-                        .collect();
-                    if state.accepting {
-                        alternatives.push(literal("\""));
-                    }
-                    self.define(slot, alternatives.join(" | "));
-                }
-                let entry = self.reserve("string");
-                Ok(self.define(entry, format!("{} {}", literal("\""), names[0])))
+                self.pattern_string(&automaton, counts, pointer, governor)
             }
             Ok(Lowered::Backreference) => {
-                self.helpers.string = true;
                 self.omitted.push(format!(
                     "{child} (back-reference: the accepted set repeats an earlier match, which no context-free grammar states)"
                 ));
-                Ok("string".to_owned())
+                self.string_without_pattern(counts, governor)
             }
             Ok(Lowered::Lookaround) => Err(self.unsupported(
                 &child,
@@ -700,6 +726,153 @@ impl<'a> Builder<'a> {
                 "a pattern construct that needs backtracking and is neither a back-reference nor a look-around",
             )),
             Err(Failure::Resource(reason)) => Err(GbnfError::Resource(reason)),
+        }
+    }
+
+    fn string_without_pattern(
+        &mut self,
+        counts: CountBounds,
+        governor: &mut Governor,
+    ) -> Result<String, GbnfError> {
+        if counts.unrestricted() {
+            self.helpers.string = true;
+            return Ok("string".to_owned());
+        }
+        if counts.maximum == Some(0) {
+            return Ok(literal(r#""""#));
+        }
+        let rules = counts.rule_count() + 2;
+        self.reserve_count_rules(rules, 512 * size(rules) + 2048, governor)?;
+        let low = json_edge('\0', '\u{D7FF}');
+        let high = json_edge('\u{E000}', char::MAX);
+        let character = self.reserve("scalar");
+        let unit = self.define(character, format!("{low} | {high}"));
+        let sequence = self.counted_sequence(&unit, counts, "scalar");
+        let quote = literal("\"");
+        let string = self.reserve("string");
+        Ok(self.define(string, format!("{quote}{sequence} {quote}")))
+    }
+
+    /// Emit the exact scalar automaton, with productive counter states when
+    /// bounded. A finite ceiling removes outgoing edges in its final layer.
+    /// A minimum-only counter saturates and follows the base graph there.
+    fn pattern_string(
+        &mut self,
+        automaton: &regex::Automaton,
+        counts: CountBounds,
+        pointer: &str,
+        governor: &mut Governor,
+    ) -> Result<String, GbnfError> {
+        let width = automaton.states.len();
+        let keyword = if counts.maximum.is_some() {
+            "maxLength"
+        } else {
+            "minLength"
+        };
+        let tool = self.tool;
+        let too_large = || GbnfError::Unsupported {
+            tool: tool.to_owned(),
+            pointer: format!("{pointer}/{keyword}"),
+            reason: "the pattern length product exceeds the 32-bit rule space",
+        };
+        let limit = counts.maximum.unwrap_or(counts.minimum);
+        let layers = limit.checked_add(1).ok_or_else(too_large)?;
+        let cells = layers
+            .checked_mul(size(width))
+            .filter(|&cells| cells < u64::from(u32::MAX))
+            .and_then(|cells| u32::try_from(cells).ok())
+            .ok_or_else(too_large)? as usize;
+        let layers = usize::try_from(layers).map_err(|_| too_large())?;
+        if !counts.unrestricted() {
+            let rules = cells.checked_add(1).ok_or_else(too_large)?;
+            governor
+                .charge(Resource::Work, size(width))
+                .map_err(GbnfError::Resource)?;
+            let edges = automaton.states.iter().fold(0_u64, |edges, state| {
+                edges.saturating_add(size(state.edges.len()))
+            });
+            let edge_layers = layers - usize::from(counts.maximum.is_some());
+            // Cover each slot, rule record and emission scratch, plus each
+            // edge's scalar classes and escaped spellings in its layers.
+            let bytes = size(rules)
+                .saturating_mul(512)
+                .saturating_add(edges.saturating_mul(size(edge_layers)).saturating_mul(2048));
+            self.reserve_count_rules(rules, bytes, governor)?;
+        }
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(cells)
+            .map_err(|_| GbnfError::Resource(StopReason::BudgetExceeded(Resource::ScratchBytes)))?;
+        slots.resize(cells, None);
+        for layer in (0..layers).rev() {
+            let start = layer * width;
+            let final_layer = layer + 1 == layers;
+            for (index, state) in automaton.states.iter().enumerate() {
+                let accepting = size(layer) >= counts.minimum && state.accepting;
+                let productive = if final_layer {
+                    counts.maximum.is_none() || accepting
+                } else {
+                    accepting
+                        || state
+                            .edges
+                            .iter()
+                            .any(|&(_, _, to)| slots[start + width + to].is_some())
+                };
+                if productive {
+                    slots[start + index] = Some(self.reserve("pattern"));
+                }
+            }
+        }
+        let Some(root) = slots[0] else {
+            return Err(self.unsupported(
+                &format!("{pointer}/{keyword}"),
+                "the pattern and length bounds admit no string",
+            ));
+        };
+        self.fill_pattern_rules(automaton, counts, &slots);
+        let body = format!("{} {}", literal("\""), self.rules[root].0);
+        let entry = self.reserve("string");
+        Ok(self.define(entry, body))
+    }
+
+    /// Emit only edges whose target remains productive in the next layer.
+    fn fill_pattern_rules(
+        &mut self,
+        automaton: &regex::Automaton,
+        counts: CountBounds,
+        slots: &[Option<usize>],
+    ) {
+        let width = automaton.states.len();
+        let layers = slots.len() / width;
+        for (layer, row) in slots.chunks_exact(width).enumerate() {
+            let targets = if layer + 1 < layers {
+                let start = (layer + 1) * width;
+                &slots[start..start + width]
+            } else if counts.maximum.is_none() {
+                row
+            } else {
+                &[]
+            };
+            for (&slot, state) in row.iter().zip(&automaton.states) {
+                if let Some(slot) = slot {
+                    let edges = if targets.is_empty() {
+                        &[]
+                    } else {
+                        state.edges.as_slice()
+                    };
+                    let mut alternatives: Vec<String> = edges
+                        .iter()
+                        .filter_map(|&(first, last, target)| {
+                            let next = targets.get(target).copied().flatten()?;
+                            Some(format!("{} {}", json_edge(first, last), self.rules[next].0))
+                        })
+                        .collect();
+                    if size(layer) >= counts.minimum && state.accepting {
+                        alternatives.push(literal("\""));
+                    }
+                    self.rules[slot].1 = alternatives.join(" | ");
+                }
+            }
         }
     }
 
@@ -799,7 +972,7 @@ impl<'a> Builder<'a> {
         governor: &mut Governor,
     ) -> Result<Option<Schema>, GbnfError> {
         let mut members = Vec::new();
-        for key in CONSTRAINTS {
+        for key in CONSTRAINTS.into_iter().chain(STRING_LENGTHS) {
             if let Some(node) = schema.get(key) {
                 let text = node
                     .to_json_governed(governor)
@@ -829,9 +1002,9 @@ impl<'a> Builder<'a> {
         governor: &mut Governor,
     ) -> Result<String, GbnfError> {
         let minimum = self
-            .array_count(schema, pointer, "minItems", governor)?
+            .count_bound(schema, pointer, "minItems", governor)?
             .unwrap_or(0);
-        let maximum = self.array_count(schema, pointer, "maxItems", governor)?;
+        let maximum = self.count_bound(schema, pointer, "maxItems", governor)?;
         if maximum.is_some_and(|maximum| maximum < minimum) {
             return Err(self.unsupported(
                 &format!("{pointer}/maxItems"),
@@ -855,7 +1028,7 @@ impl<'a> Builder<'a> {
         Ok(self.define(slot, body))
     }
 
-    fn array_count(
+    fn count_bound(
         &self,
         schema: &Node,
         pointer: &str,
@@ -868,13 +1041,13 @@ impl<'a> Builder<'a> {
         let invalid = || {
             self.unsupported(
                 &format!("{pointer}/{keyword}"),
-                "an item count must be a nonnegative integer",
+                "a count bound must be a nonnegative integer",
             )
         };
         let too_large = || {
             self.unsupported(
                 &format!("{pointer}/{keyword}"),
-                "an item count exceeds the 64-bit grammar bound",
+                "a count bound exceeds the 64-bit grammar bound",
             )
         };
         let Value::Number(number) = &node.value else {
@@ -903,12 +1076,11 @@ impl<'a> Builder<'a> {
         governor: &mut Governor,
     ) -> Result<String, GbnfError> {
         let first_count = minimum.max(1);
-        let required = first_count - 1;
-        let allowed = maximum.map(|maximum| maximum - first_count);
-        let optional = allowed.unwrap_or(0);
-        let power_bits = required.max(optional).bit_width() as usize;
-        let optional_bits = optional.bit_width() as usize;
-        let rules = 1 + power_bits + 2 * optional_bits;
+        let tail = CountBounds {
+            minimum: first_count - 1,
+            maximum: maximum.map(|maximum| maximum - 1),
+        };
+        let rules = 1 + tail.rule_count();
         // Each generated name has at most twenty counter digits. Admit the
         // rule strings and their enclosing references before emitting them.
         let bytes = (512 * size(rules)).saturating_add(size(item.len()).saturating_mul(3));
@@ -917,43 +1089,50 @@ impl<'a> Builder<'a> {
         let entry = self.reserve("array-item");
         let item = self.define(entry, item);
         let separator = format!(r#"ws "," ws {item}"#);
+        let tail = self.counted_sequence(&separator, tail, "array");
+        let nonempty = format!("{item}{tail}");
+        let inner = if minimum == 0 {
+            format!("({nonempty})?")
+        } else {
+            nonempty
+        };
+        Ok(format!(r#""[" ws {inner} ws "]""#))
+    }
+
+    /// Append the counted uses of one expression after an existing prefix.
+    /// The caller reserves the rules and the sequence's rendered storage.
+    fn counted_sequence(&mut self, atom: &str, bounds: CountBounds, family: &str) -> String {
+        let power_bits = bounds.power_bits();
+        let power_kind = format!("{family}-power");
         let powers = self.rules.len();
         for bit in 0..power_bits {
             let body = if bit == 0 {
-                separator.clone()
+                atom.to_owned()
             } else {
                 let previous = &self.rules[powers + bit - 1].0;
                 format!("{previous} {previous}")
             };
-            let rule = self.reserve("array-power");
+            let rule = self.reserve(&power_kind);
             self.rules[rule].1 = body;
         }
 
-        let mut body = r#""[" ws "#.to_owned();
-        if minimum == 0 {
-            body.push('(');
-        }
-        body.push_str(&item);
+        let mut body = String::new();
         for bit in 0..power_bits {
-            if required & (1 << bit) != 0 {
+            if bounds.minimum & (1 << bit) != 0 {
                 let _ = write!(body, " {}", self.rules[powers + bit].0);
             }
         }
-        if let Some(limit) = allowed {
-            if let Some(rule) = self.bounded_array_tail(powers, limit, optional_bits) {
+        if let Some(limit) = bounds.additional() {
+            if let Some(rule) = self.bounded_tail(powers, limit, family) {
                 let _ = write!(body, " {}", self.rules[rule].0);
             }
         } else {
-            let _ = write!(body, " ({separator})*");
+            let _ = write!(body, " ({atom})*");
         }
-        if minimum == 0 {
-            body.push_str(")?");
-        }
-        body.push_str(r#" ws "]""#);
-        Ok(body)
+        body
     }
 
-    /// A count rule can grow an arena that already holds item-pattern rules.
+    /// A count rule can grow an arena that already holds schema rules.
     /// Admit the replacement capacity and live record copies before reserve.
     fn reserve_count_rules(
         &mut self,
@@ -964,32 +1143,38 @@ impl<'a> Builder<'a> {
         let (rule_space, rule_moves) =
             count_arena_growth(self.rules.len(), self.rules.capacity(), additional);
         let (lease_space, lease_moves) =
-            count_arena_growth(self.array_storage.len(), self.array_storage.capacity(), 1);
+            count_arena_growth(self.count_storage.len(), self.count_storage.capacity(), 1);
         let moves = size(rule_moves.saturating_add(lease_moves));
         let spaces = size(rule_space.saturating_add(lease_space)).saturating_add(moves);
         governor
             .charge(
                 Resource::Work,
-                bytes.saturating_add(moves.saturating_mul(ARRAY_RECORD_BYTES)),
+                bytes.saturating_add(moves.saturating_mul(COUNT_RECORD_BYTES)),
             )
             .map_err(GbnfError::Resource)?;
         let owned = governor
-            .lease_scratch(bytes.saturating_add(spaces.saturating_mul(ARRAY_RECORD_BYTES)))
+            .lease_scratch(bytes.saturating_add(spaces.saturating_mul(COUNT_RECORD_BYTES)))
             .map_err(GbnfError::Resource)?;
         self.rules
             .try_reserve_exact(rule_space)
             .map_err(|_| GbnfError::Resource(StopReason::BudgetExceeded(Resource::ScratchBytes)))?;
-        self.array_storage
+        self.count_storage
             .try_reserve_exact(lease_space)
             .map_err(|_| GbnfError::Resource(StopReason::BudgetExceeded(Resource::ScratchBytes)))?;
-        self.array_storage.push(owned);
+        self.count_storage.push(owned);
         Ok(())
     }
 
     /// For a bound with highest set bit `k`, disjoint alternatives accept
     /// fewer than two to the power of `k` tails, or that many followed by
     /// at most the remainder. Reuse the fully occupied lower bit ranges.
-    fn bounded_array_tail(&mut self, powers: usize, limit: u64, bits: usize) -> Option<usize> {
+    fn bounded_tail(&mut self, powers: usize, limit: u64, family: &str) -> Option<usize> {
+        let bits = limit.bit_width() as usize;
+        if bits == 0 {
+            return None;
+        }
+        let complete_kind = format!("{family}-complete");
+        let bounded_kind = format!("{family}-bounded");
         let complete = self.rules.len();
         for bit in 0..bits.saturating_sub(1) {
             let power = &self.rules[powers + bit].0;
@@ -998,7 +1183,7 @@ impl<'a> Builder<'a> {
             } else {
                 format!("{} {power}?", self.rules[complete + bit - 1].0)
             };
-            let rule = self.reserve("array-complete");
+            let rule = self.reserve(&complete_kind);
             self.rules[rule].1 = body;
         }
         let mut bounded = None::<usize>;
@@ -1020,7 +1205,7 @@ impl<'a> Builder<'a> {
                     None => format!("{smaller} | {power}"),
                 }
             };
-            let rule = self.reserve("array-bounded");
+            let rule = self.reserve(&bounded_kind);
             self.rules[rule].1 = body;
             bounded = Some(rule);
         }

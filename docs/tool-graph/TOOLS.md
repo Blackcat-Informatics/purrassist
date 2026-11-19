@@ -1180,7 +1180,8 @@ than a graph (the upstream schema compiler refuses a back-reference in a graph's
 
 - Back-references `\1` to `\n` and named references `\k<name>`: the accepted set
   repeats an earlier match, which no context-free grammar can state for all
-  strings. The grammar keeps the generic JSON string for that member.
+  strings. The grammar uses the generic JSON string and enforces any sibling
+  string-length bounds.
 
 Refused with a typed error, never ledgered:
 
@@ -1196,6 +1197,23 @@ no other. A decimal bound becomes a digit grammar that spells, in plain notation
 without an exponent and without a sign on zero, every finite decimal in the
 interval and no other, compared digit by digit with no rounding. A number
 without a bound keeps the generic number grammar, which includes exponents.
+
+`minLength` and `maxLength` count Unicode scalar values in a JSON string.
+Quotes framing the string contribute no count. An escaped quote, backslash or
+control character contributes one count, as does each astral or combining
+scalar. Length bounds range from zero through `u64::MAX`. Strings with only
+length constraints use the compact count rules.
+When a pattern also applies, the compiler pairs its scalar automaton with a
+counter. For a pattern of `S` states and `E` edges and the active counter limit
+`L` (the upper bound if present, otherwise the lower bound), the product uses at
+most `S * (L + 1)` state slots and `E * (L + 1)` edge occurrences. The compiler
+admits that finite expansion through the caller governor before allocating the
+product and refuses products outside the portable 32-bit rule space. A minimum
+without a maximum saturates its counter and continues the base pattern. A
+maximum ends the counter at its stated limit. A length bound beside an entire
+`anyOf` or `oneOf` produces a typed refusal at the keyword.
+[`minLength` #225](https://github.com/Blackcat-Informatics/purrassist/issues/225)
+· [`maxLength` #226](https://github.com/Blackcat-Informatics/purrassist/issues/226)
 
 `minItems` and `maxItems` translate exactly for arrays with a shared item
 schema. A maximum of zero admits only the empty array. The count rules reuse
@@ -1214,8 +1232,6 @@ a defence, for a back-reference in a schema that arrives by another route, so th
 code covers G as well as A. A grammar can state these keywords, and the compiler
 refuses each by name as not yet translated:
 
-- `minLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/225`.
-- `maxLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/226`.
 - `minProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/229`.
 - `maxProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/230`.
 - `multipleOf`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/231`.

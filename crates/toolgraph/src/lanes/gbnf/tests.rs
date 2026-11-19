@@ -493,7 +493,45 @@ fn shacl_array_counts_and_item_patterns_reach_the_gbnf_grammar() {
         r#"sh:pattern "^customer-[0-9]+$" ; sh:minCount 2 ; sh:maxCount 3"#,
         1,
     );
-    let (vocabulary, graph) = load_example(&turtle);
+    assert_projected_customer_id(
+        &turtle,
+        &[
+            (r#"["customer-1"]"#, false),
+            (r#"["customer-1","customer-2"]"#, true),
+            (r#"["customer-1","customer-2","customer-3"]"#, true),
+            (
+                r#"["customer-1","customer-2","customer-3","customer-4"]"#,
+                false,
+            ),
+            (r#"["customer-1","wrong"]"#, false),
+        ],
+    );
+}
+
+/// The public GBNF lane keeps the SHACL string length and the pattern from
+/// the MCP projection, including both inclusive length endpoints.
+#[test]
+fn shacl_string_lengths_and_pattern_reach_the_gbnf_grammar() {
+    let turtle = worked_turtle().replacen(
+        r#"sh:pattern "^customer-[0-9]+$""#,
+        r#"sh:pattern "^customer-[0-9]+$" ; sh:minLength 11 ; sh:maxLength 12"#,
+        1,
+    );
+    assert_projected_customer_id(
+        &turtle,
+        &[
+            (r#""customer-1""#, false),
+            (r#""customer-12""#, true),
+            (r#""customer-123""#, true),
+            (r#""customer-1234""#, false),
+            (r#""customer-aa""#, false),
+        ],
+    );
+}
+
+/// Compare the customer slot in the public grammar and its actual input schema.
+fn assert_projected_customer_id(turtle: &str, cases: &[(&str, bool)]) {
+    let (vocabulary, graph) = load_example(turtle);
     let mut governor = Governor::new(Budget::default());
     let (grammars, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
     let grammar = grammars
@@ -518,17 +556,8 @@ fn shacl_array_counts_and_item_patterns_reach_the_gbnf_grammar() {
             .to_json(),
     )
     .expect("compiled input schema");
-    for (items, expected) in [
-        (r#"["customer-1"]"#, false),
-        (r#"["customer-1","customer-2"]"#, true),
-        (r#"["customer-1","customer-2","customer-3"]"#, true),
-        (
-            r#"["customer-1","customer-2","customer-3","customer-4"]"#,
-            false,
-        ),
-        (r#"["customer-1","wrong"]"#, false),
-    ] {
-        let text = format!(r#"{{"customer_id":{items},"limit":1}}"#);
+    for &(value, expected) in cases {
+        let text = format!(r#"{{"customer_id":{value},"limit":1}}"#);
         assert_eq!(accepts(grammar.as_str(), &text), expected, "{text}");
         let instance = json::parse(&text).expect("instance JSON");
         assert_eq!(
@@ -661,6 +690,111 @@ fn assert_member_cases(keywords: &str, cases: &[(String, bool)]) {
     );
 }
 
+/// Length is measured in decoded scalar values for raw, required escaped,
+/// combining and astral characters. Both ends also constrain pattern matches.
+#[test]
+fn string_lengths_count_scalars_and_intersect_patterns() {
+    for (keyword_list, cases) in [
+        (
+            r#""minLength":2e0"#,
+            &[
+                ("", false),
+                ("😀", false),
+                ("😀\n", true),
+                ("e\u{0301}", true),
+            ][..],
+        ),
+        (
+            r#""maxLength":1.0"#,
+            &[
+                ("", true),
+                ("😀", true),
+                ("\"", true),
+                ("\\", true),
+                ("\u{1}", true),
+                ("e\u{0301}", false),
+            ][..],
+        ),
+        (r#""maxLength":0"#, &[("", true), ("😀", false)][..]),
+        (
+            r#""pattern":"^😀[a\\x01]*$","minLength":2,"maxLength":3"#,
+            &[
+                ("😀", false),
+                ("😀a", true),
+                ("😀\u{1}a", true),
+                ("😀aaa", false),
+                ("😀b", false),
+            ][..],
+        ),
+        (
+            r#""pattern":"^a+$","minLength":3"#,
+            &[
+                ("aa", false),
+                ("aaa", true),
+                ("aaaaaa", true),
+                ("aaab", false),
+            ][..],
+        ),
+    ] {
+        let cases: Vec<_> = cases
+            .iter()
+            .map(|(value, expected)| (quoted(value), *expected))
+            .collect();
+        assert_member_cases(&format!(r#""type":"string",{keyword_list}"#), &cases);
+    }
+    assert_member_cases(
+        r#""enum":["a","😀x","😀xz"],"minLength":2,"maxLength":2"#,
+        &[
+            (quoted("a"), false),
+            (quoted("😀x"), true),
+            (quoted("😀xz"), false),
+        ],
+    );
+}
+
+/// Plain lengths stay compact, and the patterned product refuses oversize
+/// generation before emitting a grammar.
+#[test]
+fn string_length_generation_bounds_the_pattern_product() {
+    let (grammar, omitted) = compile(&member_schema(
+        r#""type":"string","maxLength":18446744073709551615"#,
+    ));
+    assert!(grammar.len() < 24_000);
+    assert_eq!(omitted, [] as [String; 0]);
+    assert!(accepts(&grammar, r#"{"v":"😀"}"#));
+
+    let large = member_schema(r#""type":"string","pattern":"^a*$","maxLength":1000000"#);
+    assert!(matches!(
+        try_compile(&large),
+        Err(GbnfError::Resource(StopReason::BudgetExceeded(
+            Resource::Work
+        )))
+    ));
+    for (schema, keyword) in [
+        (
+            r#""type":"string","pattern":"^a*$","maxLength":18446744073709551615"#,
+            "maxLength",
+        ),
+        (
+            r#""type":"string","pattern":"^a$","minLength":2"#,
+            "minLength",
+        ),
+        (
+            r#""type":"string","minLength":3,"maxLength":2"#,
+            "maxLength",
+        ),
+        (r#""type":"string","maxLength":false"#, "maxLength"),
+        (r#""anyOf":[{"type":"string"}],"minLength":2"#, "minLength"),
+    ] {
+        let refused = try_compile(&member_schema(schema));
+        assert!(matches!(
+            refused,
+            Err(GbnfError::Unsupported { pointer, .. })
+                if pointer == format!("/properties/v/{keyword}")
+        ));
+    }
+}
+
 /// Arrays accept all and only their allowed lengths, including both sides of
 /// a mixed-bit interval, and branch-local counts survive a union.
 #[test]
@@ -727,22 +861,22 @@ fn array_count_expansion_is_bounded_and_names_the_refused_keyword() {
         (
             r#""minItems":false"#,
             "minItems",
-            "an item count must be a nonnegative integer",
+            "a count bound must be a nonnegative integer",
         ),
         (
             r#""minItems":-1"#,
             "minItems",
-            "an item count must be a nonnegative integer",
+            "a count bound must be a nonnegative integer",
         ),
         (
             r#""maxItems":1.5"#,
             "maxItems",
-            "an item count must be a nonnegative integer",
+            "a count bound must be a nonnegative integer",
         ),
         (
             r#""maxItems":18446744073709551616"#,
             "maxItems",
-            "an item count exceeds the 64-bit grammar bound",
+            "a count bound exceeds the 64-bit grammar bound",
         ),
     ] {
         let result = try_compile(&member_schema(&format!("{item},{bounds}")));
@@ -1105,14 +1239,6 @@ fn a_look_around_is_refused_by_name() {
 fn untranslated_keywords_and_an_empty_enum_are_refused_by_name() {
     for (keywords, reason) in [
         (
-            r#""type":"string","minLength":2"#,
-            "minLength is not yet translated",
-        ),
-        (
-            r#""type":"string","maxLength":2"#,
-            "maxLength is not yet translated",
-        ),
-        (
             r#""type":"object","minProperties":1"#,
             "minProperties is not yet translated",
         ),
@@ -1251,9 +1377,7 @@ fn a_quote_a_backslash_and_a_control_character_are_spelled_escaped() {
 #[test]
 fn refused_keywords_are_refused_beside_enum_and_anyof_too() {
     for keywords in [
-        r#""enum":["a"],"minLength":1"#,
         r#""enum":[2],"multipleOf":2"#,
-        r#""const":"a","maxLength":3"#,
         r#""anyOf":[{"type":"array","items":{"type":"string"}}],"maxItems":2"#,
         r#""anyOf":[{"type":"array","items":{"type":"string"}}],"uniqueItems":true"#,
     ] {
