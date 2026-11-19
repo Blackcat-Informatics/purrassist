@@ -77,15 +77,18 @@ fn turtle(graph: &ToolGraph) -> Vec<u8> {
     .expect("dataset serializes")
 }
 
-// Rationale: the acceptance criterion that the worked example's manifest bytes are
-// fixed: two encodes are identical to each other and to the committed golden, which
-// carries the #47 byte contract (`maxOutputBytes`, `exact-bytes`, format v2).
+// Invariant: independent loads of the worked example produce the same manifest
+// bytes and ledger. The golden carries the #47 byte contract.
 #[test]
-fn worked_manifest_is_byte_identical_across_encodes_and_matches_the_golden() {
-    let graph = load(&worked());
+fn worked_manifest_is_byte_identical_across_loads_and_matches_the_golden() {
+    let source = worked();
+    let graph = load(&source);
     let (first, losses) = mcp::encode(&graph, &vocabulary(), &mut governor()).expect("encode");
-    let (second, _) = mcp::encode(&graph, &vocabulary(), &mut governor()).expect("encode again");
+    let second_graph = load(&source);
+    let (second, second_losses) =
+        mcp::encode(&second_graph, &vocabulary(), &mut governor()).expect("encode second load");
     assert_eq!(first, second);
+    assert_eq!(losses, second_losses);
     assert_eq!(first.as_str(), GOLDEN);
     assert!(losses.is_empty());
     for contract in [

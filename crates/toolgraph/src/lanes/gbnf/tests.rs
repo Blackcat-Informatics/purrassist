@@ -441,15 +441,22 @@ fn load_example(turtle: &str) -> (Vocabulary, ToolGraph) {
 
 // Invariant: every string a worked-example grammar accepts validates against the
 // schema it came from, including the customer pattern and the limit bounds, the
-// output is byte-identical across runs, and the only ledgered losses are the
-// surrogate escapes and the output shape.
+// output and ledger agree across independent loads, and the only ledgered
+// losses are the surrogate escapes and the output shape.
 #[test]
 fn the_worked_example_grammars_accept_only_schema_valid_strings() {
     let (vocabulary, graph) = load_example(worked_turtle());
     let mut governor = Governor::new(Budget::default());
     let (grammars, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
-    let (again, _) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
+    let (second_vocabulary, second_graph) = load_example(worked_turtle());
+    let (again, second_ledger) = lanes::gbnf(
+        &second_graph,
+        &second_vocabulary,
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("gbnf lane for second load");
     assert_eq!(grammars, again);
+    assert_eq!(ledger, second_ledger);
     assert_eq!(
         grammars
             .iter()

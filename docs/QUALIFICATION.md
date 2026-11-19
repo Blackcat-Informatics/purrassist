@@ -127,6 +127,15 @@ Current qualification of the added
 recipes is pending automatic CI; the recorded evaluation numbers above
 refer to the prior source.
 
+## Tool-graph projection determinism
+
+The native worked-example cases for MCP Extended, CompactSignature and
+GBNF load the same Turtle document independently for each projection.
+They compare artifact bytes and complete ordered loss ledgers between
+the two loads. The MCP and compact signature cases retain their existing
+golden checks. Reordered Turtle and host receipt parity remain open
+under [tool-graph conformance](https://github.com/Blackcat-Informatics/purrassist/issues/39).
+
 ## Tool-graph grammar qualification
 
 The GBNF lane emits both grammars from the worked Turtle graph. The Linux x86-64
