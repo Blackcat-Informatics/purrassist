@@ -78,10 +78,10 @@ use self::{
     decimal::{Bound, BoundError, Decimal},
     regex::{Failure, Lowered},
 };
-use super::shared::{entry_for, record_tool, record_upstream, uncarried};
+use super::shared::{entry_for, record_tool, uncarried, upstream_loss};
 use crate::{
     ProjectionTarget, SOURCE_REPRESENTATION, Tool, ToolGraph, Vocabulary,
-    codec::mcp::{self, CodecError},
+    codec::mcp::{self, CodecError, SchemaDirection},
 };
 
 /// A validated, owned GBNF grammar for one tool's argument object.
@@ -217,8 +217,9 @@ impl std::error::Error for GbnfError {
 /// generates a string, `output-shape-not-expressible`, and
 /// `input-shape-not-expressible` listing every schema keyword the grammar did not
 /// carry by pointer. A construct the upstream schema compiler already dropped is
-/// carried as an `input-shape-not-expressible` entry quoting its note. The ledger
-/// is checked against the vocabulary's loss profile before it is returned.
+/// carried as an input or output shape loss with its source location and the
+/// corresponding validation step. The ledger is checked against the
+/// vocabulary's loss profile before it is returned.
 ///
 /// ```
 /// use purrassist_core::{Budget, Governor};
@@ -249,7 +250,25 @@ pub fn gbnf(
     vocabulary: &Vocabulary,
     governor: &mut Governor,
 ) -> Result<(Vec<ToolGrammar>, LossLedger), GbnfError> {
-    let (manifest, upstream) = mcp::encode(graph, vocabulary, governor)
+    let mut upstream = Vec::new();
+    let (manifest, _) =
+        mcp::encode_with_schema_losses(graph, vocabulary, governor, &mut |direction, entries| {
+            let (code, check) = match direction {
+                SchemaDirection::Input => (
+                    "input-shape-not-expressible",
+                    ". Mandatory check validate-input",
+                ),
+                SchemaDirection::Output => (
+                    "output-shape-not-expressible",
+                    ". Mandatory check validate-output",
+                ),
+            };
+            upstream.extend(entries.iter().map(|entry| {
+                let mut loss = upstream_loss(ProjectionTarget::Gbnf, code, entry);
+                loss.note.to_mut().push_str(check);
+                loss
+            }));
+        })
         .map_err(|cause| GbnfError::Manifest(Box::new(cause)))?;
     let root = json::parse_with(manifest.as_str(), governor).map_err(GbnfError::Json)?;
     let declarations = match root.get("tools").map(|node| &node.value) {
@@ -279,12 +298,9 @@ pub fn gbnf(
             text,
         });
     }
-    record_upstream(
-        &mut ledger,
-        &upstream,
-        ProjectionTarget::Gbnf,
-        "input-shape-not-expressible",
-    );
+    for entry in upstream {
+        ledger.record(entry);
+    }
     check_ledger_sound_in(
         vocabulary.loss_profile(),
         &ledger,
