@@ -15,20 +15,20 @@
 //!
 //! # Governance
 //!
-//! The parser, owned statement rows and indexes, temporary `FnO` dataset
-//! builder, and catalog reader share the caller's [`Governor`].
+//! The parser, owned statement rows, role and ownership indexes, temporary
+//! `FnO` dataset builder, and catalog reader share the caller's [`Governor`].
 //! Each native account admits its live storage
 //! through the scratch meter and polls cancellation on every native step.
 //! It charges one work unit per 64 native units, carrying the remainder
 //! across charges. The loader also charges work per statement and validated
 //! property. The temporary dataset stays charged through catalog reading.
-//! The rows and indexes stay charged through validation and typing.
+//! The rows and classification tables stay charged through validation and typing.
 //!
 //! An exhausted work or scratch budget the governor recorded is
 //! [`LoadError::Exhausted`] and a cancellation is [`LoadError::Cancelled`],
 //! in any governed stage. Both outcomes withhold the graph. Native allocation
 //! and layout failures preserve the cause as [`LoadError::Parse`] with code
-//! `storage` during parsing or catalog reading, and as
+//! `storage` during parsing, classification or catalog reading, and as
 //! [`LoadError::InvalidFnoBinding`] during temporary view construction. A
 //! rejected scratch release is [`LoadError::Parse`] with code `storage-accounting`.
 //! The catalog's own storage stays charged while the [`ToolGraph`] holds it.
@@ -38,8 +38,8 @@
 //! * Only Turtle and `TriG` load: `PurRDF` 4.0.2 governs and retains source
 //!   occurrences for those formats alone, so another media type is a
 //!   [`LoadError::Parse`] with code `unsupported-format`.
-//! * Role classification and typed tool construction still allocate outside
-//!   the scratch account. The published [`RdfDataset`] copy returned by
+//! * Typed tool construction still allocates outside the scratch account.
+//!   The published [`RdfDataset`] copy returned by
 //!   [`ToolGraph::dataset`] is also outside that account. `PurRDF` exposes a
 //!   borrowed view of the retained parse.
 //! * For a diagnostic that identifies a specific row or reifier binding,
