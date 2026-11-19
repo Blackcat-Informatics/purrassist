@@ -401,13 +401,6 @@ impl<'v> Doc<'v> {
             .expect("vocabulary binds every TERM_NAMES entry")
     }
 
-    fn bound(&self, iri: &str) -> Option<&'static str> {
-        match self.find_bound(|key| Ok::<_, Infallible>(key.cmp(iri))) {
-            Ok(found) => found,
-            Err(never) => match never {},
-        }
-    }
-
     fn find_bound<E>(
         &self,
         mut compare: impl FnMut(&str) -> Result<std::cmp::Ordering, E>,
