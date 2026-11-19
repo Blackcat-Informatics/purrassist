@@ -166,8 +166,9 @@ class Coverage(unittest.TestCase):
         self.assertTrue(any(b'\xff' in turn for turn in turns))
         self.assertTrue(FUZZ.admits_bytes('tool-call'))
         self.assertTrue(FUZZ.admits_bytes('tool-call-ref'))
+        self.assertTrue(FUZZ.admits_bytes('provider-log'))
         self.assertFalse(any(FUZZ.admits_bytes(target) for target in FUZZ.TARGETS
-                             if target not in ('tool-call', 'tool-call-ref')))
+                             if target not in ('tool-call', 'tool-call-ref', 'provider-log')))
 
     def test_strict_tool_call_seeds_draw_what_their_comments_claim(self):
         """The strict seeds' control and trailer bytes, decoded as the probe

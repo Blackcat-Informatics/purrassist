@@ -14,6 +14,23 @@ path = "crates/toolgraph/tests/data/policy_document.apparmor"
 SPDX-FileCopyrightText = "2026 Blackcat Informatics Inc."
 SPDX-License-Identifier = "MIT OR Apache-2.0 OR MulanPSL-2.0"
 
+# Recorded provider SSE and their accompanying upstream license texts.
+[[annotations]]
+path = [
+  "crates/wasm-harness/src/provider_logs/anthropic-parallel-weather.sse",
+  "crates/wasm-harness/src/provider_logs/LICENSE-Pydantic-AI",
+]
+SPDX-FileCopyrightText = "2024 to present Pydantic Services Inc."
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = [
+  "crates/wasm-harness/src/provider_logs/openai-weather.sse",
+  "crates/wasm-harness/src/provider_logs/LICENSE-OpenAI-Python",
+]
+SPDX-FileCopyrightText = "2024 OpenAI"
+SPDX-License-Identifier = "Apache-2.0"
+
 # First-party data: generated fixtures, manifests and registries of this project.
 [[annotations]]
 path = [

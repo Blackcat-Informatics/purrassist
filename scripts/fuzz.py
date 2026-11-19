@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Deterministic source-region coverage-guided qualification (LLVM, pinned
 in vendor/tooling.json's `llvm-coverage` entry),
-generalized across ten `purrassist-core` targets, with differential probes
+generalized across eleven `purrassist-core` targets, with differential probes
 against Node's `RegExp` (`pattern`) and `cmark-gfm` (`markdown`).
 
 Replaces the single-purpose `scripts/fuzz-json.py`; see `docs/FUZZING.md`.
@@ -1089,6 +1089,38 @@ TOOL_CALL_REF_TOKENS = TOOL_CALL_TOKENS + [
     b'[{', b'}]', b'{"name":',
 ]
 
+PROVIDER_LOG_FIXTURES = ROOT / 'crates/wasm-harness/src/provider_logs'
+ANTHROPIC_LOG = (PROVIDER_LOG_FIXTURES / 'anthropic-parallel-weather.sse').read_bytes()
+OPENAI_LOG = (PROVIDER_LOG_FIXTURES / 'openai-weather.sse').read_bytes()
+def _compact_chat_seed(log):
+    """Preserve the choices and terminal marker within the probe's byte limit."""
+    events = []
+    for line in log.splitlines():
+        if not line.startswith(b'data: '):
+            continue
+        payload = line.removeprefix(b'data: ')
+        if payload != b'[DONE]':
+            choices = json.loads(payload)['choices']
+            payload = json.dumps({'choices': choices}, separators=(',', ':')).encode('utf-8')
+        events.append(b'data: ' + payload + b'\n\n')
+    return b''.join(events)
+
+
+PROVIDER_LOG_SEEDS = [
+    b'\x00\x06' + ANTHROPIC_LOG,
+    b'\x00\x00' + ANTHROPIC_LOG[:-1],
+    b'\x02\x11' + ANTHROPIC_LOG,
+    b'\x01\x08' + _compact_chat_seed(OPENAI_LOG),
+    b'\x01\x0c' + OPENAI_LOG[-4094:],
+]
+
+PROVIDER_LOG_TOKENS = [
+    b'data: ', b'event: ', b'\n\n', b'\r\n\r\n', b'data: [DONE]\n\n',
+    b'message_start', b'message_stop', b'content_block_start', b'content_block_stop',
+    b'input_json_delta', b'partial_json', b'tool_calls', b'finish_reason', b'\xff',
+]
+
+
 TARGETS = {
     'json': {'seeds': JSON_SEEDS, 'tokens': JSON_TOKENS, 'differential': None},
     'markdown': {'seeds': MARKDOWN_SEEDS, 'tokens': MARKDOWN_TOKENS, 'differential': 'markdown'},
@@ -1105,6 +1137,8 @@ TARGETS = {
     'tool-call-ref': {'seeds': TOOL_CALL_REF_SEEDS, 'tokens': TOOL_CALL_REF_TOKENS, 'differential': None,
                       'input': 'bytes', 'example': 'tool-call', 'probe_args': ['--tools', 'ref'],
                       'strict': TOOL_CALL_REF_STRICT},
+    'provider-log': {'seeds': PROVIDER_LOG_SEEDS, 'tokens': PROVIDER_LOG_TOKENS, 'differential': None,
+                     'input': 'bytes'},
 }
 
 

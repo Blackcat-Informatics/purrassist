@@ -139,6 +139,12 @@ specification contributors. The manifest retains upstream and normalized digests
 source URLs, and extraction details; accompanying upstream license notices remain
 beside the examples. These test strings are not linked into the runtime engine.
 
+The unpublished portable harness and the provider-log fuzz target share
+recorded event responses from Pydantic AI (MIT) and the OpenAI Python SDK
+(Apache-2.0). The [fixture provenance](../crates/wasm-harness/src/provider_logs/README.md)
+pins their source and extraction. The original license texts accompany the
+fixtures.
+
 Allocation qualification uses the installed Valgrind 3.25.1 executable as an
 external process; no allocator wrapper, client request, or profiler library is
 linked into a crate. The Linux runner can use an isolated stock glibc loader and

@@ -340,14 +340,14 @@ class FuzzTargets(Case):
         errors = tree.errors()
         self.assertFails(errors, 'fuzz-targets', 'docs/FUZZING.md', 'extra')
         self.assertFails(errors, 'fuzz-targets', 'Makefile', 'fuzz loop')
-        self.assertFails(errors, 'fuzz-targets', 'README.md', 'has 11')
-        self.assertFails(errors, 'fuzz-targets', 'docs/QUALIFICATION.md', 'has 11')
+        self.assertFails(errors, 'fuzz-targets', 'README.md', 'has 12')
+        self.assertFails(errors, 'fuzz-targets', 'docs/QUALIFICATION.md', 'has 12')
 
     def test_wrong_counts_fail(self):
-        for name, old, new in (('README.md', 'ten coverage-guided targets', 'nine coverage-guided targets'),
-                               ('docs/QUALIFICATION.md', 'the ten mutation targets', 'the eleven mutation targets'),
-                               ('docs/FUZZING.md', 'across ten `purrassist-core`', 'across eleven `purrassist-core`'),
-                               ('Makefile', 'across all ten targets', 'across all nine targets')):
+        for name, old, new in (('README.md', 'eleven coverage-guided targets', 'ten coverage-guided targets'),
+                               ('docs/QUALIFICATION.md', 'the eleven mutation targets', 'the ten mutation targets'),
+                               ('docs/FUZZING.md', 'across eleven `purrassist-core`', 'across ten `purrassist-core`'),
+                               ('Makefile', 'across all eleven targets', 'across all ten targets')):
             with self.subTest(name=name):
                 tree = self.tree()
                 tree.replace(name, old, new)
@@ -355,25 +355,25 @@ class FuzzTargets(Case):
 
     def test_the_makefile_loop_must_run_every_target(self):
         tree = self.tree()
-        tree.replace('Makefile', ' tool-call-ref; do', '; do', count=0)
+        tree.replace('Makefile', ' provider-log; do', '; do', count=0)
         self.assertFails(tree.errors(), 'fuzz-targets', 'Makefile', 'fuzz loop')
 
     def test_the_hosted_fuzz_loop_must_run_every_target_too(self):
         tree = self.tree()
         before, marker, hosted = tree.read('Makefile').partition('\nfuzz-hosted:\n')
         self.assertTrue(marker)
-        self.assertEqual(hosted.count(' tool-call-ref; do'), 1)
-        tree.write('Makefile', before + marker + hosted.replace(' tool-call-ref; do', '; do', 1))
+        self.assertEqual(hosted.count(' provider-log; do'), 1)
+        tree.write('Makefile', before + marker + hosted.replace(' provider-log; do', '; do', 1))
         self.assertFails(tree.errors(), 'fuzz-targets', 'Makefile', 'fuzz loop')
 
     def test_the_makefile_comment_must_list_every_target(self):
         tree = self.tree()
-        tree.replace('Makefile', '/tool-call/tool-call-ref', '/tool-call-ref')
+        tree.replace('Makefile', '/tool-call/tool-call-ref/provider-log', '/tool-call/tool-call-ref')
         self.assertFails(tree.errors(), 'fuzz-targets', 'Makefile', 'comment lists')
 
     def test_the_documented_list_must_match(self):
         tree = self.tree()
-        tree.replace('docs/FUZZING.md', '`tool-call`, `tool-call-ref`. Each', '`tool-call`. Each')
+        tree.replace('docs/FUZZING.md', '`tool-call`, `tool-call-ref`, `provider-log`. Each', '`tool-call`, `tool-call-ref`. Each')
         self.assertFails(tree.errors(), 'fuzz-targets', 'docs/FUZZING.md', 'lists')
 
 
@@ -679,7 +679,7 @@ class KnownLimitationsSource(Case):
 
     def test_the_real_set_is_the_agreed_one(self):
         data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
-        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 16, 17, 18])
+        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 16, 18])
 
 
 class KnownLimitationsSection(Case):
@@ -1849,14 +1849,14 @@ ABSENT = (
     ('workspace-version', 'docs/IMPLEMENTATION.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
     ('workspace-version', 'docs/QUALIFICATION.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
     ('workspace-version', 'docs/RELEASE.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
-    ('fuzz-targets', 'docs/FUZZING.md', r'across\s+ten\s+`purrassist-core`\s+targets', 'across the targets'),
-    ('fuzz-targets', 'docs/FUZZING.md', r'all\s+ten\s+targets', 'every target'),
-    ('fuzz-targets', 'docs/QUALIFICATION.md', r'Ten targets \(including', 'Targets, including'),
-    ('fuzz-targets', 'docs/QUALIFICATION.md', r'the ten mutation targets', 'the mutation targets'),
-    ('fuzz-targets', 'README.md', r'ten coverage-guided targets', 'coverage-guided probes'),
+    ('fuzz-targets', 'docs/FUZZING.md', r'across\s+eleven\s+`purrassist-core`\s+targets', 'across the targets'),
+    ('fuzz-targets', 'docs/FUZZING.md', r'all\s+eleven\s+targets', 'every target'),
+    ('fuzz-targets', 'docs/QUALIFICATION.md', r'Eleven targets \(including', 'Targets, including'),
+    ('fuzz-targets', 'docs/QUALIFICATION.md', r'the eleven mutation targets', 'the mutation targets'),
+    ('fuzz-targets', 'README.md', r'eleven coverage-guided targets', 'coverage-guided probes'),
     ('fuzz-targets', 'Makefile', r'for target in', 'for each in'),
     ('fuzz-targets', 'Makefile', r'TARGET selects one of', 'TARGET selects'),
-    ('fuzz-targets', 'Makefile', r'across all ten targets', 'across the targets'),
+    ('fuzz-targets', 'Makefile', r'across all eleven targets', 'across the targets'),
     ('receipt-version', 'docs/QUALIFICATION.md', r'receipt wire v3', 'receipt wire format'),
     ('receipt-version', 'crates/core/src/contract.rs', r'RECEIPT_VERSION: u32 = 3;', 'RECEIPT_REVISION: u32 = 3;'),
     ('dialect-count', 'README.md', r'Twenty-three dialects are built in', 'These dialects are built in'),

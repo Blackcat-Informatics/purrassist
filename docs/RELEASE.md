@@ -288,7 +288,7 @@ For the exact `main` commit to be tagged:
 2. Verify hosted CI (`verify.yml`) for that commit, and run the portability,
    conformance, syntax-oracle, fuzz, and package checks listed
    in `QUALIFICATION.md`. Every job must pass. The hosted `fuzz` job runs
-   `make fuzz-hosted`: all ten targets at the smoke count, stopping at every
+   `make fuzz-hosted`: all eleven targets at the smoke count, stopping at every
    probe panic and using the default 10 s probe timeout for every target,
    including the exact issue #11 request. Before tagging, run
    `make fuzz-hosted` locally on the same commit. The default `make fuzz`

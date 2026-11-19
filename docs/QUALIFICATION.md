@@ -33,7 +33,7 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
-| Coverage-guided/differential probes | `make fuzz` (see [Known limitations](#known-limitations)) | Ten targets (including `tool-call` and `tool-call-ref`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons. The default `make fuzz` stops on the #11 signatures, so the historical reports do not establish a passing default run for `tool-call-ref` |
+| Coverage-guided/differential probes | `make fuzz` (see [Known limitations](#known-limitations)) | Eleven targets (including `provider-log`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons. The default `make fuzz` stops on the #11 signatures, so the historical reports do not establish a passing default run for `tool-call-ref` |
 | Typed tool definitions (`purrassist-derive`) | `crates/derive/tests/derive.rs`, `crates/derive/tests/crate_override.rs`, the `compile_fail` doctests in `crates/derive/src/lib.rs` (each rejected construct with a passing twin) and the derive README doctest, `crates/derive/src/{model,write,parse}.rs` unit tests (including the default-number agreement test against core's JSON parser), `crates/purrassist/tests/derive_facade.rs`, `crates/host/tests/derive_facade.rs`, core `tool_call::derive_support` unit tests and doctests, and `scripts/check-repository.py`'s README derive-example drift check | Derived definitions equal hand-built ones; recovery through `hermes.v1` and `qwen3-coder-xml.v1` converts to the struct with exact `FromNodeError` pointers; single-pass member classification (duplicate vs. missing vs. unknown); defaults, naming, `extra`, hygiene against shadowed names, recursion and every rejected input; nested undeclared members dropped with a recorded loss unless the nested struct declares `unknown`; `f32` and `Box<T>` fields; the `#[tool(crate = ..)]` override; the `__DERIVE_ABI_<major>_<minor>` marker; facade derives work with no direct core dependency; the crate has no dependencies (`make hygiene` audit) |
 | Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone; see [Known limitations](#known-limitations)) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking. The probe checks for panics, budget overruns, mutating-guess guards and span invariants, but the default `make fuzz` stops on the #11 signatures and neither tool-call target has a recorded 10,000-mutation baseline; see [FUZZING.md](FUZZING.md) |
 | Structural helper detector | `make helper-test`, `make helper-census`, `make helper-check` | syn-based normalized body/shim/constant/table census, strict ledger validity and exact group enforcement; repository tooling only |
@@ -117,10 +117,13 @@ establishes behavior on those cases rather than a production error rate.
 Twenty-three dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
 `openai-tool-calls.v1`, `llama3-json.v1`, `mistral-v3.v1`,
 `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
-`anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`). Streaming recognition (#16) is implemented. Of
-provider streaming events (#17), Anthropic Messages event logs are read and
-reassembled by the Rust API; the OpenAI delta reading, CLI and MCP inputs,
-provider-log fixtures, fuzz seeds and WASM parity remain tracked. Current qualification of the added
+`anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`). Streaming recognition (#16) is implemented.
+The Rust APIs, CLI and MCP recover Anthropic Messages and OpenAI Chat
+Completions event logs. The portable harness replays recorded responses
+and truncated prefixes, and the `provider-log` fuzz target compares
+provider evidence and recovery across chunkings. The recording sources
+and licenses are pinned in the [fixture provenance](../crates/wasm-harness/src/provider_logs/README.md).
+Current qualification of the added
 recipes is pending automatic CI; the recorded evaluation numbers above
 refer to the prior source.
 
@@ -172,7 +175,7 @@ cases are not independent production samples; the interval cannot be interpreted
 as a production error guarantee. The independent distance oracle exhausts all
 14,641 ordered pairs of three-symbol strings up to length four.
 
-[FUZZING.md](FUZZING.md) describes the ten mutation targets, qualification
+[FUZZING.md](FUZZING.md) describes the eleven mutation targets, qualification
 counts, retained coverage regions, independent-oracle scope, compilation
 rejections/timeouts, and replay. Reports live in `docs/qualification/` and retain
 the source/tool identities and deterministic seed. A bounded campaign establishes
@@ -219,7 +222,6 @@ matches its single source, [known-limitations.json](known-limitations.json);
 - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
 - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
 - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
-- [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic Messages SSE `tool_use` event logs are reassembled into a turn by the Rust API; OpenAI `tool_calls` delta streams, CLI and MCP event-log inputs, provider-log fixtures, fuzz seeds and WASM parity are not yet implemented.
 - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
 
 The default `make fuzz` stops on the #11 signatures: the recorded

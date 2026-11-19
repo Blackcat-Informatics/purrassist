@@ -17,3 +17,6 @@
 *.gz binary
 *.zip binary
 *.tar binary
+
+# Provider fixtures retain the terminal SSE separator and original bytes.
+crates/wasm-harness/src/provider_logs/*.sse -text whitespace=-blank-at-eof
