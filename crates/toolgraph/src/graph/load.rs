@@ -3,6 +3,7 @@
 
 //! The loading algorithm: materialise rows, own every row, validate, then type.
 
+mod classification;
 mod control;
 mod roles;
 
@@ -34,6 +35,7 @@ use crate::{
     CallableBinding, ContextManagement, LoadingStrategy, OutputByteLimit, ResourceLimits,
     Vocabulary, codec::mcp::ExecutionMode,
 };
+use classification::Nodes;
 use control::{ControlledStorage, Shared, Storage, Work};
 use roles::{Kind, Role, Spec};
 
@@ -59,6 +61,8 @@ const FNO_RETURNS: &str = "https://w3id.org/function/ontology#returns";
 
 #[derive(Debug)]
 struct Row {
+    subject_id: TermId,
+    object_id: TermId,
     s: TermValue,
     p: String,
     o: TermValue,
@@ -66,6 +70,7 @@ struct Row {
 
 #[derive(Debug)]
 struct Reifier {
+    term_id: TermId,
     id: TermValue,
     s: TermValue,
     p: String,
@@ -156,17 +161,18 @@ where
     let locations = Locations { view, source };
     with_doc(view, source, vocabulary, governor, |doc| {
         doc.scan_vocabulary(view, source, &mut governor.borrow_mut())?;
-        let nodes = doc.classify(&locations, &mut governor.borrow_mut())?;
-        doc.own_every_row(&nodes, view, source, &mut governor.borrow_mut())?;
-        doc.validate_nodes(&nodes, view, source, &mut governor.borrow_mut())?;
-        let catalog = doc.read_catalog(&nodes, view, source, governor)?;
-        let tools = doc.build_tools(
-            &nodes,
-            catalog.as_ref(),
-            &locations,
-            &mut governor.borrow_mut(),
-        )?;
-        Ok((tools, catalog))
+        doc.with_classification(&locations, governor, |nodes| {
+            doc.own_every_row(nodes, view, source, &mut governor.borrow_mut())?;
+            doc.validate_nodes(nodes, view, source, &mut governor.borrow_mut())?;
+            let catalog = doc.read_catalog(nodes, view, source, governor)?;
+            let tools = doc.build_tools(
+                nodes,
+                catalog.as_ref(),
+                &locations,
+                &mut governor.borrow_mut(),
+            )?;
+            Ok((tools, catalog))
+        })
     })
 }
 
@@ -217,6 +223,32 @@ fn subject_index<S: Admission>(
     Ok(by_subject)
 }
 
+fn vocabulary_index<'v, S: Admission>(
+    vocabulary: &'v Vocabulary,
+    governor: &Shared<'_>,
+    memory: &mut Memory<'_, S>,
+    progress: &mut impl FnMut(u64) -> Result<(), LoadError>,
+    storage_error: &impl Fn(StorageError) -> LoadError,
+) -> Result<Vec<(&'v str, &'static str)>, LoadError> {
+    let mut names = Vec::new();
+    let bindings = &vocabulary.terms().local_names;
+    memory
+        .reserve(&mut names, bindings.len())
+        .map_err(storage_error)?;
+    for (name, iri) in bindings {
+        work(&mut governor.borrow_mut(), 1)?;
+        if let Ok(at) = crate::TERM_NAMES.binary_search(&name.as_str()) {
+            memory
+                .push(&mut names, (iri.as_str(), crate::TERM_NAMES[at]))
+                .map_err(storage_error)?;
+        }
+    }
+    try_sort_unstable_by(&mut names, |(left, _), (right, _)| {
+        compare_bytes(left.as_bytes(), right.as_bytes(), progress)
+    })?;
+    Ok(names)
+}
+
 impl<'v> Doc<'v> {
     fn collect<V: DatasetView<Id = TermId>, S: Admission>(
         view: &V,
@@ -225,28 +257,10 @@ impl<'v> Doc<'v> {
         governor: &Shared<'_>,
         memory: &mut Memory<'_, S>,
         storage_error: &impl Fn(StorageError) -> LoadError,
-    ) -> Result<Self, LoadError>
-    where
-        V::ReadError: std::fmt::Display,
-    {
-        let mut names = Vec::new();
-        let bindings = &vocabulary.terms().local_names;
-        memory
-            .reserve(&mut names, bindings.len())
-            .map_err(storage_error)?;
-        for (name, iri) in bindings {
-            work(&mut governor.borrow_mut(), 1)?;
-            if let Ok(at) = crate::TERM_NAMES.binary_search(&name.as_str()) {
-                memory
-                    .push(&mut names, (iri.as_str(), crate::TERM_NAMES[at]))
-                    .map_err(storage_error)?;
-            }
-        }
+    ) -> Result<Self, LoadError> {
         let mut native_work = Work::new(governor);
         let mut progress = |units| native_work.charge(units).map_err(stop);
-        try_sort_unstable_by(&mut names, |(left, _), (right, _)| {
-            compare_bytes(left.as_bytes(), right.as_bytes(), &mut progress)
-        })?;
+        let names = vocabulary_index(vocabulary, governor, memory, &mut progress, storage_error)?;
         let value = |id, memory: &mut Memory<'_, S>| {
             view.term_value_with_memory(
                 id,
@@ -275,9 +289,14 @@ impl<'v> Doc<'v> {
                 return Err(unsupported(&s, &p, Construct::NamedGraph, at));
             }
             let o = value(quad.o, memory)?;
-            memory
-                .push(&mut rows, Row { s, p, o })
-                .map_err(storage_error)?;
+            let row = Row {
+                subject_id: quad.s,
+                object_id: quad.o,
+                s,
+                p,
+                o,
+            };
+            memory.push(&mut rows, row).map_err(storage_error)?;
         }
         let mut reifiers = Vec::new();
         for quad in view.reifier_quads() {
@@ -307,9 +326,14 @@ impl<'v> Doc<'v> {
             };
             let s = value(s, memory)?;
             let o = value(o, memory)?;
-            memory
-                .push(&mut reifiers, Reifier { id, s, p, o })
-                .map_err(storage_error)?;
+            let reifier = Reifier {
+                term_id: quad.s,
+                id,
+                s,
+                p,
+                o,
+            };
+            memory.push(&mut reifiers, reifier).map_err(storage_error)?;
         }
         // A declared named graph with no statements has no quad to refuse above, so
         // read the view's declared graphs and refuse any that remain.
@@ -343,10 +367,29 @@ impl<'v> Doc<'v> {
     }
 
     fn bound(&self, iri: &str) -> Option<&'static str> {
-        self.names
-            .binary_search_by_key(&iri, |&(key, _)| key)
-            .ok()
-            .map(|position| self.names[position].1)
+        match self.find_bound(|key| Ok::<_, Infallible>(key.cmp(iri))) {
+            Ok(found) => found,
+            Err(never) => match never {},
+        }
+    }
+
+    fn find_bound<E>(
+        &self,
+        mut compare: impl FnMut(&str) -> Result<std::cmp::Ordering, E>,
+    ) -> Result<Option<&'static str>, E> {
+        use std::cmp::Ordering;
+
+        let mut names = self.names.as_slice();
+        while !names.is_empty() {
+            let middle = names.len() / 2;
+            let (key, name) = names[middle];
+            match compare(key)? {
+                Ordering::Less => names = &names[middle + 1..],
+                Ordering::Equal => return Ok(Some(name)),
+                Ordering::Greater => names = &names[..middle],
+            }
+        }
+        Ok(None)
     }
 
     fn in_namespace(&self, iri: &str) -> bool {
@@ -484,165 +527,11 @@ fn unowned_row<V: DatasetView<Id = TermId>>(
     })
 }
 
-/// Role assignment for every node the vocabulary recognises.
-struct Nodes {
-    roles: BTreeMap<TermValue, u16>,
-    fno: BTreeSet<TermValue>,
-    shapes: BTreeSet<TermValue>,
-    shape_cells: BTreeSet<TermValue>,
-}
-
 impl Doc<'_> {
-    fn classify<V: DatasetView<Id = TermId>>(
-        &self,
-        locations: &Locations<'_, V>,
-        governor: &mut Governor,
-    ) -> Result<Nodes, LoadError> {
-        let mut typed: BTreeMap<TermValue, u16> = BTreeMap::new();
-        let mut linked: BTreeMap<TermValue, u16> = BTreeMap::new();
-        let mut inferred: BTreeMap<TermValue, u16> = BTreeMap::new();
-        for row in &self.rows {
-            work(governor, 1)?;
-            let Some(name) = self.bound(&row.p) else {
-                if row.p == RDF_TYPE
-                    && let Some(class) = iri_of(&row.o).and_then(|iri| self.bound(iri))
-                {
-                    if Role::is_runtime(class) {
-                        return Err(locations.unsupported_row(
-                            row,
-                            Construct::RuntimeFact,
-                            governor,
-                        )?);
-                    }
-                    *typed.entry(row.s.clone()).or_default() |= Role::of_class(class);
-                }
-                continue;
-            };
-            if Role::is_runtime(name) {
-                return Err(locations.unsupported_row(row, Construct::RuntimeFact, governor)?);
-            }
-            *inferred.entry(row.s.clone()).or_default() |= Role::domain(name);
-            let link = Role::link(name);
-            if link != 0 {
-                *linked.entry(row.o.clone()).or_default() |= link;
-            }
-        }
-        for reifier in &self.reifiers {
-            *linked.entry(reifier.id.clone()).or_default() |= Role::HINT;
-        }
-        let mut roles: BTreeMap<TermValue, u16> = BTreeMap::new();
-        for (node, mask) in &typed {
-            *roles.entry(node.clone()).or_default() |= mask;
-        }
-        for (node, mask) in &linked {
-            *roles.entry(node.clone()).or_default() |= mask;
-        }
-        for (node, mask) in &inferred {
-            // Omitting `rdf:type` must not evade validation: untyped, unlinked
-            // nodes take the role their predicates imply.
-            if !roles.contains_key(node) {
-                roles.insert(node.clone(), *mask);
-            }
-        }
-        // Shapes: typed, referenced as an argument/result shape, or a `sh:property` value.
-        let mut shapes = BTreeSet::new();
-        for row in &self.rows {
-            if (row.p == RDF_TYPE
-                && matches!(iri_of(&row.o), Some(SH_NODE_SHAPE | SH_PROPERTY_SHAPE)))
-                || row.p == SH_PROPERTY
-            {
-                shapes.insert(if row.p == SH_PROPERTY {
-                    row.o.clone()
-                } else {
-                    row.s.clone()
-                });
-            }
-            if row.p == SH_PROPERTY {
-                shapes.insert(row.s.clone());
-            }
-        }
-        for (node, mask) in &linked {
-            if mask & Role::SHAPE != 0 {
-                shapes.insert(node.clone());
-            }
-        }
-        let mut shape_cells = BTreeSet::new();
-        for node in &shapes {
-            for row in self.rows_of(node) {
-                self.claim_list(&row.o, &mut shape_cells, governor)?;
-            }
-        }
-        let mut fno = self.fno_subjects();
-        let mut cells = BTreeSet::new();
-        for subject in &fno {
-            for predicate in [FNO_EXPECTS, FNO_RETURNS] {
-                for head in self.objects(subject, predicate) {
-                    self.claim_list(head, &mut cells, governor)?;
-                }
-            }
-        }
-        fno.extend(cells);
-        Ok(Nodes {
-            roles,
-            fno,
-            shapes,
-            shape_cells,
-        })
-    }
-
-    fn fno_subjects(&self) -> BTreeSet<TermValue> {
-        let mut fno = BTreeSet::new();
-        for indexes in self
-            .by_subject
-            .chunk_by(|&left, &right| self.rows[left].s == self.rows[right].s)
-        {
-            let subject = &self.rows[indexes[0]].s;
-            let is_fno = indexes.iter().any(|&at| {
-                let row = &self.rows[at];
-                row.p == DCTERMS_IS_PART_OF
-                    || (row.p == RDF_TYPE
-                        && iri_of(&row.o).is_some_and(|iri| {
-                            iri.starts_with(FNO)
-                                || iri.starts_with(FNOM)
-                                || self.bound(iri) == Some("Tool")
-                        }))
-            });
-            if is_fno {
-                fno.insert(subject.clone());
-            }
-        }
-        fno
-    }
-
-    /// Collect the blank cells of the RDF list starting at `head`.
-    fn claim_list(
-        &self,
-        head: &TermValue,
-        cells: &mut BTreeSet<TermValue>,
-        governor: &mut Governor,
-    ) -> Result<(), LoadError> {
-        let mut at = head.clone();
-        while matches!(at, TermValue::Blank { .. })
-            && self.rows_of(&at).any(|row| row.p == RDF_FIRST)
-            && cells.insert(at.clone())
-        {
-            work(governor, 1)?;
-            let Some(next) = self
-                .objects(&at, RDF_REST)
-                .first()
-                .map(|next| (*next).clone())
-            else {
-                break;
-            };
-            at = next;
-        }
-        Ok(())
-    }
-
     /// Every row has exactly one owning view; an unowned row is a refusal.
     fn own_every_row<V: DatasetView<Id = TermId>>(
         &self,
-        nodes: &Nodes,
+        nodes: &Nodes<'_>,
         view: &V,
         source: &BorrowedSource<'_>,
         governor: &mut Governor,
@@ -655,19 +544,18 @@ impl Doc<'_> {
             let declaration = row.p == RDF_TYPE
                 && matches!(iri_of(&row.o), Some(RDFS_CLASS | OWL_CLASS | RDF_PROPERTY));
             let annotation = matches!(row.p.as_str(), RDFS_LABEL | RDFS_COMMENT);
-            let owned = if nodes.fno.contains(&row.s) {
+            let owned = if nodes.owns_fno(row.subject_id) {
                 !vocabulary_predicate && !vocabulary_class
                     || nodes
-                        .roles
-                        .get(&row.s)
+                        .role_of(row.subject_id)
                         .is_some_and(|mask| mask & Role::TOOL != 0)
             } else if vocabulary_predicate || vocabulary_class {
-                nodes.roles.contains_key(&row.s)
-            } else if nodes.shapes.contains(&row.s) {
+                nodes.role_of(row.subject_id).is_some()
+            } else if nodes.owns_shape(row.subject_id) {
                 row.p.starts_with(SH) || row.p == RDF_TYPE || annotation
-            } else if nodes.shape_cells.contains(&row.s) {
+            } else if nodes.owns_shape_cell(row.subject_id) {
                 matches!(row.p.as_str(), RDF_FIRST | RDF_REST)
-            } else if nodes.roles.contains_key(&row.s) {
+            } else if nodes.role_of(row.subject_id).is_some() {
                 annotation || row.p == RDF_TYPE
             } else {
                 declaration
@@ -856,12 +744,12 @@ impl Doc<'_> {
 
     fn validate_nodes<V: DatasetView<Id = TermId>>(
         &self,
-        nodes: &Nodes,
+        nodes: &Nodes<'_>,
         view: &V,
         source: &BorrowedSource<'_>,
         governor: &mut Governor,
     ) -> Result<(), LoadError> {
-        for (node, &mask) in &nodes.roles {
+        for (node, mask) in nodes.roles() {
             let mask = self.concrete(node, mask)?;
             if mask == 0 {
                 // A node with no concrete role (a bare argument/result shape, or one
@@ -966,12 +854,12 @@ impl Doc<'_> {
     /// governor's storage, work and stop authority.
     fn read_catalog<V: DatasetView<Id = TermId>>(
         &self,
-        nodes: &Nodes,
+        nodes: &Nodes<'_>,
         original: &V,
         source: &BorrowedSource<'_>,
         governor: &Shared<'_>,
     ) -> Result<Option<FnoCatalog>, LoadError> {
-        if nodes.fno.is_empty() {
+        if !nodes.has_fno {
             return Ok(None);
         }
         self.with_fno_view(nodes, governor, |view| {
@@ -998,7 +886,7 @@ impl Doc<'_> {
     /// Keep the frozen view charged until the reader returns and the view drops.
     fn with_fno_view<T>(
         &self,
-        nodes: &Nodes,
+        nodes: &Nodes<'_>,
         governor: &Shared<'_>,
         read: impl FnOnce(&RdfDataset) -> Result<T, LoadError>,
     ) -> Result<T, LoadError> {
@@ -1025,7 +913,7 @@ impl Doc<'_> {
     /// The default-graph rows the `FnO` reader owns, frozen under the temporary account.
     fn fno_view(
         &self,
-        nodes: &Nodes,
+        nodes: &Nodes<'_>,
         memory: &mut Memory<'_, impl Admission>,
     ) -> Result<RdfDataset, NativeBuildError> {
         let mut builder = RdfDatasetBuilder::new();
@@ -1035,7 +923,7 @@ impl Doc<'_> {
                 .checkpoint(control::NATIVE_UNITS_PER_WORK)?;
             let is_vocabulary = self.in_namespace(&row.p)
                 || (row.p == RDF_TYPE && iri_of(&row.o).is_some_and(|iri| self.in_namespace(iri)));
-            if !nodes.fno.contains(&row.s) || is_vocabulary {
+            if !nodes.owns_fno(row.subject_id) || is_vocabulary {
                 continue;
             }
             let s = builder.intern_value_with_memory(&row.s, memory)?;
@@ -1099,15 +987,14 @@ impl Doc<'_> {
 impl Doc<'_> {
     fn build_tools<V: DatasetView<Id = TermId>>(
         &self,
-        nodes: &Nodes,
+        nodes: &Nodes<'_>,
         catalog: Option<&FnoCatalog>,
         locations: &Locations<'_, V>,
         governor: &mut Governor,
     ) -> Result<Vec<Tool>, LoadError> {
         let tool_nodes: Vec<&TermValue> = nodes
-            .roles
-            .iter()
-            .filter(|(_, mask)| **mask & Role::TOOL != 0)
+            .roles()
+            .filter(|(_, mask)| *mask & Role::TOOL != 0)
             .map(|(node, _)| node)
             .collect();
         let tool_iris: BTreeSet<&str> = tool_nodes.iter().filter_map(|node| iri_of(node)).collect();
@@ -1720,6 +1607,64 @@ mod tests {
         "#;
 
     #[test]
+    fn classification_refunds_its_scratch_storage_on_refusal() {
+        let vocabulary = fixture_vocabulary();
+        let mut fixture = Governor::new(Budget::default());
+        let source_owner = RefCell::new(&mut fixture);
+        let parsed = control::parse(
+            b"<urn:context> a <urn:toolgraph:Context> . <urn:hint> a <urn:toolgraph:Hint> .",
+            NativeRdfFormat::Turtle,
+            None,
+            &source_owner,
+        )
+        .unwrap();
+        let view = parsed.dataset().unwrap();
+        let source = parsed.source();
+        let locations = Locations {
+            view: &view,
+            source: &source,
+        };
+        with_doc(&view, &source, &vocabulary, &source_owner, |doc| {
+            let mut ample = Governor::new(Budget::default());
+            let shared = RefCell::new(&mut ample);
+            let meter = shared.borrow().scratch_meter();
+            let baseline = 64;
+            meter.charge(baseline).unwrap();
+            doc.with_classification(&locations, &shared, |nodes| {
+                assert_eq!(nodes.roles().count(), 2);
+                assert!(meter.live() > baseline);
+                Ok(())
+            })?;
+            let peak = shared.borrow().usage().peak_scratch_bytes;
+            assert_eq!(meter.live(), baseline);
+
+            let mut tight = Governor::new(Budget {
+                scratch_bytes: peak - 1,
+                ..Budget::default()
+            });
+            let shared = RefCell::new(&mut tight);
+            let meter = shared.borrow().scratch_meter();
+            meter.charge(baseline).unwrap();
+            let refused =
+                doc.with_classification(&locations, &shared, |_| -> Result<(), LoadError> {
+                    panic!("a refused classification must not reach its consumer");
+                });
+            assert!(
+                matches!(
+                    refused,
+                    Err(LoadError::Exhausted(StopReason::BudgetExceeded(
+                        Resource::ScratchBytes
+                    )))
+                ),
+                "{refused:?}"
+            );
+            assert_eq!(meter.live(), baseline);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn temporary_fno_storage_is_scoped_to_the_reader_and_refunds_on_refusal() {
         let vocabulary = fixture_vocabulary();
         let mut fixture = Governor::new(Budget::default());
@@ -1733,16 +1678,15 @@ mod tests {
             source: &source,
         };
         with_doc(&view, &source, &vocabulary, &source_owner, |doc| {
-            let nodes = doc
-                .classify(&locations, &mut source_owner.borrow_mut())
-                .unwrap();
-            check_fno_view_account(doc, &nodes);
-            Ok(())
+            doc.with_classification(&locations, &source_owner, |nodes| {
+                check_fno_view_account(doc, nodes);
+                Ok(())
+            })
         })
         .unwrap();
     }
 
-    fn check_fno_view_account(doc: &Doc<'_>, nodes: &Nodes) {
+    fn check_fno_view_account(doc: &Doc<'_>, nodes: &Nodes<'_>) {
         let mut ample = Governor::new(Budget::default());
         let governor = RefCell::new(&mut ample);
         let meter = governor.borrow().scratch_meter();
