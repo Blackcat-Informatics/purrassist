@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership",
+  "branch": "paudley/266-govern-rdf-loader-role-and-ownership",
+  "base_ref": "origin/main",
+  "head": "9471e1f991a820daaa7c64f3fa568b1c6fb5a316",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership/sync/20261119T163421-93a90f9c144e4a27bf7d29c919ae62a7",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "02ac7860f4a9abcbb5b5aa4d271a2927f4d41c26",
+  "merge_bases": [
+    "9471e1f991a820daaa7c64f3fa568b1c6fb5a316"
+  ],
+  "commit": "02ac7860f4a9abcbb5b5aa4d271a2927f4d41c26"
+}

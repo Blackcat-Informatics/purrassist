@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 266,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership",
+  "branch": "paudley/266-govern-rdf-loader-role-and-ownership",
+  "slug": "govern-rdf-loader-role-and-ownership",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership",
+  "stage_tracked": true,
+  "base": "9471e1f991a820daaa7c64f3fa568b1c6fb5a316",
+  "base_oid": "9471e1f991a820daaa7c64f3fa568b1c6fb5a316",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership",
+    "branch:paudley/266-govern-rdf-loader-role-and-ownership",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl caches into /home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership plus 0 dependency units from 0 other checkouts in 24.8s; 2250 unchanged files keep their built mtimes; 0 other files take the seed time and rebuild; 33 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership",
+    "issue:/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-19T10:23:39-0600",
+  "seed_error": ""
+}

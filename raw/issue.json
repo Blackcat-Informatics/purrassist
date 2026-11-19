@@ -1,0 +1,27 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Part of #33.\n\nThe RDF loader classifies explicit, linked and inferred roles and indexes the rows owned by FnO and SHACL. Those tables currently allocate outside the caller's scratch account and clone retained RDF terms.\n\nUse admitted storage and the native term identities already available from the retained parse. Keep explicit and linked roles ahead of inferred roles, preserve blank-node scope, and preserve deterministic diagnostic order. Keep list ownership and cycle termination. Resource or cancellation refusal must release the table's temporary storage and withhold the graph.\n\nAcceptance\n\n- The production loader uses the governed role and ownership tables through classification, row validation, FnO catalog construction and typed tool building.\n- Existing loader and manifest contracts hold. A focused regression exercises refusal in the classification stage and verifies its scratch account is refunded.\n- The local gate passes.\n\nPublished-dataset ownership, native SHACL admission and WASM integration remain part of #33.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-19T16:22:50Z",
+  "labels": [
+    {
+      "id": "LA_kwDOUvgSo88AAAAC490QjQ",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    }
+  ],
+  "milestone": null,
+  "number": 266,
+  "state": "OPEN",
+  "title": "Govern RDF loader role and ownership classification",
+  "updatedAt": "2026-11-19T16:22:50Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/266"
+}

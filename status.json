@@ -1,0 +1,118 @@
+{
+  "issue": 266,
+  "pr_number": 267,
+  "branch": "paudley/266-govern-rdf-loader-role-and-ownership",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership",
+  "observed_at": "2026-11-19T17:19:07.605745+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/266-govern-rdf-loader-role-and-ownership/.stage/govern-rdf-loader-role-and-ownership/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "02ac7860f4a9abcbb5b5aa4d271a2927f4d41c26",
+    "headRefName": "paudley/266-govern-rdf-loader-role-and-ownership",
+    "headRefOid": "fd1f92811f9d7c973966f2cf5d0802b484c62986",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 267,
+    "state": "OPEN",
+    "title": "Govern RDF role and ownership classification",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/267"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716540635",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716540843",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716540565",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716539906",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716540624",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716540521",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716540505",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44568439263/job/135716540527",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "fd1f92811f9d7c973966f2cf5d0802b484c62986",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "fd1f92811f9d7c973966f2cf5d0802b484c62986",
+    "branch": "paudley/266-govern-rdf-loader-role-and-ownership",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 267,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #267 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}
