@@ -20,8 +20,9 @@
 //! Each native account admits its live storage
 //! through the scratch meter and polls cancellation on every native step.
 //! It charges one work unit per 64 native units, carrying the remainder
-//! across charges. The loader also charges work per statement and validated
-//! property. The temporary dataset stays charged through catalog reading.
+//! across charges. Vocabulary validation scans the existing subject rows in
+//! place and charges for row visits, predicate comparisons, and variable-length
+//! lexical checks. The temporary dataset stays charged through catalog reading.
 //! The rows and classification tables stay charged through validation and typing.
 //!
 //! An exhausted work or scratch budget the governor recorded is
