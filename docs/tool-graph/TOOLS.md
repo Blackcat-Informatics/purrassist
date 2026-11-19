@@ -17,43 +17,17 @@ it loads a tool graph (below) but does not execute one.
 `ToolGraph::load` (#191, the first bounded delivery of #33) reads RDF 1.2 Turtle
 or TriG with `purrdf_rdf::parse_dataset_controlled` into typed tools, all or
 nothing, and the worked example below loads. It is bounded as follows. The FnO
-catalog is built with `FnoCatalog::from_dataset_with_control`. The caller's
-governor supplies both purrdf authorities: parser and reader storage is charged
-to its scratch meter, native steps are polled for cancellation on every step and
-convert to work units at 64 native units per work unit (below), so a work or
-scratch budget the governor recorded as exhausted is `LoadError::Exhausted`, a
-cancellation is `LoadError::Cancelled`, and no partial
-graph is published. A native storage failure the governor did not record is not
-claimed as a budget: it is a `LoadError::Parse` with code `storage` and the
-native cause (code `storage-accounting` for a rejected scratch release). Native
-work units are finer than this crate's row accounting, so the loader charges one
-work unit per 64 native units, carrying the remainder across charges. A remainder
-below 64 native units left at the end of a parse or catalog read is dropped: it is
-never charged, so each governed step can under-charge by at most 63 native units.
+catalog is built with `FnoCatalog::from_dataset_with_control`. The parser,
+the temporary FnO dataset builder, and the catalog reader charge live storage
+to the caller's scratch meter. They poll cancellation on every native step
+and charge one work unit per 64 native units, carrying the remainder across
+charges. The temporary dataset remains charged through catalog construction
+and releases its storage when destroyed. The catalog keeps its own charge.
 
-Measured rates, from the governor's `usage()` after a load. On the worked example
-(9,518 bytes) a load charges 33,191 work units (3.49 per source byte) and peaks at
-569,829 scratch bytes (59.9 per source byte). On the bulk document (the worked
-example body repeated 114 times under distinct prefixes, names and blank-node
-labels, with one ontology declaration; 1,049,171 bytes) it charges 4,084,594 work
-units (3.89 per source byte) and peaks at 66,933,394 scratch bytes (63.8 per
-source byte). The work rate grows slightly with document size, so the admitted
-sizes below scale with document shape; they are measured on the bulk document, to
-within one repetition (about 9,100 bytes). Every effort level has the same scratch
-limit of 64 MiB (67,108,864 bytes) and the same input limit of 16 MiB, so
-whichever of work and scratch is reached first limits the admitted size. A larger
-document is the explicit `LoadError::Exhausted` outcome.
-
-| Effort | Work budget | Admitted Turtle size (measured) | Binding resource |
-| --- | --- | --- | --- |
-| `Exact` | 100,000 | 27,648 bytes (about 27.6 KB) | work |
-| `Quick` | 250,000 | 63,724 bytes (about 63.7 KB) | work |
-| `Standard` | 1,000,000 | 265,429 bytes (about 265.4 KB) | work |
-| `Deep` | 10,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
-| `Maximum` | 50,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
-
-The worked example loads at every level. `Deep` and `Maximum` admit the same
-size because both are limited by the shared scratch limit, not by work.
+An exhausted work or scratch budget is `LoadError::Exhausted`.
+Cancellation is `LoadError::Cancelled`. Both withhold the graph. Native
+allocation and layout failures retain their original cause. A rejected
+scratch release is `LoadError::Parse` with code `storage-accounting`.
 
 `UnknownTerm` and `UnsupportedConstruct` carry the exact source extent (byte
 range, line and column) of the first statement matching the refusal; refusals
@@ -61,10 +35,8 @@ that name a node (shape, hint, profile, FnO binding) name subject and predicate
 only. Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
 code is `unsupported-format` for every such media type. The rows materialised for
-validation, their per-subject index, the `FnO` view dataset built for the catalog
-reader and the owned `RdfDataset` copy returned by `ToolGraph::dataset` (re-interned
-from the parse, not the parser's own dataset) are allocated outside the governor's
-storage account.
+validation, their per-subject index, and the owned `RdfDataset` copy returned by
+`ToolGraph::dataset` remain outside the governor's storage account.
 Only default-graph statements load. A statement in a named graph is refused as
 `UnsupportedConstruct` with the named-graph construct, and so is a reifier in a
 named graph. A default-graph reifier loads only as a parameter-path reifier: it

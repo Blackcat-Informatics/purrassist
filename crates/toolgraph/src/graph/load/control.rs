@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use purrassist_core::{Governor, ScratchMeter, StopReason, contract::Resource};
 use purrdf_core::{TermValue, dataset_view::DatasetView};
 use purrdf_lex::{
-    allocation::{Admission, StorageError},
+    allocation::{Admission, OwnedAdmission, StorageError},
     control::{ControlledError, Progress},
 };
 use purrdf_rdf::{
@@ -92,12 +92,45 @@ impl Admission for Storage {
     }
 }
 
+/// The original account of a temporary native builder and its frozen view.
+pub(super) struct ControlledStorage<'c, 'g> {
+    storage: Storage,
+    work: Work<'c, 'g>,
+}
+
+impl<'c, 'g> ControlledStorage<'c, 'g> {
+    /// Keep the grant alive until both the builder and its frozen view die.
+    pub(super) fn owned(governor: &'c Shared<'g>) -> (OwnedAdmission<Self>, Rejection) {
+        let (storage, rejection) = Storage::new(governor);
+        let account = Self {
+            storage,
+            work: Work::new(governor),
+        };
+        (OwnedAdmission::new(account), rejection)
+    }
+}
+
+impl Admission for ControlledStorage<'_, '_> {
+    fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError> {
+        self.storage.resize(live_bytes)
+    }
+
+    fn progress_enabled(&self) -> bool {
+        true
+    }
+
+    fn checkpoint(&mut self, units: u64) -> Result<(), StorageError> {
+        self.work.charge(units).map_err(|reason| {
+            self.storage.rejection.record(reason);
+            StorageError::AdmissionFailed
+        })
+    }
+}
+
 /// Native work units charged as one governor work unit. The governed parser and
 /// `FnO` reader count one native unit per lexical or structural step, which is
 /// much finer than this crate's row accounting; charging each step as a work unit
-/// would admit only a few kilobytes under the Standard budget. The admitted sizes
-/// at 64 native units per work unit are measured in the `graph` module's
-/// governance notes.
+/// would limit accepted input under the Standard budget.
 pub(super) const NATIVE_UNITS_PER_WORK: u64 = 64;
 
 /// Work and stop authority: one governor work unit per
@@ -146,18 +179,25 @@ pub(super) fn storage_stop(
     rejection: &Rejection,
     cause: &StorageError,
 ) -> LoadError {
+    accounted_storage_stop(governor, rejection, cause)
+        .unwrap_or_else(|| read_failure("storage", cause))
+}
+
+/// Preserve a caller stop or an account failure without choosing a native error category.
+pub(super) fn accounted_storage_stop(
+    governor: &Shared<'_>,
+    rejection: &Rejection,
+    cause: &StorageError,
+) -> Option<LoadError> {
     if let Err(reason) = governor.borrow().check() {
-        return stop(reason);
+        return Some(stop(reason));
     }
-    rejection.take().map_or_else(
-        || read_failure("storage", cause),
-        |reason| {
-            read_failure(
-                "storage-accounting",
-                format!("scratch accounting refused a native release ({reason:?}): {cause}"),
-            )
-        },
-    )
+    rejection.take().map(|reason| {
+        read_failure(
+            "storage-accounting",
+            format!("scratch accounting refused a native release ({reason:?}): {cause}"),
+        )
+    })
 }
 
 /// A source-read failure with a stable code; the dataset is the parser's own.

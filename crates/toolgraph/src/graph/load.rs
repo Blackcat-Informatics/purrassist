@@ -12,11 +12,14 @@ use std::convert::Infallible;
 
 use purrassist_core::{Governor, StopReason, contract::Resource, output::FieldMask};
 use purrdf_core::{
-    RdfDatasetBuilder, TermId, TermValue, dataset_from_view,
+    NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermValue, dataset_from_view,
     dataset_view::DatasetView,
     fno::{FnoCatalog, FnoReadError, FnoReadFailure},
 };
-use purrdf_lex::control::ControlledError;
+use purrdf_lex::{
+    allocation::{Admission, Memory},
+    control::ControlledError,
+};
 
 use super::{
     Coercion, Construct, Hint, LoadError, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile,
@@ -26,7 +29,7 @@ use crate::{
     CallableBinding, ContextManagement, LoadingStrategy, OutputByteLimit, ResourceLimits,
     Vocabulary, codec::mcp::ExecutionMode,
 };
-use control::{Shared, Storage, Work};
+use control::{ControlledStorage, Shared, Storage, Work};
 use roles::{Kind, Role, Spec};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -129,10 +132,8 @@ pub(super) fn load(
             return Err(error);
         }
     };
-    // The owned copy is not governed: `PurRDF` offers no governed detach of a
-    // retained parse. It is one of several ungoverned allocations of the load; the
-    // `Doc` rows, the `by_subject` index and the `FnO` view dataset built in
-    // `fno_view` are also outside the governor's storage account.
+    // `PurRDF` exposes only a borrowed retained parse. The owned dataset copy,
+    // `Doc` rows and subject index are outside the governor's storage account.
     let dataset = dataset_from_view(&view)
         .map_err(|cause| control::read_failure("dataset-materialisation", cause))?;
     Ok(ToolGraph {
@@ -492,22 +493,6 @@ impl Doc<'_> {
     }
 }
 
-/// Intern a materialised term through the builder's public owned-term API.
-///
-/// The default blank scope is the exact inverse of the owned rendering that
-/// `TermValue::to_rdf_term` produces, so a blank node keeps its parsed identity.
-fn intern(
-    builder: &mut RdfDatasetBuilder,
-    value: &TermValue,
-) -> Result<TermId, Box<dyn std::fmt::Display>> {
-    let owned = value
-        .to_rdf_term()
-        .map_err(|cause| Box::new(cause) as Box<dyn std::fmt::Display>)?;
-    builder
-        .intern_owned_term(&owned)
-        .map_err(|cause| Box::new(cause) as Box<dyn std::fmt::Display>)
-}
-
 fn is_literal(value: &TermValue, datatypes: &[&str]) -> bool {
     matches!(
         value,
@@ -769,12 +754,14 @@ impl Doc<'_> {
         if nodes.fno.is_empty() {
             return Ok(None);
         }
-        let view = {
-            let mut governor = governor.borrow_mut();
-            self.fno_view(nodes, &mut governor)?
-        };
-        let (storage, rejection) = Storage::new(governor);
-        FnoCatalog::from_dataset_with_control(&*view, self.namespace, storage, Work::new(governor))
+        self.with_fno_view(nodes, governor, |view| {
+            let (storage, rejection) = Storage::new(governor);
+            FnoCatalog::from_dataset_with_control(
+                view,
+                self.namespace,
+                storage,
+                Work::new(governor),
+            )
             .map(Some)
             .map_err(|failure| match failure {
                 ControlledError::Control(reason) => stop(reason),
@@ -783,37 +770,57 @@ impl Doc<'_> {
                 )) => control::storage_stop(governor, &rejection, &cause),
                 ControlledError::Native(native) => self.fno_error(&native),
             })
+        })
     }
 
-    /// The default-graph rows the `FnO` reader owns, frozen as a dataset.
+    /// Keep the frozen view charged until the reader returns and the view drops.
+    fn with_fno_view<T>(
+        &self,
+        nodes: &Nodes,
+        governor: &Shared<'_>,
+        read: impl FnOnce(&RdfDataset) -> Result<T, LoadError>,
+    ) -> Result<T, LoadError> {
+        let (mut view_account, view_rejection) = ControlledStorage::owned(governor);
+        let view = self
+            .fno_view(nodes, &mut Memory::new(&mut view_account))
+            .map_err(|failure| {
+                if let NativeBuildError::Storage(cause) = &failure
+                    && let Some(refused) =
+                        control::accounted_storage_stop(governor, &view_rejection, cause)
+                {
+                    return refused;
+                }
+                LoadError::InvalidFnoBinding {
+                    subject: self.namespace.to_owned(),
+                    predicate: None,
+                    detail: format!("FnO view construction was refused: {failure}"),
+                }
+            })?;
+        read(&view)
+    }
+
+    /// The default-graph rows the `FnO` reader owns, frozen under the temporary account.
     fn fno_view(
         &self,
         nodes: &Nodes,
-        governor: &mut Governor,
-    ) -> Result<std::sync::Arc<purrdf_core::RdfDataset>, LoadError> {
+        memory: &mut Memory<'_, impl Admission>,
+    ) -> Result<RdfDataset, NativeBuildError> {
         let mut builder = RdfDatasetBuilder::new();
-        let storage = |cause: &dyn std::fmt::Display| LoadError::InvalidFnoBinding {
-            subject: self.namespace.to_owned(),
-            predicate: None,
-            detail: format!("FnO view construction was refused: {cause}"),
-        };
         for row in &self.rows {
-            work(governor, 1)?;
+            memory
+                .admission_mut()
+                .checkpoint(control::NATIVE_UNITS_PER_WORK)?;
             let is_vocabulary = self.in_namespace(&row.p)
                 || (row.p == RDF_TYPE && iri_of(&row.o).is_some_and(|iri| self.in_namespace(iri)));
             if !nodes.fno.contains(&row.s) || is_vocabulary {
                 continue;
             }
-            let s = intern(&mut builder, &row.s).map_err(|cause| storage(&*cause))?;
-            let p = builder
-                .intern_iri(&row.p)
-                .map_err(|cause| storage(&cause))?;
-            let o = intern(&mut builder, &row.o).map_err(|cause| storage(&*cause))?;
-            builder
-                .push_quad(s, p, o, None)
-                .map_err(|cause| storage(&cause))?;
+            let s = builder.intern_value_with_memory(&row.s, memory)?;
+            let p = builder.intern_iri_with_memory(&row.p, memory)?;
+            let o = builder.intern_value_with_memory(&row.o, memory)?;
+            builder.push_quad_with_memory(s, p, o, None, memory)?;
         }
-        builder.freeze().map_err(|cause| storage(&cause))
+        builder.freeze_with_memory(memory)
     }
 
     fn fno_error(&self, failure: &FnoReadFailure<Infallible>) -> LoadError {
@@ -1339,4 +1346,87 @@ fn node_mask(doc: &Doc<'_>, node: &TermValue) -> u16 {
         }
     }
     mask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{PrefixTable, TERM_NAMES, TermBindings, register_loss_profile};
+    use purrassist_core::Budget;
+    use purrdf_core::loss::LossProfile;
+    use purrdf_rdf::NativeRdfFormat;
+
+    #[test]
+    fn temporary_fno_storage_is_scoped_to_the_reader_and_refunds_on_refusal() {
+        let namespace = "urn:toolgraph:";
+        let vocabulary = Vocabulary::new(
+            "pa",
+            PrefixTable(vec![("pa".into(), namespace.into())]),
+            TermBindings {
+                namespace_iri: namespace.into(),
+                local_names: TERM_NAMES
+                    .iter()
+                    .map(|name| ((*name).into(), format!("{namespace}{name}")))
+                    .collect(),
+            },
+            register_loss_profile(LossProfile::builtin()).unwrap(),
+        )
+        .unwrap();
+        let source = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix dcterms: <http://purl.org/dc/terms/> .
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+            <urn:catalog> a owl:Ontology ;
+              dcterms:isPartOf <urn:toolgraph:> ;
+              rdfs:label "Loader test catalog" ;
+              rdfs:comment "A catalog without functions." .
+        "#;
+        let mut fixture = Governor::new(Budget::default());
+        let source_owner = RefCell::new(&mut fixture);
+        let parsed = control::parse(source, NativeRdfFormat::Turtle, None, &source_owner).unwrap();
+        let view = parsed.dataset().unwrap();
+        let doc = Doc::collect(&view, &vocabulary, &mut source_owner.borrow_mut()).unwrap();
+        let nodes = doc.classify(&mut source_owner.borrow_mut()).unwrap();
+
+        let mut ample = Governor::new(Budget::default());
+        let governor = RefCell::new(&mut ample);
+        let meter = governor.borrow().scratch_meter();
+        let (view_peak, catalog_bytes, catalog) = doc
+            .with_fno_view(&nodes, &governor, |view| {
+                let view_bytes = meter.live();
+                assert!(view_bytes > 0);
+                let peak = governor.borrow().usage().peak_scratch_bytes;
+                let (storage, _) = Storage::new(&governor);
+                let catalog = FnoCatalog::from_dataset_with_control(
+                    view,
+                    namespace,
+                    storage,
+                    Work::new(&governor),
+                )
+                .unwrap();
+                Ok((peak, meter.live() - view_bytes, catalog))
+            })
+            .unwrap();
+        assert!(catalog_bytes > 0);
+        assert_eq!(meter.live(), catalog_bytes);
+        drop(catalog);
+        assert!(meter.live() < catalog_bytes);
+
+        let mut tight = Governor::new(Budget {
+            scratch_bytes: view_peak - 1,
+            ..Budget::default()
+        });
+        let governor = RefCell::new(&mut tight);
+        let meter = governor.borrow().scratch_meter();
+        let refused = doc.with_fno_view(&nodes, &governor, |_| -> Result<(), LoadError> {
+            panic!("a refused temporary view must not reach its reader");
+        });
+        assert_eq!(
+            refused,
+            Err(LoadError::Exhausted(StopReason::BudgetExceeded(
+                Resource::ScratchBytes
+            )))
+        );
+        assert_eq!(meter.live(), 0);
+    }
 }
