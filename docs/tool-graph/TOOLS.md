@@ -32,6 +32,11 @@ Cancellation is `LoadError::Cancelled`. Both withhold the graph. Native
 allocation and layout failures retain their original cause. A rejected
 scratch release is `LoadError::Parse` with code `storage-accounting`.
 
+Vocabulary scanning checks caller-namespace IRIs in RDF statements, literal
+datatypes, nested triple terms, and reifier identities. The caller's work
+budget covers namespace comparisons and vocabulary lookups. Nested term
+traversal uses a temporary admitted work list.
+
 `UnknownTerm`, `UnsupportedConstruct`, and `UnsupportedProjection` carry the
 exact source extent (byte range, line and column) of the first statement
 matching the refusal. An unsupported projection also preserves the field-mask

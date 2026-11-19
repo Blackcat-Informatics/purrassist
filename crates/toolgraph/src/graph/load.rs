@@ -10,6 +10,7 @@ mod roles;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
+use std::ops::ControlFlow;
 
 use purrassist_core::{
     Governor, StopReason,
@@ -164,9 +165,9 @@ where
 {
     let locations = Locations { view, source };
     with_doc(view, source, vocabulary, governor, |doc| {
-        doc.scan_vocabulary(view, source, &mut governor.borrow_mut())?;
+        doc.scan_vocabulary(&locations, governor)?;
         doc.with_classification(&locations, governor, |nodes| {
-            doc.own_every_row(nodes, view, source, &mut governor.borrow_mut())?;
+            doc.own_every_row(nodes, &locations, governor)?;
             doc.validate_nodes(nodes, &locations, governor)?;
             let catalog = doc.read_catalog(nodes, view, source, governor)?;
             let tools = doc.build_tools(
@@ -396,8 +397,30 @@ impl<'v> Doc<'v> {
         Ok(None)
     }
 
-    fn in_namespace(&self, iri: &str) -> bool {
-        iri.starts_with(self.namespace)
+    fn has_namespace<C: Progress + ?Sized>(
+        &self,
+        iri: &str,
+        progress: &mut C,
+    ) -> Result<bool, C::Error> {
+        let namespace = self.namespace.as_bytes();
+        let Some(prefix) = iri.as_bytes().get(..namespace.len()) else {
+            return Ok(false);
+        };
+        compare_bytes(namespace, prefix, progress).map(std::cmp::Ordering::is_eq)
+    }
+
+    fn is_vocabulary_row<C: Progress + ?Sized>(
+        &self,
+        row: &Row,
+        progress: &mut C,
+    ) -> Result<bool, C::Error> {
+        if self.has_namespace(&row.p, progress)? {
+            return Ok(true);
+        }
+        match (row.p.as_str(), iri_of(&row.o)) {
+            (RDF_TYPE, Some(iri)) => self.has_namespace(iri, progress),
+            _ => Ok(false),
+        }
     }
 
     fn rows_of<'a>(&'a self, subject: &TermValue) -> impl Iterator<Item = &'a Row> + 'a {
@@ -425,53 +448,115 @@ impl<'v> Doc<'v> {
             .any(|row| row.p == RDF_TYPE && iri_of(&row.o) == Some(class))
     }
 
-    /// Refuse every caller-namespace term the vocabulary does not bind.
+    /// Refuse unbound names throughout each written RDF statement.
     fn scan_vocabulary<V: DatasetView<Id = TermId>>(
         &self,
-        view: &V,
-        source: &BorrowedSource<'_>,
-        governor: &mut Governor,
+        locations: &Locations<'_, V>,
+        governor: &Shared<'_>,
     ) -> Result<(), LoadError> {
+        let (mut account, rejection) = ControlledStorage::owned(governor);
+        let mut memory = Memory::new(&mut account);
+        let refusal = |cause| control::storage_stop(governor, &rejection, &cause);
         for row in &self.rows {
-            work(governor, 1)?;
-            if let Some(term) = self.unbound_term(&row.s, &row.p, &row.o) {
+            if let Some(term) = self
+                .inspect_vocabulary_statement(&row.s, &row.p, &row.o, &mut memory)
+                .map_err(refusal)?
+            {
+                let at = locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut())?;
                 return Err(LoadError::UnknownTerm {
                     subject: show(&row.s),
                     predicate: row.p.clone(),
                     term: term.to_owned(),
-                    at: control::default_row_extent(
-                        view, source, &row.s, &row.p, &row.o, governor,
-                    )?,
+                    at,
                 });
             }
         }
         for reifier in &self.reifiers {
-            work(governor, 1)?;
-            if let Some(term) = self.unbound_term(&reifier.s, &reifier.p, &reifier.o) {
+            let unknown = self
+                .inspect_vocabulary_statement(&reifier.s, &reifier.p, &reifier.o, &mut memory)
+                .map_err(refusal)?;
+            let unknown = match unknown {
+                Some(term) => Some(term),
+                None => self
+                    .unknown_value_iri(&reifier.id, &mut memory)
+                    .map_err(refusal)?,
+            };
+            if let Some(term) = unknown {
+                let at = control::default_reifier_extent(
+                    locations.view,
+                    locations.source,
+                    reifier,
+                    &mut governor.borrow_mut(),
+                )?;
                 return Err(LoadError::UnknownTerm {
                     subject: show(&reifier.id),
                     predicate: reifier.p.clone(),
                     term: term.to_owned(),
-                    at: control::default_reifier_extent(view, source, reifier, governor)?,
+                    at,
                 });
             }
         }
         Ok(())
     }
 
-    fn unbound_term<'a>(
+    fn inspect_vocabulary_statement<'a, S: Admission>(
         &self,
         subject: &'a TermValue,
         predicate: &'a str,
         object: &'a TermValue,
-    ) -> Option<&'a str> {
-        [iri_of(subject), Some(predicate), iri_of(object)]
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<&'a str>, StorageError> {
+        memory.charge(control::NATIVE_UNITS_PER_WORK)?;
+        // Keep the existing direct-term refusals ahead of nested-value checks.
+        for iri in [iri_of(subject), Some(predicate), iri_of(object)]
             .into_iter()
             .flatten()
-            // The bare namespace IRI names the vocabulary itself.
-            .find(|iri| {
-                *iri != self.namespace && self.in_namespace(iri) && self.bound(iri).is_none()
-            })
+        {
+            if self.is_unbound_iri(iri, memory)? {
+                return Ok(Some(iri));
+            }
+        }
+        for value in [subject, object] {
+            if matches!(value, TermValue::Literal { .. } | TermValue::Triple { .. })
+                && let Some(iri) = self.unknown_value_iri(value, memory)?
+            {
+                return Ok(Some(iri));
+            }
+        }
+        Ok(None)
+    }
+
+    fn unknown_value_iri<'a, S: Admission>(
+        &self,
+        value: &'a TermValue,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<&'a str>, StorageError> {
+        let found = value.visit_terms_with_memory(
+            |term, memory| {
+                memory.charge(1)?;
+                if let TermValue::Iri(iri) | TermValue::Literal { datatype: iri, .. } = term
+                    && self.is_unbound_iri(iri, memory)?
+                {
+                    return Ok(ControlFlow::Break(iri.as_str()));
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+            memory,
+        )?;
+        Ok(found.break_value())
+    }
+
+    fn is_unbound_iri<C: Progress + ?Sized>(
+        &self,
+        iri: &str,
+        progress: &mut C,
+    ) -> Result<bool, C::Error> {
+        // The bare namespace IRI names the vocabulary itself.
+        Ok(iri.len() > self.namespace.len()
+            && self.has_namespace(iri, progress)?
+            && self
+                .find_bound(|known| compare_bytes(known.as_bytes(), iri.as_bytes(), progress))?
+                .is_none())
     }
 }
 
@@ -536,24 +621,22 @@ impl Doc<'_> {
     fn own_every_row<V: DatasetView<Id = TermId>>(
         &self,
         nodes: &Nodes<'_>,
-        view: &V,
-        source: &BorrowedSource<'_>,
-        governor: &mut Governor,
+        locations: &Locations<'_, V>,
+        governor: &Shared<'_>,
     ) -> Result<(), LoadError> {
+        let mut progress = Work::new(governor);
         for row in &self.rows {
-            work(governor, 1)?;
-            let vocabulary_predicate = self.in_namespace(&row.p);
-            let vocabulary_class =
-                row.p == RDF_TYPE && iri_of(&row.o).is_some_and(|iri| self.in_namespace(iri));
+            work(&mut governor.borrow_mut(), 1)?;
+            let vocabulary = self.is_vocabulary_row(row, &mut progress).map_err(stop)?;
             let declaration = row.p == RDF_TYPE
                 && matches!(iri_of(&row.o), Some(RDFS_CLASS | OWL_CLASS | RDF_PROPERTY));
             let annotation = matches!(row.p.as_str(), RDFS_LABEL | RDFS_COMMENT);
             let owned = if nodes.owns_fno(row.subject_id) {
-                !vocabulary_predicate && !vocabulary_class
+                !vocabulary
                     || nodes
                         .role_of(row.subject_id)
                         .is_some_and(|mask| mask & Role::TOOL != 0)
-            } else if vocabulary_predicate || vocabulary_class {
+            } else if vocabulary {
                 nodes.role_of(row.subject_id).is_some()
             } else if nodes.owns_shape(row.subject_id) {
                 row.p.starts_with(SH) || row.p == RDF_TYPE || annotation
@@ -565,7 +648,12 @@ impl Doc<'_> {
                 declaration
             };
             if !owned {
-                return Err(unowned_row(row, view, source, governor)?);
+                return Err(unowned_row(
+                    row,
+                    locations.view,
+                    locations.source,
+                    &mut governor.borrow_mut(),
+                )?);
             }
         }
         Ok(())
@@ -762,11 +850,7 @@ impl Doc<'_> {
                 work(&mut governor.borrow_mut(), 1)?;
                 if mask == 0 {
                     // An abstract role or bare shape has no property table.
-                    let vocabulary_class = match (row.p.as_str(), iri_of(&row.o)) {
-                        (RDF_TYPE, Some(iri)) => self.has_namespace(iri, &mut progress)?,
-                        _ => false,
-                    };
-                    if vocabulary_class || self.has_namespace(&row.p, &mut progress)? {
+                    if self.is_vocabulary_row(row, &mut progress).map_err(stop)? {
                         return Err(unowned_row(
                             row,
                             locations.view,
@@ -886,16 +970,6 @@ impl Doc<'_> {
         Ok(())
     }
 
-    fn has_namespace(&self, iri: &str, progress: &mut Work<'_, '_>) -> Result<bool, LoadError> {
-        let namespace = self.namespace.as_bytes();
-        let Some(prefix) = iri.as_bytes().get(..namespace.len()) else {
-            return Ok(false);
-        };
-        compare_bytes(namespace, prefix, progress)
-            .map(std::cmp::Ordering::is_eq)
-            .map_err(stop)
-    }
-
     fn matches_property(
         row: &Row,
         predicate: &str,
@@ -984,9 +1058,7 @@ impl Doc<'_> {
             memory
                 .admission_mut()
                 .checkpoint(control::NATIVE_UNITS_PER_WORK)?;
-            let is_vocabulary = self.in_namespace(&row.p)
-                || (row.p == RDF_TYPE && iri_of(&row.o).is_some_and(|iri| self.in_namespace(iri)));
-            if !nodes.owns_fno(row.subject_id) || is_vocabulary {
+            if !nodes.owns_fno(row.subject_id) || self.is_vocabulary_row(row, memory)? {
                 continue;
             }
             let s = builder.intern_value_with_memory(&row.s, memory)?;
@@ -1729,6 +1801,44 @@ mod tests {
             );
             assert_eq!(meter.live(), baseline);
             Ok(())
+        })
+        .unwrap();
+    }
+
+    /// The vocabulary scan charges the lookup work after source rows are admitted.
+    #[test]
+    fn vocabulary_prefix_and_binding_lookup_obey_the_work_limit() {
+        let vocabulary = fixture_vocabulary();
+        let mut fixture = Governor::new(Budget::default());
+        let source_owner = RefCell::new(&mut fixture);
+        let parsed = control::parse(
+            br#"<urn:subject> <urn:toolgraph:profileName> "example" ."#,
+            NativeRdfFormat::Turtle,
+            None,
+            &source_owner,
+        )
+        .unwrap();
+        let view = parsed.dataset().unwrap();
+        let source = parsed.source();
+        let locations = Locations {
+            view: &view,
+            source: &source,
+        };
+        with_doc(&view, &source, &vocabulary, &source_owner, |doc| {
+            // One unit covers visiting the row. It cannot cover a matching
+            // namespace and the comparisons against the vocabulary index.
+            let mut tight = Governor::new(Budget {
+                work: 1,
+                ..Budget::default()
+            });
+            assert_eq!(
+                doc.scan_vocabulary(&locations, &RefCell::new(&mut tight)),
+                Err(LoadError::Exhausted(StopReason::BudgetExceeded(
+                    Resource::Work
+                )))
+            );
+            let mut ample = Governor::new(Budget::default());
+            doc.scan_vocabulary(&locations, &RefCell::new(&mut ample))
         })
         .unwrap();
     }

@@ -657,6 +657,63 @@ fn a_projection_refusal_locates_the_correct_scoped_blank_context() {
     );
 }
 
+/// A caller-namespace IRI is checked wherever it occurs in the RDF value.
+#[test]
+fn vocabulary_checks_literal_datatypes_nested_terms_and_reifier_ids() {
+    const SH_HAS_VALUE: &str = "http://www.w3.org/ns/shacl#hasValue";
+    const SH_PATH: &str = "http://www.w3.org/ns/shacl#path";
+    let original = worked();
+    for (statement, unbound, predicate, written) in [
+        (
+            r#"ex:customerIdShape sh:hasValue "x"^^pa:UnboundDatatype ."#,
+            "UnboundDatatype",
+            SH_HAS_VALUE,
+            r#"sh:hasValue "x"^^pa:UnboundDatatype"#,
+        ),
+        (
+            "ex:customerIdShape sh:hasValue <<( ex:s ex:p <<( ex:s pa:UnboundNested ex:o )>> )>> .",
+            "UnboundNested",
+            SH_HAS_VALUE,
+            "sh:hasValue <<( ex:s ex:p <<( ex:s pa:UnboundNested ex:o )>> )>>",
+        ),
+        (
+            "<< ex:pathShape sh:path ex:path ~ pa:UnboundReifier >> .",
+            "UnboundReifier",
+            SH_PATH,
+            "<< ex:pathShape sh:path ex:path ~ pa:UnboundReifier >>",
+        ),
+    ] {
+        let source = format!("{original}\n{statement}\n");
+        let error = load(&source).expect_err("unknown vocabulary term");
+        let LoadError::UnknownTerm {
+            subject,
+            term,
+            predicate: actual,
+            at: Some(at),
+            ..
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(term, format!("{NAMESPACE}{unbound}"));
+        assert_eq!(actual, predicate);
+        if unbound == "UnboundReifier" {
+            assert_eq!(subject, term);
+        } else {
+            assert_eq!(subject, format!("{EX}customerIdShape"));
+        }
+        assert_eq!(&source[at.start..at.end], written);
+        let external = format!("ex:{unbound}");
+        let replacement = if unbound == "UnboundReifier" {
+            "ex:pathClaim"
+        } else {
+            &external
+        };
+        let valid = source.replace(&format!("pa:{unbound}"), replacement);
+        load(&valid).expect("the neighbouring vocabulary is admitted");
+    }
+}
+
 // Rationale: budget exhaustion and cancellation are explicit errors, never a partial
 // graph; the same input loads under the Standard budget.
 #[test]
