@@ -594,10 +594,12 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
   governed quadratic conversion), and exposed through Rust, CLI
   (`recover-tool-calls`), and MCP (`recover_tool_calls`). Typed tool
   definitions can be derived from Rust structs and enums (`purrassist-derive`).
-  Streaming recognition (#16) is implemented. The Rust API reads Anthropic
-  Messages event logs and OpenAI chat-completions tool-call deltas (#17).
-  CLI and MCP inputs, provider-log fixtures, fuzz seeds, and WASM parity
-  remain tracked.
+  Streaming recognition (#16) is implemented. The core streaming readers
+  and the shared batch Rust host, CLI and MCP operation read Anthropic
+  Messages and OpenAI chat-completions event logs. Batch results preserve the
+  admitted event log and transport faults alongside reconstructed-message
+  recovery. Provider-log fixture provenance, fuzz seeds, and WASM parity
+  remain tracked under #17.
   See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.
 - Standard helper-provider adapters and caller-managed endpoints. No model is

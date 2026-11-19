@@ -32,15 +32,13 @@ use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
 use core::ops::Range;
 
-/// Select usable calls from a single reading, then apply the provider's
-/// transport-fault policy.
+/// Select usable calls from a single provider reading.
 pub(super) fn usable_provider_calls<'a>(
     outcome: &'a Outcome<ToolCalls>,
     select: fn(&'a ToolCalls) -> Vec<&'a ToolCall>,
-    permit: impl FnOnce(Vec<&'a ToolCall>) -> Vec<&'a ToolCall>,
 ) -> Vec<&'a ToolCall> {
     match outcome {
-        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => permit(select(calls)),
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => select(calls),
         Outcome::Ambiguous(_) | Outcome::Unresolved => Vec::new(),
     }
 }
@@ -1397,6 +1395,24 @@ impl<'s> ToolCallStream<'s> {
             events.extend(core::iter::once(event));
             Ok(())
         })
+    }
+
+    pub(super) fn finish_provider(
+        mut self,
+        stop: GenerationStop,
+        events: &mut impl Extend<StreamEvent>,
+        transport: super::provider::Transport<'_>,
+    ) -> AssistResult<ToolCalls> {
+        self.request.stop = stop;
+        self.intake.finish_with_transport(
+            &self.request,
+            &mut self.governor,
+            &mut |event| {
+                events.extend(core::iter::once(event));
+                Ok(())
+            },
+            Some(transport),
+        )
     }
 
     /// Finish and return EOF events followed by the final recovery result.

@@ -60,6 +60,7 @@ mod from_node;
 mod ir;
 mod metadata;
 mod output;
+mod provider;
 mod recognizer;
 pub mod recover;
 pub mod resolve;
@@ -96,6 +97,7 @@ pub use ir::{
     ReasoningSegment, Rejection, Segment, Spanned, UnresolvedArgument,
 };
 pub use metadata::{DeclarationMetadata, ParameterAliases};
+pub use provider::{ProviderFaultClass, ProviderLogFormat, ProviderLogRecovery};
 pub use recognizer::{GenerationStop, ReasoningPolicy, RecognizedTurn, Recognizer};
 pub use recover::{
     AmbiguityPolicy, DEFAULT_ID_PREFIX, Finish, IdGenerator, IdPolicy, KeywordUse,

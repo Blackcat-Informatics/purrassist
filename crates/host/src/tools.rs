@@ -341,7 +341,72 @@ pub fn recover_tool_calls(
     output: &[u8],
     options: &Node,
 ) -> Result<AssistResult<purrassist::tool_call::ToolCalls>, String> {
-    tool_calls::recover(output, options, None)
+    if matches!(&options.value, Value::Object(members) if members.iter().any(|member| member.key == "input_format"))
+    {
+        return Err("unknown recover_tool_calls argument \"input_format\"".into());
+    }
+    match tool_calls::recover(output, options, None, None)? {
+        ToolCallRecovery::Raw(result) => Ok(result),
+        ToolCallRecovery::Provider(_) => unreachable!("a raw-only request uses the raw reader"),
+    }
+}
+
+/// The shared batch result for raw model output or a provider event log.
+///
+/// [`recover_tool_calls_input`] selects the variant from its options.
+/// Use [`Self::to_node`] and [`Self::exit_code`] for transport-aware publication.
+///
+/// ```
+/// use purrassist::{json, tool_call::ProviderLogRecovery};
+/// use purrassist_host::tools::{ToolCallRecovery, recover_tool_calls_input};
+/// let options = json::parse(r#"{"input_format":"openai-chat-events","tools":[]}"#)?;
+/// let answer = recover_tool_calls_input(b"", &options)?;
+/// assert!(matches!(&answer, ToolCallRecovery::Provider(result)
+///     if matches!(result, ProviderLogRecovery::OpenAiChat(_))));
+/// assert_eq!(answer.exit_code(), 4);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug)]
+pub enum ToolCallRecovery {
+    /// Ordinary raw model output.
+    Raw(AssistResult<purrassist::tool_call::ToolCalls>),
+    /// A provider event log with typed transport evidence.
+    Provider(purrassist::tool_call::ProviderLogRecovery),
+}
+
+impl ToolCallRecovery {
+    /// Encode the batch response used by the CLI and MCP.
+    #[must_use]
+    pub fn to_node(&self) -> Node {
+        match self {
+            Self::Raw(result) => result.to_node(),
+            Self::Provider(result) => result.to_node(),
+        }
+    }
+
+    /// Map published usability to the batch CLI exit code.
+    #[must_use]
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            Self::Raw(result) => purrassist::tool_call::exit_code(&result.outcome),
+            Self::Provider(result) => result.exit_code(),
+        }
+    }
+}
+
+/// Recover the supplied bytes using the shared batch CLI and MCP operation.
+///
+/// Set `input_format` to `anthropic-events` or `openai-chat-events` for
+/// provider logs. Omit it or choose `raw` for ordinary recovery.
+/// See [`ToolCallRecovery`] for an example and [`recover_tool_calls`] for
+/// the raw recovery options.
+///
+/// # Errors
+///
+/// Returns an invalid option or declaration error, including a caller
+/// `stop` supplied for a provider log. Exhaustion is a recovery outcome.
+pub fn recover_tool_calls_input(output: &[u8], options: &Node) -> Result<ToolCallRecovery, String> {
+    tool_calls::recover(output, options, None, tool_calls::input_format(options)?)
 }
 
 fn governor(budget: Budget, cancellation: Option<&CancellationToken>) -> Governor {

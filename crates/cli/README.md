@@ -21,12 +21,18 @@ command `purrassist` with the arguments `mcp`, `--root` and the workspace
 directory. `mcp` and `call` create a `.purrassist/` journal directory in that
 root.
 
-`recover-tool-calls` reads one model turn as raw bytes from `FILE` or stdin
+By default `recover-tool-calls` reads one model turn as raw bytes from `FILE` or stdin
 (16 MiB limit; invalid UTF-8 is kept and recorded as a
 `tool_call.input.invalid-utf8` loss) and recovers its tool calls against the
 declarations in `--tools` (`--tools-format openai`, `mcp`, or `anthropic`),
 whose bytes the adapters read exactly as written (their render-back and schema
 digests refer to the file's own bytes).
+Select `--input-format anthropic-events` for an Anthropic Messages event log
+or `--input-format openai-chat-events` for an OpenAI chat-completions event
+log. The log supplies the stop reason. The result carries the source log and
+its faults under `provider`; the receipt refers to the reconstructed message.
+Transport-withheld calls are excluded from re-emission and usability counts.
+
 It prints the same result as the `recover_tool_calls` tool: per-call outcomes,
 itemized repairs and losses, rejected attempts, the tool-choice check, the
 turn's finish, an optional `--emit` re-emission (`openai` for the `tool_calls`
@@ -48,8 +54,8 @@ makes the forced choice strict, and is an invocation error without
 `--tool-choice NAME` (a tool name, not `auto`, `none` or `required`). A failed
 choice exits 4. `--help`
 lists every option; repeated single-valued options are rejected. The exit
-code is `tool_call::exit_code` of the result, so it always agrees with the
-printed `value.verdict`: 0 for `run` (the tool-choice check passed and at
+code follows the printed verdict, `value.verdict` for raw input and
+`provider.verdict` for event logs: 0 for `run` (the tool-choice check passed and at
 least one call is usable, `usable_accepting_guesses`, even beside rejected
 attempts or unparsed call markup, which the JSON itemizes) and `no_calls`
 (clean content, finish `content_only`); 3 for `ambiguous` (nothing usable

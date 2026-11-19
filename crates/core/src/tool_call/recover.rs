@@ -1477,6 +1477,7 @@ pub struct ToolCall {
     /// The unmodeled keywords of an adapter tool's schema on this call's
     /// path, in schema order.
     pub keywords: Vec<KeywordUse>,
+    pub(super) transport_withheld: bool,
 }
 
 impl ToolCall {
@@ -1509,13 +1510,13 @@ impl ToolCall {
         T::from_node(&self.arguments)
     }
 
-    /// Whether the call may run as is: its outcome is `Resolved` and it
-    /// names a declared tool.
+    /// Whether the call may run as is: it passes provider transport checks
+    /// when applicable, its outcome is `Resolved`, and it names a declared tool.
     ///
     /// See [`ToolCall`] for an example.
     #[must_use]
     pub fn is_usable(&self) -> bool {
-        self.outcome == CallOutcome::Resolved && self.tool.is_some()
+        !self.transport_withheld && self.outcome == CallOutcome::Resolved && self.tool.is_some()
     }
 
     /// Whether the call may run when the caller accepts guesses: `Resolved`,
@@ -1526,7 +1527,8 @@ impl ToolCall {
     #[must_use]
     pub fn is_usable_accepting_guesses(&self) -> bool {
         self.is_usable()
-            || (self.outcome == CallOutcome::BestGuess
+            || (!self.transport_withheld
+                && self.outcome == CallOutcome::BestGuess
                 && self.effects == Some(Effects::ReadOnly)
                 && self.tool.is_some())
     }
@@ -1657,6 +1659,7 @@ pub struct ToolCalls {
     /// and rejected attempt not printed; `None` for [`EmitTarget::None`].
     /// Ids are the calls' assigned [`ToolCall::id`]s.
     pub emitted: Option<Emission>,
+    transport_faulted: bool,
 }
 
 impl ToolCalls {
@@ -1756,16 +1759,16 @@ impl ToolCalls {
     /// See [`Verdict`] for an example.
     #[must_use]
     pub fn verdict(&self) -> Verdict {
-        if !self.emitted_calls().is_empty() {
+        if self.tool_choice.passed && self.calls.iter().any(ToolCall::is_usable_accepting_guesses) {
             Verdict::Run
         } else if !self.tool_choice.passed {
             Verdict::NothingUsable
-        } else if self.finish == Finish::ContentOnly {
+        } else if self.finish == Finish::ContentOnly && !self.transport_faulted {
             Verdict::NoCalls
         } else if self
             .calls
             .iter()
-            .any(|call| call.outcome == CallOutcome::Ambiguous)
+            .any(|call| !call.transport_withheld && call.outcome == CallOutcome::Ambiguous)
         {
             Verdict::Ambiguous
         } else {
@@ -2838,6 +2841,20 @@ impl WireValue for ToolCall {
     }
 }
 
+impl ToolCall {
+    fn wire_call(&self, provider: bool) -> Node {
+        let mut node = self.to_node();
+        if provider && let Value::Object(members) = &mut node.value {
+            members.push(crate::json::Member {
+                key: "transport_permitted".into(),
+                key_span: None,
+                value: Node::new(Value::Bool(!self.transport_withheld)),
+            });
+        }
+        node
+    }
+}
+
 impl WireValue for ToolCalls {
     /// `{calls, rejected: [{span, dialect (null for a family no built-in
     /// dialect parses), candidate_dialects, reason: {code, at, and for
@@ -2854,9 +2871,33 @@ impl WireValue for ToolCalls {
     /// requests without one keep their wire form. Deterministic and
     /// infallible.
     fn to_node(&self) -> Node {
+        self.to_node_with(false)
+    }
+}
+
+impl ToolCalls {
+    pub(super) fn to_node_with(&self, provider: bool) -> Node {
+        let calls = |accept_guesses: bool| {
+            self.calls
+                .iter()
+                .filter(|call| {
+                    self.tool_choice.passed
+                        && if accept_guesses {
+                            call.is_usable_accepting_guesses()
+                        } else {
+                            call.is_usable()
+                        }
+                })
+                .count()
+        };
+        let usable = calls(false);
+        let accepting_guesses = calls(true);
         let ranges = |ranges: &[Range<usize>]| array(ranges.iter().map(byte_range));
         let mut node = object([
-            ("calls", array(self.calls.iter().map(WireValue::to_node))),
+            (
+                "calls",
+                array(self.calls.iter().map(|call| call.wire_call(provider))),
+            ),
             (
                 "rejected",
                 array(self.rejected.iter().map(|rejected| {
@@ -2900,7 +2941,13 @@ impl WireValue for ToolCalls {
                 })),
             ),
             ("finish", string(self.finish.code())),
-            ("openai_finish_reason", string(self.openai_finish_reason())),
+            (
+                "openai_finish_reason",
+                string(openai_finish_reason(
+                    self.length_stop,
+                    accepting_guesses != 0,
+                )),
+            ),
             (
                 "tool_choice",
                 object([
@@ -2914,10 +2961,10 @@ impl WireValue for ToolCalls {
             ),
             ("next_id_start", integer(self.next_id_start)),
             ("verdict", string(self.verdict().code())),
-            ("usable_calls", integer(size(self.usable().len()))),
+            ("usable_calls", integer(size(usable))),
             (
                 "usable_calls_accepting_guesses",
-                integer(size(self.usable_accepting_guesses().len())),
+                integer(size(accepting_guesses)),
             ),
         ]);
         if let (Some(emitted), Value::Object(members)) = (&self.emitted, &mut node.value) {
@@ -3270,6 +3317,7 @@ impl<'s> RecoveryIntake<'s> {
         let result = (|| {
             intake.capture = Some(SourceCapture::new(governor)?);
             let recovery = Recovery {
+                transport: None,
                 tools,
                 request,
                 dialects,
@@ -3651,6 +3699,7 @@ impl<'s> RecoveryIntake<'s> {
             .bytes
             .as_slice();
         let recovery = Recovery {
+            transport: None,
             tools: self.tools,
             request,
             dialects: self.dialects,
@@ -3677,6 +3726,7 @@ impl<'s> RecoveryIntake<'s> {
         &mut self,
         request: &ToolRecoveryRequest,
         governor: &mut Governor,
+        transport: Option<super::provider::Transport<'_>>,
     ) -> Result<Done, StopReason> {
         let RecognizedInput {
             turn,
@@ -3696,6 +3746,7 @@ impl<'s> RecoveryIntake<'s> {
                 .as_slice(),
             source: self.receipt.source,
             policies,
+            transport,
         };
         let (readings, trace) =
             recovery.resolve_turn(turn, &encoding, forced.as_deref(), governor)?;
@@ -3711,44 +3762,56 @@ impl<'s> RecoveryIntake<'s> {
     }
 
     pub(super) fn finish_with_events(
-        mut self,
+        self,
         request: &ToolRecoveryRequest,
         governor: &mut Governor,
         sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
     ) -> AssistResult<ToolCalls> {
+        self.finish_with_transport(request, governor, sink, None)
+    }
+
+    pub(super) fn finish_with_transport(
+        mut self,
+        request: &ToolRecoveryRequest,
+        governor: &mut Governor,
+        sink: &mut impl FnMut(StreamEvent) -> Result<(), StopReason>,
+        transport: Option<super::provider::Transport<'_>>,
+    ) -> AssistResult<ToolCalls> {
         self.receipt.source = core::mem::take(&mut self.digest).finish();
-        let completed = self.complete(request, governor).and_then(|done| {
-            let mut readings = ScratchVec::new(governor);
-            match &done.outcome {
-                Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
-                    add_final_view(&mut readings, calls, &done, 0, governor)?;
-                }
-                Outcome::Ambiguous(values) => {
-                    for (index, calls) in values.iter().enumerate() {
-                        add_final_view(&mut readings, calls, &done, index, governor)?;
+        let completed = self
+            .complete(request, governor, transport)
+            .and_then(|done| {
+                let mut readings = ScratchVec::new(governor);
+                match &done.outcome {
+                    Outcome::Resolved(calls) | Outcome::BestGuess(calls) => {
+                        add_final_view(&mut readings, calls, &done, 0, governor)?;
+                    }
+                    Outcome::Ambiguous(values) => {
+                        for (index, calls) in values.iter().enumerate() {
+                            add_final_view(&mut readings, calls, &done, index, governor)?;
+                        }
+                    }
+                    Outcome::Unresolved if !done.rejected_values.is_empty() => {
+                        for (index, calls) in done.rejected_values.iter().enumerate() {
+                            add_final_view(&mut readings, &calls.0, &done, index, governor)?;
+                        }
+                    }
+                    Outcome::Unresolved => {
+                        drop(readings);
+                        return Ok(done);
                     }
                 }
-                Outcome::Unresolved if !done.rejected_values.is_empty() => {
-                    for (index, calls) in done.rejected_values.iter().enumerate() {
-                        add_final_view(&mut readings, &calls.0, &done, index, governor)?;
-                    }
-                }
-                Outcome::Unresolved => {
-                    drop(readings);
-                    return Ok(done);
-                }
-            }
-            let source = self
-                .capture
-                .as_ref()
-                .expect("completed recovery owns admitted source")
-                .bytes
-                .as_slice();
-            self.events
-                .finish(&readings, &done.trace, source, governor, sink)?;
-            drop(readings);
-            Ok(done)
-        });
+                let source = self
+                    .capture
+                    .as_ref()
+                    .expect("completed recovery owns admitted source")
+                    .bytes
+                    .as_slice();
+                self.events
+                    .finish(&readings, &done.trace, source, governor, sink)?;
+                drop(readings);
+                Ok(done)
+            });
         let outcome = match completed {
             Ok(done) => {
                 self.receipt.evidence = done.evidence;
@@ -5303,6 +5366,7 @@ struct Recovery<'a> {
     output: &'a [u8],
     source: Digest,
     policies: Policies,
+    transport: Option<super::provider::Transport<'a>>,
 }
 
 impl Recovery<'_> {
@@ -5715,6 +5779,7 @@ impl Recovery<'_> {
                 turn: self.source,
                 length_stop: self.request.stop.is_truncation(),
                 emitted: None,
+                transport_faulted: false,
             },
             facts: Vec::new(),
             embedded_origins: ScratchVec::new(governor),
@@ -5785,6 +5850,12 @@ impl Recovery<'_> {
             }
         }
         reading.value.finish = self.finish(&reading.value);
+        if let Some(transport) = self.transport {
+            reading.value.transport_faulted = transport.faulted();
+            for call in &mut reading.value.calls {
+                call.transport_withheld = !transport.allows(call, governor)?;
+            }
+        }
         reading.value.emitted =
             emit::emission(self.tools, &reading.value, &self.request.emit, governor)?;
         Ok(reading)
@@ -8114,6 +8185,7 @@ fn tool_call(
             alternatives: resolved.alternatives,
             distinguishing: resolved.distinguishing,
             keywords: Vec::new(),
+            transport_withheld: false,
         },
         CallFacts {
             origins,
@@ -8171,6 +8243,7 @@ mod tests {
         governor: &mut Governor,
     ) -> (Reading, Reading) {
         let recovery = Recovery {
+            transport: None,
             tools,
             request,
             dialects,
@@ -8229,6 +8302,7 @@ mod tests {
             assert!(passing.value.tool_choice.passed);
             assert_eq!(printed(passing.value.emitted.as_ref()), Some(1));
             let recovery = Recovery {
+                transport: None,
                 tools: &tools,
                 request: &request,
                 dialects: &dialects,
@@ -8273,6 +8347,7 @@ mod tests {
         let tools = ToolSet::compile([ToolDefinition::new("ls")], Budget::default()).unwrap();
         let request = ToolRecoveryRequest::default();
         let recovery = Recovery {
+            transport: None,
             tools: &tools,
             request: &request,
             dialects: DialectSet::built_in(),

@@ -1158,7 +1158,7 @@ the codecs' unit tests.
 ## Surfaces
 
 The Rust API, the MCP tool, and the CLI run the same request builder
-(`purrassist_host::tools::recover_tool_calls`); the host test
+(`purrassist_host::tools::recover_tool_calls_input`); the host test
 `tool_call_tools::final_result_matches_core_recover` checks the tool's result
 against direct core recovery, and the CLI protocol tests check CLI and MCP
 equivalence.
@@ -1166,12 +1166,14 @@ equivalence.
 ### MCP
 
 The stdio MCP server (`purrassist mcp --root DIRECTORY`) lists
-`recover_tool_calls`. Its arguments are `output` (the turn, a string) and
+`recover_tool_calls`. Its arguments are `output` (the turn or event log, a
+string) and
 `tools` (the declarations: the array or object itself, or a string holding
 the raw declaration JSON, which the adapters read byte for byte; see
 [C5](#c5-lossless-declaration-adapters)) plus optional `tools_format` (`openai`, the
 default, `mcp`, or `anthropic`), `dialects` (built-in dialect ids; default
-all of them), `stop` (`stop`, `length`, `tool_calls`, `content_filter`,
+all of them), `input_format` (`raw`, the default, `anthropic-events`, or
+`openai-chat-events`), `stop` (for raw input only: `stop`, `length`, `tool_calls`, `content_filter`,
 `unknown`, or `{"stop_sequence": STRING}`), `tool_choice` (an `OpenAI` or
 Anthropic form; the Anthropic `{"type":"tool","name":N,"disable_parallel_tool_use":true}`
 is the strict form with exactly one call), `tool_choice_strict`
@@ -1257,8 +1259,31 @@ budget).
 The `recover_tool_calls` MCP tool has no exit code. Like every other tool in
 the registry, a completed recovery is a successful tool result (`isError`
 false) whatever it recovered, and `isError` is true only when the request
-itself is invalid. Its `value.verdict` is the field the CLI's exit code
-summarizes; `status` is not (see below).
+itself is invalid. The CLI exit code summarizes `value.verdict` for raw
+input and `provider.verdict` for event logs.
+
+### Provider event logs
+
+Pass `input_format` to the MCP operation or `--input-format` to
+`recover-tool-calls`. In Rust, use
+`purrassist_host::tools::recover_tool_calls_input` with the same option. The
+event log supplies the stop reason. An explicit `stop` is an invocation error.
+
+The response's `provider.source` retains the admitted provider bytes, as
+`text` or `bytes_hex`, and their digest. A resource stop or cancellation can
+leave only the admitted prefix. The receipt's source and the recovery's
+call spans refer to the reconstructed message. In `provider.faults`, the
+event number and `log_offset` refer to the original log. Entries in
+`provider.message_spans` connect a provider index to reconstructed message
+byte offsets. A fault's `index` identifies the Anthropic content block or
+OpenAI tool call. A null index withholds every call in the log.
+
+Use `provider.verdict` for the batch decision. Per-call outcomes retain the
+recovery diagnosis, and `transport_permitted` records whether the provider
+reading admits that call. A withheld call contributes to neither usable
+count nor emission, regardless of its diagnostic recovery outcome. A
+generation-limit stop withholds the whole log. A call-local fault can leave
+an unaffected neighbor usable when the tool-choice check passes.
 
 ### Strict forced tool choice
 
