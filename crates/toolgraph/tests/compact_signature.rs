@@ -8,7 +8,7 @@ use purrassist_toolgraph::{
     PrefixTable, ProjectionTarget, SOURCE_REPRESENTATION, TERM_NAMES, TermBindings, ToolGraph,
     Vocabulary, lanes, register_loss_profile,
 };
-use purrdf_core::loss::{LossProfile, check_ledger_sound_in};
+use purrdf_core::loss::{LossLedger, LossProfile, check_ledger_sound_in};
 
 const NAMESPACE: &str = "https://example.org/toolgraph#";
 const TOOLS: &str = include_str!("../../../docs/tool-graph/TOOLS.md");
@@ -56,7 +56,7 @@ fn golden() -> String {
     text
 }
 
-fn project(depth: u64) -> (String, Vec<(String, Option<String>)>) {
+fn project(depth: u64) -> (String, LossLedger) {
     let vocabulary = vocabulary();
     let mut governor = Governor::new(Budget::default());
     let graph = ToolGraph::load(
@@ -76,17 +76,7 @@ fn project(depth: u64) -> (String, Vec<(String, Option<String>)>) {
         ProjectionTarget::CompactSignature.representation(),
     )
     .expect("every entry is registered for compact-signature-v1");
-    let entries = ledger
-        .entries()
-        .iter()
-        .map(|entry| {
-            (
-                entry.code.to_string(),
-                entry.location.as_ref().and_then(|at| at.subject.clone()),
-            )
-        })
-        .collect();
-    (signature.into_string(), entries)
+    (signature.into_string(), ledger)
 }
 
 // Invariant: the signature for the worked example is byte-for-byte the document's
@@ -94,12 +84,21 @@ fn project(depth: u64) -> (String, Vec<(String, Option<String>)>) {
 // documented loss table is ledgered with its exact source location.
 #[test]
 fn the_worked_example_signature_and_ledger_match_the_specification() {
-    let (signature, entries) = project(2);
+    let (signature, ledger) = project(2);
+    let (second_signature, second_ledger) = project(2);
+    assert_eq!(signature, second_signature);
+    assert_eq!(ledger, second_ledger);
     assert_eq!(signature, golden());
     let ex = |name: &str| Some(format!("https://example.org/tools/{name}"));
-    let rows: Vec<(&str, Option<String>)> = entries
+    let rows: Vec<(&str, Option<String>)> = ledger
+        .entries()
         .iter()
-        .map(|(code, subject)| (code.as_str(), subject.clone()))
+        .map(|entry| {
+            (
+                entry.code.as_ref(),
+                entry.location.as_ref().and_then(|at| at.subject.clone()),
+            )
+        })
         .collect();
     let expected = [
         ("authorization-not-expressible", ex("edit_file")),
@@ -133,13 +132,15 @@ fn the_worked_example_signature_and_ledger_match_the_specification() {
 // ledgers the cut, so the signature never silently loses nested detail.
 #[test]
 fn a_result_object_beyond_the_depth_is_ledgered() {
-    let (signature, entries) = project(0);
+    let (signature, ledger) = project(0);
     assert!(signature.contains("->object\n"));
     assert!(
-        entries
+        ledger
+            .entries()
             .iter()
-            .any(|(code, subject)| code == "schema-keyword-not-expressible"
-                && subject.as_deref() == Some("https://example.org/tools/QueryOutput"))
+            .any(|entry| entry.code == "schema-keyword-not-expressible"
+                && entry.location.as_ref().and_then(|at| at.subject.as_deref())
+                    == Some("https://example.org/tools/QueryOutput"))
     );
 }
 
