@@ -158,9 +158,9 @@ where
     V::ReadError: std::fmt::Display,
 {
     with_doc(view, source, vocabulary, governor, |doc| {
-        doc.scan_vocabulary(&mut governor.borrow_mut())?;
+        doc.scan_vocabulary(view, source, &mut governor.borrow_mut())?;
         let nodes = doc.classify(&mut governor.borrow_mut())?;
-        doc.own_every_row(&nodes, &mut governor.borrow_mut())?;
+        doc.own_every_row(&nodes, view, source, &mut governor.borrow_mut())?;
         doc.validate_nodes(&nodes, view, source, &mut governor.borrow_mut())?;
         let catalog = doc.read_catalog(&nodes, view, source, governor)?;
         let tools = doc.build_tools(&nodes, catalog.as_ref(), &mut governor.borrow_mut())?;
@@ -372,38 +372,52 @@ impl<'v> Doc<'v> {
     }
 
     /// Refuse every caller-namespace term the vocabulary does not bind.
-    fn scan_vocabulary(&self, governor: &mut Governor) -> Result<(), LoadError> {
-        let check = |subject: &TermValue, predicate: &str, term: &TermValue| {
-            match iri_of(term) {
-                // The bare namespace IRI names the vocabulary itself, not a term in it.
-                Some(iri)
-                    if iri != self.namespace
-                        && self.in_namespace(iri)
-                        && self.bound(iri).is_none() =>
-                {
-                    Err(LoadError::UnknownTerm {
-                        subject: show(subject),
-                        predicate: predicate.to_owned(),
-                        term: iri.to_owned(),
-                        at: None,
-                    })
-                }
-                _ => Ok(()),
-            }
-        };
+    fn scan_vocabulary<V: DatasetView<Id = TermId>>(
+        &self,
+        view: &V,
+        source: &BorrowedSource<'_>,
+        governor: &mut Governor,
+    ) -> Result<(), LoadError> {
         for row in &self.rows {
             work(governor, 1)?;
-            check(&row.s, &row.p, &row.s)?;
-            check(&row.s, &row.p, &TermValue::Iri(row.p.clone()))?;
-            check(&row.s, &row.p, &row.o)?;
+            if let Some(term) = self.unbound_term(&row.s, &row.p, &row.o) {
+                return Err(LoadError::UnknownTerm {
+                    subject: show(&row.s),
+                    predicate: row.p.clone(),
+                    term: term.to_owned(),
+                    at: control::default_row_extent(
+                        view, source, &row.s, &row.p, &row.o, governor,
+                    )?,
+                });
+            }
         }
         for reifier in &self.reifiers {
             work(governor, 1)?;
-            check(&reifier.id, &reifier.p, &reifier.s)?;
-            check(&reifier.id, &reifier.p, &TermValue::Iri(reifier.p.clone()))?;
-            check(&reifier.id, &reifier.p, &reifier.o)?;
+            if let Some(term) = self.unbound_term(&reifier.s, &reifier.p, &reifier.o) {
+                return Err(LoadError::UnknownTerm {
+                    subject: show(&reifier.id),
+                    predicate: reifier.p.clone(),
+                    term: term.to_owned(),
+                    at: control::default_reifier_extent(view, source, reifier, governor)?,
+                });
+            }
         }
         Ok(())
+    }
+
+    fn unbound_term<'a>(
+        &self,
+        subject: &'a TermValue,
+        predicate: &'a str,
+        object: &'a TermValue,
+    ) -> Option<&'a str> {
+        [iri_of(subject), Some(predicate), iri_of(object)]
+            .into_iter()
+            .flatten()
+            // The bare namespace IRI names the vocabulary itself.
+            .find(|iri| {
+                *iri != self.namespace && self.in_namespace(iri) && self.bound(iri).is_none()
+            })
     }
 }
 
@@ -423,6 +437,20 @@ fn named_graph(subject: &TermValue, predicate: &str, at: Option<super::SourceExt
         construct: Construct::NamedGraph,
         at,
     }
+}
+
+fn unowned_row<V: DatasetView<Id = TermId>>(
+    row: &Row,
+    view: &V,
+    source: &BorrowedSource<'_>,
+    governor: &mut Governor,
+) -> Result<LoadError, LoadError> {
+    Ok(LoadError::UnsupportedConstruct {
+        subject: show(&row.s),
+        predicate: row.p.clone(),
+        construct: Construct::UnownedStatement,
+        at: control::default_row_extent(view, source, &row.s, &row.p, &row.o, governor)?,
+    })
 }
 
 /// Role assignment for every node the vocabulary recognises.
@@ -573,7 +601,13 @@ impl Doc<'_> {
     }
 
     /// Every row has exactly one owning view; an unowned row is a refusal.
-    fn own_every_row(&self, nodes: &Nodes, governor: &mut Governor) -> Result<(), LoadError> {
+    fn own_every_row<V: DatasetView<Id = TermId>>(
+        &self,
+        nodes: &Nodes,
+        view: &V,
+        source: &BorrowedSource<'_>,
+        governor: &mut Governor,
+    ) -> Result<(), LoadError> {
         for row in &self.rows {
             work(governor, 1)?;
             let vocabulary_predicate = self.in_namespace(&row.p);
@@ -600,7 +634,7 @@ impl Doc<'_> {
                 declaration
             };
             if !owned {
-                return Err(unsupported(&row.s, &row.p, Construct::UnownedStatement));
+                return Err(unowned_row(row, view, source, governor)?);
             }
         }
         Ok(())
@@ -799,7 +833,7 @@ impl Doc<'_> {
                     let vocabulary_class = row.p == RDF_TYPE
                         && iri_of(&row.o).is_some_and(|iri| self.in_namespace(iri));
                     if self.in_namespace(&row.p) || vocabulary_class {
-                        return Err(unsupported(node, &row.p, Construct::UnownedStatement));
+                        return Err(unowned_row(row, view, source, governor)?);
                     }
                 }
                 continue;

@@ -28,7 +28,7 @@ use purrdf_rdf::{
     parse_dataset_controlled,
 };
 
-use super::{stop, work};
+use super::{Reifier, stop, work};
 use crate::graph::{Construct, LoadError, SourceExtent};
 
 /// The governor shared between the native parser's progress callback and the
@@ -319,41 +319,23 @@ pub(super) fn locate<V: DatasetView<Id = TermId>>(
     } = error
     {
         // The context role admits exactly one projection predicate.
-        *at = statement_extent(
-            view,
-            source,
-            subject,
-            *blank_scope,
-            predicate,
-            None,
-            governor,
-        )?
-        .map(Box::new);
+        *at = statement_extent(view, source, subject, *blank_scope, predicate, governor)?
+            .map(Box::new);
         return Ok(());
     }
-    let (subject, predicate, term, at) = match error {
-        LoadError::UnknownTerm {
-            subject,
-            predicate,
-            term,
-            at,
-        } => (
-            subject.as_str(),
-            predicate.as_str(),
-            Some(term.as_str()),
-            at,
-        ),
-        LoadError::UnsupportedConstruct {
-            subject,
-            predicate,
-            construct,
-            at,
-        } if *construct != Construct::NamedGraph => {
-            (subject.as_str(), predicate.as_str(), None, at)
-        }
-        _ => return Ok(()),
-    };
-    *at = statement_extent(view, source, subject, None, predicate, term, governor)?;
+    if let LoadError::UnsupportedConstruct {
+        subject,
+        predicate,
+        construct:
+            Construct::RuntimeFact
+            | Construct::Reifier
+            | Construct::ComplexPath
+            | Construct::FunctionWithoutTool,
+        at,
+    } = error
+    {
+        *at = statement_extent(view, source, subject, None, predicate, governor)?;
+    }
     Ok(())
 }
 
@@ -363,22 +345,44 @@ fn statement_extent<V: DatasetView<Id = TermId>>(
     subject: &str,
     blank_scope: Option<BlankScope>,
     predicate: &str,
-    term: Option<&str>,
     governor: &mut Governor,
 ) -> Result<Option<SourceExtent>, LoadError> {
-    find_statement(source, governor, |_, [s, p, o], graph, governor| {
+    find_statement(source, governor, |_, [s, p, _], graph, governor| {
+        Ok(graph.is_none()
+            && spells(view, source, s, subject, blank_scope, governor)?
+            && spells(view, source, p, predicate, None, governor)?)
+    })
+}
+
+/// Match the reifier and the complete embedded triple behind its written occurrence.
+pub(super) fn default_reifier_extent<V: DatasetView<Id = TermId>>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    reifier: &Reifier,
+    governor: &mut Governor,
+) -> Result<Option<SourceExtent>, LoadError> {
+    find_statement(source, governor, |statement, [s, _, o], graph, governor| {
         if graph.is_some()
-            || !spells(view, source, s, subject, blank_scope, governor)?
-            || !spells(view, source, p, predicate, None, governor)?
+            || source.statement_kind(statement) != Some(SourceStatementKind::Reifier)
+            || !matches_value(view, source, s, &reifier.id, governor)?
         {
             return Ok(false);
         }
-        Ok(match term {
-            Some(wanted) if wanted != subject && wanted != predicate => {
-                spells(view, source, o, wanted, None, governor)?
-            }
-            _ => true,
-        })
+        let Some(triple) = term_id(source, o, governor)? else {
+            return Ok(false);
+        };
+        let terms = view
+            .with_term(triple, |term| match term {
+                TermRef::Triple { s, p, o } => Some((s, p, o)),
+                _ => None,
+            })
+            .map_err(|cause| read_failure("dataset-read", cause))?;
+        let Some((s, p, o)) = terms else {
+            return Ok(false);
+        };
+        Ok(matches_term(view, s, &reifier.s, governor)?
+            && matches_iri(view, p, &reifier.p, governor)?
+            && matches_term(view, o, &reifier.o, governor)?)
     })
 }
 
@@ -392,8 +396,11 @@ pub(super) fn default_row_extent<V: DatasetView<Id = TermId>>(
     governor: &mut Governor,
 ) -> Result<Option<SourceExtent>, LoadError> {
     find_statement(source, governor, |_, [s, p, o], graph, governor| {
+        let Some(p) = term_id(source, p, governor)? else {
+            return Ok(false);
+        };
         Ok(graph.is_none()
-            && spells(view, source, p, predicate, None, governor)?
+            && matches_iri(view, p, predicate, governor)?
             && matches_value(view, source, s, subject, governor)?
             && matches_value(view, source, o, object, governor)?)
     })
@@ -409,6 +416,28 @@ fn matches_value<V: DatasetView<Id = TermId>>(
     let Some(id) = term_id(source, origin, governor)? else {
         return Ok(false);
     };
+    matches_term(view, id, expected, governor)
+}
+
+fn matches_iri<V: DatasetView<Id = TermId>>(
+    view: &V,
+    id: TermId,
+    expected: &str,
+    governor: &mut Governor,
+) -> Result<bool, LoadError> {
+    view.with_term(id, |actual| match actual {
+        TermRef::Iri(iri) => matches_text(iri, expected, governor),
+        _ => Ok(false),
+    })
+    .map_err(|cause| read_failure("dataset-read", cause))?
+}
+
+fn matches_term<V: DatasetView<Id = TermId>>(
+    view: &V,
+    id: TermId,
+    expected: &TermValue,
+    governor: &mut Governor,
+) -> Result<bool, LoadError> {
     // Most matching candidates are named resources or list cells. Compare
     // those borrowed terms before allocating storage for richer RDF values.
     if matches!(expected, TermValue::Iri(_) | TermValue::Blank { .. }) {

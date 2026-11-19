@@ -220,6 +220,26 @@ fn a_term_the_vocabulary_does_not_bind_is_refused_with_subject_and_predicate() {
     load(&worked()).expect("neighbouring valid input");
 }
 
+#[test]
+fn an_unbound_term_inside_a_reifier_locates_the_rejected_binding() {
+    let statement = "<< ex:pathShape sh:path pa:Unbound ~ ex:pathClaim >>";
+    let source = format!("{}\n{statement} .\n", worked());
+    let error = load(&source).expect_err("unbound reified object");
+    let LoadError::UnknownTerm {
+        subject,
+        predicate,
+        term,
+        at: Some(at),
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, format!("{EX}pathClaim"));
+    assert_eq!(predicate, "http://www.w3.org/ns/shacl#path");
+    assert_eq!(term, format!("{NAMESPACE}Unbound"));
+    assert_eq!(&source[at.start..at.end], statement);
+}
+
 // A refused value or misplaced predicate identifies a written statement.
 // A missing required property has no such statement.
 #[test]
@@ -484,6 +504,28 @@ fn a_statement_no_view_owns_is_refused_not_skipped() {
     );
     let declared = format!("{}\n<urn:declared> a rdfs:Class .\n", worked());
     load(&declared).expect("a class declaration is owned");
+}
+
+#[test]
+fn an_unowned_row_locates_its_scoped_blank_node() {
+    let scoped = encode_blank_label("shape", BlankScope(9), LabelAlphabet::BlankNodeLabel);
+    let clause = "rdfs:label \"same\"";
+    let owned = format!("{}\n_:shape a sh:NodeShape ; {clause} .\n", worked());
+    load(&owned).expect("the shape owns the earlier annotation");
+    let source = format!("{owned}_:{scoped} {clause} .\n");
+    let error = load(&source).expect_err("the other blank node has no owner");
+    let LoadError::UnsupportedConstruct {
+        subject,
+        construct: Construct::UnownedStatement,
+        at: Some(at),
+        ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, "_:shape");
+    assert_eq!(Some(at.start), source.rfind(clause));
+    assert_eq!(&source[at.start..at.end], clause);
 }
 
 // Rationale: a vocabulary statement on a node with no concrete role (a bare shape, or
