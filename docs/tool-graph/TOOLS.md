@@ -1197,6 +1197,18 @@ without an exponent and without a sign on zero, every finite decimal in the
 interval and no other, compared digit by digit with no rounding. A number
 without a bound keeps the generic number grammar, which includes exponents.
 
+`minItems` and `maxItems` translate exactly for arrays with a shared item
+schema. A maximum of zero admits only the empty array. The count rules reuse
+one copy of the item grammar, including any item pattern. They add at most
+193 named rules per array to the emitted grammar, in addition to its ordinary
+array rule. The governor admits the count rules before emission. The bound
+counts emitted rules, while recognizer work still depends on the input and
+the item grammar. Bounds are integers from zero through `u64::MAX`, the range
+used by SHACL property counts in the upstream compiler. Invalid, larger or
+contradictory bounds produce a typed refusal at the keyword. Item counts on an
+array branch of a union are supported. Counts beside an entire `anyOf` or
+`oneOf` produce a typed refusal at the keyword.
+
 The G lane records `input-shape-not-expressible` for an open input shape and, as
 a defence, for a back-reference in a schema that arrives by another route, so the
 code covers G as well as A. A grammar can state these keywords, and the compiler
@@ -1204,8 +1216,6 @@ refuses each by name as not yet translated:
 
 - `minLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/225`.
 - `maxLength`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/226`.
-- `minItems`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/227`.
-- `maxItems`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/228`.
 - `minProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/229`.
 - `maxProperties`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/230`.
 - `multipleOf`: not yet translated; filed as `https://github.com/Blackcat-Informatics/purrassist/issues/231`.

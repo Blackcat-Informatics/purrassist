@@ -401,8 +401,18 @@ fn every_accepted_string_validates_against_its_schema() {
     }
 }
 
-/// The worked example's vocabulary and graph.
-fn worked_example() -> (Vocabulary, ToolGraph) {
+/// The worked example's Turtle before any test variation.
+fn worked_turtle() -> &'static str {
+    TOOLS
+        .split("## End-to-end example")
+        .nth(1)
+        .and_then(|section| section.split("```turtle\n").nth(1))
+        .and_then(|fence| fence.split("\n```").next())
+        .expect("worked Turtle fence")
+}
+
+/// The worked example's vocabulary and graph from the supplied Turtle.
+fn load_example(turtle: &str) -> (Vocabulary, ToolGraph) {
     let vocabulary = Vocabulary::new(
         "pa",
         PrefixTable(vec![("pa".into(), NAMESPACE.into())]),
@@ -416,15 +426,6 @@ fn worked_example() -> (Vocabulary, ToolGraph) {
         register_loss_profile(LossProfile::builtin()).expect("loss profile"),
     )
     .expect("vocabulary");
-    let section = TOOLS
-        .split("## End-to-end example")
-        .nth(1)
-        .expect("section");
-    let turtle = section
-        .split("```turtle\n")
-        .nth(1)
-        .and_then(|fence| fence.split("\n```").next())
-        .expect("turtle fence");
     let mut governor = Governor::new(Budget::default());
     let graph = ToolGraph::load(
         turtle.as_bytes(),
@@ -443,7 +444,7 @@ fn worked_example() -> (Vocabulary, ToolGraph) {
 // surrogate escapes and the output shape.
 #[test]
 fn the_worked_example_grammars_accept_only_schema_valid_strings() {
-    let (vocabulary, graph) = worked_example();
+    let (vocabulary, graph) = load_example(worked_turtle());
     let mut governor = Governor::new(Budget::default());
     let (grammars, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
     let (again, _) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
@@ -481,6 +482,66 @@ fn the_worked_example_grammars_accept_only_schema_valid_strings() {
     assert_eq!(codes("json-string-validity-not-expressible"), 1);
     assert_eq!(codes("output-shape-not-expressible"), 2);
     assert_eq!(codes("input-shape-not-expressible"), 0);
+}
+
+/// The public lane enforces SHACL property counts and each item's pattern
+/// against the same schema exposed through the MCP Extended manifest.
+#[test]
+fn shacl_array_counts_and_item_patterns_reach_the_gbnf_grammar() {
+    let turtle = worked_turtle().replacen(
+        r#"sh:pattern "^customer-[0-9]+$" ; sh:minCount 1 ; sh:maxCount 1"#,
+        r#"sh:pattern "^customer-[0-9]+$" ; sh:minCount 2 ; sh:maxCount 3"#,
+        1,
+    );
+    let (vocabulary, graph) = load_example(&turtle);
+    let mut governor = Governor::new(Budget::default());
+    let (grammars, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
+    let grammar = grammars
+        .iter()
+        .find(|grammar| grammar.tool() == "query_customer_orders")
+        .expect("query grammar");
+    let (manifest, _) = mcp::encode(&graph, &vocabulary, &mut governor).expect("manifest");
+    let root = json::parse(manifest.as_str()).expect("manifest JSON");
+    let json::Value::Array(declarations) = &root.get("tools").expect("tools").value else {
+        panic!("tools array");
+    };
+    let declaration = declarations
+        .iter()
+        .find(|declaration| {
+            declaration.get("name").and_then(json::Node::as_str) == Some(grammar.tool())
+        })
+        .expect("query declaration");
+    let schema = Schema::compile(
+        &declaration
+            .get("inputSchema")
+            .expect("input schema")
+            .to_json(),
+    )
+    .expect("compiled input schema");
+    for (items, expected) in [
+        (r#"["customer-1"]"#, false),
+        (r#"["customer-1","customer-2"]"#, true),
+        (r#"["customer-1","customer-2","customer-3"]"#, true),
+        (
+            r#"["customer-1","customer-2","customer-3","customer-4"]"#,
+            false,
+        ),
+        (r#"["customer-1","wrong"]"#, false),
+    ] {
+        let text = format!(r#"{{"customer_id":{items},"limit":1}}"#);
+        assert_eq!(accepts(grammar.as_str(), &text), expected, "{text}");
+        let instance = json::parse(&text).expect("instance JSON");
+        assert_eq!(
+            schema.validate(&instance).expect("validation").valid,
+            expected
+        );
+    }
+    assert!(
+        !ledger
+            .entries()
+            .iter()
+            .any(|entry| entry.code == "input-shape-not-expressible")
+    );
 }
 
 // Invariant: required members come first in property order, optional members
@@ -598,6 +659,102 @@ fn assert_member_cases(keywords: &str, cases: &[(String, bool)]) {
         [],
         "{keywords}\n{grammar}"
     );
+}
+
+/// Arrays accept all and only their allowed lengths, including both sides of
+/// a mixed-bit interval, and branch-local counts survive a union.
+#[test]
+fn array_count_bounds_match_schema_validation() {
+    let item = r#""type":"array","items":{"type":"integer"}"#;
+    for (bounds, minimum, maximum) in [
+        (r#""minItems":3e0"#, 3, 8),
+        (r#""maxItems":0"#, 0, 0),
+        (r#""maxItems":4.0"#, 0, 4),
+        (r#""minItems":2,"maxItems":7"#, 2, 7),
+        (r#""minItems":5,"maxItems":5"#, 5, 5),
+    ] {
+        let cases: Vec<_> = (0..=8)
+            .map(|length| {
+                let items = vec!["1"; length].join(",");
+                (format!("[{items}]"), (minimum..=maximum).contains(&length))
+            })
+            .collect();
+        assert_member_cases(&format!("{item},{bounds}"), &cases);
+    }
+    assert_member_cases(
+        &format!(r#""anyOf":[{{{item},"minItems":2,"maxItems":2}},{{"type":"null"}}]"#),
+        &[
+            ("[1]".to_owned(), false),
+            ("[1,2]".to_owned(), true),
+            ("[1,2,3]".to_owned(), false),
+            ("null".to_owned(), true),
+        ],
+    );
+    assert_member_cases(
+        r#""type":"array","maxItems":0"#,
+        &[("[]".to_owned(), true), ("[1]".to_owned(), false)],
+    );
+}
+
+/// Huge admitted bounds stay compact and out-of-domain or invalid bounds
+/// give a typed refusal at the count keyword.
+#[test]
+fn array_count_expansion_is_bounded_and_names_the_refused_keyword() {
+    let item = r#""type":"array","items":{"type":"integer"}"#;
+    let schema = member_schema(&format!(r#"{item},"maxItems":18446744073709551615"#));
+    let (grammar, omitted) = compile(&schema);
+    assert_eq!(omitted.len(), 0);
+    assert!(grammar.len() < 24_000);
+    assert!(accepts(&grammar, r#"{"v":[1]}"#));
+    let schema = json::parse(&schema).expect("array schema");
+    let mut governor = Governor::new(Budget {
+        scratch_bytes: 4_096,
+        ..Budget::default()
+    });
+    assert!(matches!(
+        Builder::new("test").grammar(&schema, &mut governor),
+        Err(GbnfError::Resource(StopReason::BudgetExceeded(
+            Resource::ScratchBytes
+        )))
+    ));
+
+    for (bounds, keyword, expected) in [
+        (
+            r#""minItems":2,"maxItems":1"#,
+            "maxItems",
+            "maxItems is less than minItems",
+        ),
+        (
+            r#""minItems":false"#,
+            "minItems",
+            "an item count must be a nonnegative integer",
+        ),
+        (
+            r#""minItems":-1"#,
+            "minItems",
+            "an item count must be a nonnegative integer",
+        ),
+        (
+            r#""maxItems":1.5"#,
+            "maxItems",
+            "an item count must be a nonnegative integer",
+        ),
+        (
+            r#""maxItems":18446744073709551616"#,
+            "maxItems",
+            "an item count exceeds the 64-bit grammar bound",
+        ),
+    ] {
+        let result = try_compile(&member_schema(&format!("{item},{bounds}")));
+        let Err(GbnfError::Unsupported {
+            pointer, reason, ..
+        }) = result
+        else {
+            panic!("{bounds}: {result:?}");
+        };
+        assert_eq!(pointer, format!("/properties/v/{keyword}"));
+        assert_eq!(reason, expected);
+    }
 }
 
 /// Cases of a string-valued pattern: each decoded string and whether it matches.
@@ -956,14 +1113,6 @@ fn untranslated_keywords_and_an_empty_enum_are_refused_by_name() {
             "maxLength is not yet translated",
         ),
         (
-            r#""type":"array","items":{"type":"string"},"minItems":1"#,
-            "minItems is not yet translated",
-        ),
-        (
-            r#""type":"array","items":{"type":"string"},"maxItems":1"#,
-            "maxItems is not yet translated",
-        ),
-        (
             r#""type":"object","minProperties":1"#,
             "minProperties is not yet translated",
         ),
@@ -1124,29 +1273,12 @@ fn refused_keywords_are_refused_beside_enum_and_anyof_too() {
 #[test]
 fn the_gbnf_lane_ledgers_input_shape_and_the_ledger_is_sound() {
     use purrdf_core::loss::check_ledger_sound_in;
-    let (vocabulary, _) = worked_example();
-    let section = TOOLS
-        .split("## End-to-end example")
-        .nth(1)
-        .expect("section");
-    let turtle = section
-        .split("```turtle\n")
-        .nth(1)
-        .and_then(|fence| fence.split("\n```").next())
-        .expect("turtle fence")
-        .replace(
-            "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ; sh:closed true ;",
-            "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ;",
-        );
+    let turtle = worked_turtle().replace(
+        "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ; sh:closed true ;",
+        "ex:QueryInput a sh:NodeShape ; sh:targetClass ex:QueryArguments ;",
+    );
+    let (vocabulary, graph) = load_example(&turtle);
     let mut governor = Governor::new(Budget::default());
-    let graph = ToolGraph::load(
-        turtle.as_bytes(),
-        "text/turtle",
-        None,
-        &vocabulary,
-        &mut governor,
-    )
-    .expect("graph loads");
     let (_, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("gbnf lane");
     assert!(
         ledger.entries().iter().any(|entry| {
