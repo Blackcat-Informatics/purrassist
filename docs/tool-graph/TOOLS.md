@@ -33,9 +33,11 @@ scratch release is `LoadError::Parse` with code `storage-accounting`.
 `UnknownTerm`, `UnsupportedConstruct`, and `UnsupportedProjection` carry the
 exact source extent (byte range, line and column) of the first statement
 matching the refusal. An unsupported projection also preserves the field-mask
-parser's offset in the decoded string. Refusals that name a node (shape, hint,
-profile, FnO binding) identify the subject and predicate. Other media types
-than Turtle and TriG are refused as `LoadError::Parse`
+parser's offset in the decoded string. An FnO refusal carries a statement
+extent when the reader identifies the exact refused row or return-list head.
+Missing facts and ambiguous field or list failures have no statement extent.
+Refusals that name a node identify the subject and predicate where available.
+Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
 code is `unsupported-format` for every such media type. Role classification,
 typed tool construction, and the owned `RdfDataset` copy returned by

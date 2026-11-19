@@ -17,9 +17,9 @@ use purrassist_core::{
     Governor, ScratchMeter, StopReason,
     contract::{Resource, saturating_size},
 };
-use purrdf_core::{BlankScope, QuadIds, TermId, TermRef, dataset_view::DatasetView};
+use purrdf_core::{BlankScope, QuadIds, TermId, TermRef, TermValue, dataset_view::DatasetView};
 use purrdf_lex::{
-    allocation::{Admission, OwnedAdmission, StorageError},
+    allocation::{Admission, Memory, OwnedAdmission, StorageError},
     control::{ControlledError, Progress},
 };
 use purrdf_rdf::{
@@ -380,6 +380,71 @@ fn statement_extent<V: DatasetView<Id = TermId>>(
             _ => true,
         })
     })
+}
+
+/// Locate a native diagnostic's complete default-graph statement by RDF value.
+pub(super) fn default_row_extent<V: DatasetView<Id = TermId>>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    subject: &TermValue,
+    predicate: &str,
+    object: &TermValue,
+    governor: &mut Governor,
+) -> Result<Option<SourceExtent>, LoadError> {
+    find_statement(source, governor, |_, [s, p, o], graph, governor| {
+        Ok(graph.is_none()
+            && spells(view, source, p, predicate, None, governor)?
+            && matches_value(view, source, s, subject, governor)?
+            && matches_value(view, source, o, object, governor)?)
+    })
+}
+
+fn matches_value<V: DatasetView<Id = TermId>>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    origin: SourceOriginId,
+    expected: &TermValue,
+    governor: &mut Governor,
+) -> Result<bool, LoadError> {
+    let Some(id) = term_id(source, origin, governor)? else {
+        return Ok(false);
+    };
+    // Most matching candidates are named resources or list cells. Compare
+    // those borrowed terms before allocating storage for richer RDF values.
+    if matches!(expected, TermValue::Iri(_) | TermValue::Blank { .. }) {
+        return view
+            .with_term(id, |actual| match (actual, expected) {
+                (TermRef::Iri(actual), TermValue::Iri(expected)) => {
+                    matches_text(actual, expected, governor)
+                }
+                (
+                    TermRef::Blank { label, scope },
+                    TermValue::Blank {
+                        label: expected,
+                        scope: wanted,
+                    },
+                ) => Ok(scope == *wanted && matches_text(label, expected, governor)?),
+                _ => Ok(false),
+            })
+            .map_err(|cause| read_failure("dataset-read", cause))?;
+    }
+    let shared = RefCell::new(governor);
+    let (mut account, rejection) = ControlledStorage::owned(&shared);
+    let mut memory = Memory::new(&mut account);
+    let actual = view.term_value_with_memory(
+        id,
+        &mut memory,
+        |cause| read_failure("dataset-read", cause),
+        |cause, _| storage_stop(&shared, &rejection, &cause),
+    )?;
+    let mut progress = Work::new(&shared);
+    actual
+        .try_cmp_with_control(expected, &mut memory, &mut |units| progress.charge(units))
+        .map(std::cmp::Ordering::is_eq)
+        .map_err(|failure| match failure {
+            ControlledError::Control(reason) => stop(reason),
+            ControlledError::Native(cause) => storage_stop(&shared, &rejection, &cause),
+        })
 }
 
 /// Locate the exact refused RDF statement, including its graph and native layer.
