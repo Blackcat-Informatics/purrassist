@@ -37,6 +37,8 @@ pub(crate) enum OwnedParseFailure {
 #[derive(Debug)]
 pub(crate) struct Syntax {
     offset: usize,
+    /// Whether the parser reached end of input while expecting more bytes.
+    pub(crate) at_end: bool,
     message: SyntaxMessage,
 }
 

@@ -70,6 +70,7 @@ mod stream;
 mod stream_anthropic;
 mod stream_capture;
 mod stream_finish;
+mod stream_openai;
 mod toolset;
 
 pub use adapter::{DeclarationForm, ToolDeclaration, ToolSource};
@@ -116,6 +117,9 @@ pub use shape::{
 pub use stream::{StreamEvent, ToolCallStream};
 pub use stream_anthropic::{
     AnthropicEventStream, BlockSpan, EventFault, EventFaultClass, EventFaultKind, EventLogRecovery,
+};
+pub use stream_openai::{
+    ChatCallSpan, ChatFault, ChatFaultClass, ChatFaultKind, ChatLogRecovery, OpenAiChatStream,
 };
 pub use toolset::{CompiledTool, ToolSet, ToolSetError, collision_key, is_valid_name};
 
