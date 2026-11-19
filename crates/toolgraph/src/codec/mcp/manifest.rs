@@ -233,7 +233,11 @@ pub fn encode(
 }
 
 /// Encode the same manifest while observing each schema's native losses.
-pub fn encode_with_schema_losses(
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "The projection observer is re-exported within the crate. Public visibility conflicts with unreachable_pub."
+)]
+pub(crate) fn encode_with_schema_losses(
     graph: &ToolGraph,
     vocabulary: &Vocabulary,
     governor: &mut Governor,
@@ -405,7 +409,11 @@ fn project(
 
 /// The declaration member whose schema compiler produced a loss.
 #[derive(Clone, Copy)]
-pub enum SchemaDirection {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "The observer direction is re-exported within the crate. Public visibility conflicts with unreachable_pub."
+)]
+pub(crate) enum SchemaDirection {
     Input,
     Output,
 }
