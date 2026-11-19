@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::contract::{Resource, saturating_size as size};
+use crate::contract::{Resource, ScratchLease, saturating_size as size};
 use crate::{Budget, Governor, ScratchString, ScratchVec, StopReason};
 
 /// A validated context mask. Construction accepts only the four documented forms.
@@ -111,9 +111,38 @@ impl FieldMask {
     /// assert!(governor.usage().work > 0);
     /// ```
     pub fn parse_governed(input: &str, governor: &mut Governor) -> Result<Self, FieldMaskError> {
+        let (mask, storage) = Self::parse_with_lease(input, governor)?;
+        storage.retain();
+        Ok(mask)
+    }
+
+    /// Parse and return the lease covering the validated mask's owned storage.
+    ///
+    /// Keep the lease in the same owner as the mask and drop the mask first.
+    /// The lease can outlive `governor`. Any later clone is caller-owned.
+    ///
+    /// # Errors
+    /// Returns the same syntax and resource errors as [`Self::parse_governed`].
+    /// A refusal releases this parse's storage.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor};
+    /// use purrassist_core::output::FieldMask;
+    /// let mut governor = Governor::new(Budget::default());
+    /// let parsed = FieldMask::parse_with_lease(".orders", &mut governor).unwrap();
+    /// assert_eq!(parsed.0.to_string(), ".orders");
+    /// assert!(parsed.1.bytes() > 0);
+    /// drop(parsed);
+    /// assert_eq!(governor.scratch_meter().live(), 0);
+    /// ```
+    pub fn parse_with_lease(
+        input: &str,
+        governor: &mut Governor,
+    ) -> Result<(Self, ScratchLease), FieldMaskError> {
         governor.charge(Resource::InputBytes, size(input.len()))?;
         governor.charge(Resource::Work, size(input.len()).saturating_add(1))?;
         let mut parser = Parser {
+            storage: ScratchLease::empty(governor),
             input,
             at: 0,
             governor,
@@ -143,7 +172,7 @@ impl FieldMask {
                     return Err(parser.unsupported());
                 }
             }
-            Mask::Fields(names.into_vec())
+            Mask::Fields(parser.retain_names(names))
         } else if parser.take(b'.') {
             if parser.take(b'[') {
                 if !parser.take(b']') {
@@ -164,7 +193,7 @@ impl FieldMask {
                         let name = parser.identifier()?;
                         names.push(parser.retain(name)?)?;
                     }
-                    Mask::Path(names.into_vec())
+                    Mask::Path(parser.retain_names(names))
                 }
             }
         } else {
@@ -175,7 +204,7 @@ impl FieldMask {
             return Err(parser.unsupported());
         }
         parser.governor.check()?;
-        Ok(Self { kind })
+        Ok((Self { kind }, parser.storage))
     }
 
     /// Render canonical spacing through the existing display implementation.
@@ -241,6 +270,7 @@ struct Parser<'a, 'g> {
     input: &'a str,
     at: usize,
     governor: &'g mut Governor,
+    storage: ScratchLease,
 }
 
 impl<'a> Parser<'a, '_> {
@@ -290,6 +320,14 @@ impl<'a> Parser<'a, '_> {
         self.governor.charge(Resource::Work, size(name.len()))?;
         let mut retained = ScratchString::new(self.governor);
         retained.push_str(name)?;
-        Ok(retained.into_string())
+        let (name, storage) = retained.into_owned_parts();
+        self.storage.absorb(storage);
+        Ok(name)
+    }
+
+    fn retain_names(&mut self, names: ScratchVec<String>) -> Vec<String> {
+        let (names, storage) = names.into_owned_parts();
+        self.storage.absorb(storage);
+        names
     }
 }

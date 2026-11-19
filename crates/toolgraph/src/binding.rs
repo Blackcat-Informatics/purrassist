@@ -155,7 +155,7 @@ pub struct CallableBinding<'a> {
     mapping_index: usize,
     function_index: usize,
     implementation_index: usize,
-    parameters: Vec<(usize, usize)>,
+    parameters: ScratchVec<(usize, usize)>,
 }
 
 impl<'a> CallableBinding<'a> {
@@ -263,7 +263,7 @@ impl<'a> CallableBinding<'a> {
             mapping_index,
             function_index,
             implementation_index,
-            parameters: parameters.into_vec(),
+            parameters,
         })
     }
 
@@ -289,6 +289,7 @@ impl<'a> CallableBinding<'a> {
     #[must_use]
     pub fn parameter(&self, index: usize) -> Option<ParameterBinding<'a>> {
         self.parameters
+            .as_slice()
             .get(index)
             .map(|&(parameter, mapping)| ParameterBinding {
                 parameter: &self.catalog.as_input().params[parameter],
@@ -300,6 +301,7 @@ impl<'a> CallableBinding<'a> {
     #[must_use = "consume the iterator to inspect the admitted parameter bindings"]
     pub fn parameters(&self) -> impl ExactSizeIterator<Item = ParameterBinding<'a>> + '_ {
         self.parameters
+            .as_slice()
             .iter()
             .map(|&(parameter, mapping)| ParameterBinding {
                 parameter: &self.catalog.as_input().params[parameter],
