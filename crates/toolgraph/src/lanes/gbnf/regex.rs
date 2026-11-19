@@ -12,23 +12,23 @@
 //! only where they are written, including inside an alternative. Quantifiers,
 //! classes, `\p{...}`, `\b` and `\B` need no translation of their own.
 //!
-//! A pattern the derivative engine cannot compile has a back-reference or a
-//! look-around. Neither is regular in the engine's sense, so each is named and
-//! left to the caller.
+//! Look-around uses core's bounded scalar product. Backreferences are left
+//! to the schema check.
 
 use std::{collections::BTreeMap, fmt::Write as _};
 
 use purrassist_core::{
     Governor, StopReason,
-    contract::Resource,
-    pattern::{DfaState, Pattern, PatternCompileError, PatternError},
+    contract::{Resource, ScratchLease, saturating_size},
+    pattern::{DfaState, LookaroundCompileError, Pattern, PatternCompileError, PatternError},
 };
 
 /// A deterministic automaton: state 0 is the start, every state reaches an
 /// accepting state, and the edges of one state are disjoint and ordered.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) struct Automaton {
     pub(super) states: Vec<State>,
+    _scratch: ScratchLease,
 }
 
 /// One state: whether the text so far is accepted, and its outgoing runs of
@@ -46,9 +46,6 @@ pub(super) enum Lowered {
     Automaton(Automaton),
     /// The pattern repeats an earlier match, which no context-free grammar states.
     Backreference,
-    /// The pattern tests the text around a position; its exact translation is not
-    /// implemented.
-    Lookaround,
 }
 
 /// Why a pattern could not be lowered.
@@ -58,9 +55,8 @@ pub(super) enum Failure {
     Syntax(PatternError),
     /// No string contains a match.
     Empty,
-    /// The engine needs backtracking for a construct that is neither a
-    /// back-reference nor a look-around.
-    Unnamed,
+    /// The look-around automaton exceeded its structural size cap.
+    LookaroundLimit,
     /// The governor stopped the work.
     Resource(StopReason),
 }
@@ -87,10 +83,16 @@ pub(super) fn lower(source: &str, governor: &mut Governor) -> Result<Lowered, Fa
             }
         }
     };
-    automaton(&pattern, governor)?.map_or_else(
-        || classify(source),
-        |automaton| Ok(Lowered::Automaton(automaton)),
-    )
+    if let Some(automaton) = automaton(&pattern, governor)? {
+        return Ok(Lowered::Automaton(automaton));
+    }
+    let machine = match pattern.lookaround_dfa(governor) {
+        Ok(Some(machine)) => machine,
+        Ok(None) => return Ok(Lowered::Backreference),
+        Err(LookaroundCompileError::SizeLimit) => return Err(Failure::LookaroundLimit),
+        Err(LookaroundCompileError::Resource(reason)) => return Err(Failure::Resource(reason)),
+    };
+    minimal(&machine.rows(), governor).map(Lowered::Automaton)
 }
 
 /// `source` with every `\` followed by an ASCII punctuation character that the
@@ -129,45 +131,6 @@ fn literal_identity_escapes(source: &str) -> String {
     output
 }
 
-/// Which construct keeps a pattern off the derivative engine. A look-around
-/// wins over a back-reference: only the back-reference is left to the schema
-/// check.
-fn classify(source: &str) -> Result<Lowered, Failure> {
-    let characters: Vec<char> = source.chars().collect();
-    let (mut backreference, mut lookaround) = (false, false);
-    let (mut index, mut in_class) = (0, false);
-    while index < characters.len() {
-        match characters[index] {
-            '\\' => {
-                if !in_class
-                    && characters
-                        .get(index + 1)
-                        .is_some_and(|next| matches!(next, '1'..='9' | 'k'))
-                {
-                    backreference = true;
-                }
-                index += 1;
-            }
-            '[' => in_class = true,
-            ']' => in_class = false,
-            '(' if !in_class && characters.get(index + 1) == Some(&'?') => {
-                lookaround |= match characters.get(index + 2) {
-                    Some('=' | '!') => true,
-                    Some('<') => matches!(characters.get(index + 3), Some('=' | '!')),
-                    _ => false,
-                };
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    match (lookaround, backreference) {
-        (true, _) => Ok(Lowered::Lookaround),
-        (false, true) => Ok(Lowered::Backreference),
-        (false, false) => Err(Failure::Unnamed),
-    }
-}
-
 /// A state of the search automaton, with every matched state as one.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
@@ -179,6 +142,50 @@ type Raw = Vec<(bool, Vec<(char, char, usize)>)>;
 
 /// A state's class and its merged edges, the key of one refined class.
 type Signature = (usize, Vec<(char, char, usize)>);
+
+/// Index signatures by a fixed-width key, then compare the full runs on a hit.
+#[derive(Default)]
+struct Signatures {
+    heads: BTreeMap<u64, usize>,
+    entries: Vec<(Signature, Option<usize>)>,
+}
+
+impl Signatures {
+    fn intern(&mut self, signature: Signature, governor: &mut Governor) -> Result<usize, Failure> {
+        let cells = saturating_size(signature.1.len()).saturating_add(1);
+        let lookup = u64::from(self.heads.len().max(1).ilog2() + 1) * 16;
+        governor
+            .charge(Resource::Work, lookup.saturating_add(cells))
+            .map_err(Failure::Resource)?;
+        let mut key = 0xcbf2_9ce4_8422_2325_u64;
+        let mut feed = |value: u64| key = (key ^ value).wrapping_mul(0x0100_0000_01b3);
+        feed(saturating_size(signature.0));
+        for &(first, last, target) in &signature.1 {
+            feed(u64::from(first));
+            feed(u64::from(last));
+            feed(saturating_size(target));
+        }
+        let head = self.heads.get(&key).copied();
+        let mut candidate = head;
+        while let Some(id) = candidate {
+            governor
+                .charge(Resource::Work, cells)
+                .map_err(Failure::Resource)?;
+            let (stored, previous) = &self.entries[id];
+            if *stored == signature {
+                return Ok(id);
+            }
+            candidate = *previous;
+        }
+        governor
+            .charge(Resource::Work, lookup.saturating_mul(2))
+            .map_err(Failure::Resource)?;
+        let id = self.entries.len();
+        self.heads.insert(key, id);
+        self.entries.push((signature, head));
+        Ok(id)
+    }
+}
 
 /// The index of `key` among the states met so far, adding it when new.
 fn intern(
@@ -242,22 +249,49 @@ fn automaton(pattern: &Pattern, governor: &mut Governor) -> Result<Option<Automa
         }
         raw[this] = (accepting, edges);
     }
-    minimal(&raw, governor).map(Some)
+    minimal(
+        &raw.iter()
+            .map(|(accepting, edges)| (*accepting, edges.iter().copied())),
+        governor,
+    )
+    .map(Some)
 }
 
 /// Drop the states that reach no accepting state, merge equivalent states and
 /// number the rest in the order a walk from the start meets them.
-fn minimal(raw: &Raw, governor: &mut Governor) -> Result<Automaton, Failure> {
-    let count = raw.len();
-    // Productive states: those from which an accepting state is reachable.
-    let mut productive: Vec<bool> = raw.iter().map(|(accepting, _)| *accepting).collect();
+fn minimal<E>(
+    rows: &(impl ExactSizeIterator<Item = (bool, E)> + Clone),
+    governor: &mut Governor,
+) -> Result<Automaton, Failure>
+where
+    E: ExactSizeIterator<Item = (char, char, usize)>,
+{
+    let count = saturating_size(rows.len());
+    governor
+        .charge(Resource::Work, count)
+        .map_err(Failure::Resource)?;
+    let edges = rows.clone().fold(0_u64, |total, (_, row)| {
+        total.saturating_add(saturating_size(row.len()))
+    });
+    let scan = count.saturating_add(edges);
+    // Bound the live refinement maps, lists, and signature vectors. Dense
+    // rows are borrowed. Only merged edge runs are copied into signatures
+    // and the output, with room for geometric vector growth.
+    let _temporary = governor
+        .lease_scratch(
+            count
+                .saturating_mul(2048)
+                .saturating_add(edges.saturating_mul(32)),
+        )
+        .map_err(Failure::Resource)?;
+    let mut productive: Vec<bool> = rows.clone().map(|(accepting, _)| accepting).collect();
     loop {
         governor
-            .charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))
+            .charge(Resource::Work, scan)
             .map_err(Failure::Resource)?;
         let mut changed = false;
-        for (state, (_, edges)) in raw.iter().enumerate() {
-            if !productive[state] && edges.iter().any(|&(_, _, target)| productive[target]) {
+        for (state, (_, mut edges)) in rows.clone().enumerate() {
+            if !productive[state] && edges.any(|(_, _, target)| productive[target]) {
                 productive[state] = true;
                 changed = true;
             }
@@ -269,68 +303,44 @@ fn minimal(raw: &Raw, governor: &mut Governor) -> Result<Automaton, Failure> {
     if !productive[0] {
         return Err(Failure::Empty);
     }
-    // Moore refinement: states are equivalent when they accept alike and reach
-    // equivalent states over the same scalar values.
-    let mut class: Vec<usize> = raw
-        .iter()
-        .map(|(accepting, _)| usize::from(*accepting))
-        .collect();
-    let mut classes = 2;
-    loop {
-        governor
-            .charge(Resource::Work, u64::try_from(count).unwrap_or(u64::MAX))
-            .map_err(Failure::Resource)?;
-        let mut signatures: BTreeMap<Signature, usize> = BTreeMap::new();
-        let mut next = Vec::with_capacity(count);
-        for (state, (_, edges)) in raw.iter().enumerate() {
-            let mut merged: Vec<(char, char, usize)> = Vec::new();
-            for &(first, last, target) in edges {
-                if !productive[target] {
-                    continue;
-                }
-                match merged.last_mut() {
-                    Some(previous)
-                        if previous.2 == class[target]
-                            && u32::from(previous.1) + 1 == u32::from(first) =>
-                    {
-                        previous.1 = last;
-                    }
-                    _ => merged.push((first, last, class[target])),
-                }
-            }
-            let fresh = signatures.len();
-            next.push(*signatures.entry((class[state], merged)).or_insert(fresh));
-        }
-        let settled = signatures.len() == classes;
-        classes = signatures.len();
-        class = next;
-        if settled {
-            break;
-        }
-    }
+    let (class, classes) = refine(rows, &productive, scan, governor)?;
     // Number the classes by a walk from the start, in edge order.
-    let mut number: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut number = vec![None; classes];
     let mut order: Vec<usize> = Vec::new();
-    let mut representative: BTreeMap<usize, usize> = BTreeMap::new();
-    for (state, &state_class) in class.iter().enumerate() {
+    let mut representative = vec![0; classes];
+    governor
+        .charge(Resource::Work, count)
+        .map_err(Failure::Resource)?;
+    for (state, &state_class) in class.iter().enumerate().rev() {
         if productive[state] {
-            representative.entry(state_class).or_insert(state);
+            representative[state_class] = state;
         }
     }
-    number.insert(class[0], 0);
+    number[class[0]] = Some(0);
     order.push(class[0]);
+    let scratch = governor
+        .lease_scratch(
+            count
+                .saturating_mul(64)
+                .saturating_add(edges.saturating_mul(32)),
+        )
+        .map_err(Failure::Resource)?;
+    governor
+        .charge(Resource::Work, scan)
+        .map_err(Failure::Resource)?;
     let mut cursor = 0;
     let mut states = Vec::new();
     while cursor < order.len() {
-        let member = representative[&order[cursor]];
+        let member = representative[order[cursor]];
         cursor += 1;
         let mut edges: Vec<(char, char, usize)> = Vec::new();
-        for &(first, last, target) in &raw[member].1 {
+        let (accepting, row) = rows.clone().nth(member).expect("representative row");
+        for (first, last, target) in row {
             if !productive[target] {
                 continue;
             }
             let target_class = class[target];
-            let target_number = *number.entry(target_class).or_insert_with(|| {
+            let target_number = *number[target_class].get_or_insert_with(|| {
                 order.push(target_class);
                 order.len() - 1
             });
@@ -344,10 +354,59 @@ fn minimal(raw: &Raw, governor: &mut Governor) -> Result<Automaton, Failure> {
                 _ => edges.push((first, last, target_number)),
             }
         }
-        states.push(State {
-            accepting: raw[member].0,
-            edges,
-        });
+        states.push(State { accepting, edges });
     }
-    Ok(Automaton { states })
+    Ok(Automaton {
+        states,
+        _scratch: scratch,
+    })
+}
+
+/// Refine classes until equivalent states reach equivalent classes over
+/// the same scalar values.
+fn refine<E>(
+    rows: &(impl ExactSizeIterator<Item = (bool, E)> + Clone),
+    productive: &[bool],
+    scan: u64,
+    governor: &mut Governor,
+) -> Result<(Vec<usize>, usize), Failure>
+where
+    E: ExactSizeIterator<Item = (char, char, usize)>,
+{
+    let mut class: Vec<usize> = rows
+        .clone()
+        .map(|(accepting, _)| usize::from(accepting))
+        .collect();
+    let mut classes = 2;
+    loop {
+        governor
+            .charge(Resource::Work, scan)
+            .map_err(Failure::Resource)?;
+        let mut signatures = Signatures::default();
+        let mut next = Vec::with_capacity(rows.len());
+        for (state, (_, edges)) in rows.clone().enumerate() {
+            let mut merged: Vec<(char, char, usize)> = Vec::new();
+            for (first, last, target) in edges {
+                if !productive[target] {
+                    continue;
+                }
+                match merged.last_mut() {
+                    Some(previous)
+                        if previous.2 == class[target]
+                            && u32::from(previous.1) + 1 == u32::from(first) =>
+                    {
+                        previous.1 = last;
+                    }
+                    _ => merged.push((first, last, class[target])),
+                }
+            }
+            next.push(signatures.intern((class[state], merged), governor)?);
+        }
+        let settled = signatures.entries.len() == classes;
+        classes = signatures.entries.len();
+        class = next;
+        if settled {
+            return Ok((class, classes));
+        }
+    }
 }

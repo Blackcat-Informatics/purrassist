@@ -32,12 +32,14 @@ mod backtrack;
 mod bytes;
 pub(crate) mod derive;
 mod generate;
+mod lookaround;
 mod parse;
 mod storage;
 mod unicode;
 
 pub use bytes::{ByteCompileError, ByteInclusion, ByteInstruction, ByteLanguage};
 pub use derive::{DerivativeDfa, DfaState, ScalarRun};
+pub use lookaround::{LookaroundCompileError, LookaroundDfa};
 
 use crate::contract::{
     Budget, Evidence, Governor, Resource, ScratchString, ScratchVec, StopReason,
@@ -408,6 +410,35 @@ impl Pattern {
             .as_ref()
             .map(|compiled| DerivativeDfa::new(compiled, governor))
             .transpose()
+    }
+
+    /// Compile regular look-around to a finite scalar automaton with the
+    /// same whole-subject search semantics as [`Self::is_match`].
+    ///
+    /// Ordinary patterns use [`Self::byte_dfa`]. This method returns `None`
+    /// for those patterns and for patterns that contain a backreference.
+    ///
+    /// # Errors
+    /// Returns [`LookaroundCompileError::SizeLimit`] when the combined
+    /// construction exceeds 4,096 states or 65,536 table cells, or
+    /// [`LookaroundCompileError::Resource`] when the governor refuses it.
+    ///
+    /// ```
+    /// use purrassist_core::{Budget, Governor, pattern::Pattern};
+    /// let pattern = Pattern::compile(r"^a(?=b)b$").unwrap();
+    /// let mut governor = Governor::new(Budget::default());
+    /// let machine = pattern.lookaround_dfa(&mut governor).unwrap().unwrap();
+    /// assert!(!machine.rows().next().unwrap().0);
+    /// assert!(machine.rows().any(|(accepting, _)| accepting));
+    /// ```
+    pub fn lookaround_dfa(
+        &self,
+        governor: &mut Governor,
+    ) -> Result<Option<LookaroundDfa>, LookaroundCompileError> {
+        if self.compiled.is_some() {
+            return Ok(None);
+        }
+        lookaround::compile(&self.ast, governor)
     }
 
     /// Detach this pattern's derivative automaton from its syntax tree;

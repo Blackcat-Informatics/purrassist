@@ -529,6 +529,26 @@ fn shacl_string_lengths_and_pattern_reach_the_gbnf_grammar() {
     );
 }
 
+/// Multiline SHACL anchors project to ECMAScript assertions in the MCP schema.
+/// The public grammar preserves their whole-input and line-boundary semantics.
+#[test]
+fn shacl_multiline_pattern_reaches_the_gbnf_grammar() {
+    let turtle = worked_turtle().replacen(
+        r#"sh:pattern "^customer-[0-9]+$""#,
+        r#"sh:pattern "^customer-[0-9]+$" ; sh:flags "m""#,
+        1,
+    );
+    assert_projected_customer_id(
+        &turtle,
+        &[
+            (r#""customer-12""#, true),
+            (r#""prefix\ncustomer-12\nsuffix""#, true),
+            (r#""prefixcustomer-12""#, false),
+            (r#""customer-12suffix""#, false),
+        ],
+    );
+}
+
 /// Compare the customer slot in the public grammar and its actual input schema.
 fn assert_projected_customer_id(turtle: &str, cases: &[(&str, bool)]) {
     let (vocabulary, graph) = load_example(turtle);
@@ -1208,28 +1228,33 @@ fn a_back_reference_is_ledgered_and_validate_input_refuses_a_violation() {
     }
 }
 
-// Invariant: a look-around is refused by name and never ledgered, so no grammar
-// that omits it is returned.
+/// Check each assertion direction and polarity at its actual input boundary.
 #[test]
-fn a_look_around_is_refused_by_name() {
-    for pattern in [r"a(?=b)", r"a(?!b)", r"(?<=a)b", r"(?<!a)b"] {
-        let refused = try_compile(&member_schema(&format!(
-            r#""type":"string","pattern":{}"#,
-            quoted(pattern)
-        )));
-        let Err(GbnfError::Unsupported {
-            pointer, reason, ..
-        }) = refused
-        else {
-            panic!("{pattern}: {refused:?}");
-        };
-        assert_eq!(pointer, "/properties/v/pattern");
-        assert!(
-            reason.contains("look-around is not yet translated"),
-            "{reason}"
-        );
-        assert!(reason.contains("issue 224"), "{reason}");
-    }
+fn look_around_preserves_assertion_boundaries() {
+    assert_pattern(r"a(?=b)", &[("zaabz", true), ("zzac", false)]);
+    assert_pattern(r"a(?!b)", &[("za", true), ("ab", false)]);
+    assert_pattern(r"(?<=a)b", &[("zab", true), ("zcb", false)]);
+    assert_pattern(r"(?<!a)b", &[("b", true), ("ab", false)]);
+    assert_pattern(r"(?=a(?<=^a))a", &[("a", true), ("za", false)]);
+}
+
+/// A repetition inside the look-around is governed by the named pattern limit.
+#[test]
+fn oversized_look_around_is_refused_by_name() {
+    let pattern = r"(?=a{1000000})a";
+    let refused = try_compile(&member_schema(&format!(
+        r#""type":"string","pattern":{}"#,
+        quoted(pattern)
+    )));
+    let Err(GbnfError::Unsupported {
+        pointer, reason, ..
+    }) = refused
+    else {
+        panic!("{pattern}: {refused:?}");
+    };
+    assert_eq!(pointer, "/properties/v/pattern");
+    assert!(reason.contains("look-around"), "{reason}");
+    assert!(reason.contains("limit"), "{reason}");
 }
 
 // Invariant: a size or divisibility keyword a grammar can state is refused as
@@ -1303,8 +1328,8 @@ fn automaton_accepts(automaton: &super::regex::Automaton, text: &str) -> bool {
 
 // Differential: over generated strings, the strings the lowered automaton
 // accepts are exactly those `Pattern::is_match` accepts, for no anchor, one
-// anchor, an anchor inside an alternation, `\b`, a negated class and a class
-// over astral characters.
+// anchor, an anchor inside an alternation, `\b`, a negated class, an
+// astral class, and assertions that depend on both sides of a boundary.
 #[test]
 fn differential_automaton_acceptance_equals_pattern_is_match() {
     use purrassist_core::pattern::Pattern;
@@ -1316,6 +1341,8 @@ fn differential_automaton_acceptance_equals_pattern_is_match() {
         r"\bab\b",
         r"[^a]b",
         r"[\u{1F600}-\u{1F64F}]a",
+        r"(?<=\ba)(?=b$)b",
+        r"^(?![^\s\S])$",
     ];
     let alphabet = ['a', 'b', ' ', '_', '\u{1F600}', '\u{1F680}', 'é'];
     let mut strings = vec![String::new()];

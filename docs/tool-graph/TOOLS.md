@@ -1155,12 +1155,13 @@ than a graph (the upstream schema compiler refuses a back-reference in a graph's
   strings. The grammar uses the generic JSON string and enforces any sibling
   string-length bounds.
 
-Refused with a typed error, never ledgered:
-
-- Look-ahead `(?=...)` and `(?!...)` and look-behind `(?<=...)` and `(?<!...)`.
-  Look-around is not yet translated: its exact translation needs an automaton
-  product with a size bound, filed as issue 224
-  (`https://github.com/Blackcat-Informatics/purrassist/issues/224`).
+Look-ahead `(?=...)` and `(?!...)` and look-behind `(?<=...)` and `(?<!...)`
+use an exact scalar automaton product. The product evaluates nested assertions,
+anchors, and word boundaries in the full subject. It combines with sibling
+string-length bounds. Compilation refuses the pattern at its schema pointer
+if the combined construction exceeds 4,096 states or 65,536 table cells.
+This includes look-around generated when the MCP projection translates
+multiline SHACL anchors.
 
 Numeric bounds are represented exactly. An integer bound (`minimum`, `maximum`,
 `exclusiveMinimum`, `exclusiveMaximum`, including fractional bounds read for an

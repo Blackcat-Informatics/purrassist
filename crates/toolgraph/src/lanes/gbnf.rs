@@ -61,7 +61,7 @@
 //! earlier match. At the entry point the ledger row for this target is exercised
 //! by open input shapes. A construct that
 //! cannot be lowered soundly at all is a typed refusal, including a pattern with
-//! a look-around, whose exact translation is not implemented.
+//! a look-around whose exact automaton exceeds the compilation limit.
 
 use std::fmt::{self, Write as _};
 
@@ -127,7 +127,7 @@ pub enum GbnfError {
     /// member without a property schema, `oneOf` alternatives that may overlap,
     /// a `pattern` or bound beside `anyOf` or `oneOf`,
     /// bounds, a pattern or an `enum` that admit no value, an invalid or
-    /// oversized count, a `pattern` with a look-around, a keyword not yet
+    /// oversized count, a `pattern` whose look-around product exceeds its limit, a keyword not yet
     /// translated (`minProperties`, `maxProperties`, `multipleOf`), or
     /// `uniqueItems: true`, which no context-free grammar states.
     Unsupported {
@@ -709,10 +709,6 @@ impl<'a> Builder<'a> {
                 ));
                 self.string_without_pattern(counts, governor)
             }
-            Ok(Lowered::Lookaround) => Err(self.unsupported(
-                &child,
-                "look-around is not yet translated: its exact translation needs an automaton product with a size bound, filed as issue 224",
-            )),
             Err(Failure::Syntax(cause)) => Err(GbnfError::Pattern {
                 tool: self.tool.to_owned(),
                 pointer: child,
@@ -721,9 +717,9 @@ impl<'a> Builder<'a> {
             Err(Failure::Empty) => {
                 Err(self.unsupported(&child, "no string contains a match of the pattern"))
             }
-            Err(Failure::Unnamed) => Err(self.unsupported(
+            Err(Failure::LookaroundLimit) => Err(self.unsupported(
                 &child,
-                "a pattern construct that needs backtracking and is neither a back-reference nor a look-around",
+                "look-around exceeds the compilation limit of 4096 states or 65536 table cells",
             )),
             Err(Failure::Resource(reason)) => Err(GbnfError::Resource(reason)),
         }
