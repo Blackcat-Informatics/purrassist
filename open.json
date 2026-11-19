@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 270,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and",
+  "branch": "paudley/270-govern-typed-rdf-tool-construction-and",
+  "slug": "govern-typed-rdf-tool-construction-and",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "943d18cd1b02c880e0debc96cce9dd169516e1a8",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and",
+    "branch:paudley/270-govern-typed-rdf-tool-construction-and",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/269-govern-rdf-loader-vocabulary-property caches into /home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and plus 0 dependency units from 0 other checkouts in 28.9s; 2242 unchanged files keep their built mtimes; 9 other files take the seed time and rebuild; 0 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and",
+    "issue:/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-19T11:39:23-0600",
+  "seed_error": ""
+}

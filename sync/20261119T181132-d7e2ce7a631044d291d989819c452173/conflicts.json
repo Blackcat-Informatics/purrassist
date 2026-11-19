@@ -1,0 +1,82 @@
+{
+  "crates/toolgraph/README.md": [
+    {
+      "mode": "100644",
+      "oid": "d5678ada962a18a011734d0d12bc4442e4928f68",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "9b5b4143d05010c6825bd490ac5126ee152e751f",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "1872d1dcf3723619cf21a0eb60dabebc0441cf61",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "crates/toolgraph/src/graph/load.rs": [
+    {
+      "mode": "100644",
+      "oid": "dedaf3f21099a79c2308413e8f1c204863aa510a",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "919cb95284e45392012819b874163f1abb287448",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "bd9bd720ff43599fcee5b7a157e7a5f7fb59b68f",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ],
+  "crates/toolgraph/src/graph/load/classification.rs": [
+    {
+      "mode": "100644",
+      "oid": "b77f90dc35bbcf1fa3c7d332daf8b2972473b9a6",
+      "stage": 1,
+      "content": "inputs/2-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "9eea7eaed4bd10737dc01f00ff0fd5de740e8a01",
+      "stage": 2,
+      "content": "inputs/2-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "2560d69c878b2f7729b64abdbf403f9898cdfe52",
+      "stage": 3,
+      "content": "inputs/2-3.bin"
+    }
+  ],
+  "docs/tool-graph/TOOLS.md": [
+    {
+      "mode": "100644",
+      "oid": "e8e3f49605931773a993a8b314a663cdb204831d",
+      "stage": 1,
+      "content": "inputs/3-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "a41eab0aa3821144c4f5edf331cee8ad3c760212",
+      "stage": 2,
+      "content": "inputs/3-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "a8918b6a4af2630d9b43aecf699758242b1c7d7a",
+      "stage": 3,
+      "content": "inputs/3-3.bin"
+    }
+  ]
+}

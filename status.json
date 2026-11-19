@@ -1,0 +1,111 @@
+{
+  "issue": 270,
+  "pr_number": 273,
+  "branch": "paudley/270-govern-typed-rdf-tool-construction-and",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and",
+  "observed_at": "2026-11-19T19:43:26.079708+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "next_actions": [],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "598a22561371e6097496016f7b23c401cc6998ea",
+    "headRefName": "paudley/270-govern-typed-rdf-tool-construction-and",
+    "headRefOid": "8abdcfbdbca669b88156b952f832b787ad4fbcd5",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 273,
+    "state": "OPEN",
+    "title": "Govern typed RDF tool construction and ownership",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/273"
+  },
+  "checks": {
+    "state": "pass",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522879",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522702",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522910",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522930",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522731",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522454",
+        "name": "fuzz",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522928",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44588128259/job/135786522992",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "8abdcfbdbca669b88156b952f832b787ad4fbcd5",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "8abdcfbdbca669b88156b952f832b787ad4fbcd5",
+    "branch": "paudley/270-govern-typed-rdf-tool-construction-and",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 273,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #273 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and",
+  "branch": "paudley/270-govern-typed-rdf-tool-construction-and",
+  "base_ref": "origin/paudley/269-govern-rdf-loader-vocabulary-property",
+  "head": "2c1a1299fc9abf654549d67ee46bee5345cbd363",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/sync/20261119T181132-d7e2ce7a631044d291d989819c452173",
+  "conflicts": [
+    "crates/toolgraph/README.md",
+    "crates/toolgraph/src/graph/load.rs",
+    "crates/toolgraph/src/graph/load/classification.rs",
+    "docs/tool-graph/TOOLS.md"
+  ],
+  "status": "completed",
+  "base": "73c1b74ac260645ce764387858ee079cd2cd46f0",
+  "merge_bases": [
+    "caa38560cedc170712911609c4736980c63bc002"
+  ],
+  "merge_index": "0bfc3e3e55ae1dcc2021e6a558291afe48d0b14692984468b6bf2d852cd6cb80",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/toolgraph/README.md'\nRecorded preimage for 'crates/toolgraph/src/graph/load.rs'\nRecorded preimage for 'crates/toolgraph/src/graph/load/classification.rs'\nRecorded preimage for 'docs/tool-graph/TOOLS.md'\n",
+  "candidate_tree": "a6936d5a642b2d30d68baf37bfd66c00bb811b89",
+  "candidate_patch": "candidate-6cb030f3d09044e5b5fbd59264daf42d.patch",
+  "stdout_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stdout.log",
+  "stderr_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 2.0145964960029232,
+  "commit": "ece2733981e928d6d85329efbb37f62870e034c9",
+  "tree": "a6936d5a642b2d30d68baf37bfd66c00bb811b89",
+  "exit_code": 0
+}

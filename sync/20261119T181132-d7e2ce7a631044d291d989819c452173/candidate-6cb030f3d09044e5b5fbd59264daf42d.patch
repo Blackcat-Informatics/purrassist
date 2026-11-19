@@ -1,0 +1,613 @@
+diff --git crates/toolgraph/README.md crates/toolgraph/README.md
+index 9b5b4143..6bef6771 100644
+--- crates/toolgraph/README.md
++++ crates/toolgraph/README.md
+@@ -25,7 +25,8 @@ subject and predicate. `outputProjectionJq` must be a field mask or the load
+ fails with `LoadError::UnsupportedProjection`. The load runs through the governed
+ `PurRDF` entry points (`parse_dataset_controlled`, `from_dataset_with_control`):
+ the caller's `Governor` bounds parsing, catalog construction, and vocabulary
+-property validation and typed construction. Both stages use admitted native RDF rows.
++property validation and typed construction. Both stages use admitted native
++RDF rows.
+ Statement-level refusals carry the exact `SourceExtent` when they identify a
+ specific statement. The loader charges one work unit per 64 native units.
+ Use `Governor::usage()` to inspect charged work and peak scratch for a
+@@ -34,8 +35,9 @@ the caller's budget.
+ 
+ Temporary typed-construction indexes refund their scratch storage when loading
+ finishes. The loaded graph retains its typed storage reservation until drop.
+-The published RDF dataset copy allocates outside the scratch account. See `docs/tool-graph/TOOLS.md` for the differences between
+-the Rust shape table and SHACL. Full SHACL admission remains #33 work.
++The published RDF dataset copy allocates outside the scratch account. See
++`docs/tool-graph/TOOLS.md` for the differences between the Rust shape table
++and SHACL. Full SHACL admission remains #33 work.
+ Authorization and execution remain specified in
+ the repository's tool-graph documents; this crate does not yet provide them.
+ `ToolGraph::tool_set` is implemented: it builds the core `ToolSet` through the governed MCP adapter.
+diff --git crates/toolgraph/src/graph.rs crates/toolgraph/src/graph.rs
+index d741067e..a106162e 100644
+--- crates/toolgraph/src/graph.rs
++++ crates/toolgraph/src/graph.rs
+@@ -20,8 +20,9 @@
+ //! Each native account admits its live storage
+ //! through the scratch meter and polls cancellation on every native step.
+ //! It charges one work unit per 64 native units, carrying the remainder
+-//! across charges. The loader also charges work per statement and validated
+-//! property. The temporary dataset stays charged through catalog reading.
++//! across charges. Vocabulary validation scans the existing subject rows in
++//! place and charges for row visits, predicate comparisons, and variable-length
++//! lexical checks. The temporary dataset stays charged through catalog reading.
+ //! The rows and classification tables stay charged through validation and typing.
+ //! Typed construction reads those classified native identities. Temporary
+ //! indexes and profile traversal frames release their reservations at the end
+diff --git crates/toolgraph/src/graph/load.rs crates/toolgraph/src/graph/load.rs
+index 919cb952..426269e5 100644
+--- crates/toolgraph/src/graph/load.rs
++++ crates/toolgraph/src/graph/load.rs
+@@ -14,7 +14,7 @@ use std::convert::Infallible;
+ 
+ use purrassist_core::{
+     Governor, StopReason,
+-    contract::{Resource, ScratchLease},
++    contract::{Resource, ScratchLease, saturating_size},
+     output::FieldMask,
+ };
+ use purrdf_core::{
+@@ -40,7 +40,7 @@ use crate::{
+     CallableBinding, ContextManagement, LoadingStrategy, OutputByteLimit, ResourceLimits,
+     Vocabulary, codec::mcp::ExecutionMode,
+ };
+-use classification::Nodes;
++use classification::{Nodes, RoleNode};
+ use control::{ControlledStorage, Shared, Storage, Work};
+ use profile::{BuildStorage, Profiles, matches_predicate};
+ use roles::{Kind, Role, Spec};
+@@ -200,7 +200,7 @@ where
+         doc.scan_vocabulary(view, source, &mut governor.borrow_mut())?;
+         doc.with_classification(&locations, governor, |nodes| {
+             doc.own_every_row(nodes, view, source, &mut governor.borrow_mut())?;
+-            doc.validate_nodes(nodes, view, source, &mut governor.borrow_mut())?;
++            doc.validate_nodes(nodes, &locations, governor)?;
+             let catalog = doc.read_catalog(nodes, view, source, governor)?;
+             let tools = doc.build_tools(nodes, catalog.as_ref(), &locations, governor)?;
+             Ok((tools, catalog))
+@@ -430,26 +430,6 @@ impl<'v> Doc<'v> {
+         iri.starts_with(self.namespace)
+     }
+ 
+-    fn rows_of<'a>(&'a self, subject: &TermValue) -> impl Iterator<Item = &'a Row> + 'a {
+-        let start = self
+-            .by_subject
+-            .partition_point(|&row| self.rows[row].s < *subject);
+-        let matching = &self.by_subject[start..];
+-        let length = matching.partition_point(|&row| self.rows[row].s == *subject);
+-        matching[..length].iter().map(|&row| &self.rows[row])
+-    }
+-
+-    fn objects<'a>(&'a self, subject: &TermValue, predicate: &str) -> Vec<&'a TermValue> {
+-        self.rows_of(subject)
+-            .filter(|row| row.p == predicate)
+-            .map(|row| &row.o)
+-            .collect()
+-    }
+-
+-    fn objects_of(&self, subject: &TermValue, name: &'static str) -> Vec<&TermValue> {
+-        self.objects(subject, self.term(name))
+-    }
+-
+     /// Refuse every caller-namespace term the vocabulary does not bind.
+     fn scan_vocabulary<V: DatasetView<Id = TermId>>(
+         &self,
+@@ -702,27 +682,18 @@ fn boolean(value: &TermValue) -> bool {
+ 
+ impl Doc<'_> {
+     /// The concrete roles of a node: its recognised bits, with rule markers resolved.
+-    fn concrete(&self, node: &TermValue, mask: u16) -> Result<u16, LoadError> {
+-        self.resolve_concrete(node, mask, || {
+-            self.rows_of(node)
+-                .filter_map(|row| self.bound(&row.p))
+-                .map(|name| Role::domain(name) & Role::RULES)
+-                .filter(|domain| *domain != Role::RULES)
+-                .fold(0, |all, domain| all | domain)
+-        })
+-    }
+-
+     fn resolve_concrete(
+         &self,
+         node: &TermValue,
+         mask: u16,
+-        inferred: impl FnOnce() -> u16,
++        rule_domain: impl FnOnce() -> u16,
+     ) -> Result<u16, LoadError> {
+         let mut mask = mask & !Role::SHAPE;
+         if mask & Role::RULE_ANY != 0 {
+             let concrete = mask & Role::RULES;
+             let concrete = if concrete == 0 || concrete == Role::RULES {
+-                inferred()
++                // A predicate specific to a rule can supply an omitted class.
++                rule_domain()
+             } else {
+                 concrete
+             };
+@@ -777,35 +748,36 @@ impl Doc<'_> {
+     fn validate_nodes<V: DatasetView<Id = TermId>>(
+         &self,
+         nodes: &Nodes<'_>,
+-        view: &V,
+-        source: &BorrowedSource<'_>,
+-        governor: &mut Governor,
++        locations: &Locations<'_, V>,
++        governor: &Shared<'_>,
+     ) -> Result<(), LoadError> {
+-        for (node, mask) in nodes.roles() {
+-            let node = node.term;
+-            let mask = self.concrete(node, mask)?;
+-            if mask == 0 {
+-                // A node with no concrete role (a bare argument/result shape, or one
+-                // typed only as the abstract `Node` class) has no property table, so
+-                // a vocabulary statement on it would be validated by nothing.
+-                for row in self.rows_of(node) {
+-                    work(governor, 1)?;
+-                    let vocabulary_class = row.p == RDF_TYPE
+-                        && iri_of(&row.o).is_some_and(|iri| self.in_namespace(iri));
+-                    if self.in_namespace(&row.p) || vocabulary_class {
+-                        return Err(unowned_row(row, view, source, governor)?);
++        let mut progress = Work::new(governor);
++        for classified in nodes.roles() {
++            let node = classified.identity.term;
++            let mask = self.resolve_concrete(node, classified.mask, || classified.rule_domain)?;
++            for &index in classified.rows {
++                let row = &self.rows[index];
++                work(&mut governor.borrow_mut(), 1)?;
++                if mask == 0 {
++                    // An abstract role or bare shape has no property table.
++                    let vocabulary_class = match (row.p.as_str(), iri_of(&row.o)) {
++                        (RDF_TYPE, Some(iri)) => self.has_namespace(iri, &mut progress)?,
++                        _ => false,
++                    };
++                    if vocabulary_class || self.has_namespace(&row.p, &mut progress)? {
++                        return Err(unowned_row(
++                            row,
++                            locations.view,
++                            locations.source,
++                            &mut governor.borrow_mut(),
++                        )?);
+                     }
+-                }
+-                continue;
+-            }
+-            // A predicate whose domain excludes every role of its subject.
+-            for row in self.rows_of(node) {
+-                work(governor, 1)?;
+-                if let Some(name) = self.bound(&row.p)
+-                    && Role::domain(name) & mask == 0
++                } else if let Some(name) = self.find_bound(|key| {
++                    compare_bytes(key.as_bytes(), row.p.as_bytes(), &mut progress).map_err(stop)
++                })? && Role::domain(name) & mask == 0
+                 {
+                     let at =
+-                        control::default_row_extent(view, source, node, &row.p, &row.o, governor)?;
++                        locations.statement(node, &row.p, &row.o, &mut governor.borrow_mut())?;
+                     return Err(Self::wrap(
+                         Role::first(mask),
+                         node,
+@@ -818,68 +790,125 @@ impl Doc<'_> {
+                 }
+             }
+             for role in Role::bits(mask) {
+-                for spec in Spec::table(role) {
+-                    work(governor, 1)?;
+-                    let predicate = self.term(spec.name);
+-                    let values = self.objects(node, predicate);
+-                    let found = values.len();
+-                    if found < usize::from(spec.min) {
+-                        return Err(Self::wrap(role, node, predicate, Violation::Missing, None));
+-                    }
+-                    if found > usize::from(spec.max) {
+-                        return Err(Self::wrap(
+-                            role,
+-                            node,
+-                            predicate,
+-                            Violation::TooMany { found },
+-                            None,
+-                        ));
+-                    }
+-                    for value in values {
+-                        if let Err(violation) = check_value(spec.kind, value) {
+-                            let at = control::default_row_extent(
+-                                view, source, node, predicate, value, governor,
+-                            )?;
+-                            return Err(Self::wrap(role, node, predicate, violation, at));
+-                        }
+-                    }
+-                }
+-                if role == Role::NETWORK {
+-                    let has = |name| !self.objects_of(node, name).is_empty();
+-                    if has("socketType") == has("protocol") {
+-                        return Err(Self::wrap(
+-                            role,
+-                            node,
+-                            self.term("protocol"),
+-                            Violation::Exclusive,
+-                            None,
+-                        ));
+-                    }
+-                }
+-                if role == Role::MOUNT
+-                    && let Some(value) = self
+-                        .objects_of(node, "deny")
+-                        .into_iter()
+-                        .find(|value| !boolean(value))
+-                {
+-                    let predicate = self.term("deny");
+-                    let at = control::default_row_extent(
+-                        view, source, node, predicate, value, governor,
+-                    )?;
+-                    return Err(Self::wrap(
+-                        role,
+-                        node,
+-                        predicate,
+-                        Violation::OutOfRange {
+-                            expected: "true: a mount rule is always a denial",
+-                        },
+-                        at,
+-                    ));
+-                }
++                self.validate_role(classified, role, locations, governor, &mut progress)?;
+             }
+         }
+         Ok(())
+     }
++
++    fn validate_role<V: DatasetView<Id = TermId>>(
++        &self,
++        node: RoleNode<'_>,
++        role: u16,
++        locations: &Locations<'_, V>,
++        governor: &Shared<'_>,
++        progress: &mut Work<'_, '_>,
++    ) -> Result<(), LoadError> {
++        let mut socket_type = false;
++        let mut protocol = false;
++        let mut mount_allow = None;
++        for spec in Spec::table(role) {
++            work(&mut governor.borrow_mut(), 1)?;
++            let predicate = self.term(spec.name);
++            let mut found = 0;
++            for &index in node.rows {
++                if matches_predicate(&self.rows[index], predicate, progress)? {
++                    found += 1;
++                }
++            }
++            let cardinality = if found < usize::from(spec.min) {
++                Some(Violation::Missing)
++            } else if found > usize::from(spec.max) {
++                Some(Violation::TooMany { found })
++            } else {
++                None
++            };
++            if let Some(violation) = cardinality {
++                return Err(Self::wrap(
++                    role,
++                    node.identity.term,
++                    predicate,
++                    violation,
++                    None,
++                ));
++            }
++            if found == 0 {
++                continue;
++            }
++            if role == Role::NETWORK {
++                socket_type |= spec.name == "socketType";
++                protocol |= spec.name == "protocol";
++            }
++            for &index in node.rows {
++                let row = &self.rows[index];
++                if !matches_predicate(row, predicate, progress)? {
++                    continue;
++                }
++                let value = &row.o;
++                if matches!(spec.kind, Kind::Name | Kind::Positive | Kind::NonNegative) {
++                    progress
++                        .charge(saturating_size(lexical_str(value).len()))
++                        .map_err(stop)?;
++                }
++                if let Err(violation) = check_value(spec.kind, value) {
++                    let at = locations.statement(
++                        node.identity.term,
++                        predicate,
++                        value,
++                        &mut governor.borrow_mut(),
++                    )?;
++                    return Err(Self::wrap(
++                        role,
++                        node.identity.term,
++                        predicate,
++                        violation,
++                        at,
++                    ));
++                }
++                if role == Role::MOUNT && spec.name == "deny" && !boolean(value) {
++                    mount_allow = Some(value);
++                }
++            }
++        }
++        if role == Role::NETWORK && socket_type == protocol {
++            return Err(Self::wrap(
++                role,
++                node.identity.term,
++                self.term("protocol"),
++                Violation::Exclusive,
++                None,
++            ));
++        }
++        if let Some(value) = mount_allow {
++            let predicate = self.term("deny");
++            let at = locations.statement(
++                node.identity.term,
++                predicate,
++                value,
++                &mut governor.borrow_mut(),
++            )?;
++            return Err(Self::wrap(
++                role,
++                node.identity.term,
++                predicate,
++                Violation::OutOfRange {
++                    expected: "true: a mount rule is always a denial",
++                },
++                at,
++            ));
++        }
++        Ok(())
++    }
++
++    fn has_namespace(&self, iri: &str, progress: &mut Work<'_, '_>) -> Result<bool, LoadError> {
++        let namespace = self.namespace.as_bytes();
++        let Some(prefix) = iri.as_bytes().get(..namespace.len()) else {
++            return Ok(false);
++        };
++        compare_bytes(namespace, prefix, progress)
++            .map(std::cmp::Ordering::is_eq)
++            .map_err(stop)
++    }
+ }
+ 
+ impl Doc<'_> {
+@@ -1044,9 +1073,10 @@ impl Doc<'_> {
+         let mut scratch = BuildStorage::new(&mut scratch, governor, rejection);
+         let mut progress = Work::new(governor);
+         let mut iris = Vec::new();
+-        for (node, role) in nodes.roles() {
++        for role in nodes.roles() {
++            let node = role.identity;
+             scratch.charge(1)?;
+-            if role & Role::TOOL != 0
++            if role.mask & Role::TOOL != 0
+                 && let Some(iri) = iri_of(node.term)
+             {
+                 scratch.push(&mut iris, iri)?;
+@@ -1072,9 +1102,10 @@ impl Doc<'_> {
+         };
+         let mut storage = BuildStorage::new(&mut retained.storage, governor, rejection);
+         let mut seen_names = OrderedTable::default();
+-        for (node, role) in nodes.roles() {
++        for role in nodes.roles() {
++            let node = role.identity;
+             storage.charge(1)?;
+-            if role & Role::TOOL == 0 {
++            if role.mask & Role::TOOL == 0 {
+                 continue;
+             }
+             let Some(catalog) = catalog else {
+@@ -1927,6 +1958,59 @@ mod tests {
+         .unwrap();
+     }
+ 
++    /// The vocabulary validator must refuse an exhausted scan even after the
++    /// parser and classifier have admitted a complete context.
++    #[test]
++    fn vocabulary_property_scans_obey_the_work_limit() {
++        let vocabulary = fixture_vocabulary();
++        let mut fixture = Governor::new(Budget::default());
++        let source_owner = RefCell::new(&mut fixture);
++        let parsed = control::parse(
++            br#"@prefix pa: <urn:toolgraph:> .
++                <urn:context> a pa:Context ;
++                    pa:outputProjectionJq ".result" ;
++                    pa:maxOutputBytes 256 ;
++                    pa:historyRetentionTurns 1 ;
++                    pa:intentTags "a", "b", "c" ;
++                    pa:loadingStrategy "always" ."#,
++            NativeRdfFormat::Turtle,
++            None,
++            &source_owner,
++        )
++        .unwrap();
++        let view = parsed.dataset().unwrap();
++        let source = parsed.source();
++        let locations = Locations {
++            view: &view,
++            source: &source,
++        };
++        with_doc(&view, &source, &vocabulary, &source_owner, |doc| {
++            doc.with_classification(&locations, &source_owner, |nodes| {
++                // This budget covers the eight rows and five checks, but it
++                // cannot also cover the property scans.
++                let mut tight = Governor::new(Budget {
++                    work: 16,
++                    ..Budget::default()
++                });
++                assert_eq!(
++                    doc.validate_nodes(nodes, &locations, &RefCell::new(&mut tight)),
++                    Err(LoadError::Exhausted(StopReason::BudgetExceeded(
++                        Resource::Work
++                    )))
++                );
++
++                let mut ample = Governor::new(Budget::default());
++                doc.validate_nodes(nodes, &locations, &RefCell::new(&mut ample))?;
++                let mut exact = Governor::new(Budget {
++                    work: ample.usage().work,
++                    ..Budget::default()
++                });
++                doc.validate_nodes(nodes, &locations, &RefCell::new(&mut exact))
++            })
++        })
++        .unwrap();
++    }
++
+     #[test]
+     fn temporary_fno_storage_is_scoped_to_the_reader_and_refunds_on_refusal() {
+         let vocabulary = fixture_vocabulary();
+diff --git crates/toolgraph/src/graph/load/classification.rs crates/toolgraph/src/graph/load/classification.rs
+index 9eea7eae..fc7e82fc 100644
+--- crates/toolgraph/src/graph/load/classification.rs
++++ crates/toolgraph/src/graph/load/classification.rs
+@@ -29,6 +29,7 @@ struct NodeState<'doc> {
+     term: Option<&'doc TermValue>,
+     declared: Option<u16>,
+     inferred: Option<u16>,
++    rule_domain: u16,
+     membership: u8,
+ }
+ 
+@@ -41,6 +42,7 @@ impl<'doc> NodeState<'doc> {
+     fn infer(&mut self, term: &'doc TermValue, role: u16) {
+         self.term = Some(term);
+         *self.inferred.get_or_insert(0) |= role;
++        self.rule_domain |= Role::specific_rule_domain(role);
+     }
+ 
+     fn role(&self) -> Option<u16> {
+@@ -49,10 +51,18 @@ impl<'doc> NodeState<'doc> {
+     }
+ }
+ 
++#[derive(Clone, Copy)]
++pub(super) struct RoleNode<'doc> {
++    pub(super) identity: Node<'doc>,
++    pub(super) mask: u16,
++    pub(super) rule_domain: u16,
++    pub(super) rows: &'doc [usize],
++}
++
+ /// Classifications stay in the same admitted account through every consumer.
+ pub(super) struct Nodes<'doc> {
+     by_id: Vec<NodeState<'doc>>,
+-    roles: Vec<(Node<'doc>, u16)>,
++    roles: Vec<RoleNode<'doc>>,
+     pub(super) has_fno: bool,
+ }
+ 
+@@ -63,7 +73,7 @@ impl<'doc> Nodes<'doc> {
+         })
+     }
+ 
+-    pub(super) fn roles(&self) -> impl Iterator<Item = (Node<'doc>, u16)> + '_ {
++    pub(super) fn roles(&self) -> impl Iterator<Item = RoleNode<'doc>> + '_ {
+         self.roles.iter().copied()
+     }
+ 
+@@ -318,15 +328,24 @@ fn collect_roles<S: Admission>(
+             let index = u32::try_from(index).expect("index fits in a retained term table");
+             let id = TermId::from_index(index).expect("index addresses a retained term");
+             memory
+-                .push(&mut nodes.roles, (Node { id, term }, role))
++                .push(
++                    &mut nodes.roles,
++                    RoleNode {
++                        identity: Node { id, term },
++                        mask: role,
++                        rule_domain: node.rule_domain,
++                        rows: node.rows,
++                    },
++                )
+                 .map_err(&storage_error)?;
+         }
+     }
+     // Native term IDs follow acquisition order. Diagnostics use RDF value order.
+     let mut progress = Work::new(governor);
+-    try_sort_unstable_by(&mut nodes.roles, |(left, _), (right, _)| {
+-        left.term
+-            .try_cmp_with_control(right.term, memory, &mut |units| {
++    try_sort_unstable_by(&mut nodes.roles, |left, right| {
++        left.identity
++            .term
++            .try_cmp_with_control(right.identity.term, memory, &mut |units| {
+                 progress.charge(units).map_err(stop)
+             })
+             .map_err(|failure| match failure {
+diff --git crates/toolgraph/src/graph/load/roles.rs crates/toolgraph/src/graph/load/roles.rs
+index 519a5ed3..341ddbd5 100644
+--- crates/toolgraph/src/graph/load/roles.rs
++++ crates/toolgraph/src/graph/load/roles.rs
+@@ -311,6 +311,12 @@ impl Role {
+         }
+     }
+ 
++    /// Rule classes distinguished by this predicate rather than shared by all rules.
++    pub(super) const fn specific_rule_domain(domain: u16) -> u16 {
++        let rules = domain & Self::RULES;
++        if rules == Self::RULES { 0 } else { rules }
++    }
++
+     /// The lowest set role bit.
+     pub(super) const fn first(mask: u16) -> u16 {
+         mask.isolate_lowest_one()
+diff --git crates/toolgraph/tests/graph_load.rs crates/toolgraph/tests/graph_load.rs
+index a965faf5..a750539e 100644
+--- crates/toolgraph/tests/graph_load.rs
++++ crates/toolgraph/tests/graph_load.rs
+@@ -451,6 +451,21 @@ fn an_invalid_execution_profile_is_refused() {
+     assert!(matches!(violation, Violation::OutOfRange { .. }));
+     assert_eq!(&source[at.start..at.end], written);
+ 
++    // Multiplicity is reported before checking either value's kind.
++    let duplicate = load(&edited(
++        r#"pa:confinementMode "change_hat""#,
++        r#"pa:confinementMode 42, "change_hat""#,
++    ))
++    .expect_err("a single-valued field has two values");
++    assert!(matches!(
++        duplicate,
++        LoadError::InvalidExecutionProfile {
++            violation: Violation::TooMany { found: 2 },
++            at: None,
++            ..
++        }
++    ));
++
+     let written = "pa:deny false";
+     let source = edited(
+         r#"pa:mountOperation "mount" ; pa:deny true"#,
+diff --git docs/tool-graph/TOOLS.md docs/tool-graph/TOOLS.md
+index a41eab0a..664cadca 100644
+--- docs/tool-graph/TOOLS.md
++++ docs/tool-graph/TOOLS.md
+@@ -21,8 +21,10 @@ catalog is built with `FnoCatalog::from_dataset_with_control`. The parser,
+ owned statement rows and lookup indexes, temporary FnO dataset builder, and
+ catalog reader charge live storage to the caller's scratch meter. They poll
+ cancellation on native steps and charge one work unit per 64 native units,
+-carrying the remainder across charges. Statement rows and indexes remain
+-charged through validation and typing. The temporary dataset remains charged
++carrying the remainder across charges. Vocabulary validation uses the admitted
++subject rows directly. It charges for row visits, predicate comparisons, and
++variable-length lexical checks. Statement rows and indexes remain charged
++through validation and typing. The temporary dataset remains charged
+ through catalog construction. The catalog keeps its own charge.
+ 
+ An exhausted work or scratch budget is `LoadError::Exhausted`.
+@@ -41,8 +43,9 @@ predicate on the wrong role and a value of the wrong kind or range. Refusals
+ that identify only a node name the subject and predicate where available.
+ Other media types than Turtle and TriG are refused as `LoadError::Parse`
+ because purrdf governs and retains occurrences for those two alone; the refusal
+-code is `unsupported-format` for every such media type. The owned `RdfDataset` copy returned by `ToolGraph::dataset` allocates outside
+-the scratch account.
++code is `unsupported-format` for every such media type. The owned `RdfDataset`
++copy returned by `ToolGraph::dataset` allocates outside the scratch account.
++
+ Typed tool construction uses the classified RDF identities and admits the
+ temporary path and tool indexes, profile traversal, field masks, and retained
+ typed values against the caller's budget. Temporary storage is refunded when

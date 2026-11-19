@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and",
+  "branch": "paudley/270-govern-typed-rdf-tool-construction-and",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "ece2733981e928d6d85329efbb37f62870e034c9",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/270-govern-typed-rdf-tool-construction-and/.stage/govern-typed-rdf-tool-construction-and/sync/20261119T182745-7757927f969e475d977809c21a695a3f",
+  "conflicts": [],
+  "status": "completed",
+  "base": "598a22561371e6097496016f7b23c401cc6998ea",
+  "merge_bases": [
+    "73c1b74ac260645ce764387858ee079cd2cd46f0",
+    "943d18cd1b02c880e0debc96cce9dd169516e1a8"
+  ],
+  "merge_index": "d619e2956399d7461275c857c615e90b107aac47c7dc60e264a6760627fb5032",
+  "candidate_tree": "a6936d5a642b2d30d68baf37bfd66c00bb811b89",
+  "candidate_patch": "candidate-baae69a125524e289935174ac2d12c7f.patch",
+  "stdout_log": "commit-baae69a125524e289935174ac2d12c7f.stdout.log",
+  "stderr_log": "commit-baae69a125524e289935174ac2d12c7f.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 14.128227398992749,
+  "commit": "8abdcfbdbca669b88156b952f832b787ad4fbcd5",
+  "tree": "a6936d5a642b2d30d68baf37bfd66c00bb811b89",
+  "exit_code": 0
+}

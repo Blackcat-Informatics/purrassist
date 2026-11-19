@@ -1,0 +1,7 @@
+{"time": "2026-11-19T18:11:32.149970+00:00", "status": "started"}
+{"time": "2026-11-19T18:11:35.554235+00:00", "status": "merging"}
+{"time": "2026-11-19T18:11:36.628217+00:00", "status": "conflicted"}
+{"time": "2026-11-19T18:11:36.642915+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'crates/toolgraph/README.md'\nRecorded preimage for 'crates/toolgraph/src/graph/load.rs'\nRecorded preimage for 'crates/toolgraph/src/graph/load/classification.rs'\nRecorded preimage for 'docs/tool-graph/TOOLS.md'\n"}
+{"time": "2026-11-19T18:13:12.299943+00:00", "status": "committing", "candidate_tree": "a6936d5a642b2d30d68baf37bfd66c00bb811b89", "candidate_patch": "candidate-6cb030f3d09044e5b5fbd59264daf42d.patch", "stdout_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stdout.log", "stderr_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stderr.log", "validation_records": []}
+{"time": "2026-11-19T18:13:14.324490+00:00", "status": "commit_returned", "exit_code": 0, "commit_duration_seconds": 2.0145964960029232, "stdout_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stdout.log", "stderr_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stderr.log"}
+{"time": "2026-11-19T18:13:14.363398+00:00", "status": "completed", "commit": "ece2733981e928d6d85329efbb37f62870e034c9", "tree": "a6936d5a642b2d30d68baf37bfd66c00bb811b89", "exit_code": 0, "stdout_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stdout.log", "stderr_log": "commit-6cb030f3d09044e5b5fbd59264daf42d.stderr.log"}
