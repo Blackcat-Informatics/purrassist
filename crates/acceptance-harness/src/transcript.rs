@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Single-source acceptance transcript shared through the harness Cargo library.
-//! Native, WASI and browser-WASM callers exercise the actual core engines.
+//! The native transcript exercises the actual core engines.
 mod provider_logs;
 
 use purrassist_core::{
@@ -28,7 +28,7 @@ use purrassist_core::{
 /// Build the exact JSON transcript exercised by every portable target.
 ///
 /// ```
-/// let json = wasm_harness::transcript_json();
+/// let json = acceptance_harness::transcript_json();
 /// // The transcript holds a turn per built-in dialect, beyond the default
 /// // parse budget: size the work to its length.
 /// let budget = purrassist_core::Budget {

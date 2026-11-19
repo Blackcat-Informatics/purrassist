@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! Deterministic native/WASI acceptance transcript replaying the fixed
+//! Deterministic native acceptance transcript replaying the fixed
 //! provider wire-format transcripts through [`Pending`], one governor per
 //! transcript, with no network, socket, or credential access of any kind.
 //!

@@ -512,7 +512,7 @@ PurRAssist recovers intent from imperfect AI output and requests. Every result
 combines its answer with evidence, provenance, losses, and explicit inferences.
 The governing requirements are in `.goals`. Maximal utility, performance, and
 portability apply together. Native execution uses native capabilities while
-computational engines remain wasmable.
+computational engines remain independent of platform services.
 
 ## Schema recovery complexity
 
@@ -598,8 +598,7 @@ counts of 12/24/48, and explicit Work refusal retaining the original input.
   and the shared batch Rust host, CLI and MCP operation read Anthropic
   Messages and OpenAI chat-completions event logs. Batch results preserve the
   admitted event log and transport faults alongside reconstructed-message
-  recovery. Provider-log fixture provenance, fuzz seeds, and WASM parity
-  remain tracked under #17.
+  recovery. Provider-log replay uses registered fixtures and fixed fuzz seeds.
   See `tool-calls/README.md`.
 - Rust facade, CLI, and stdio MCP server using the same operations.
 - Standard helper-provider adapters and caller-managed endpoints. No model is
@@ -950,8 +949,7 @@ Core operations are synchronous and resumable around supplied helper responses.
 - `purrassist-host`: filesystem and helper integration behind both the CLI and
   the MCP server.
 - `purrassist-cli`: executable and stdio MCP server.
-- `wasm-harness`: internal, unpublished native, WASI and browser-WASM core
-  acceptance transcript harness.
+- `acceptance-harness`: internal, unpublished native core acceptance transcript harness.
 - `purrassist-helper-census`: internal, unpublished structural duplicate
   functionality census and helper ledger checks.
 - `purrassist-toolgraph`: internal, unpublished pure vocabulary/loss-profile constructors
@@ -959,8 +957,7 @@ Core operations are synchronous and resumable around supplied helper responses.
   parsing and exact output byte-limit enforcement, plus governed AppArmor glob
   words, all-or-nothing graph loading into typed tools (#191) and the MCP Extended
   manifest encoder and decoder with a source-preserving loss ledger (#196). `ToolGraph::tool_set`
-  is implemented (#198). Wasm-harness wiring, host integration, authorization and
-  execution remain planned. The direct
+  is implemented (#198). Host integration, authorization and execution remain planned. The direct
   `plain_tool_schemas` consumer adopts upstream plain FnO schema compilation and
   validates exact worked schemas with the core engine (#70). G7's numeric
   prerequisite (#43) adopts exact decimals, finite IEEE carriers, registered
@@ -990,7 +987,7 @@ Every stage remains required. A passing subset does not qualify the release.
 Run official JSON Schema and CommonMark/GFM suites, independent syntax oracles,
 composed-recovery goldens, Unicode/path/phonetic ambiguity tests, crash/stale/
 retry/undo tests, preservation/replay/ledger properties, bounded fuzzing, and
-executed native/WASM comparisons with fixed helper transcripts. Measure quality,
+native acceptance and fixed helper transcripts. Measure quality,
 incorrect correction, latency, allocation and build cost.
 
 Tool-call recovery additionally requires: canonical anchor fixtures for every
@@ -1001,8 +998,7 @@ deterministic result digest independent of tool and dialect order; the
 published cost bound checked on 1 MiB arguments; a correction evaluation with
 zero incorrect automatic answers and full abstention recall; the registry and
 its published table in agreement (`tool-calls/RULES.md`); a coverage-guided
-`tool-call` fuzz target; and the tool-call transcript in the native/WASM
-comparison. `tool-calls/INTEGRATION.md` maps each integrator guarantee to its
+`tool-call` fuzz target; and the native tool-call acceptance transcript. `tool-calls/INTEGRATION.md` maps each integrator guarantee to its
 test.
 
 `make check` runs formatting, lint, optimized build/test, Rustdoc, and repository

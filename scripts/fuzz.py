@@ -1089,7 +1089,7 @@ TOOL_CALL_REF_TOKENS = TOOL_CALL_TOKENS + [
     b'[{', b'}]', b'{"name":',
 ]
 
-PROVIDER_LOG_FIXTURES = ROOT / 'crates/wasm-harness/src/provider_logs'
+PROVIDER_LOG_FIXTURES = ROOT / 'crates/acceptance-harness/src/provider_logs'
 ANTHROPIC_LOG = (PROVIDER_LOG_FIXTURES / 'anthropic-parallel-weather.sse').read_bytes()
 OPENAI_LOG = (PROVIDER_LOG_FIXTURES / 'openai-weather.sse').read_bytes()
 def _compact_chat_seed(log):

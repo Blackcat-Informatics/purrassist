@@ -24,25 +24,12 @@
     "version": "26.11.1",
     "license": "MIT",
     "source": "https://raw.githubusercontent.com/nodejs/node/v26.11.1/LICENSE",
-    "scope": "Installed Node.js runtime used to execute scripts/run-wasi.mjs (wasm32-wasip1 acceptance transcripts), scripts/run-wasm.mjs (wasm32-unknown-unknown acceptance transcript, no WASI), and scripts/fuzz.py's `pattern`-target differential oracle (`node -e`, comparing `Pattern::is_match` against `new RegExp(p, 'u').test(s)` restricted to the ECMA subset both implement). No Cargo dependency; not linked into any crate. The upstream LICENSE aggregates the licenses of bundled third-party components (V8, ICU, and others); none of that bundled source is vendored or shipped by this project.",
+    "scope": "Installed Node.js runtime used to execute scripts/fuzz.py's `pattern`-target differential oracle (`node -e`, comparing `Pattern::is_match` against `new RegExp(p, 'u').test(s)` restricted to the ECMA subset both implement). No Cargo dependency; not linked into any crate. The upstream LICENSE aggregates the licenses of bundled third-party components (V8, ICU, and others); none of that bundled source is vendored or shipped by this project.",
     "notices": {
       "vendor/licenses/node-26.11.1/LICENSE": "6b85ee1983d01fa2cdcdd5d1a3053c6221fae41d6a54e43b416bf35969fc4128"
     },
     "binary_source": "https://nodejs.org/dist/v26.11.1/node-v26.11.1-linux-x64.tar.xz",
     "binary_sha256": "3883bfc73f9a680ca4eab04b196068aaaab1373ffa77d8fc1a4408222495b651"
-  },
-  {
-    "name": "wasi-sdk",
-    "version": "34",
-    "license": "Apache-2.0 WITH LLVM-exception",
-    "source": "https://raw.githubusercontent.com/WebAssembly/wasi-sdk/wasi-sdk-34/LICENSE",
-    "notices": {
-      "vendor/licenses/wasi-sdk-34/LICENSE": "a6c48161a09acc75a0e25503bab66a731eb5fba5392ed4bb4743e4ba5085327a"
-    },
-    "upstream_notice_sha256": {
-      "vendor/licenses/wasi-sdk-34/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
-    },
-    "notice_normalization": "LF line endings; trailing horizontal whitespace and final blank lines removed. License text unchanged."
   },
   {
     "name": "typescript",

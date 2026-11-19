@@ -28,8 +28,8 @@ report does not create an acceptance baseline or suppress any finding.
 `helper-check` enforces the complete ledger and rejects unreviewed groups.
 Ledger validation reports current body/shim groups without silently accepting
 new findings. Strict `helper-check` is mandatory in `make check`. The shared
-core acceptance transcript belongs to the unpublished `wasm-harness` Cargo
-library. Its native/WASI example and browser export use the same function
+core acceptance transcript belongs to the unpublished `acceptance-harness` Cargo
+library. Its native example uses the transcript function
 through Cargo, with no cross-package source include and no dependency from
 the pure core to qualification tooling.
 

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-//! Identical native/WASI grammar acceptance and syntax repair transcript.
+//! Native grammar acceptance and syntax repair transcript.
 use purrassist_core::{
     Budget, Governor, Outcome,
     digest::Digest,

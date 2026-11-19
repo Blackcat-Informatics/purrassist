@@ -231,7 +231,7 @@ class WorkflowValidation(unittest.TestCase):
 
 
 INSTALL = 'rustup toolchain install'
-MEMBERS = ('core', 'derive', 'syntax', 'purrassist', 'host', 'cli', 'wasm-harness',
+MEMBERS = ('core', 'derive', 'syntax', 'purrassist', 'host', 'cli', 'acceptance-harness',
            'helper-census', 'toolgraph')
 TREE_FILES = ('Makefile', 'Cargo.toml', 'rust-toolchain.toml',
               *(f'crates/{member}/Cargo.toml' for member in MEMBERS), '.github/workflows/verify.yml',
@@ -683,7 +683,7 @@ class ToolchainPins(ScratchTree):
 
     def test_flags_before_the_name_pass(self):
         self.assertEqual(self.pins(f'{INSTALL} --profile minimal --component clippy,rustfmt 1.98.0'), ['1.98.0'])
-        self.assertEqual(self.pins(f'{INSTALL} -t wasm32-wasip1 --no-self-update --profile=minimal 1.98.0'),
+        self.assertEqual(self.pins(f'{INSTALL} -t aarch64-unknown-linux-gnu --no-self-update --profile=minimal 1.98.0'),
                          ['1.98.0'])
         self.add_step(f'{INSTALL} --profile minimal 1.98.0')
         CR.validate_toolchain_pins(self.root)

@@ -460,8 +460,7 @@ def package_fresh(workspace: Path, cargo_home: Path, target_dir: Path) -> Path:
     publishable set (mirroring `check-release.py`'s filter) rather than
     `--workspace`, since the latter also tries to package and verify-build
     `publish = false` tooling crates that are not part of the release this
-    script audits and may target an entirely different build (e.g.
-    `crates/wasm-harness`, `wasm32-unknown-unknown` only).
+    script audits (for example, `crates/acceptance-harness`).
 
     `--target-dir` is passed as a best-effort hint (some environments run
     `cargo` through a wrapper that silently strips `--target-dir` and

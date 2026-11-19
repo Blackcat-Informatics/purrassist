@@ -110,8 +110,6 @@ a small language ABI crate, and a streaming iterator; its C build brings `cc`,
 platform compiler discovery, and a JSON-driven generation toolchain. Exact
 versions, licenses, and upstream repositories are recorded in the inventory.
 No provider SDK, HTTP client, TLS stack, async runtime, or model runtime is linked.
-WASI syntax builds additionally require a WASI C sysroot; the pure core does not.
-Its build-only archive is pinned by SHA-256 in `vendor/wasi.json`.
 
 Independent syntax qualification uses the installed Python, Rust, and Node
 compilers, plus a TypeScript 5.9.3 compiler archive pinned by SHA-512. This adds
@@ -131,7 +129,7 @@ and verifies retained license notices, Unicode artifact/fixture hashes, and each
 crate's first-party license copies. It refuses any dependency in the core. No optional feature may conceal a core
 dependency. Development tools are separate from linked runtime dependencies:
 Rust/Cargo/Clippy/rustfmt, Python 3 for repository verification, and Node.js for
-executed WASI comparisons. None is invoked by the pure core.
+syntax and regular-expression oracles. None is invoked by the pure core.
 
 Official CommonMark 0.31.2 and GFM 0.29.0.gfm.13 examples are qualification-only
 fixtures under CC-BY-SA-4.0, separately attributed to John MacFarlane and the GFM
@@ -141,7 +139,7 @@ beside the examples. These test strings are not linked into the runtime engine.
 
 The unpublished portable harness and the provider-log fuzz target share
 recorded event responses from Pydantic AI (MIT) and the OpenAI Python SDK
-(Apache-2.0). The [fixture provenance](../crates/wasm-harness/src/provider_logs/README.md)
+(Apache-2.0). The [fixture provenance](../crates/acceptance-harness/src/provider_logs/README.md)
 pins their source and extraction. The original license texts accompany the
 fixtures.
 
@@ -360,12 +358,9 @@ Actual controls and the full official corpus execute for each campaign. This
 supersedes the earlier narrow email HTML projection for new reports, preserving
 all historical observations unchanged and retaining the same upstream licenses.
 
-The unpublished `wasm-harness` owns the shared core acceptance transcript.
-Its native/WASI `portable-core` example and browser export use that Cargo
-library directly. The harness depends on core; core has no dependency on the
-harness. Adding its `rlib` output beside the browser `cdylib` adds no third-party
-or published-package dependency. Artifact reports retain the tested engine's
-logical `purrassist-core` label while recording the measured module identity.
+The unpublished `acceptance-harness` owns the shared core acceptance transcript.
+Its native `portable-core` example uses that Cargo library directly. The harness
+depends on core and adds no third-party or published-package dependencies.
 
 The repository social-preview image `docs/social-preview.png` is rendered by hand
 from `docs/social-preview.svg`; `docs/assets.json` registers both digests, the

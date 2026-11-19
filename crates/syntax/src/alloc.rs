@@ -57,18 +57,6 @@
 //! out of sync. The thread-local in this module (`CURRENT`) only *routes*
 //! a fresh `malloc`/`calloc` to the right account; it is consulted at
 //! allocation time, never at free time, and it holds no counts itself.
-//!
-//! # wasm32-wasip1
-//! The WASI build links tree-sitter's C sources against a WASI C sysroot
-//! (`vendor/wasi.json`), but tree-sitter's own allocation hook
-//! (`ts_current_malloc`/`ts_current_calloc`/`ts_current_realloc`/
-//! `ts_current_free`) is a C function pointer inside tree-sitter's own
-//! compiled object, not the sysroot's `malloc`. `set_allocator` overwrites
-//! those pointers the same way on every target `std::alloc::System` supports,
-//! including `wasm32-wasip1`; `scripts/check-wasm.py` executes the identical
-//! native/WASI acceptance and repair transcript and diffs their output
-//! byte-for-byte, which exercises this module's allocator on that target the
-//! same way `inspect`/`apply_checked`/`parse_governed` exercise it natively.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::ffi::c_void;

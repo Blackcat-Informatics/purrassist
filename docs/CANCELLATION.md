@@ -62,8 +62,7 @@ the transaction receipt and use the existing conditional undo operation.
 Tests cover cross-owner cancellation of a live governor after successful work,
 sticky exhaustion precedence, independent accounting, cancelled planning and
 matching, source-preserving file refusal before commit, and retry with a fresh
-token. The native/WASI transcript also executes token cancellation; browser-WASM
-execution compares the shared-token transcript against native output.
+token. The native acceptance transcript also executes shared-token cancellation.
 
 ## MCP transport
 

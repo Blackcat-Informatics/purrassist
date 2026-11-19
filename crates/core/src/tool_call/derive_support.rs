@@ -26,7 +26,7 @@
 //! declares [`Param::integer`]. The range of the Rust type is enforced by
 //! [`FromNode`] alone, which reports `expected: "integer within the u8 range"`
 //! for `300` as a `u8`. `usize` and `isize` ranges differ between targets
-//! (notably `wasm32`), so fixed-width integers are preferable in portable
+//! so fixed-width integers are preferable in portable
 //! tool definitions.
 use super::{FromNode, FromNodeError, ObjectSpec, Param, ParameterSpec, ToolDefinition};
 use crate::json::{Member, Node, Number, Value};

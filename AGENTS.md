@@ -20,8 +20,7 @@ documentation must distinguish implemented behavior from plans.
 
 - **Greenfield first.** Take the best available design. Learn from the limits
   of earlier work without accepting them. Correct past mistakes when found.
-- **Rust first.** All core functionality is high-quality Rust. Python, wasm
-  and the C ABI are interfaces to it, not places where work happens.
+- **Rust first.** All core functionality is high-quality Rust. Python and the C ABI are interfaces to it, not places where work happens.
 - **Subsume, extend, enhance.** If something we use holds us back, take over
   its function, extend it, then improve it past the original.
 - **Low optionality, hard failures.** No optional components, conditional
@@ -30,7 +29,7 @@ documentation must distinguish implemented behavior from plans.
 
 Three maximums bound every choice: **utility** (err toward the broadest
 function), **performance** (seek the optimal Rust solution) and
-**portability** (code that compiles to wasm is the core value).
+**portability** (keep the core independent of platform services).
 
 When requests conflict, decide in this order. This order settles conflicts; it
 does not replace the standing rules in this file.

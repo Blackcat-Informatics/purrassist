@@ -54,5 +54,5 @@ cover one call, several calls and nested typed arguments. The
 [`tool_call_stripped` behavioral target](../../../crates/core/tests/tool_call_stripped.rs)
 exercises the recipe roster, evidence boundaries, original input, shared detector
 candidates, joined-ID ambiguity and indentation work. Qualification results,
-corpus measurements and native/WASM capture digests require their actual runs;
+corpus measurements and native transcript digests require their actual runs;
 this page does not supply execution evidence.

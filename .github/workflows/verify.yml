@@ -82,18 +82,6 @@ jobs:
       - run: cargo test -p purrassist-host -p purrassist-cli --locked
       - run: rustup component add clippy
       - run: cargo clippy -p purrassist-host -p purrassist-cli --all-targets --locked -- -D warnings
-  wasm:
-    runs-on: ubuntu-24.04
-    env:
-      RUSTUP_TOOLCHAIN: nightly-2026-09-14
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - run: rustup toolchain install nightly-2026-09-14 --profile minimal --target wasm32-wasip1,wasm32-unknown-unknown
-      - name: Install pinned Node for WASM execution
-        run: python3 scripts/install-qualification-tool.py node >> "$GITHUB_PATH"
-      - run: make wasm-test
   corpus:
     # Vendored conformance corpora, generated evaluation corpora, exhaustive
     # oracles and 1 MiB scale runs (`test = false` suites; not in make check).

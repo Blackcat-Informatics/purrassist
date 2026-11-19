@@ -568,8 +568,7 @@ impl Drop for ScratchLease {
 /// [`ScratchVec`] and [`ScratchMap`] must charge the same number of bytes for
 /// the same workload on every compilation target so a governor makes the
 /// same admit/reject decision, and a receipt reports the same
-/// `peak_scratch_bytes`/`total_scratch_charged`, on 32-bit WASM as on 64-bit
-/// native (see `docs/QUALIFICATION.md`). `core::mem::size_of::<T>()` is the
+/// `peak_scratch_bytes`/`total_scratch_charged`, at either pointer width. `core::mem::size_of::<T>()` is the
 /// wrong tool for that: it varies with pointer width for any `T` containing
 /// a `String`, `Vec`, `Box`, or reference, which is exactly the shape of the
 /// element types these containers hold.
@@ -608,8 +607,7 @@ macro_rules! scratch_charge {
 // Primitive element types actually stored in a `ScratchVec`/`ScratchMap`
 // (directly, or as a tuple component) anywhere in this crate's production
 // code, its tests, or its doctests. Each charge is that type's `size_of` on
-// a 64-bit target, so these constants never change even when this crate is
-// compiled for `wasm32`.
+// a 64-bit target, independent of the current target pointer width.
 scratch_charge!((), 0);
 scratch_charge!(bool, 1);
 scratch_charge!(char, 4);

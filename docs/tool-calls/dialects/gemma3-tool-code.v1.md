@@ -67,8 +67,7 @@ cover one call, multiple blocks and nested typed arguments. Native
 spans and result payloads. The common every-pair roundtrip suite includes this
 dialect through the registry. Goldens, corpus witnesses, fuzz seed discovery,
 long-argument and dense-call fixtures, and portable transcript cases are present.
-The native, WASI and browser-WASM transcript comparisons pass with pinned
-anchor and repair digests. The grammar's measured configuration bound is
+The native transcript checks its pinned anchor and repair digests. The grammar's measured configuration bound is
 `B_d = 97`; dense recovery handles 29,127 calls under the ordinary sized
 Standard budget. The complete correction corpus contains 18,218 cases and
 records zero incorrect results. See [resource bounds](../../RESOURCES.md) and

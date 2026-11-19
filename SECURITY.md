@@ -31,8 +31,8 @@ cooperating writers; their portable path checks are not a hostile-process sandbo
 
 The workspace denies `unsafe_code` by default. Its two production exceptions
 are `crates/syntax/src/alloc.rs` and `crates/host/src/files/windows.rs`;
-the rest of those library crates retains the denial. Four qualification-only
-exceptions are confined to `crates/wasm-harness/src/lib.rs`,
+the rest of those library crates retains the denial. Three qualification-only
+exceptions are confined to
 `crates/core/tests/allocation_oracle.rs`, `crates/core/benches/latency.rs`, and
 `crates/syntax/benches/latency.rs`. Their source and justification are registered
 in `docs/DEPENDENCIES.md`. `crates/host/src/files/windows.rs` calls `kernel32`

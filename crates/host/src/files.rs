@@ -766,7 +766,7 @@ impl Store {
         fire(CrashPoint::BeforeRename);
         #[cfg(windows)]
         let method = windows::replace(file, &temporary, &target)?;
-        // Every other platform, including `wasm32-wasip1`, uses the portable
+        // Every other platform uses the portable
         // `rename(2)`-equivalent; only directory durability (`sync_directory`
         // below) is unproven off Unix/Windows and stays an explicit error there.
         #[cfg(not(windows))]
