@@ -213,11 +213,13 @@ pub enum SkipReason {
     /// ([`Verdict::NothingUsable`](super::Verdict::NothingUsable)), so
     /// nothing is emitted (see [`ToolCalls::emitted_calls`]).
     ToolChoiceFailed,
+    /// The provider log withheld the call due to a transport fault.
+    ProviderTransport,
 }
 
 impl SkipReason {
     /// The wire code: `unresolved`, `ambiguous`, `guess_on_mutating_tool`,
-    /// `unrepresentable`, or `tool_choice_failed`.
+    /// `unrepresentable`, `tool_choice_failed`, or `provider_transport`.
     ///
     /// See [`SkipReason`] for an example.
     #[must_use]
@@ -228,6 +230,7 @@ impl SkipReason {
             Self::GuessOnMutatingTool => "guess_on_mutating_tool",
             Self::Unrepresentable { .. } => "unrepresentable",
             Self::ToolChoiceFailed => "tool_choice_failed",
+            Self::ProviderTransport => "provider_transport",
         }
     }
 }
@@ -246,6 +249,7 @@ impl fmt::Display for SkipReason {
             Self::ToolChoiceFailed => {
                 formatter.write_str("the turn fails the request's tool-choice check")
             }
+            Self::ProviderTransport => formatter.write_str("the provider log withholds the call"),
         }
     }
 }
@@ -638,7 +642,7 @@ pub fn openai_tool_calls_governed(
 
 /// The emission recovery makes for `target`, numbering calls by their
 /// assigned [`ToolCall::id`]s.
-pub(crate) fn emission(
+pub(super) fn emission(
     tools: &ToolSet,
     calls: &ToolCalls,
     target: &EmitTarget,
@@ -685,6 +689,7 @@ fn selection(calls: &ToolCalls) -> (Vec<&ToolCall>, Vec<(usize, Skipped)>) {
             continue;
         }
         let reason = match &call.outcome {
+            _ if call.transport_withheld => SkipReason::ProviderTransport,
             _ if call.is_usable_accepting_guesses() => SkipReason::ToolChoiceFailed,
             CallOutcome::Unresolved { reason } => SkipReason::Unresolved {
                 reason: reason.clone(),

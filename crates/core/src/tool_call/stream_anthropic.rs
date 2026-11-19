@@ -37,6 +37,7 @@
 //! intake and once for retention, each event once for its size, and the
 //! message bytes are charged by the inner [`ToolCallStream`].
 
+use super::provider::{DiscardEvents, FaultScope, provider_input};
 use super::stream::{debug_provider_stream, usable_provider_calls};
 use super::{
     DialectSet, GenerationStop, StreamEvent, ToolCall, ToolCallStream, ToolCalls,
@@ -55,18 +56,8 @@ const MESSAGE_OPEN: &[u8] = br#"{"role":"assistant","content":["#;
 /// The message suffix every reassembled message ends with.
 const MESSAGE_CLOSE: &[u8] = b"]}";
 
-/// Which kind of problem an [`EventFaultKind`] is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EventFaultClass {
-    /// An event that is not valid or not understood.
-    Malformed,
-    /// The log ended before the message did.
-    Truncated,
-    /// A valid event in a place the protocol does not allow.
-    OutOfOrder,
-    /// The provider reported an error event.
-    Provider,
-}
+/// The transport class of a [`EventFaultKind`].
+pub use super::provider::ProviderFaultClass as EventFaultClass;
 
 /// What was wrong with one event, or with the log as a whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,9 +136,41 @@ pub enum EventFaultKind {
     StopWithoutOpenBlock,
     /// An `error` event.
     ProviderError,
+    /// The provider stopped the turn at the generation limit.
+    LengthStop,
 }
 
 impl EventFaultKind {
+    pub(super) const fn wire_code(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            Self::NotUtf8 => ("not_utf8", None),
+            Self::NotJson => ("not_json", None),
+            Self::MissingMember(member) => ("missing_member", Some(member)),
+            Self::UnsupportedEvent => ("unsupported_event", None),
+            Self::UnsupportedBlock => ("unsupported_block", None),
+            Self::MismatchedDelta => ("mismatched_delta", None),
+            Self::UnrecognizedStopReason => ("unrecognized_stop_reason", None),
+            Self::NonEmptyStartInput => ("non_empty_start_input", None),
+            Self::PartialEvent => ("partial_event", None),
+            Self::OpenBlock => ("open_block", None),
+            Self::UnfinishedInput => ("unfinished_input", None),
+            Self::MalformedInput => ("malformed_input", None),
+            Self::MissingData => ("missing_data", None),
+            Self::MissingMessageStop => ("missing_message_stop", None),
+            Self::MissingMessageDelta => ("missing_message_delta", None),
+            Self::MessageStartMissing => ("message_start_missing", None),
+            Self::MessageStartRepeated => ("message_start_repeated", None),
+            Self::EventAfterMessageStop => ("event_after_message_stop", None),
+            Self::BlockIndexSequence => ("block_index_sequence", None),
+            Self::BlockStartWhileOpen => ("block_start_while_open", None),
+            Self::DeltaWithoutStart => ("delta_without_start", None),
+            Self::DeltaAfterStop => ("delta_after_stop", None),
+            Self::StopWithoutOpenBlock => ("stop_without_open_block", None),
+            Self::ProviderError => ("provider_error", None),
+            Self::LengthStop => ("length_stop", None),
+        }
+    }
+
     /// The class of this fault.
     ///
     /// ```
@@ -172,7 +195,8 @@ impl EventFaultKind {
             | Self::OpenBlock
             | Self::UnfinishedInput
             | Self::MissingMessageStop
-            | Self::MissingMessageDelta => EventFaultClass::Truncated,
+            | Self::MissingMessageDelta
+            | Self::LengthStop => EventFaultClass::Truncated,
             Self::MessageStartMissing
             | Self::MessageStartRepeated
             | Self::EventAfterMessageStop
@@ -215,10 +239,11 @@ pub struct BlockSpan {
     pub block: u64,
     /// The block's bytes in the reassembled message (the receipt's source).
     pub span: Range<usize>,
+    tool_use: bool,
 }
 
 impl ScratchCharge for BlockSpan {
-    const CHARGE: usize = 24;
+    const CHARGE: usize = 32;
 }
 const _: () = assert!(core::mem::size_of::<BlockSpan>() <= BlockSpan::CHARGE);
 
@@ -242,16 +267,14 @@ pub struct EventLogRecovery {
     /// the governor refused the log's own retention or bytes arrived after a
     /// halt; the receipt's `stopped` then says why.
     pub log: Vec<u8>,
+    pub(super) whole_fault: bool,
 }
 
 impl EventLogRecovery {
     /// The content block index of the block `call` was read from.
     #[must_use]
     pub fn block_of(&self, call: &ToolCall) -> Option<u64> {
-        self.blocks
-            .iter()
-            .find(|block| block.span.contains(&call.span.start))
-            .map(|block| block.block)
+        block_at(&self.blocks, call).map(|block| block.block)
     }
 
     /// Whether the log had no fault.
@@ -260,39 +283,32 @@ impl EventLogRecovery {
         self.faults.is_empty()
     }
 
-    fn permitted<'a>(&self, calls: Vec<&'a ToolCall>) -> Vec<&'a ToolCall> {
-        if self.faults.iter().any(|fault| fault.block.is_none()) {
-            return Vec::new();
-        }
-        calls
-            .into_iter()
-            .filter(|call| {
-                self.block_of(call).is_some_and(|block| {
-                    !self.faults.iter().any(|fault| fault.block == Some(block))
-                })
-            })
-            .collect()
-    }
-
     /// The calls that may run as is: [`ToolCalls::usable`] without the calls
     /// of any faulted block, and none at all when a fault belongs to the whole
     /// log (a log cut short, a provider error, a missing `message_start`).
     #[must_use]
     pub fn usable(&self) -> Vec<&ToolCall> {
-        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable, |calls| {
-            self.permitted(calls)
-        })
+        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable)
     }
 
     /// Like [`Self::usable`], built on [`ToolCalls::usable_accepting_guesses`].
     #[must_use]
     pub fn usable_accepting_guesses(&self) -> Vec<&ToolCall> {
-        usable_provider_calls(
-            &self.recovery.outcome,
-            ToolCalls::usable_accepting_guesses,
-            |calls| self.permitted(calls),
-        )
+        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable_accepting_guesses)
     }
+}
+
+fn block_at<'a>(blocks: &'a [BlockSpan], call: &ToolCall) -> Option<&'a BlockSpan> {
+    let position = blocks.partition_point(|block| block.span.end <= call.span.start);
+    blocks
+        .get(position)
+        .filter(|block| block.span.contains(&call.span.start))
+}
+
+fn tool_block_index(blocks: &[BlockSpan], call: &ToolCall) -> Option<u64> {
+    block_at(blocks, call)
+        .filter(|block| block.tool_use)
+        .map(|block| block.block)
 }
 
 /// The kind of the open block, which fixes the deltas it accepts.
@@ -459,8 +475,7 @@ fn stop_of(node: &Node, reason: &str) -> Option<GenerationStop> {
 }
 
 impl<'s> AnthropicEventStream<'s> {
-    fn new(tools: &'s ToolSet, request: ToolRecoveryRequest, dialects: &'s DialectSet) -> Self {
-        let stream = tools.stream_with_dialects(request, dialects);
+    pub(super) fn with_stream(stream: ToolCallStream<'s>) -> Self {
         let governor = stream.governor();
         Self {
             log: ScratchVec::new(governor),
@@ -488,56 +503,18 @@ impl<'s> AnthropicEventStream<'s> {
         }
     }
 
-    /// Feed event-log bytes, which may end anywhere (inside a line, a
-    /// multi-byte character, or a CR LF pair), and append the recognizer's
-    /// newly settled [`StreamEvent`]s to `events`. Their spans are offsets in
-    /// the reassembled message, not in the log. Empty feeds charge nothing.
-    ///
-    /// Governor refusal and cancellation stop interpretation; they are
-    /// reported by [`Self::finish`], never by panic or a partial result.
-    pub fn feed(&mut self, bytes: &[u8], events: &mut impl Extend<StreamEvent>) {
-        if self.halted || bytes.is_empty() {
-            return;
-        }
-        if self.take(bytes, events).is_err() {
-            self.halt();
-        }
-    }
+    provider_input!();
 
     /// Cancel interpretation. The first governor refusal is preserved.
     pub fn cancel(&mut self) {
-        self.halt();
+        self.halt(StopReason::Cancelled);
     }
 
-    fn halt(&mut self) {
-        self.halted = true;
-        self.stream.cancel();
-    }
-
-    fn take(
-        &mut self,
-        bytes: &[u8],
-        events: &mut impl Extend<StreamEvent>,
-    ) -> Result<(), StopReason> {
-        let governor = self.stream.governor_mut();
-        governor.charge(Resource::Work, size(bytes.len()))?;
-        self.log.reserve(bytes.len())?;
-        self.log.extend(bytes.iter().copied())?;
-        let base = self.log.len() - bytes.len();
-        for (offset, &byte) in bytes.iter().enumerate() {
-            let at = base + offset;
-            if core::mem::take(&mut self.skip_lf) && byte == b'\n' {
-                self.line_start = at + 1;
-                continue;
-            }
-            if byte == b'\n' || byte == b'\r' {
-                self.skip_lf = byte == b'\r';
-                let start = core::mem::replace(&mut self.line_start, at + 1);
-                self.at = at;
-                self.line(start, at, events)?;
-            }
+    fn halt(&mut self, reason: StopReason) {
+        if !self.halted {
+            self.halted = true;
+            self.stream.stop_producer(reason);
         }
-        Ok(())
     }
 
     /// One complete line of the log, `log[start..end]` without terminator.
@@ -656,6 +633,9 @@ impl<'s> AnthropicEventStream<'s> {
                     None => self.fault(EventFaultKind::MissingMember("delta.stop_reason"), None),
                     Some(reason) => {
                         if let Some(stop) = stop_of(root, reason) {
+                            if stop == GenerationStop::Length {
+                                self.fault(EventFaultKind::LengthStop, None)?;
+                            }
                             self.stop = Some(stop);
                             Ok(())
                         } else {
@@ -987,6 +967,7 @@ impl<'s> AnthropicEventStream<'s> {
         let span = BlockSpan {
             block: open.index,
             span: open.start..self.message_len,
+            tool_use: open.kind == Kind::ToolUse,
         };
         push_scratch(&mut self.blocks, span, self.stream.governor_mut())
     }
@@ -1025,26 +1006,45 @@ impl<'s> AnthropicEventStream<'s> {
     /// [`ToolCallStream`] is kept.
     #[must_use]
     pub fn finish(mut self, events: &mut impl Extend<StreamEvent>) -> EventLogRecovery {
-        if !self.halted && self.seal(events).is_err() {
-            self.halt();
-        }
-        if !self.halted && self.stream.governor().check().is_err() {
-            self.halt();
-        }
+        let scope = if self.halted {
+            FaultScope::Whole
+        } else {
+            match self.seal(events).and_then(|()| {
+                self.stream.governor().check()?;
+                FaultScope::prepare(
+                    self.faults.as_slice().iter().map(|fault| fault.block),
+                    self.stream.governor_mut(),
+                )
+            }) {
+                Ok(scope) => scope,
+                Err(reason) => {
+                    self.halt(reason);
+                    FaultScope::Whole
+                }
+            }
+        };
         let Self {
             stream,
             log,
             faults,
             blocks,
             stop,
+            data,
+            closers,
+            open,
             ..
         } = self;
-        let recovery = stream.finish_with_events(stop.unwrap_or(GenerationStop::Unknown), events);
+        drop((data, closers, open));
+        let index = |call: &ToolCall| tool_block_index(&blocks, call);
+        let transport = scope.transport(&index, blocks.len());
+        let recovery =
+            stream.finish_provider(stop.unwrap_or(GenerationStop::Unknown), events, transport);
         EventLogRecovery {
             recovery,
             faults: faults.into_vec(),
             blocks: blocks.into_vec(),
             log: log.into_vec(),
+            whole_fault: matches!(scope, FaultScope::Whole),
         }
     }
 }
@@ -1058,7 +1058,7 @@ impl ToolSet {
         request: ToolRecoveryRequest,
         dialects: &'s DialectSet,
     ) -> AnthropicEventStream<'s> {
-        AnthropicEventStream::new(self, request, dialects)
+        AnthropicEventStream::with_stream(self.stream_with_dialects(request, dialects))
     }
 
     /// Read a complete Anthropic Messages event log in one call: the result
@@ -1083,7 +1083,7 @@ impl ToolSet {
         dialects: &DialectSet,
     ) -> EventLogRecovery {
         let mut stream = self.stream_anthropic_events(request, dialects);
-        let mut events = Vec::new();
+        let mut events = DiscardEvents;
         stream.feed(log, &mut events);
         stream.finish(&mut events)
     }

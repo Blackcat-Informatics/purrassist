@@ -465,9 +465,13 @@ impl<T: WireValue> AssistResult<T> {
     /// ```
     #[must_use]
     pub fn to_node(&self) -> Node {
+        self.to_node_with(WireValue::to_node)
+    }
+
+    pub(crate) fn to_node_with(&self, reading: impl Fn(&T) -> Node) -> Node {
         let (status, value, alternatives) = match &self.outcome {
-            Outcome::Resolved(value) => ("resolved", value.to_node(), array([])),
-            Outcome::BestGuess(value) => ("best_guess", value.to_node(), array([])),
+            Outcome::Resolved(value) => ("resolved", reading(value), array([])),
+            Outcome::BestGuess(value) => ("best_guess", reading(value), array([])),
             Outcome::Ambiguous(values) => {
                 // `values` is already in the same order as
                 // `self.receipt.alternatives` (see that field's
@@ -479,7 +483,7 @@ impl<T: WireValue> AssistResult<T> {
                 (
                     "ambiguous",
                     Node::new(Value::Null),
-                    array(values.iter().map(WireValue::to_node)),
+                    array(values.iter().map(&reading)),
                 )
             }
             Outcome::Unresolved => ("unresolved", Node::new(Value::Null), array([])),

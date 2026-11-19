@@ -3,20 +3,23 @@
 //! The `recover_tool_calls` operation: one request builder shared by the
 //! registry handler (MCP `tools/call` and CLI `call`) and the CLI
 //! `recover-tool-calls` command, so every surface runs the same request.
+use super::ToolCallRecovery;
 use purrassist::{
     AssistResult, CancellationToken, Effort, Governor, Outcome, Receipt, StopReason,
     json::{Node, Value},
     tool_call::{
         AmbiguityPolicy, DEFAULT_ID_PREFIX, DialectId, DialectSet, DialectSetError, Effects,
-        EmitTarget, GenerationStop, IdPolicy, PolicySelection, RECOVER_OPERATION, ReasoningPolicy,
-        RepairPolicy, StrictForced, ToolCalls, ToolChoice, ToolRecoveryRequest, ToolSet,
-        ToolSetError,
+        EmitTarget, GenerationStop, IdPolicy, PolicySelection, ProviderLogFormat,
+        ProviderLogRecovery, RECOVER_OPERATION, ReasoningPolicy, RepairPolicy, StrictForced,
+        ToolCalls, ToolChoice, ToolRecoveryRequest, ToolSet, ToolSetError,
     },
 };
+use std::borrow::Cow;
 
 /// Every member a `recover_tool_calls` argument object may carry.
-const MEMBERS: [&str; 14] = [
+const MEMBERS: [&str; 15] = [
     "output",
+    "input_format",
     "tools",
     "tools_format",
     "dialects",
@@ -34,7 +37,34 @@ const MEMBERS: [&str; 14] = [
 
 pub(super) fn call(args: &Node, cancellation: Option<&CancellationToken>) -> Result<Node, String> {
     let output = super::field(args, "output")?;
-    Ok(recover(output.as_bytes(), args, cancellation)?.to_node())
+    Ok(recover(output.as_bytes(), args, cancellation, input_format(args)?)?.to_node())
+}
+
+pub(super) fn input_format(options: &Node) -> Result<Option<ProviderLogFormat>, String> {
+    let Value::Object(members) = &options.value else {
+        return Err("recover_tool_calls arguments must be an object".into());
+    };
+    let mut formats = members.iter().filter(|member| member.key == "input_format");
+    let format = formats.next().map(|member| &member.value);
+    if formats.next().is_some() {
+        return Err("input_format may occur only once".into());
+    }
+    named(
+        format,
+        "input_format",
+        None,
+        &[
+            ("raw", None),
+            (
+                ProviderLogFormat::Anthropic.code(),
+                Some(ProviderLogFormat::Anthropic),
+            ),
+            (
+                ProviderLogFormat::OpenAiChat.code(),
+                Some(ProviderLogFormat::OpenAiChat),
+            ),
+        ],
+    )
 }
 
 /// Build the request `options` describes and recover `output` under one
@@ -44,7 +74,8 @@ pub(super) fn recover(
     output: &[u8],
     options: &Node,
     cancellation: Option<&CancellationToken>,
-) -> Result<AssistResult<ToolCalls>, String> {
+    provider: Option<ProviderLogFormat>,
+) -> Result<ToolCallRecovery, String> {
     let Value::Object(members) = &options.value else {
         return Err("recover_tool_calls arguments must be an object".into());
     };
@@ -57,24 +88,31 @@ pub(super) fn recover(
             member.key
         ));
     }
+    if provider.is_some() && members.iter().any(|member| member.key == "stop") {
+        return Err("stop cannot be specified for provider event logs".into());
+    }
     let effort = super::effort(options)?;
     let dialects = dialect_ids(options.get("dialects"))?;
-    // Two phases: count the call openers of the dialects that will read the
-    // output (a pure pre-scan), then size the one governor's budget from
-    // them and the output length.
-    let openers = dialects.as_ref().map_or_else(
-        || DialectSet::built_in().call_openers(output),
-        |ids| {
-            ids.iter()
-                .map(|dialect| dialect.grammar().call_openers(output))
-                .fold(0, u64::saturating_add)
-        },
-    );
+    // Raw output keeps its original measured opener-based budget. Event logs
+    // use a byte-derived upper bound for synthetic message length and candidate
+    // openers because the provider controls where it splits literal openers.
+    let (input_len, openers) = if provider.is_some() {
+        let length = output.len().saturating_mul(2).saturating_add(64);
+        (length, u64::try_from(length).unwrap_or(u64::MAX))
+    } else {
+        let openers = dialects.as_ref().map_or_else(
+            || DialectSet::built_in().call_openers(output),
+            |ids| {
+                ids.iter()
+                    .map(|dialect| dialect.grammar().call_openers(output))
+                    .fold(0, u64::saturating_add)
+            },
+        );
+        (output.len(), openers)
+    };
     let mut request = ToolRecoveryRequest::new(effort)
         .budget(ToolRecoveryRequest::sized_budget(
-            effort,
-            output.len(),
-            openers,
+            effort, input_len, openers,
         ))
         .stop(stop(options.get("stop"))?)
         .tool_choice(tool_choice(
@@ -89,9 +127,13 @@ pub(super) fn recover(
     for (tool, effects) in effects(options.get("effects"))? {
         request = request.effects(tool, effects);
     }
-    let declarations = declarations(options.get("tools").ok_or("missing argument tools")?);
+    let tools = options.get("tools").ok_or("missing argument tools")?;
     let format = text(options.get("tools_format"), "tools_format")?.unwrap_or("openai");
     let mut governor = super::governor(request.budget, cancellation);
+    let declarations = match declarations(tools, provider.map(|_| &mut governor)) {
+        Ok(declarations) => declarations,
+        Err(reason) => return Ok(stopped(output, effort, reason, &governor, provider)),
+    };
     let compiled = match format {
         "openai" => ToolSet::from_openai_governed(&declarations, &mut governor),
         "mcp" => ToolSet::from_mcp_governed(&declarations, &mut governor),
@@ -101,7 +143,7 @@ pub(super) fn recover(
     let tools = match compiled {
         Ok(tools) => tools,
         Err(ToolSetError::Resource(reason)) => {
-            return Ok(stopped(output, effort, reason, &governor));
+            return Ok(stopped(output, effort, reason, &governor, provider));
         }
         Err(error) => return Err(error.to_string()),
     };
@@ -109,7 +151,7 @@ pub(super) fn recover(
         Some(match DialectSet::new(dialects, &mut governor) {
             Ok(set) => set,
             Err(DialectSetError::Resource(reason)) => {
-                return Ok(stopped(output, effort, reason, &governor));
+                return Ok(stopped(output, effort, reason, &governor, provider));
             }
             Err(error) => return Err(error.to_string()),
         })
@@ -117,7 +159,14 @@ pub(super) fn recover(
         None
     };
     let dialects = prepared.as_ref().unwrap_or_else(|| DialectSet::built_in());
-    Ok(tools.recover_governed(output, &request, dialects, &mut governor))
+    Ok(match provider {
+        None => {
+            ToolCallRecovery::Raw(tools.recover_governed(output, &request, dialects, &mut governor))
+        }
+        Some(format) => ToolCallRecovery::Provider(
+            tools.recover_provider_log(format, output, request, dialects, governor),
+        ),
+    })
 }
 
 /// The declaration text the adapters read, whose exact bytes their
@@ -128,11 +177,17 @@ pub(super) fn recover(
 /// parsed) is written back compactly: its member order, duplicate members
 /// and number spellings (`1.50e3` stays `1.50e3`) are kept, but the
 /// caller's whitespace and string escape spellings are not.
-fn declarations(tools: &Node) -> String {
-    match &tools.value {
-        Value::String(text) => text.clone(),
-        _ => tools.to_json(),
+fn declarations<'a>(
+    tools: &'a Node,
+    governor: Option<&mut Governor>,
+) -> Result<Cow<'a, str>, StopReason> {
+    if let Value::String(text) = &tools.value {
+        return Ok(Cow::Borrowed(text));
     }
+    governor.map_or_else(
+        || Ok(Cow::Owned(tools.to_json())),
+        |governor| tools.to_json_governed(governor).map(Cow::Owned),
+    )
 }
 
 /// The `Unresolved` result of a stop before recovery began: the receipt
@@ -142,13 +197,20 @@ fn stopped(
     effort: Effort,
     reason: StopReason,
     governor: &Governor,
-) -> AssistResult<ToolCalls> {
-    let mut receipt = Receipt::new(output, RECOVER_OPERATION, effort, *governor.limits());
+    provider: Option<ProviderLogFormat>,
+) -> ToolCallRecovery {
+    let source = if provider.is_some() { &[] } else { output };
+    let mut receipt = Receipt::new(source, RECOVER_OPERATION, effort, *governor.limits());
     receipt.stopped = reason;
     receipt.usage = governor.usage();
-    AssistResult {
-        outcome: Outcome::Unresolved,
-        receipt,
+    match provider {
+        Some(format) => {
+            ToolCallRecovery::Provider(ProviderLogRecovery::NotStarted { format, receipt })
+        }
+        None => ToolCallRecovery::Raw(AssistResult::<ToolCalls> {
+            outcome: Outcome::Unresolved,
+            receipt,
+        }),
     }
 }
 

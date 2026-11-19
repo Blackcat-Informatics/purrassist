@@ -254,7 +254,7 @@ Generated from `Tools::definitions()` by the test `tools_reference_matches_regis
     - `alternatives`: array, required
     - `receipt`: object, required
   - Examples: [`examples/temperature.input.txt`](../examples/temperature.input.txt), [`examples/temperature.schema.json`](../examples/temperature.schema.json)
-- **`recover_tool_calls`**: Recover the tool calls of one model turn against caller tool declarations (OpenAI, MCP, or Anthropic form) over built-in call dialects, with per-call outcomes, itemized repairs and losses, rejected attempts (including call markup of dialects not built in or not allowed, reported as unsupported_dialect), the tool-choice check, the turn's finish, optional re-emission, and a receipt; never executes a call. status is the certainty of the reading of the turn, not whether anything can run: read value.verdict (run, no_calls, ambiguous, nothing_usable) and value.usable_calls for that; both usable counts are 0 whenever value.tool_choice.passed is false, so a failed tool choice never leaves a call to run
+- **`recover_tool_calls`**: Recover tool calls from raw model output or an explicitly selected provider event log against caller tool declarations (OpenAI, MCP, or Anthropic form) over built-in call dialects, with per-call outcomes, itemized repairs and losses, rejected attempts (including call markup of dialects not built in or not allowed, reported as unsupported_dialect), the tool-choice check, the turn's finish, optional re-emission, and a receipt; never executes a call. status is the certainty of the reading of the turn, not whether anything can run: read value.verdict (run, no_calls, ambiguous, nothing_usable) and value.usable_calls for that; both usable counts are 0 whenever value.tool_choice.passed is false, so a failed tool choice never leaves a call to run
   - MCP: `tools/call` with name `recover_tool_calls`
   - CLI: `purrassist call recover_tool_calls --root DIR < args.json`
   - Writes files under the root: no
@@ -273,11 +273,13 @@ Generated from `Tools::definitions()` by the test `tools_reference_matches_regis
     - `ids`: one of several shapes
     - `emit`: one of "none", "openai", "anthropic-tool-use.v1", "bare-json.v1", "deepseek-v3-stripped.v1", "deepseek-v3.1-stripped.v1", "deepseek-v3.1.v1", "deepseek-v3.v1", "gemma3-tool-code.v1", "glm-4.5.v1", "harmony-stripped.v1", "harmony.v1", "hermes-stripped.v1", "hermes.v1", "kimi-k2-stripped.v1", "kimi-k2.v1", "llama3-json-stripped.v1", "llama3-json.v1", "mistral-v11-stripped.v1", "mistral-v11.v1", "mistral-v3-stripped.v1", "mistral-v3.v1", "openai-tool-calls.v1", "pythonic.v1", "qwen3-coder-xml.v1"
     - `effort`: one of "exact", "quick", "standard", "deep", "maximum"
+    - `input_format`: one of "raw", "anthropic-events", "openai-chat-events"
   - Output:
     - `status`: one of "resolved", "best_guess", "ambiguous", "unresolved", required
     - `value`: one of several shapes, required
     - `alternatives`: array, required
     - `receipt`: object, required
+    - `provider`: object
 - **`project_result`**: Validate the complete original JSON result against its output schema, apply the closed context field mask, and emit an exact-byte checked JSON Lines artifact; structured refusals retain original source, requested controls, stage and typed cause. The byte limit covers only decoded artifact text, excluding protocol and receipt framing; no tool is executed or authorized
   - MCP: `tools/call` with name `project_result`
   - CLI: `purrassist call project_result --root DIR < args.json`
@@ -726,16 +728,21 @@ the `decode_json` tool's output and makes no claim to.
 
 ### `recover_tool_calls`
 
-`recover-tool-calls` reads one model turn as raw bytes from a file or stdin
-and recovers its tool calls against the declarations in `--tools`
+By default, `recover-tool-calls` reads one model turn as raw bytes from a
+file or stdin and recovers its tool calls against the declarations in `--tools`
 (`--tools-format openai`, `mcp`, or `anthropic`). It prints the same result as
 the `recover_tool_calls` MCP tool: per-call outcomes, itemized repairs and
 losses, rejected attempts, the tool-choice check, the turn's finish and its
 `OpenAI` `finish_reason`, an optional `--emit` re-emission (`openai` for the
 `tool_calls` array, or a dialect id), and a receipt. It never executes a call.
-The `finish_reason` is `"length"` whenever the caller's stop reason is a length stop (whatever the
-finish: a length stop is never reported as a clean finish, and the usable
-calls are still emitted), otherwise `"tool_calls"` exactly when the `OpenAI`
+For provider event logs, select `--input-format anthropic-events` or
+`--input-format openai-chat-events` in the CLI and the same value in the MCP
+`input_format` argument. The log supplies its stop reason. The result's
+`provider` section retains original bytes, typed faults and the transport-aware
+verdict. The receipt refers to the reconstructed message.
+The `finish_reason` is `"length"` for a length stop. Raw input can retain
+usable calls at a length stop. A provider length stop withholds every call.
+Otherwise it is `"tool_calls"` exactly when the `OpenAI`
 emission holds a call, and `"stop"` otherwise;
 neither says whether anything else went wrong, so read `finish`, `verdict`
 and `rejected` as well. The command exits 0 when at least one call is usable (`usable_accepting_guesses`) and the
