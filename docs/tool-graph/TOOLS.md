@@ -30,10 +30,12 @@ Cancellation is `LoadError::Cancelled`. Both withhold the graph. Native
 allocation and layout failures retain their original cause. A rejected
 scratch release is `LoadError::Parse` with code `storage-accounting`.
 
-`UnknownTerm` and `UnsupportedConstruct` carry the exact source extent (byte
-range, line and column) of the first statement matching the refusal; refusals
-that name a node (shape, hint, profile, FnO binding) name subject and predicate
-only. Other media types than Turtle and TriG are refused as `LoadError::Parse`
+`UnknownTerm`, `UnsupportedConstruct`, and `UnsupportedProjection` carry the
+exact source extent (byte range, line and column) of the first statement
+matching the refusal. An unsupported projection also preserves the field-mask
+parser's offset in the decoded string. Refusals that name a node (shape, hint,
+profile, FnO binding) identify the subject and predicate. Other media types
+than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
 code is `unsupported-format` for every such media type. Role classification,
 typed tool construction, and the owned `RdfDataset` copy returned by

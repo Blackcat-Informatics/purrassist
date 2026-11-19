@@ -14,7 +14,11 @@ use purrassist_toolgraph::{
     Coercion, Construct, LoadError, LoadingStrategy, PrefixTable, TERM_NAMES, TermBindings,
     ToolGraph, Violation, Vocabulary, register_loss_profile,
 };
-use purrdf_core::loss::LossProfile;
+use purrdf_core::{
+    BlankScope,
+    blank_label::{LabelAlphabet, encode_blank_label},
+    loss::LossProfile,
+};
 
 const NAMESPACE: &str = "https://example.org/toolgraph#";
 const TOOLS: &str = include_str!("../../../docs/tool-graph/TOOLS.md");
@@ -432,29 +436,61 @@ fn a_vocabulary_statement_on_a_node_without_a_concrete_role_is_refused() {
 }
 
 // Rationale: only the four-form field-mask subset is accepted; any other jq is
-// refused with the parser's byte offset rather than ignored.
+// refused with the decoded byte offset and the written RDF statement extent.
 #[test]
 fn output_projection_outside_the_field_mask_subset_is_refused() {
-    let error = load(&edited(
-        "pa:outputProjectionJq \".orders\"",
-        "pa:outputProjectionJq \".orders | length\"",
-    ))
-    .expect_err("pipe is not a field mask");
+    let written = r#"pa:outputProjectionJq ".orders \u007C length""#;
+    let source = edited("pa:outputProjectionJq \".orders\"", written);
+    let error = load(&source).expect_err("pipe is not a field mask");
     let LoadError::UnsupportedProjection {
         subject,
+        blank_scope: None,
+        predicate,
         projection,
-        ..
+        error: purrassist_core::output::FieldMaskError::Unsupported { offset: 8 },
+        at: Some(at),
     } = error
     else {
         panic!("{error:?}");
     };
     assert_eq!(subject, format!("{EX}QueryContext"));
+    assert_eq!(predicate, format!("{NAMESPACE}outputProjectionJq"));
     assert_eq!(projection, ".orders | length");
+    assert_eq!(&source[at.start..at.end], written);
     load(&edited(
         "pa:outputProjectionJq \".orders\"",
         "pa:outputProjectionJq \".orders[]?\"",
     ))
     .expect("an optional-elements mask is in the subset");
+}
+
+// The rendered label can be equal for two blank nodes. The source extent
+// still belongs to the native scope of the context with the invalid mask.
+#[test]
+fn a_projection_refusal_locates_the_correct_scoped_blank_context() {
+    let scope = BlankScope(9);
+    let scoped = encode_blank_label("context", scope, LabelAlphabet::BlankNodeLabel);
+    let written = r#"pa:outputProjectionJq ".version | length""#;
+    let source = worked()
+        .replace("ex:QueryContext", "_:context")
+        .replace("ex:EditContext", &format!("_:{scoped}"))
+        .replacen("pa:outputProjectionJq \".version\"", written, 1);
+    let error = load(&source).expect_err("invalid mask on the scoped context");
+    let LoadError::UnsupportedProjection {
+        subject,
+        blank_scope: Some(found),
+        at: Some(at),
+        ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, "_:context");
+    assert_eq!(found, scope);
+    assert_eq!(&source[at.start..at.end], written);
+    assert!(
+        source[..at.start].contains(r#"_:context a pa:Context ; pa:outputProjectionJq ".orders""#)
+    );
 }
 
 // Rationale: budget exhaustion and cancellation are explicit errors, never a partial
