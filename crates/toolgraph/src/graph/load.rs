@@ -1695,8 +1695,15 @@ mod tests {
         let parsed =
             control::parse(CATALOG_SOURCE, NativeRdfFormat::Turtle, None, &source_owner).unwrap();
         let view = parsed.dataset().unwrap();
-        with_doc(&view, &parsed.source(), &vocabulary, &source_owner, |doc| {
-            let nodes = doc.classify(&mut source_owner.borrow_mut()).unwrap();
+        let source = parsed.source();
+        let locations = Locations {
+            view: &view,
+            source: &source,
+        };
+        with_doc(&view, &source, &vocabulary, &source_owner, |doc| {
+            let nodes = doc
+                .classify(&locations, &mut source_owner.borrow_mut())
+                .unwrap();
             check_fno_view_account(doc, &nodes);
             Ok(())
         })
