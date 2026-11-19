@@ -3,7 +3,8 @@
 
 //! The MCP Extended manifest codec over the worked example in `docs/tool-graph/TOOLS.md`.
 
-use purrassist_core::{Budget, Governor};
+use purrassist_core::tool_call::ToolSet;
+use purrassist_core::{Budget, Governor, json};
 use purrassist_toolgraph::codec::mcp::{self, CodecError, EnvelopeProblem, ManifestJson};
 use purrassist_toolgraph::{
     ContextCodecError, PrefixTable, TERM_NAMES, TermBindings, ToolGraph, Vocabulary,
@@ -11,6 +12,7 @@ use purrassist_toolgraph::{
 };
 use purrdf_core::loss::LossProfile;
 use purrdf_rdf::SerializeGraph;
+use purrdf_shapes::{engine, shapes};
 
 const NAMESPACE: &str = "https://example.org/toolgraph#";
 const TOOLS: &str = include_str!("../../../docs/tool-graph/TOOLS.md");
@@ -107,15 +109,16 @@ fn decode_of_encode_returns_the_same_graph_and_ledger() {
     assert_eq!(again, manifest);
 }
 
-// Rationale: a schema constraint with no plain JSON Schema spelling is a ledgered loss
-// that names its source shape, is registered in the caller's profile, and is the only
-// difference the round trip may show; the retained source still holds the constraint.
+// The projected schema admits both inputs. The retained SHACL shape must still
+// reject the unequal values after decoding, and the ledger must explain the gap.
 #[test]
 fn an_inexpressible_shape_constraint_is_ledgered_and_survives_in_the_source() {
     let from = "ex:pathShape a sh:PropertyShape ; sh:path ex:path ;";
     let source = worked();
     assert!(source.contains(from));
-    let source = source.replacen(from, &format!("{from} sh:equals ex:text ;"), 1);
+    let mut source = source.replacen(from, &format!("{from} sh:equals ex:text ;"), 1);
+    // Select the focus node without adding rdf:type to its closed argument shape.
+    source.push_str("\nex:EditInput sh:targetSubjectsOf ex:path .\n");
     let graph = load(&source);
     let vocabulary = vocabulary();
     let (manifest, losses) = mcp::encode(&graph, &vocabulary, &mut governor()).expect("encode");
@@ -138,6 +141,29 @@ fn an_inexpressible_shape_constraint_is_ledgered_and_survives_in_the_source() {
         mcp::decode(&manifest, &vocabulary, &mut governor()).expect("decode");
     assert_eq!(decoded_losses, losses);
     assert_eq!(turtle(&decoded), turtle(&graph));
+
+    let shapes = shapes::from_dataset(decoded.dataset()).expect("decode original SHACL shapes");
+    let tools = ToolSet::from_mcp(manifest.as_str(), Budget::default()).expect("adapt manifest");
+    let schema = tools.tool("edit_file").expect("edit tool").schema();
+    for (text, conforms) in [("notes.txt", true), ("replacement", false)] {
+        let arguments =
+            json::parse(&format!(r#"{{"path":"notes.txt","text":"{text}"}}"#)).expect("arguments");
+        assert!(schema.validate(&arguments).expect("validate JSON").valid);
+
+        let data = format!(
+            r#"@prefix ex: <https://example.org/tools/> .
+               ex:args ex:path "notes.txt" ; ex:text "{text}" ."#
+        );
+        let dataset = purrdf_rdf::parse_dataset(data.as_bytes(), "text/turtle", None)
+            .expect("parse RDF arguments");
+        let report = engine::validate_dataset(&dataset, &shapes).expect("validate RDF arguments");
+        assert_eq!(report.conforms, conforms, "{:?}", report.results);
+        assert_eq!(report.results.is_empty(), conforms);
+        assert!(report.results.iter().all(|result| {
+            result.source_constraint_component.as_str()
+                == "http://www.w3.org/ns/shacl#EqualsConstraintComponent"
+        }));
+    }
 }
 
 // Rationale: legacy wire forms are refused, never migrated or read as bytes: a v1
