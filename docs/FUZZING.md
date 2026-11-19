@@ -3,9 +3,9 @@
 # Coverage-guided and differential qualification
 
 `scripts/fuzz.py --target <name>` generalizes the original single-purpose
-JSON runner (`scripts/fuzz-json.py`, now removed) across ten
+JSON runner (`scripts/fuzz-json.py`, now removed) across eleven
 `purrassist-core` targets: `json`, `markdown`, `schema`, `pattern`,
-`unified`, `fuzzy`, `matching`, `patch`, `tool-call`, `tool-call-ref`. Each target is a
+`unified`, `fuzzy`, `matching`, `patch`, `tool-call`, `tool-call-ref`, `provider-log`. Each target is a
 process-isolated Rust example (`crates/core/examples/fuzz_<target>.rs`, with
 `-` spelled `_`; `tool-call-ref` runs the `tool-call` example with `--tools ref`; registered as `[[example]] name = "fuzz-<target>"` in
 `crates/core/Cargo.toml`) that reads bounded stdin (at most 4,096 bytes),
@@ -47,7 +47,8 @@ skipping.
 
 ## Targets, invariants, and seed provenance
 
-Every probe except `tool-call` and `tool-call-ref` rejects invalid UTF-8 explicitly before
+The `tool-call`, `tool-call-ref` and `provider-log` probes accept raw bytes.
+Every other probe rejects invalid UTF-8 explicitly before
 entering the core (the report counts those executions in `invalid_utf8`).
 Tool-call recovery accepts arbitrary bytes and records each invalid UTF-8
 run as a loss, so the `tool-call` probe admits them and always completes
@@ -330,6 +331,17 @@ targets' mutation tokens so mutation can create or move field boundaries).
   branches of `pop` and `nesting` in `crates/core/src/grammar/codec/xml.rs`
   and the scope-graph paths comes from the llvm-cov procedure under "Replaying
   coverage evidence" below.
+
+- **`provider-log`**: the first byte's low bit chooses Anthropic Messages
+  or OpenAI Chat Completions. The next bit selects a 128-byte intake budget.
+  The second byte plus one chooses chunk width. Replay the remaining bytes
+  as a single chunk and at the selected width. Compare admitted source,
+  typed faults, spans, events and the complete recovery receipt, including
+  resource usage. Seeds include the complete recorded Anthropic response,
+  its cut terminal event, and a complete OpenAI seed projected to its
+  `choices` members and terminal marker. The portable harness replays the
+  complete source recording for each provider.
+  [Fixture provenance](../crates/wasm-harness/src/provider_logs/README.md)
 
 ## Differential probes
 
@@ -859,7 +871,6 @@ matches its single source, [known-limitations.json](known-limitations.json);
 - [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
 - [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
 - [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
-- [#17](https://github.com/Blackcat-Informatics/purrassist/issues/17) Tool-call recovery: reassemble provider streaming events (Anthropic SSE tool_use, OpenAI tool_calls deltas). Anthropic Messages SSE `tool_use` event logs are reassembled into a turn by the Rust API; OpenAI `tool_calls` delta streams, CLI and MCP event-log inputs, provider-log fixtures, fuzz seeds and WASM parity are not yet implemented.
 - [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
 
 The default `make fuzz` stops on the #11 signatures. "Known slow input
@@ -891,7 +902,7 @@ Exact discovery counts are tied to compiler, flags, and source mapping; they
 are not comparable coverage percentages across toolchain versions.
 
 **Smoke** (`verify.yml` on pull requests, main-branch pushes, and manual
-runs): `make fuzz-hosted` runs the corpus-feedback test once and all ten
+runs): `make fuzz-hosted` runs the corpus-feedback test once and all eleven
 targets with the runner's default 1,000 mutations each and default 10 s
 probe timeout, including `tool-call-ref` and its exact issue #11 request.
 Every probe panic stops the campaign. `TARGET` and `FUZZ_ARGS`
@@ -917,7 +928,7 @@ fields are never reconstructed retrospectively. New Markdown reports
 add guarded engine/harness/runner hashes and a private executable snapshot.
 The full local gate and hosted smoke campaigns on the exact final commit
 provide separate final-integration evidence; hosted smoke (`make fuzz-hosted`)
-must execute 1,000 mutations for each of all ten targets, failing on every
+must execute 1,000 mutations for each of all eleven targets, failing on every
 probe panic and applying the default 10 s probe timeout to every target.
 
 ### Replaying coverage evidence
@@ -989,6 +1000,7 @@ source/tool identities, rather than whole-crate coverage percentages.
 | [patch](qualification/fuzz-patch-linux-x86_64.json) | 10,003 | 435 | 5 | 0 | 0 | not recorded |
 | tool-call | none | none | none | none | none | none |
 | tool-call-ref | none | none | none | none | none | none |
+| provider-log | none | none | none | none | none | none |
 
 The final Markdown phase rejected 332 invalid UTF-8 inputs explicitly and
 reported zero resource non-results. Its 9,683 comparisons include 27 independently

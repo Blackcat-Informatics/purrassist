@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //! Single-source acceptance transcript shared through the harness Cargo library.
 //! Native, WASI and browser-WASM callers exercise the actual core engines.
+mod provider_logs;
+
 use purrassist_core::{
     Budget, CancellationToken, Effort, Governor, Outcome, StopReason,
     contract::Resource,
@@ -90,6 +92,7 @@ pub fn transcript_json() -> String {
     transcript.push(list_transcript());
     transcript.push(reference_transcript());
     transcript.push(tool_call_transcript());
+    transcript.push(provider_logs::transcript());
     transcript.push(output_projection_transcript());
     array(transcript).to_json()
 }
