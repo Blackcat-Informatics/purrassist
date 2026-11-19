@@ -1444,3 +1444,45 @@ fn the_gbnf_lane_ledgers_input_shape_and_the_ledger_is_sound() {
     )
     .expect("sound ledger");
 }
+
+// Upstream losses from argument and result shapes must reach the check that
+// can enforce them. The GBNF ledger retains the native loss location.
+#[test]
+fn upstream_schema_losses_name_the_check_for_their_original_direction() {
+    let turtle = worked_turtle()
+        .replacen(
+            "ex:customerIdShape a sh:PropertyShape ; sh:path ex:customer_id ;",
+            "ex:customerIdShape a sh:PropertyShape ; sh:path ex:customer_id ; sh:equals ex:limit ;",
+            1,
+        )
+        .replacen(
+            "sh:property [ sh:path ex:orders ;",
+            "sh:property [ sh:path ex:orders ; sh:equals ex:mirror ;",
+            1,
+        );
+    let (vocabulary, graph) = load_example(&turtle);
+    let mut governor = Governor::new(Budget::default());
+    let (_, native) = mcp::encode(&graph, &vocabulary, &mut governor).expect("manifest");
+    let [input, output] = native.entries() else {
+        panic!("one native loss per direction: {:?}", native.entries());
+    };
+    assert_eq!(input.code, "sh:equals");
+    assert_eq!(output.code, "sh:equals");
+
+    let (_, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("GBNF");
+    let mut carried = ledger
+        .entries()
+        .iter()
+        .filter(|entry| entry.note.contains("upstream schema compiler omitted"));
+    for (original, code, check) in [
+        (input, "input-shape-not-expressible", "validate-input"),
+        (output, "output-shape-not-expressible", "validate-output"),
+    ] {
+        let entry = carried.next().expect("carried native loss");
+        assert_eq!(entry.code, code);
+        assert_eq!(entry.location, original.location);
+        assert!(entry.note.contains(original.note.as_ref()));
+        assert!(entry.note.ends_with(check), "{}", entry.note);
+    }
+    assert!(carried.next().is_none());
+}

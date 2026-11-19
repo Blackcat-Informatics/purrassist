@@ -48,14 +48,23 @@ pub(super) fn record_upstream(
     code: &'static str,
 ) {
     for entry in upstream.entries() {
-        let note = format!(
-            "upstream schema compiler omitted a construct ({}): {}",
-            entry.code, entry.note
-        );
-        ledger.record(LossEntry {
-            location: entry.location.clone(),
-            ..entry_for(target, code, note, None)
-        });
+        ledger.record(upstream_loss(target, code, entry));
+    }
+}
+
+/// Translate one native schema loss without losing its original source location.
+pub(super) fn upstream_loss(
+    target: ProjectionTarget,
+    code: &'static str,
+    entry: &LossEntry,
+) -> LossEntry {
+    let note = format!(
+        "upstream schema compiler omitted a construct ({}): {}",
+        entry.code, entry.note
+    );
+    LossEntry {
+        location: entry.location.clone(),
+        ..entry_for(target, code, note, None)
     }
 }
 

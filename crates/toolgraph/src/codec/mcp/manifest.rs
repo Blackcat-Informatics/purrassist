@@ -23,7 +23,7 @@ use purrassist_core::{
     contract::Resource,
     json::{self, Member, Node, ParseFailure, Value},
 };
-use purrdf_core::loss::{LossLedger, LossSoundnessError, check_ledger_sound_in};
+use purrdf_core::loss::{LossEntry, LossLedger, LossSoundnessError, check_ledger_sound_in};
 use purrdf_rdf::{RdfDiagnostic, SerializeGraph};
 use purrdf_shapes::{
     ShapesError,
@@ -229,7 +229,17 @@ pub fn encode(
     vocabulary: &Vocabulary,
     governor: &mut Governor,
 ) -> Result<(ManifestJson, LossLedger), CodecError> {
-    let (tools, ledger) = project(graph, vocabulary, governor)?;
+    encode_with_schema_losses(graph, vocabulary, governor, &mut |_, _| {})
+}
+
+/// Encode the same manifest while observing each schema's native losses.
+pub(crate) fn encode_with_schema_losses(
+    graph: &ToolGraph,
+    vocabulary: &Vocabulary,
+    governor: &mut Governor,
+    observe: &mut dyn FnMut(SchemaDirection, &[LossEntry]),
+) -> Result<(ManifestJson, LossLedger), CodecError> {
+    let (tools, ledger) = project(graph, vocabulary, governor, observe)?;
     let bytes = purrdf_rdf::serialize_dataset(
         graph.dataset().as_ref(),
         MEDIA_TYPE,
@@ -337,7 +347,7 @@ pub fn decode(
         governor,
     )
     .map_err(|cause| CodecError::Load(Box::new(cause)))?;
-    let (projected, ledger) = project(&graph, vocabulary, governor)?;
+    let (projected, ledger) = project(&graph, vocabulary, governor, &mut |_, _| {})?;
     if projected.len() != declarations.len() {
         return Err(CodecError::Disagreement {
             tool: None,
@@ -355,8 +365,12 @@ fn project(
     graph: &ToolGraph,
     vocabulary: &Vocabulary,
     governor: &mut Governor,
+    observe: &mut dyn FnMut(SchemaDirection, &[LossEntry]),
 ) -> Result<(Vec<Node>, LossLedger), CodecError> {
-    let mut ledger = LossLedger::new();
+    let mut losses = SchemaLosses {
+        ledger: LossLedger::new(),
+        observe,
+    };
     let mut tools = Vec::with_capacity(graph.tools().len());
     if !graph.tools().is_empty() {
         let shapes = purrdf_shapes::shapes::from_dataset(graph.dataset())
@@ -376,12 +390,38 @@ fn project(
                 vocabulary,
                 limits: &limits,
             };
-            tools.push(project_tool(index, tool, &context, governor, &mut ledger)?);
+            tools.push(project_tool(index, tool, &context, governor, &mut losses)?);
         }
     }
-    check_ledger_sound_in(vocabulary.loss_profile(), &ledger, SCHEMA_FROM, SCHEMA_TO)
-        .map_err(|cause| CodecError::UnsoundLoss(cause.into_owned()))?;
-    Ok((tools, ledger))
+    check_ledger_sound_in(
+        vocabulary.loss_profile(),
+        &losses.ledger,
+        SCHEMA_FROM,
+        SCHEMA_TO,
+    )
+    .map_err(|cause| CodecError::UnsoundLoss(cause.into_owned()))?;
+    Ok((tools, losses.ledger))
+}
+
+/// The declaration member whose schema compiler produced a loss.
+#[derive(Clone, Copy)]
+pub(crate) enum SchemaDirection {
+    Input,
+    Output,
+}
+
+impl SchemaDirection {
+    const fn member(self) -> &'static str {
+        match self {
+            Self::Input => "inputSchema",
+            Self::Output => "outputSchema",
+        }
+    }
+}
+
+struct SchemaLosses<'a> {
+    ledger: LossLedger,
+    observe: &'a mut dyn FnMut(SchemaDirection, &[LossEntry]),
 }
 
 /// Shared inputs of one tool projection.
@@ -396,27 +436,27 @@ fn project_tool(
     tool: &Tool,
     context: &Context<'_>,
     governor: &mut Governor,
-    ledger: &mut LossLedger,
+    losses: &mut SchemaLosses<'_>,
 ) -> Result<Node, CodecError> {
     let input = schema(
         tool,
-        "inputSchema",
+        SchemaDirection::Input,
         &tool.input_shape,
         tool.parameters
             .iter()
             .map(|parameter| (&parameter.predicate, &parameter.implementation_property)),
         context,
         governor,
-        ledger,
+        losses,
     )?;
     let output = schema(
         tool,
-        "outputSchema",
+        SchemaDirection::Output,
         &tool.output_shape,
         std::iter::once((&tool.output.predicate, &tool.output.implementation_property)),
         context,
         governor,
-        ledger,
+        losses,
     )?;
     let recovery_hints = tool
         .parameters
@@ -463,16 +503,16 @@ fn project_tool(
 /// Compile one shape to a plain JSON Schema node, recording its upstream losses.
 fn schema<'a>(
     tool: &Tool,
-    member: &'static str,
+    direction: SchemaDirection,
     shape: &str,
     fields: impl Iterator<Item = (&'a String, &'a String)>,
     context: &Context<'_>,
     governor: &mut Governor,
-    ledger: &mut LossLedger,
+    losses: &mut SchemaLosses<'_>,
 ) -> Result<Node, CodecError> {
     let refuse = |error| CodecError::Schema {
         tool: tool.name.clone(),
-        member,
+        member: direction.member(),
         error: Box::new(error),
     };
     let class = root_class(context.shapes, shape).ok_or_else(|| {
@@ -498,8 +538,10 @@ fn schema<'a>(
         context.limits,
     )
     .map_err(refuse)?;
-    for entry in compiled.losses.entries() {
-        ledger.record(entry.clone());
+    let entries = compiled.losses.entries();
+    (losses.observe)(direction, entries);
+    for entry in entries {
+        losses.ledger.record(entry.clone());
     }
     json::parse_with(&compiled.schema_json, governor).map_err(CodecError::Json)
 }
