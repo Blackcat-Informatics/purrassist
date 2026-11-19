@@ -24,8 +24,9 @@ use purrdf_lex::{
 use purrdf_rdf::{BorrowedSource, SourceStatementKind};
 
 use super::{
-    Coercion, Construct, Hint, LoadError, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile,
-    ToolGraph, ToolImplementation, ToolOutput, ToolParameter, Violation, Waiver,
+    Coercion, Construct, Hint, LoadError, ProfileRule, SourceExtent, Tool, ToolAnnotations,
+    ToolExecutionProfile, ToolGraph, ToolImplementation, ToolOutput, ToolParameter, Violation,
+    Waiver,
 };
 use crate::{
     CallableBinding, ContextManagement, LoadingStrategy, OutputByteLimit, ResourceLimits,
@@ -160,7 +161,7 @@ where
         doc.scan_vocabulary(&mut governor.borrow_mut())?;
         let nodes = doc.classify(&mut governor.borrow_mut())?;
         doc.own_every_row(&nodes, &mut governor.borrow_mut())?;
-        doc.validate_nodes(&nodes, &mut governor.borrow_mut())?;
+        doc.validate_nodes(&nodes, view, source, &mut governor.borrow_mut())?;
         let catalog = doc.read_catalog(&nodes, view, source, governor)?;
         let tools = doc.build_tools(&nodes, catalog.as_ref(), &mut governor.borrow_mut())?;
         Ok((tools, catalog))
@@ -736,6 +737,7 @@ impl Doc<'_> {
                 return Err(LoadError::InvalidExecutionProfile {
                     subject: show(node),
                     predicate: self.term("rule").to_owned(),
+                    at: None,
                     violation: Violation::Detail(
                         "a rule needs exactly one concrete rule class".to_owned(),
                     ),
@@ -746,30 +748,46 @@ impl Doc<'_> {
         Ok(mask)
     }
 
-    fn wrap(role: u16, subject: &TermValue, predicate: &str, violation: Violation) -> LoadError {
+    fn wrap(
+        role: u16,
+        subject: &TermValue,
+        predicate: &str,
+        violation: Violation,
+        at: Option<SourceExtent>,
+    ) -> LoadError {
         let (subject, predicate) = (show(subject), predicate.to_owned());
+        let at = at.map(Box::new);
         if role & (Role::TOOL | Role::CONTEXT) != 0 {
             LoadError::InvalidShape {
                 subject,
                 predicate,
                 violation,
+                at,
             }
         } else if role == Role::HINT {
             LoadError::InvalidHint {
                 subject,
                 predicate,
                 violation,
+                at,
             }
         } else {
             LoadError::InvalidExecutionProfile {
                 subject,
                 predicate,
                 violation,
+                at,
             }
         }
     }
 
-    fn validate_nodes(&self, nodes: &Nodes, governor: &mut Governor) -> Result<(), LoadError> {
+    fn validate_nodes<V: DatasetView<Id = TermId>>(
+        &self,
+        nodes: &Nodes,
+        view: &V,
+        source: &BorrowedSource<'_>,
+        governor: &mut Governor,
+    ) -> Result<(), LoadError> {
         for (node, &mask) in &nodes.roles {
             let mask = self.concrete(node, mask)?;
             if mask == 0 {
@@ -792,6 +810,8 @@ impl Doc<'_> {
                 if let Some(name) = self.bound(&row.p)
                     && Role::domain(name) & mask == 0
                 {
+                    let at =
+                        control::default_row_extent(view, source, node, &row.p, &row.o, governor)?;
                     return Err(Self::wrap(
                         Role::first(mask),
                         node,
@@ -799,6 +819,7 @@ impl Doc<'_> {
                         Violation::Domain {
                             subject_role: Role::label(Role::first(mask)),
                         },
+                        at,
                     ));
                 }
             }
@@ -809,7 +830,7 @@ impl Doc<'_> {
                     let values = self.objects(node, predicate);
                     let found = values.len();
                     if found < usize::from(spec.min) {
-                        return Err(Self::wrap(role, node, predicate, Violation::Missing));
+                        return Err(Self::wrap(role, node, predicate, Violation::Missing, None));
                     }
                     if found > usize::from(spec.max) {
                         return Err(Self::wrap(
@@ -817,11 +838,16 @@ impl Doc<'_> {
                             node,
                             predicate,
                             Violation::TooMany { found },
+                            None,
                         ));
                     }
                     for value in values {
-                        check_value(spec.kind, value)
-                            .map_err(|violation| Self::wrap(role, node, predicate, violation))?;
+                        if let Err(violation) = check_value(spec.kind, value) {
+                            let at = control::default_row_extent(
+                                view, source, node, predicate, value, governor,
+                            )?;
+                            return Err(Self::wrap(role, node, predicate, violation, at));
+                        }
                     }
                 }
                 if role == Role::NETWORK {
@@ -832,22 +858,28 @@ impl Doc<'_> {
                             node,
                             self.term("protocol"),
                             Violation::Exclusive,
+                            None,
                         ));
                     }
                 }
                 if role == Role::MOUNT
-                    && !self
+                    && let Some(value) = self
                         .objects_of(node, "deny")
-                        .iter()
-                        .all(|value| boolean(value))
+                        .into_iter()
+                        .find(|value| !boolean(value))
                 {
+                    let predicate = self.term("deny");
+                    let at = control::default_row_extent(
+                        view, source, node, predicate, value, governor,
+                    )?;
                     return Err(Self::wrap(
                         role,
                         node,
-                        self.term("deny"),
+                        predicate,
                         Violation::OutOfRange {
                             expected: "true: a mount rule is always a denial",
                         },
+                        at,
                     ));
                 }
             }
@@ -1034,6 +1066,7 @@ impl Doc<'_> {
                 return Err(LoadError::InvalidShape {
                     subject: show(node),
                     predicate: self.term("name").to_owned(),
+                    at: None,
                     violation: Violation::Duplicate,
                 });
             }
@@ -1047,6 +1080,7 @@ impl Doc<'_> {
                 LoadError::InvalidHint {
                     subject: show(&reifier.id),
                     predicate: reifier.p.clone(),
+                    at: None,
                     violation: Violation::Unresolved,
                 }
             } else {
@@ -1096,6 +1130,7 @@ impl Doc<'_> {
             return Err(LoadError::InvalidShape {
                 subject: show(node),
                 predicate: self.term("name").to_owned(),
+                at: None,
                 violation: Violation::WrongKind {
                     expected: "an IRI subject",
                 },
@@ -1106,6 +1141,7 @@ impl Doc<'_> {
             return Err(LoadError::InvalidShape {
                 subject: iri.clone(),
                 predicate: self.term("subtool").to_owned(),
+                at: None,
                 violation: Violation::Unresolved,
             });
         }
@@ -1144,6 +1180,7 @@ impl Doc<'_> {
             .ok_or_else(|| LoadError::InvalidShape {
                 subject: show(node),
                 predicate: self.term(name).to_owned(),
+                at: None,
                 violation: Violation::Missing,
             })
     }
@@ -1213,6 +1250,7 @@ impl Doc<'_> {
             return Err(LoadError::InvalidShape {
                 subject: show(&input_shape),
                 predicate: extra.clone(),
+                at: None,
                 violation: Violation::Unresolved,
             });
         }
@@ -1231,6 +1269,7 @@ impl Doc<'_> {
             return Err(LoadError::InvalidShape {
                 subject: show(&output_shape),
                 predicate: extra.clone(),
+                at: None,
                 violation: Violation::Unresolved,
             });
         }
@@ -1260,6 +1299,7 @@ impl Doc<'_> {
             return Err(LoadError::InvalidShape {
                 subject: show(shape),
                 predicate: RDF_TYPE.to_owned(),
+                at: None,
                 violation: Violation::Unresolved,
             });
         }
@@ -1269,6 +1309,7 @@ impl Doc<'_> {
                 return Err(LoadError::InvalidShape {
                     subject: show(property),
                     predicate: SH_PATH.to_owned(),
+                    at: None,
                     violation: Violation::Missing,
                 });
             };
@@ -1293,11 +1334,13 @@ impl Doc<'_> {
             Some(_) => Err(LoadError::InvalidShape {
                 subject: show(shape),
                 predicate: SH_PROPERTY.to_owned(),
+                at: None,
                 violation: Violation::Duplicate,
             }),
             None => Err(LoadError::InvalidShape {
                 subject: show(shape),
                 predicate: SH_PROPERTY.to_owned(),
+                at: None,
                 violation: Violation::Unresolved,
             }),
         }
@@ -1322,6 +1365,7 @@ impl Doc<'_> {
                 Some(&second) => Err(LoadError::InvalidHint {
                     subject: show(&self.reifiers[second].id),
                     predicate: SH_PATH.to_owned(),
+                    at: None,
                     violation: Violation::Duplicate,
                 }),
                 None => Ok(None),
@@ -1336,6 +1380,7 @@ impl Doc<'_> {
             return Err(LoadError::InvalidHint {
                 subject: show(id),
                 predicate: self.term("typeCoercion").to_owned(),
+                at: None,
                 violation: Violation::OutOfRange {
                     expected: "none alone, or conversions without none",
                 },
@@ -1409,6 +1454,7 @@ impl Doc<'_> {
             return Err(LoadError::InvalidExecutionProfile {
                 subject: show(node),
                 predicate: self.term("subprofile").to_owned(),
+                at: None,
                 violation: Violation::Cycle,
             });
         }

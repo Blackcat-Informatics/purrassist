@@ -150,6 +150,7 @@ impl fmt::Display for SourceExtent {
 /// [`UnsupportedProjection`](Self::UnsupportedProjection) can carry the exact
 /// [`SourceExtent`] of their refused statement. [`InvalidFnoBinding`](Self::InvalidFnoBinding)
 /// carries it when the reader identifies a specific written statement.
+/// Role violations carry it when validation identifies a specific refused value.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum LoadError {
@@ -184,6 +185,8 @@ pub enum LoadError {
         predicate: String,
         /// The violation.
         violation: Violation,
+        /// The written extent of a specific refused statement, if identified.
+        at: Option<Box<SourceExtent>>,
     },
     /// The `FnO` catalog or a tool's callable binding was refused.
     InvalidFnoBinding {
@@ -204,6 +207,8 @@ pub enum LoadError {
         predicate: String,
         /// The violation.
         violation: Violation,
+        /// The written extent of a specific refused statement, if identified.
+        at: Option<Box<SourceExtent>>,
     },
     /// An execution profile, waiver or rule node is malformed.
     InvalidExecutionProfile {
@@ -213,6 +218,8 @@ pub enum LoadError {
         predicate: String,
         /// The violation.
         violation: Violation,
+        /// The written extent of a specific refused statement, if identified.
+        at: Option<Box<SourceExtent>>,
     },
     /// A construct the loader refuses rather than skips.
     UnsupportedConstruct {
@@ -275,17 +282,23 @@ impl fmt::Display for LoadError {
                 subject,
                 predicate,
                 violation,
+                at,
             }
             | Self::InvalidHint {
                 subject,
                 predicate,
                 violation,
+                at,
             }
             | Self::InvalidExecutionProfile {
                 subject,
                 predicate,
                 violation,
-            } => write!(f, "{subject} {predicate}: {violation}"),
+                at,
+            } => {
+                write!(f, "{subject} {predicate}: {violation}")?;
+                at.iter().try_for_each(|at| write!(f, " ({at})"))
+            }
             Self::InvalidFnoBinding {
                 subject,
                 predicate,

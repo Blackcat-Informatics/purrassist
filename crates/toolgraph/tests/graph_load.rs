@@ -220,8 +220,8 @@ fn a_term_the_vocabulary_does_not_bind_is_refused_with_subject_and_predicate() {
     load(&worked()).expect("neighbouring valid input");
 }
 
-// Rationale: a missing required property and an out-of-range value are shape
-// violations naming the node and predicate.
+// A refused value or misplaced predicate identifies a written statement.
+// A missing required property has no such statement.
 #[test]
 fn a_violated_vocabulary_shape_names_the_node_and_predicate() {
     let missing = load(&edited("pa:name \"edit_file\" ; ", "")).expect_err("name is required");
@@ -229,6 +229,7 @@ fn a_violated_vocabulary_shape_names_the_node_and_predicate() {
         subject,
         predicate,
         violation,
+        at: None,
     } = missing
     else {
         panic!("{missing:?}");
@@ -236,17 +237,31 @@ fn a_violated_vocabulary_shape_names_the_node_and_predicate() {
     assert_eq!(subject, format!("{EX}edit_file"));
     assert_eq!(predicate, format!("{NAMESPACE}name"));
     assert_eq!(violation, Violation::Missing);
-    let range = load(&edited("pa:maxOutputBytes 4096", "pa:maxOutputBytes 0"));
-    assert!(
-        matches!(
-            range,
-            Err(LoadError::InvalidShape {
-                violation: Violation::OutOfRange { .. },
-                ..
-            })
-        ),
-        "{range:?}"
-    );
+    let written = "pa:maxOutputBytes 0";
+    let source = edited("pa:maxOutputBytes 4096", written);
+    let range = load(&source).expect_err("invalid byte limit");
+    let LoadError::InvalidShape {
+        violation: Violation::OutOfRange { .. },
+        at: Some(at),
+        ..
+    } = range
+    else {
+        panic!("{range:?}")
+    };
+    assert_eq!(&source[at.start..at.end], written);
+
+    let written = r#"pa:alias "misplaced""#;
+    let source = format!("{}\nex:QueryContext {written} .\n", worked());
+    let domain = load(&source).expect_err("hint predicate on query context");
+    let LoadError::InvalidShape {
+        violation: Violation::Domain { .. },
+        at: Some(at),
+        ..
+    } = domain
+    else {
+        panic!("{domain:?}")
+    };
+    assert_eq!(&source[at.start..at.end], written);
     load(&worked()).expect("neighbouring valid input");
 }
 
@@ -356,6 +371,7 @@ fn an_incomplete_parameter_hint_is_refused_at_the_hint() {
         subject,
         predicate,
         violation,
+        at: None,
     } = error
     else {
         panic!("{error:?}");
@@ -363,6 +379,18 @@ fn an_incomplete_parameter_hint_is_refused_at_the_hint() {
     assert_eq!(subject, format!("{EX}customerClaim"));
     assert_eq!(predicate, format!("{NAMESPACE}maxEditDistance"));
     assert_eq!(violation, Violation::Missing);
+    let written = r#"pa:alias "customer"@en"#;
+    let source = format!("{}\nex:customerClaim {written} .\n", worked());
+    let wrong_kind = load(&source).expect_err("a hint alias requires a plain string");
+    let LoadError::InvalidHint {
+        violation: Violation::WrongKind { .. },
+        at: Some(at),
+        ..
+    } = wrong_kind
+    else {
+        panic!("{wrong_kind:?}")
+    };
+    assert_eq!(&source[at.start..at.end], written);
     // A reifier that annotates no parameter path is not silently ignored either.
     let orphan = load(&edited(
         "<< ex:pathShape sh:path ex:path ~ ex:pathClaim >> .",
@@ -379,15 +407,14 @@ fn an_incomplete_parameter_hint_is_refused_at_the_hint() {
 // nested-profile cycle check keeps a self-referencing child from looping.
 #[test]
 fn an_invalid_execution_profile_is_refused() {
-    let error = load(&edited(
-        "pa:confinementMode \"change_hat\"",
-        "pa:confinementMode \"unconfined\"",
-    ))
-    .expect_err("unknown confinement mode");
+    let written = r#"pa:confinementMode "unconfined""#;
+    let source = edited(r#"pa:confinementMode "change_hat""#, written);
+    let error = load(&source).expect_err("unknown confinement mode");
     let LoadError::InvalidExecutionProfile {
         subject,
         predicate,
         violation,
+        at: Some(at),
     } = error
     else {
         panic!("{error:?}");
@@ -395,6 +422,23 @@ fn an_invalid_execution_profile_is_refused() {
     assert_eq!(subject, format!("{EX}DatabaseProfile"));
     assert_eq!(predicate, format!("{NAMESPACE}confinementMode"));
     assert!(matches!(violation, Violation::OutOfRange { .. }));
+    assert_eq!(&source[at.start..at.end], written);
+
+    let written = "pa:deny false";
+    let source = edited(
+        r#"pa:mountOperation "mount" ; pa:deny true"#,
+        &format!(r#"pa:mountOperation "mount" ; {written}"#),
+    );
+    let allowed_mount = load(&source).expect_err("mount rules require a denial");
+    let LoadError::InvalidExecutionProfile {
+        violation: Violation::OutOfRange { .. },
+        at: Some(at),
+        ..
+    } = allowed_mount
+    else {
+        panic!("{allowed_mount:?}")
+    };
+    assert_eq!(&source[at.start..at.end], written);
     let cycle = load(&edited(
         "pa:egressAllowed true ;",
         "pa:egressAllowed true ; pa:subprofile ex:DatabaseProfile ;",
