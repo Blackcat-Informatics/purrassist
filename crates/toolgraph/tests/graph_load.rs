@@ -412,14 +412,21 @@ fn an_incomplete_parameter_hint_is_refused_at_the_hint() {
     };
     assert_eq!(&source[at.start..at.end], written);
     // A reifier that annotates no parameter path is not silently ignored either.
-    let orphan = load(&edited(
+    let binding = "<< ex:pathShape sh:path ex:text ~ ex:pathClaim >>";
+    let source = edited(
         "<< ex:pathShape sh:path ex:path ~ ex:pathClaim >> .",
-        "<< ex:pathShape sh:path ex:text ~ ex:pathClaim >> .",
-    ));
-    assert!(
-        matches!(orphan, Err(LoadError::InvalidHint { .. })),
-        "{orphan:?}"
+        &format!("{binding} ."),
     );
+    let error = load(&source).expect_err("the hint binds an unused path");
+    let LoadError::InvalidHint {
+        violation: Violation::Unresolved,
+        at: Some(at),
+        ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(&source[at.start..at.end], binding);
     load(&worked()).expect("neighbouring valid input");
 }
 
@@ -820,17 +827,19 @@ fn an_empty_named_graph_is_refused_not_dropped() {
     assert_eq!(&source[at.start..at.end], "<urn:empty-graph>");
 }
 
-/// Unwrap an `UnsupportedConstruct` refusal into its subject, predicate and construct.
-fn unsupported_construct(error: LoadError) -> (String, String, Construct) {
+/// Check the source occurrence and return its typed construct diagnostic.
+fn unsupported_construct(source: &str, written: &str) -> (String, String, Construct) {
+    let error = load(source).expect_err("unsupported construct");
     let LoadError::UnsupportedConstruct {
         subject,
         predicate,
         construct,
-        ..
+        at: Some(at),
     } = error
     else {
         panic!("{error:?}");
     };
+    assert_eq!(&source[at.start..at.end], written);
     (subject, predicate, construct)
 }
 
@@ -946,7 +955,10 @@ fn an_unconsumed_reifier_that_is_not_a_hint_is_refused_as_a_reifier() {
          ex:plainReifier pa:maxEditDistance 0 ; pa:typeCoercion \"none\" ;\n \
          pa:caseFold false ; pa:unicodeFold false .",
     );
-    let (subject, predicate, construct) = unsupported_construct(load(&source).unwrap_err());
+    let (subject, predicate, construct) = unsupported_construct(
+        &source,
+        r#"<< ex:EditResult rdfs:label "x" ~ ex:plainReifier >>"#,
+    );
     assert_eq!(
         (subject.as_str(), predicate.as_str(), construct),
         (
@@ -966,7 +978,8 @@ fn a_call_time_fact_in_a_tool_graph_is_refused_as_a_runtime_fact() {
         "ex:EditResult a rdfs:Class .",
         "ex:EditResult a rdfs:Class ; pa:userId \"customer-17\" .",
     );
-    let (subject, predicate, construct) = unsupported_construct(load(&predicate_form).unwrap_err());
+    let (subject, predicate, construct) =
+        unsupported_construct(&predicate_form, r#"pa:userId "customer-17""#);
     assert_eq!(
         (subject.as_str(), predicate, construct),
         (
@@ -979,7 +992,7 @@ fn a_call_time_fact_in_a_tool_graph_is_refused_as_a_runtime_fact() {
         "ex:EditResult a rdfs:Class .",
         "ex:EditResult a rdfs:Class, pa:Session .",
     );
-    let (_, _, construct) = unsupported_construct(load(&class_form).unwrap_err());
+    let (_, _, construct) = unsupported_construct(&class_form, "a rdfs:Class, pa:Session");
     assert_eq!(construct, Construct::RuntimeFact);
 }
 
@@ -991,14 +1004,14 @@ fn a_function_without_a_tool_is_refused_as_a_function_without_a_tool() {
     let source = edited(
         "ex:EditResult a rdfs:Class .",
         "ex:EditResult a rdfs:Class .\n\
-         ex:orphanFunction a fno:Function ; rdfs:label \"orphan\" ; fno:expects ( ) ; fno:returns ( ex:orphanOutput ) .\n\
+         ex:orphanFunction a rdfs:Class ; a fno:Function ; rdfs:label \"orphan\" ; fno:expects ( ) ; fno:returns ( ex:orphanOutput ) .\n\
          ex:orphanOutput a fno:Output ; fno:predicate ex:orphan ; fno:type xsd:string .\n\
          _:orphanMapping a fno:Mapping ; rdfs:label \"orphan binding\" ; fno:function ex:orphanFunction ;\n \
          fno:implementation ex:editImplementation ; fno:returnMapping _:orphanReturn .\n\
          _:orphanReturn a fnom:DefaultReturnMapping ; rdfs:label \"orphan return\" ; fnom:functionOutput ex:orphanOutput ;\n \
          fnom:implementationProperty \"orphan\" .",
     );
-    let (subject, predicate, construct) = unsupported_construct(load(&source).unwrap_err());
+    let (subject, predicate, construct) = unsupported_construct(&source, "a fno:Function");
     assert_eq!(
         (subject.as_str(), predicate, construct),
         (
@@ -1018,7 +1031,7 @@ fn a_non_iri_shape_path_is_refused_as_a_complex_path() {
         "ex:customerIdShape a sh:PropertyShape ; sh:path ex:customer_id ;",
         "ex:customerIdShape a sh:PropertyShape ; sh:path [] ;",
     );
-    let (subject, predicate, construct) = unsupported_construct(load(&source).unwrap_err());
+    let (subject, predicate, construct) = unsupported_construct(&source, "sh:path []");
     assert_eq!(
         (subject.as_str(), predicate.as_str(), construct),
         (
