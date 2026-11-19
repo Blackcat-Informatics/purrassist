@@ -131,13 +131,7 @@ pub(super) fn load(
         // INVARIANT: a parse that was not refused retains its dataset.
         .expect("a successful governed parse retains its dataset");
     let source = parse.source();
-    let (tools, catalog) = match analyse(&view, &source, vocabulary, &governor) {
-        Ok(analysed) => analysed,
-        Err(mut error) => {
-            control::locate(&mut error, &view, &source, &mut governor.borrow_mut())?;
-            return Err(error);
-        }
-    };
+    let (tools, catalog) = analyse(&view, &source, vocabulary, &governor)?;
     // `PurRDF` exposes only a borrowed retained parse. The published dataset
     // copy is outside the governor's storage account.
     let dataset = dataset_from_view(&view)
@@ -159,13 +153,19 @@ fn analyse<V: DatasetView<Id = TermId>>(
 where
     V::ReadError: std::fmt::Display,
 {
+    let locations = Locations { view, source };
     with_doc(view, source, vocabulary, governor, |doc| {
         doc.scan_vocabulary(view, source, &mut governor.borrow_mut())?;
-        let nodes = doc.classify(&mut governor.borrow_mut())?;
+        let nodes = doc.classify(&locations, &mut governor.borrow_mut())?;
         doc.own_every_row(&nodes, view, source, &mut governor.borrow_mut())?;
         doc.validate_nodes(&nodes, view, source, &mut governor.borrow_mut())?;
         let catalog = doc.read_catalog(&nodes, view, source, governor)?;
-        let tools = doc.build_tools(&nodes, catalog.as_ref(), &mut governor.borrow_mut())?;
+        let tools = doc.build_tools(
+            &nodes,
+            catalog.as_ref(),
+            &locations,
+            &mut governor.borrow_mut(),
+        )?;
         Ok((tools, catalog))
     })
 }
@@ -268,11 +268,11 @@ impl<'v> Doc<'v> {
             work(&mut governor.borrow_mut(), 1)?;
             let s = value(quad.s, memory)?;
             let TermValue::Iri(p) = value(quad.p, memory)? else {
-                return Err(unsupported(&s, "-", Construct::UnownedStatement));
+                return Err(unsupported(&s, "-", Construct::UnownedStatement, None));
             };
             if quad.g.is_some() {
                 let at = control::quad_extent(source, quad, layer, &mut governor.borrow_mut())?;
-                return Err(named_graph(&s, &p, at));
+                return Err(unsupported(&s, &p, Construct::NamedGraph, at));
             }
             let o = value(quad.o, memory)?;
             memory
@@ -291,7 +291,7 @@ impl<'v> Doc<'v> {
                     SourceStatementKind::Reifier,
                     &mut governor.borrow_mut(),
                 )?;
-                return Err(named_graph(&id, "-", at));
+                return Err(unsupported(&id, "-", Construct::NamedGraph, at));
             }
             let Some((s, p, o)) = view
                 .with_term(quad.o, |term| match term {
@@ -300,10 +300,10 @@ impl<'v> Doc<'v> {
                 })
                 .map_err(|cause| control::read_failure("dataset-read", cause))?
             else {
-                return Err(unsupported(&id, "-", Construct::Reifier));
+                return Err(unsupported(&id, "-", Construct::Reifier, None));
             };
             let TermValue::Iri(p) = value(p, memory)? else {
-                return Err(unsupported(&id, "-", Construct::Reifier));
+                return Err(unsupported(&id, "-", Construct::Reifier, None));
             };
             let s = value(s, memory)?;
             let o = value(o, memory)?;
@@ -316,7 +316,12 @@ impl<'v> Doc<'v> {
         if let Some(graph) = view.named_graphs().next() {
             work(&mut governor.borrow_mut(), 1)?;
             let at = control::graph_extent(source, graph, &mut governor.borrow_mut())?;
-            return Err(named_graph(&value(graph, memory)?, "-", at));
+            return Err(unsupported(
+                &value(graph, memory)?,
+                "-",
+                Construct::NamedGraph,
+                at,
+            ));
         }
         let by_subject = subject_index(&rows, memory, &mut progress, storage_error)?;
         Ok(Self {
@@ -423,21 +428,45 @@ impl<'v> Doc<'v> {
     }
 }
 
-fn unsupported(subject: &TermValue, predicate: &str, construct: Construct) -> LoadError {
+fn unsupported(
+    subject: &TermValue,
+    predicate: &str,
+    construct: Construct,
+    at: Option<SourceExtent>,
+) -> LoadError {
     LoadError::UnsupportedConstruct {
         subject: show(subject),
         predicate: predicate.to_owned(),
         construct,
-        at: None,
+        at,
     }
 }
 
-fn named_graph(subject: &TermValue, predicate: &str, at: Option<super::SourceExtent>) -> LoadError {
-    LoadError::UnsupportedConstruct {
-        subject: show(subject),
-        predicate: predicate.to_owned(),
-        construct: Construct::NamedGraph,
-        at,
+/// The retained native dataset and source used only when attaching a refusal.
+struct Locations<'a, V> {
+    view: &'a V,
+    source: &'a BorrowedSource<'a>,
+}
+
+impl<V: DatasetView<Id = TermId>> Locations<'_, V> {
+    fn statement(
+        &self,
+        subject: &TermValue,
+        predicate: &str,
+        object: &TermValue,
+        governor: &mut Governor,
+    ) -> Result<Option<SourceExtent>, LoadError> {
+        control::default_row_extent(self.view, self.source, subject, predicate, object, governor)
+    }
+
+    fn unsupported_row(
+        &self,
+        row: &Row,
+        construct: Construct,
+        governor: &mut Governor,
+    ) -> Result<LoadError, LoadError> {
+        let at = self.statement(&row.s, &row.p, &row.o, governor)?;
+        Ok(unsupported(&row.s, &row.p, construct, at))
     }
 }
 
@@ -464,7 +493,11 @@ struct Nodes {
 }
 
 impl Doc<'_> {
-    fn classify(&self, governor: &mut Governor) -> Result<Nodes, LoadError> {
+    fn classify<V: DatasetView<Id = TermId>>(
+        &self,
+        locations: &Locations<'_, V>,
+        governor: &mut Governor,
+    ) -> Result<Nodes, LoadError> {
         let mut typed: BTreeMap<TermValue, u16> = BTreeMap::new();
         let mut linked: BTreeMap<TermValue, u16> = BTreeMap::new();
         let mut inferred: BTreeMap<TermValue, u16> = BTreeMap::new();
@@ -475,14 +508,18 @@ impl Doc<'_> {
                     && let Some(class) = iri_of(&row.o).and_then(|iri| self.bound(iri))
                 {
                     if Role::is_runtime(class) {
-                        return Err(unsupported(&row.s, &row.p, Construct::RuntimeFact));
+                        return Err(locations.unsupported_row(
+                            row,
+                            Construct::RuntimeFact,
+                            governor,
+                        )?);
                     }
                     *typed.entry(row.s.clone()).or_default() |= Role::of_class(class);
                 }
                 continue;
             };
             if Role::is_runtime(name) {
-                return Err(unsupported(&row.s, &row.p, Construct::RuntimeFact));
+                return Err(locations.unsupported_row(row, Construct::RuntimeFact, governor)?);
             }
             *inferred.entry(row.s.clone()).or_default() |= Role::domain(name);
             let link = Role::link(name);
@@ -1060,10 +1097,11 @@ impl Doc<'_> {
 }
 
 impl Doc<'_> {
-    fn build_tools(
+    fn build_tools<V: DatasetView<Id = TermId>>(
         &self,
         nodes: &Nodes,
         catalog: Option<&FnoCatalog>,
+        locations: &Locations<'_, V>,
         governor: &mut Governor,
     ) -> Result<Vec<Tool>, LoadError> {
         let tool_nodes: Vec<&TermValue> = nodes
@@ -1076,12 +1114,15 @@ impl Doc<'_> {
         if let Some(catalog) = catalog {
             for function in &catalog.as_input().functions {
                 if !tool_iris.contains(function.iri.as_str()) {
-                    return Err(LoadError::UnsupportedConstruct {
-                        subject: function.iri.clone(),
-                        predicate: RDF_TYPE.to_owned(),
-                        construct: Construct::FunctionWithoutTool,
-                        at: None,
-                    });
+                    let subject = TermValue::Iri(function.iri.clone());
+                    let class = TermValue::Iri(FNO_FUNCTION.to_owned());
+                    let at = locations.statement(&subject, RDF_TYPE, &class, governor)?;
+                    return Err(unsupported(
+                        &subject,
+                        RDF_TYPE,
+                        Construct::FunctionWithoutTool,
+                        at,
+                    ));
                 }
             }
         }
@@ -1097,7 +1138,14 @@ impl Doc<'_> {
                     at: None,
                 });
             };
-            let tool = self.build_tool(node, catalog, &tool_iris, &mut consumed, governor)?;
+            let tool = self.build_tool(
+                node,
+                catalog,
+                &tool_iris,
+                &mut consumed,
+                locations,
+                governor,
+            )?;
             if !seen_names.insert(tool.name.clone()) {
                 return Err(LoadError::InvalidShape {
                     subject: show(node),
@@ -1108,19 +1156,25 @@ impl Doc<'_> {
             }
             tools.push(tool);
         }
-        for (at, reifier) in self.reifiers.iter().enumerate() {
-            if consumed.contains(&at) {
+        for (index, reifier) in self.reifiers.iter().enumerate() {
+            if consumed.contains(&index) {
                 continue;
             }
+            let at = control::default_reifier_extent(
+                locations.view,
+                locations.source,
+                reifier,
+                governor,
+            )?;
             return Err(if self.has_type(&reifier.id, self.term("Hint")) {
                 LoadError::InvalidHint {
                     subject: show(&reifier.id),
                     predicate: reifier.p.clone(),
-                    at: None,
+                    at: at.map(Box::new),
                     violation: Violation::Unresolved,
                 }
             } else {
-                unsupported(&reifier.id, &reifier.p, Construct::Reifier)
+                unsupported(&reifier.id, &reifier.p, Construct::Reifier, at)
             });
         }
         tools.sort_by(|left, right| left.iri.cmp(&right.iri));
@@ -1154,12 +1208,13 @@ impl Doc<'_> {
         parse_u64(&self.text(node, name)).expect("validated integer")
     }
 
-    fn build_tool(
+    fn build_tool<V: DatasetView<Id = TermId>>(
         &self,
         node: &TermValue,
         catalog: &FnoCatalog,
         tool_iris: &BTreeSet<&str>,
         consumed: &mut BTreeSet<usize>,
+        locations: &Locations<'_, V>,
         governor: &mut Governor,
     ) -> Result<Tool, LoadError> {
         let TermValue::Iri(iri) = node else {
@@ -1183,7 +1238,7 @@ impl Doc<'_> {
         }
         subtools.sort();
         let (parameters, output, implementation) =
-            self.build_callable(node, iri, catalog, consumed, governor)?;
+            self.build_callable(node, iri, catalog, consumed, locations, governor)?;
         let annotations = ToolAnnotations {
             title: self.single(node, "title").map(lexical),
             read_only_hint: self.flag(node, "readOnlyHint"),
@@ -1204,7 +1259,11 @@ impl Doc<'_> {
             parameters,
             output,
             execution_profile: self.build_profile(&profile_node, &mut stack, governor)?,
-            context: self.build_context(&self.node_of(node, "contextManagement")?, governor)?,
+            context: self.build_context(
+                &self.node_of(node, "contextManagement")?,
+                locations,
+                governor,
+            )?,
             parameter_constraints: self.text(node, "parameterConstraints"),
             subtools,
         })
@@ -1223,12 +1282,13 @@ impl Doc<'_> {
 }
 
 impl Doc<'_> {
-    fn build_callable(
+    fn build_callable<V: DatasetView<Id = TermId>>(
         &self,
         node: &TermValue,
         iri: &str,
         catalog: &FnoCatalog,
         consumed: &mut BTreeSet<usize>,
+        locations: &Locations<'_, V>,
         governor: &mut Governor,
     ) -> Result<(Vec<ToolParameter>, ToolOutput, ToolImplementation), LoadError> {
         let fno_error = |detail: String| LoadError::InvalidFnoBinding {
@@ -1258,8 +1318,8 @@ impl Doc<'_> {
             })?;
         let input_shape = self.node_of(node, "inputShape")?;
         let output_shape = self.node_of(node, "outputShape")?;
-        let input_paths = self.shape_paths(&input_shape)?;
-        let output_paths = self.shape_paths(&output_shape)?;
+        let input_paths = self.shape_paths(&input_shape, locations, governor)?;
+        let output_paths = self.shape_paths(&output_shape, locations, governor)?;
         let mut parameters = Vec::new();
         let mut used = BTreeSet::new();
         for parameter in binding.parameters() {
@@ -1327,9 +1387,11 @@ impl Doc<'_> {
     }
 
     /// `sh:path` IRI -> property shapes of a node shape, refusing anything else.
-    fn shape_paths(
+    fn shape_paths<V: DatasetView<Id = TermId>>(
         &self,
         shape: &TermValue,
+        locations: &Locations<'_, V>,
+        governor: &mut Governor,
     ) -> Result<BTreeMap<String, Vec<TermValue>>, LoadError> {
         if !self.has_type(shape, SH_NODE_SHAPE) {
             return Err(LoadError::InvalidShape {
@@ -1350,7 +1412,8 @@ impl Doc<'_> {
                 });
             };
             let Some(path) = iri_of(path) else {
-                return Err(unsupported(property, SH_PATH, Construct::ComplexPath));
+                let at = locations.statement(property, SH_PATH, path, governor)?;
+                return Err(unsupported(property, SH_PATH, Construct::ComplexPath, at));
             };
             paths
                 .entry(path.to_owned())
@@ -1474,24 +1537,37 @@ impl Doc<'_> {
 }
 
 impl Doc<'_> {
-    fn build_context(
+    fn build_context<V: DatasetView<Id = TermId>>(
         &self,
         node: &TermValue,
+        locations: &Locations<'_, V>,
         governor: &mut Governor,
     ) -> Result<ContextManagement, LoadError> {
-        let projection = self.text(node, "outputProjectionJq");
-        let mask =
-            FieldMask::parse_governed(&projection, governor).map_err(|error| match error {
-                purrassist_core::output::FieldMaskError::Resource(reason) => stop(reason),
-                error => LoadError::UnsupportedProjection {
+        let predicate = self.term("outputProjectionJq");
+        let row = self.rows_of(node).find(|row| row.p == predicate);
+        let projection = row.map_or_else(String::new, |row| lexical(&row.o));
+        let mask = match FieldMask::parse_governed(&projection, governor) {
+            Ok(mask) => mask,
+            Err(purrassist_core::output::FieldMaskError::Resource(reason)) => {
+                return Err(stop(reason));
+            }
+            Err(error) => {
+                let at = match row {
+                    Some(row) => locations
+                        .statement(&row.s, &row.p, &row.o, governor)?
+                        .map(Box::new),
+                    None => None,
+                };
+                return Err(LoadError::UnsupportedProjection {
                     subject: show(node),
                     blank_scope: node.as_blank().map(|(_, scope)| scope),
-                    predicate: self.term("outputProjectionJq").to_owned(),
+                    predicate: predicate.to_owned(),
                     projection,
                     error,
-                    at: None,
-                },
-            })?;
+                    at,
+                });
+            }
+        };
         let limit = OutputByteLimit::new(self.number(node, "maxOutputBytes"))
             // INVARIANT: `validate_nodes` admitted a positive value.
             .expect("validated positive byte limit");
@@ -1651,8 +1727,15 @@ mod tests {
         let parsed =
             control::parse(CATALOG_SOURCE, NativeRdfFormat::Turtle, None, &source_owner).unwrap();
         let view = parsed.dataset().unwrap();
-        with_doc(&view, &parsed.source(), &vocabulary, &source_owner, |doc| {
-            let nodes = doc.classify(&mut source_owner.borrow_mut()).unwrap();
+        let source = parsed.source();
+        let locations = Locations {
+            view: &view,
+            source: &source,
+        };
+        with_doc(&view, &source, &vocabulary, &source_owner, |doc| {
+            let nodes = doc
+                .classify(&locations, &mut source_owner.borrow_mut())
+                .unwrap();
             check_fno_view_account(doc, &nodes);
             Ok(())
         })

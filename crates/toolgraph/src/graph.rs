@@ -42,11 +42,11 @@
 //!   the scratch account. The published [`RdfDataset`] copy returned by
 //!   [`ToolGraph::dataset`] is also outside that account. `PurRDF` exposes a
 //!   borrowed view of the retained parse.
-//! * [`SourceExtent`] names the first statement in source order whose subject and
-//!   predicate (and term) match the refusal. Refusals that identify only a node,
-//!   including missing `FnO` facts, carry no statement extent. A term the
-//!   grammar generates without source spelling is
-//!   located by the syntax that introduced it.
+//! * For a diagnostic that identifies a specific row or reifier binding,
+//!   [`SourceExtent`] names the first written occurrence of that RDF statement.
+//!   Matching preserves blank scopes and literal facets. Refusals that identify
+//!   only a node, including missing `FnO` facts, carry no statement extent.
+//!   The syntax that introduces a generated term supplies its location.
 //! * Only default-graph statements and reifiers load; a named-graph one is refused.
 //! * The vocabulary shapes are checked by a Rust table that is not equivalent to
 //!   the shapes document; see `docs/tool-graph/TOOLS.md` for the differences.

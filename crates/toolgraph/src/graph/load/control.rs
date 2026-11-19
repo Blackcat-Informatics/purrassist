@@ -9,7 +9,6 @@
 //! through the governor at each native counting point.
 
 use std::cell::RefCell;
-use std::fmt::{self, Write as _};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -17,7 +16,7 @@ use purrassist_core::{
     Governor, ScratchMeter, StopReason,
     contract::{Resource, saturating_size},
 };
-use purrdf_core::{BlankScope, QuadIds, TermId, TermRef, TermValue, dataset_view::DatasetView};
+use purrdf_core::{QuadIds, TermId, TermRef, TermValue, dataset_view::DatasetView};
 use purrdf_lex::{
     allocation::{Admission, Memory, OwnedAdmission, StorageError},
     control::{ControlledError, Progress},
@@ -29,7 +28,7 @@ use purrdf_rdf::{
 };
 
 use super::{Reifier, stop, work};
-use crate::graph::{Construct, LoadError, SourceExtent};
+use crate::graph::{LoadError, SourceExtent};
 
 /// The governor shared between the native parser's progress callback and the
 /// loader's own stages. Native calls never run while a stage holds the borrow.
@@ -303,57 +302,6 @@ pub(super) fn parse<'b, 'c, 'g>(
         .map_err(|failed| refusal(&failed, governor, &rejection))
 }
 
-/// Locate a diagnostic that names a default-graph subject and predicate.
-pub(super) fn locate<V: DatasetView<Id = TermId>>(
-    error: &mut LoadError,
-    view: &V,
-    source: &BorrowedSource<'_>,
-    governor: &mut Governor,
-) -> Result<(), LoadError> {
-    if let LoadError::UnsupportedProjection {
-        subject,
-        blank_scope,
-        predicate,
-        at,
-        ..
-    } = error
-    {
-        // The context role admits exactly one projection predicate.
-        *at = statement_extent(view, source, subject, *blank_scope, predicate, governor)?
-            .map(Box::new);
-        return Ok(());
-    }
-    if let LoadError::UnsupportedConstruct {
-        subject,
-        predicate,
-        construct:
-            Construct::RuntimeFact
-            | Construct::Reifier
-            | Construct::ComplexPath
-            | Construct::FunctionWithoutTool,
-        at,
-    } = error
-    {
-        *at = statement_extent(view, source, subject, None, predicate, governor)?;
-    }
-    Ok(())
-}
-
-fn statement_extent<V: DatasetView<Id = TermId>>(
-    view: &V,
-    source: &BorrowedSource<'_>,
-    subject: &str,
-    blank_scope: Option<BlankScope>,
-    predicate: &str,
-    governor: &mut Governor,
-) -> Result<Option<SourceExtent>, LoadError> {
-    find_statement(source, governor, |_, [s, p, _], graph, governor| {
-        Ok(graph.is_none()
-            && spells(view, source, s, subject, blank_scope, governor)?
-            && spells(view, source, p, predicate, None, governor)?)
-    })
-}
-
 /// Match the reifier and the complete embedded triple behind its written occurrence.
 pub(super) fn default_reifier_extent<V: DatasetView<Id = TermId>>(
     view: &V,
@@ -513,57 +461,12 @@ pub(super) fn graph_extent(
     Ok(None)
 }
 
-fn spells<V: DatasetView<Id = TermId>>(
-    view: &V,
-    source: &BorrowedSource<'_>,
-    origin: SourceOriginId,
-    wanted: &str,
-    blank_scope: Option<BlankScope>,
-    governor: &mut Governor,
-) -> Result<bool, LoadError> {
-    let Some(id) = term_id(source, origin, governor)? else {
-        return Ok(false);
-    };
-    view.with_term(id, |term| match term {
-        TermRef::Iri(iri) => matches_text(iri, wanted, governor),
-        TermRef::Blank { label, scope } => {
-            let Some(wanted) = wanted.strip_prefix("_:") else {
-                return Ok(false);
-            };
-            Ok(blank_scope.is_none_or(|wanted| scope == wanted)
-                && matches_text(label, wanted, governor)?)
-        }
-        TermRef::Literal { lexical, .. } => {
-            work(
-                governor,
-                saturating_size(lexical.len())
-                    .saturating_mul(8)
-                    .saturating_add(2),
-            )?;
-            let mut spelling = MatchingSpelling(wanted);
-            Ok(write!(spelling, "{lexical:?}").is_ok() && spelling.0.is_empty())
-        }
-        TermRef::Triple { .. } => Ok(wanted == "<<triple>>"),
-    })
-    .map_err(|cause| read_failure("dataset-read", cause))?
-}
-
 fn matches_text(left: &str, right: &str, governor: &mut Governor) -> Result<bool, LoadError> {
     if left.len() != right.len() {
         return Ok(false);
     }
     work(governor, saturating_size(left.len()))?;
     Ok(left == right)
-}
-
-/// Compare the diagnostic spelling of a literal without allocating a copy.
-struct MatchingSpelling<'a>(&'a str);
-
-impl fmt::Write for MatchingSpelling<'_> {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        self.0 = self.0.strip_prefix(text).ok_or(fmt::Error)?;
-        Ok(())
-    }
 }
 
 fn find_statement(
