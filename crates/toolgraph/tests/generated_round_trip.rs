@@ -17,7 +17,7 @@ use purrassist_toolgraph::{
     PrefixTable, TERM_NAMES, TermBindings, ToolGraph, Vocabulary, register_loss_profile,
 };
 use purrdf_core::loss::LossProfile;
-use purrdf_rdf::SerializeGraph;
+use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY, datasets_isomorphic};
 
 const NAMESPACE: &str = "https://example.org/toolgraph#";
 
@@ -395,15 +395,6 @@ fn load(index: u32, source: &str) -> ToolGraph {
     .unwrap_or_else(|error| panic!("generated graph {index} must load: {error:?}\n{source}"))
 }
 
-fn turtle(graph: &ToolGraph) -> Vec<u8> {
-    purrdf_rdf::serialize_dataset(
-        graph.dataset().as_ref(),
-        "text/turtle",
-        SerializeGraph::Dataset,
-    )
-    .expect("dataset serializes")
-}
-
 fn generated() -> Vec<(u32, Generated, ToolGraph)> {
     (0..GRAPHS)
         .map(|index| {
@@ -442,7 +433,17 @@ fn decode_of_encode_equals_the_graph_except_for_exactly_the_ledgered_losses() {
         let (decoded, decoded_losses) = mcp::decode(&manifest, &vocabulary, &mut governor())
             .unwrap_or_else(|error| panic!("graph {index} decodes: {error:?}"));
         assert_eq!(decoded.tools(), graph.tools(), "graph {index} tools");
-        assert_eq!(turtle(&decoded), turtle(&graph), "graph {index} dataset");
+        let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+        let isomorphic = datasets_isomorphic(
+            graph.dataset().as_ref(),
+            decoded.dataset().as_ref(),
+            &mut control,
+        )
+        .unwrap_or_else(|error| panic!("graph {index} comparison failed: {error:?}"));
+        assert!(
+            isomorphic,
+            "graph {index} round trip changed the RDF dataset"
+        );
         assert_eq!(decoded_losses, encoded, "graph {index} ledger");
         assert_eq!(
             u32::try_from(encoded.entries().len()).expect("small ledger"),

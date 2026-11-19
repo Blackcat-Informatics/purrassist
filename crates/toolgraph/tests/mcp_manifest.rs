@@ -11,6 +11,7 @@ use purrassist_toolgraph::{
     register_loss_profile,
 };
 use purrdf_core::loss::LossProfile;
+use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY, datasets_isomorphic};
 use purrdf_rdf::SerializeGraph;
 use purrdf_shapes::{engine, shapes};
 
@@ -94,7 +95,8 @@ fn worked_manifest_is_byte_identical_across_encodes_and_matches_the_golden() {
 }
 
 // Rationale: the round-trip law. Decoding an encoded manifest returns the same typed
-// tools and the same dataset (a serialization fixed point), and the same ledger.
+// tools, an isomorphic RDF dataset, and the same ledger. Re-encoding also
+// reproduces the original manifest bytes.
 #[test]
 fn decode_of_encode_returns_the_same_graph_and_ledger() {
     let graph = load(&worked());
@@ -103,7 +105,16 @@ fn decode_of_encode_returns_the_same_graph_and_ledger() {
     let (decoded, decoded_losses) =
         mcp::decode(&manifest, &vocabulary(), &mut governor()).expect("decode");
     assert_eq!(decoded.tools(), graph.tools());
-    assert_eq!(turtle(&decoded), turtle(&graph));
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    assert!(
+        datasets_isomorphic(
+            graph.dataset().as_ref(),
+            decoded.dataset().as_ref(),
+            &mut control,
+        )
+        .expect("compare the worked RDF datasets"),
+        "the round trip changed the worked RDF dataset"
+    );
     assert_eq!(decoded_losses, encoded_losses);
     let (again, _) = mcp::encode(&decoded, &vocabulary(), &mut governor()).expect("re-encode");
     assert_eq!(again, manifest);
