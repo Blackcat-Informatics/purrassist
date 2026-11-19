@@ -20,6 +20,7 @@ use purrdf_lex::{
     allocation::{Admission, Memory},
     control::ControlledError,
 };
+use purrdf_rdf::{BorrowedSource, SourceStatementKind};
 
 use super::{
     Coercion, Construct, Hint, LoadError, ProfileRule, Tool, ToolAnnotations, ToolExecutionProfile,
@@ -125,10 +126,11 @@ pub(super) fn load(
         .dataset()
         // INVARIANT: a parse that was not refused retains its dataset.
         .expect("a successful governed parse retains its dataset");
-    let (tools, catalog) = match analyse(&view, vocabulary, &governor) {
+    let source = parse.source();
+    let (tools, catalog) = match analyse(&view, &source, vocabulary, &governor) {
         Ok(analysed) => analysed,
         Err(mut error) => {
-            control::locate(&mut error, &parse);
+            control::locate(&mut error, &view, &source, &mut governor.borrow_mut())?;
             return Err(error);
         }
     };
@@ -146,13 +148,14 @@ pub(super) fn load(
 /// Run every stage over the parsed rows; nothing escapes unless all stages pass.
 fn analyse<V: DatasetView<Id = TermId>>(
     view: &V,
+    source: &BorrowedSource<'_>,
     vocabulary: &Vocabulary,
     governor: &Shared<'_>,
 ) -> Result<(Vec<Tool>, Option<FnoCatalog>), LoadError>
 where
     V::ReadError: std::fmt::Display,
 {
-    let doc = Doc::collect(view, vocabulary, &mut governor.borrow_mut())?;
+    let doc = Doc::collect(view, source, vocabulary, &mut governor.borrow_mut())?;
     doc.scan_vocabulary(&mut governor.borrow_mut())?;
     let nodes = doc.classify(&mut governor.borrow_mut())?;
     doc.own_every_row(&nodes, &mut governor.borrow_mut())?;
@@ -165,6 +168,7 @@ where
 impl<'v> Doc<'v> {
     fn collect<V: DatasetView<Id = TermId>>(
         view: &V,
+        source: &BorrowedSource<'_>,
         vocabulary: &'v Vocabulary,
         governor: &mut Governor,
     ) -> Result<Self, LoadError>
@@ -184,15 +188,22 @@ impl<'v> Doc<'v> {
         let mut rows = Vec::new();
         let mut by_subject: BTreeMap<TermValue, Vec<usize>> = BTreeMap::new();
         // Statement rows, then annotation side-table rows: both describe a subject.
-        let statements = view.quads().chain(view.annotation_quads());
-        for quad in statements {
+        let statements = view
+            .quads()
+            .map(|quad| (quad, SourceStatementKind::Quad))
+            .chain(
+                view.annotation_quads()
+                    .map(|quad| (quad, SourceStatementKind::Annotation)),
+            );
+        for (quad, layer) in statements {
             work(governor, 1)?;
             let (s, o) = (value(quad.s)?, value(quad.o)?);
             let TermValue::Iri(p) = value(quad.p)? else {
                 return Err(unsupported(&s, "-", Construct::UnownedStatement));
             };
             if quad.g.is_some() {
-                return Err(unsupported(&s, &p, Construct::NamedGraph));
+                let at = control::quad_extent(source, quad, layer, governor)?;
+                return Err(named_graph(&s, &p, at));
             }
             by_subject.entry(s.clone()).or_default().push(rows.len());
             rows.push(Row { s, p, o });
@@ -203,7 +214,9 @@ impl<'v> Doc<'v> {
             let id = value(quad.s)?;
             if quad.g.is_some() {
                 // A reifier row in a named graph would need a graph on its hint.
-                return Err(unsupported(&id, "-", Construct::NamedGraph));
+                let at =
+                    control::quad_extent(source, quad, SourceStatementKind::Reifier, governor)?;
+                return Err(named_graph(&id, "-", at));
             }
             let TermValue::Triple { s, p, o } = value(quad.o)? else {
                 return Err(unsupported(&id, "-", Construct::Reifier));
@@ -222,7 +235,8 @@ impl<'v> Doc<'v> {
         // read the view's declared graphs and refuse any that remain.
         if let Some(graph) = view.named_graphs().next() {
             work(governor, 1)?;
-            return Err(unsupported(&value(graph)?, "-", Construct::NamedGraph));
+            let at = control::graph_extent(source, graph, governor)?;
+            return Err(named_graph(&value(graph)?, "-", at));
         }
         Ok(Self {
             vocabulary,
@@ -317,6 +331,15 @@ fn unsupported(subject: &TermValue, predicate: &str, construct: Construct) -> Lo
         predicate: predicate.to_owned(),
         construct,
         at: None,
+    }
+}
+
+fn named_graph(subject: &TermValue, predicate: &str, at: Option<super::SourceExtent>) -> LoadError {
+    LoadError::UnsupportedConstruct {
+        subject: show(subject),
+        predicate: predicate.to_owned(),
+        construct: Construct::NamedGraph,
+        at,
     }
 }
 
@@ -1385,7 +1408,13 @@ mod tests {
         let source_owner = RefCell::new(&mut fixture);
         let parsed = control::parse(source, NativeRdfFormat::Turtle, None, &source_owner).unwrap();
         let view = parsed.dataset().unwrap();
-        let doc = Doc::collect(&view, &vocabulary, &mut source_owner.borrow_mut()).unwrap();
+        let doc = Doc::collect(
+            &view,
+            &parsed.source(),
+            &vocabulary,
+            &mut source_owner.borrow_mut(),
+        )
+        .unwrap();
         let nodes = doc.classify(&mut source_owner.borrow_mut()).unwrap();
 
         let mut ample = Governor::new(Budget::default());

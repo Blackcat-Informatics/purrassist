@@ -9,22 +9,27 @@
 //! through the governor at each native counting point.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::fmt::{self, Write as _};
+use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use purrassist_core::{Governor, ScratchMeter, StopReason, contract::Resource};
-use purrdf_core::{TermValue, dataset_view::DatasetView};
+use purrassist_core::{
+    Governor, ScratchMeter, StopReason,
+    contract::{Resource, saturating_size},
+};
+use purrdf_core::{QuadIds, TermId, TermRef, dataset_view::DatasetView};
 use purrdf_lex::{
     allocation::{Admission, OwnedAdmission, StorageError},
     control::{ControlledError, Progress},
 };
 use purrdf_rdf::{
-    NativeParseError, NativeRdfFormat, ParseRefusal, RetainedParse, SourceOriginId,
-    SourceOriginKind, SourceRole, SourceSemanticReference, parse_dataset_controlled,
+    BorrowedSource, NativeParseError, NativeRdfFormat, ParseRefusal, RetainedParse, SourceOriginId,
+    SourceOriginKind, SourceRole, SourceSemanticReference, SourceStatementKind,
+    parse_dataset_controlled,
 };
 
-use super::{show, stop};
-use crate::graph::{LoadError, SourceExtent};
+use super::{stop, work};
+use crate::graph::{Construct, LoadError, SourceExtent};
 
 /// The governor shared between the native parser's progress callback and the
 /// loader's own stages. Native calls never run while a stage holds the borrow.
@@ -298,123 +303,226 @@ pub(super) fn parse<'b, 'c, 'g>(
         .map_err(|failed| refusal(&failed, governor, &rejection))
 }
 
-/// The statement a diagnostic refers to, as far as the error names it.
-struct Probe<'a> {
-    subject: &'a str,
-    predicate: &'a str,
-    term: Option<&'a str>,
-}
-
-/// Attach the exact source extent to a statement-level refusal.
-///
-/// The extent is that of the first statement in source order whose subject and
-/// predicate (and, for an unknown term, whose subject, predicate or object) match
-/// the error. Errors that name a node rather than a statement stay unlocated.
-pub(super) fn locate(error: &mut LoadError, parse: &RetainedParse<'_, Storage, Work<'_, '_>>) {
-    let (probe, slot) = match error {
+/// Locate a diagnostic that names a default-graph subject and predicate.
+pub(super) fn locate<V: DatasetView<Id = TermId>>(
+    error: &mut LoadError,
+    view: &V,
+    source: &BorrowedSource<'_>,
+    governor: &mut Governor,
+) -> Result<(), LoadError> {
+    let (subject, predicate, term, at) = match error {
         LoadError::UnknownTerm {
             subject,
             predicate,
             term,
             at,
         } => (
-            Probe {
-                subject,
-                predicate,
-                term: Some(term),
-            },
+            subject.as_str(),
+            predicate.as_str(),
+            Some(term.as_str()),
             at,
         ),
         LoadError::UnsupportedConstruct {
             subject,
             predicate,
+            construct,
             at,
-            ..
-        } => (
-            Probe {
-                subject,
-                predicate,
-                term: None,
-            },
-            at,
-        ),
-        _ => return,
+        } if *construct != Construct::NamedGraph => {
+            (subject.as_str(), predicate.as_str(), None, at)
+        }
+        _ => return Ok(()),
     };
-    let found = extent(parse, &probe);
-    *slot = found;
+    *at = find_statement(source, governor, |_, [s, p, o], graph, governor| {
+        if graph.is_some()
+            || !spells(view, source, s, subject, governor)?
+            || !spells(view, source, p, predicate, governor)?
+        {
+            return Ok(false);
+        }
+        Ok(match term {
+            Some(wanted) if wanted != subject && wanted != predicate => {
+                spells(view, source, o, wanted, governor)?
+            }
+            _ => true,
+        })
+    })?;
+    Ok(())
 }
 
-fn extent(
-    parse: &RetainedParse<'_, Storage, Work<'_, '_>>,
-    probe: &Probe<'_>,
-) -> Option<SourceExtent> {
-    let view = parse.dataset()?;
-    let source = parse.source();
-    let mut statements: BTreeMap<usize, [Option<SourceOriginId>; 3]> = BTreeMap::new();
+/// Locate the exact refused RDF statement, including its graph and native layer.
+pub(super) fn quad_extent(
+    source: &BorrowedSource<'_>,
+    quad: QuadIds,
+    layer: SourceStatementKind,
+    governor: &mut Governor,
+) -> Result<Option<SourceExtent>, LoadError> {
+    find_statement(source, governor, |statement, [s, p, o], graph, governor| {
+        let (Some(graph), Some(graph_id)) = (graph, quad.g) else {
+            return Ok(false);
+        };
+        Ok(source.statement_kind(statement) == Some(layer)
+            && term_id(source, graph, governor)? == Some(graph_id)
+            && term_id(source, s, governor)? == Some(quad.s)
+            && term_id(source, p, governor)? == Some(quad.p)
+            && term_id(source, o, governor)? == Some(quad.o))
+    })
+}
+
+/// Locate a graph declaration even when the named graph contains no statements.
+pub(super) fn graph_extent(
+    source: &BorrowedSource<'_>,
+    graph: TermId,
+    governor: &mut Governor,
+) -> Result<Option<SourceExtent>, LoadError> {
     for occurrence in source.occurrences() {
-        let (Some(statement), slot) = (
-            occurrence.statement(),
-            match occurrence.role() {
+        work(governor, 1)?;
+        if occurrence.role() == SourceRole::GraphDeclaration
+            && term_id(source, occurrence.origin(), governor)? == Some(graph)
+            && let Some(range) = origin_range(source, occurrence.origin(), governor)?
+        {
+            return extent(source, range, governor).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn spells<V: DatasetView<Id = TermId>>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    origin: SourceOriginId,
+    wanted: &str,
+    governor: &mut Governor,
+) -> Result<bool, LoadError> {
+    let Some(id) = term_id(source, origin, governor)? else {
+        return Ok(false);
+    };
+    view.with_term(id, |term| match term {
+        TermRef::Iri(iri) => matches_text(iri, wanted, governor),
+        TermRef::Blank { label, .. } => {
+            let Some(wanted) = wanted.strip_prefix("_:") else {
+                return Ok(false);
+            };
+            matches_text(label, wanted, governor)
+        }
+        TermRef::Literal { lexical, .. } => {
+            work(
+                governor,
+                saturating_size(lexical.len())
+                    .saturating_mul(8)
+                    .saturating_add(2),
+            )?;
+            let mut spelling = MatchingSpelling(wanted);
+            Ok(write!(spelling, "{lexical:?}").is_ok() && spelling.0.is_empty())
+        }
+        TermRef::Triple { .. } => Ok(wanted == "<<triple>>"),
+    })
+    .map_err(|cause| read_failure("dataset-read", cause))?
+}
+
+fn matches_text(left: &str, right: &str, governor: &mut Governor) -> Result<bool, LoadError> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    work(governor, saturating_size(left.len()))?;
+    Ok(left == right)
+}
+
+/// Compare the diagnostic spelling of a literal without allocating a copy.
+struct MatchingSpelling<'a>(&'a str);
+
+impl fmt::Write for MatchingSpelling<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.0 = self.0.strip_prefix(text).ok_or(fmt::Error)?;
+        Ok(())
+    }
+}
+
+fn find_statement(
+    source: &BorrowedSource<'_>,
+    governor: &mut Governor,
+    mut matches: impl FnMut(
+        usize,
+        [SourceOriginId; 3],
+        Option<SourceOriginId>,
+        &mut Governor,
+    ) -> Result<bool, LoadError>,
+) -> Result<Option<SourceExtent>, LoadError> {
+    let mut occurrences = source.occurrences().peekable();
+    while let Some(first) = occurrences.next() {
+        work(governor, 1)?;
+        let Some(statement) = first.statement() else {
+            continue;
+        };
+        let mut origins = [None; 4];
+        let mut occurrence = first;
+        loop {
+            let slot = match occurrence.role() {
                 SourceRole::Subject => 0,
                 SourceRole::Predicate => 1,
                 SourceRole::Object => 2,
-                SourceRole::Graph | SourceRole::GraphDeclaration => continue,
-            },
-        ) else {
-            continue;
-        };
-        statements.entry(statement).or_default()[slot] = Some(occurrence.origin());
+                SourceRole::Graph | SourceRole::GraphDeclaration => 3,
+            };
+            origins[slot] = Some(occurrence.origin());
+            let Some(next) = occurrences.next_if(|next| next.statement() == Some(statement)) else {
+                break;
+            };
+            work(governor, 1)?;
+            occurrence = next;
+        }
+        if let [Some(s), Some(p), Some(o), graph] = origins
+            && matches(statement, [s, p, o], graph, governor)?
+            && let (Some(p), Some(o)) = (
+                origin_range(source, p, governor)?,
+                origin_range(source, o, governor)?,
+            )
+        {
+            return extent(source, p.start.min(o.start)..p.end.max(o.end), governor).map(Some);
+        }
     }
-    let term = |origin: SourceOriginId| -> Option<TermValue> {
-        let mut at = origin;
-        loop {
-            let found = source.origin(at)?;
-            match (found.semantic(), found.kind()) {
-                (Some(SourceSemanticReference::Term(id)), _) => return view.term_value(id).ok(),
-                (Some(SourceSemanticReference::ConstantIri(iri)), _) => {
-                    return Some(TermValue::Iri(iri.to_owned()));
-                }
-                (_, SourceOriginKind::Inherited { from }) => at = *from,
-                _ => return None,
-            }
+    Ok(None)
+}
+
+/// Folded statement roots and graph declarations carry final dataset term IDs.
+fn term_id(
+    source: &BorrowedSource<'_>,
+    origin: SourceOriginId,
+    governor: &mut Governor,
+) -> Result<Option<TermId>, LoadError> {
+    work(governor, 1)?;
+    Ok(
+        match source
+            .origin(origin)
+            .and_then(purrdf_rdf::SourceTermOrigin::semantic)
+        {
+            Some(SourceSemanticReference::Term(id)) => Some(id),
+            _ => None,
+        },
+    )
+}
+
+fn origin_range(
+    source: &BorrowedSource<'_>,
+    mut origin: SourceOriginId,
+    governor: &mut Governor,
+) -> Result<Option<Range<usize>>, LoadError> {
+    while let Some(found) = source.origin(origin) {
+        work(governor, 1)?;
+        match found.kind() {
+            SourceOriginKind::Written(range) => return Ok(Some(range.clone())),
+            SourceOriginKind::Generated { anchor, .. } => return Ok(Some(anchor.clone())),
+            SourceOriginKind::Inherited { from } => origin = *from,
         }
-    };
-    let range = |origin: SourceOriginId| -> Option<std::ops::Range<usize>> {
-        let mut at = origin;
-        loop {
-            match source.origin(at)?.kind() {
-                SourceOriginKind::Written(range) => return Some(range.clone()),
-                SourceOriginKind::Generated { anchor, .. } => return Some(anchor.clone()),
-                SourceOriginKind::Inherited { from } => at = *from,
-            }
-        }
-    };
-    for origins in statements.into_values() {
-        let [Some(subject), Some(predicate), Some(object)] = origins else {
-            continue;
-        };
-        let (Some(s), Some(p), Some(o)) = (term(subject), term(predicate), term(object)) else {
-            continue;
-        };
-        let matches = show(&s) == probe.subject
-            && show(&p) == probe.predicate
-            && probe.term.is_none_or(|wanted| {
-                [&s, &p, &o]
-                    .iter()
-                    .any(|candidate| show(candidate) == wanted)
-            });
-        if !matches {
-            continue;
-        }
-        let (Some(p_range), Some(o_range)) = (range(predicate), range(object)) else {
-            continue;
-        };
-        return Some(SourceExtent::new(
-            source.bytes(),
-            p_range.start.min(o_range.start)..p_range.end.max(o_range.end),
-        ));
     }
-    None
+    Ok(None)
+}
+
+fn extent(
+    source: &BorrowedSource<'_>,
+    range: Range<usize>,
+    governor: &mut Governor,
+) -> Result<SourceExtent, LoadError> {
+    work(governor, saturating_size(range.start).saturating_mul(4))?;
+    Ok(SourceExtent::new(source.bytes(), range))
 }
 
 #[cfg(test)]
