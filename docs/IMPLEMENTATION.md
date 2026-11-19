@@ -991,7 +991,7 @@ Run official JSON Schema and CommonMark/GFM suites, independent syntax oracles,
 composed-recovery goldens, Unicode/path/phonetic ambiguity tests, crash/stale/
 retry/undo tests, preservation/replay/ledger properties, bounded fuzzing, and
 executed native/WASM comparisons with fixed helper transcripts. Measure quality,
-incorrect correction, latency, allocation, memory and build cost.
+incorrect correction, latency, allocation and build cost.
 
 Tool-call recovery additionally requires: canonical anchor fixtures for every
 built-in dialect; one captured golden per registry rule; a negative corpus;
