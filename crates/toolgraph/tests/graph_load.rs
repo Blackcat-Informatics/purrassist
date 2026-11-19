@@ -451,6 +451,21 @@ fn an_invalid_execution_profile_is_refused() {
     assert!(matches!(violation, Violation::OutOfRange { .. }));
     assert_eq!(&source[at.start..at.end], written);
 
+    // Multiplicity is reported before checking either value's kind.
+    let duplicate = load(&edited(
+        r#"pa:confinementMode "change_hat""#,
+        r#"pa:confinementMode 42, "change_hat""#,
+    ))
+    .expect_err("a single-valued field has two values");
+    assert!(matches!(
+        duplicate,
+        LoadError::InvalidExecutionProfile {
+            violation: Violation::TooMany { found: 2 },
+            at: None,
+            ..
+        }
+    ));
+
     let written = "pa:deny false";
     let source = edited(
         r#"pa:mountOperation "mount" ; pa:deny true"#,

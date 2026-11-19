@@ -29,6 +29,7 @@ struct NodeState<'doc> {
     term: Option<&'doc TermValue>,
     declared: Option<u16>,
     inferred: Option<u16>,
+    rule_domain: u16,
     membership: u8,
 }
 
@@ -41,6 +42,7 @@ impl<'doc> NodeState<'doc> {
     fn infer(&mut self, term: &'doc TermValue, role: u16) {
         self.term = Some(term);
         *self.inferred.get_or_insert(0) |= role;
+        self.rule_domain |= Role::specific_rule_domain(role);
     }
 
     fn role(&self) -> Option<u16> {
@@ -49,10 +51,18 @@ impl<'doc> NodeState<'doc> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct RoleNode<'doc> {
+    pub(super) identity: Node<'doc>,
+    pub(super) mask: u16,
+    pub(super) rule_domain: u16,
+    pub(super) rows: &'doc [usize],
+}
+
 /// Classifications stay in the same admitted account through every consumer.
 pub(super) struct Nodes<'doc> {
     by_id: Vec<NodeState<'doc>>,
-    roles: Vec<(Node<'doc>, u16)>,
+    roles: Vec<RoleNode<'doc>>,
     pub(super) has_fno: bool,
 }
 
@@ -63,7 +73,7 @@ impl<'doc> Nodes<'doc> {
         })
     }
 
-    pub(super) fn roles(&self) -> impl Iterator<Item = (Node<'doc>, u16)> + '_ {
+    pub(super) fn roles(&self) -> impl Iterator<Item = RoleNode<'doc>> + '_ {
         self.roles.iter().copied()
     }
 
@@ -318,15 +328,24 @@ fn collect_roles<S: Admission>(
             let index = u32::try_from(index).expect("index fits in a retained term table");
             let id = TermId::from_index(index).expect("index addresses a retained term");
             memory
-                .push(&mut nodes.roles, (Node { id, term }, role))
+                .push(
+                    &mut nodes.roles,
+                    RoleNode {
+                        identity: Node { id, term },
+                        mask: role,
+                        rule_domain: node.rule_domain,
+                        rows: node.rows,
+                    },
+                )
                 .map_err(&storage_error)?;
         }
     }
     // Native term IDs follow acquisition order. Diagnostics use RDF value order.
     let mut progress = Work::new(governor);
-    try_sort_unstable_by(&mut nodes.roles, |(left, _), (right, _)| {
-        left.term
-            .try_cmp_with_control(right.term, memory, &mut |units| {
+    try_sort_unstable_by(&mut nodes.roles, |left, right| {
+        left.identity
+            .term
+            .try_cmp_with_control(right.identity.term, memory, &mut |units| {
                 progress.charge(units).map_err(stop)
             })
             .map_err(|failure| match failure {

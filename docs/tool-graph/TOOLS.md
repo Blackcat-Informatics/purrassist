@@ -21,8 +21,10 @@ catalog is built with `FnoCatalog::from_dataset_with_control`. The parser,
 owned statement rows and lookup indexes, temporary FnO dataset builder, and
 catalog reader charge live storage to the caller's scratch meter. They poll
 cancellation on native steps and charge one work unit per 64 native units,
-carrying the remainder across charges. Statement rows and indexes remain
-charged through validation and typing. The temporary dataset remains charged
+carrying the remainder across charges. Vocabulary validation uses the admitted
+subject rows directly. It charges for row visits, predicate comparisons, and
+variable-length lexical checks. Statement rows and indexes remain charged
+through validation and typing. The temporary dataset remains charged
 through catalog construction. The catalog keeps its own charge.
 
 An exhausted work or scratch budget is `LoadError::Exhausted`.
@@ -41,8 +43,9 @@ predicate on the wrong role and a value of the wrong kind or range. Refusals
 that identify only a node name the subject and predicate where available.
 Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
-code is `unsupported-format` for every such media type. The owned `RdfDataset` copy returned by `ToolGraph::dataset` allocates outside
-the scratch account.
+code is `unsupported-format` for every such media type. The owned `RdfDataset`
+copy returned by `ToolGraph::dataset` allocates outside the scratch account.
+
 Typed tool construction uses the classified RDF identities and admits the
 temporary path and tool indexes, profile traversal, field masks, and retained
 typed values against the caller's budget. Temporary storage is refunded when

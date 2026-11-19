@@ -25,7 +25,8 @@ subject and predicate. `outputProjectionJq` must be a field mask or the load
 fails with `LoadError::UnsupportedProjection`. The load runs through the governed
 `PurRDF` entry points (`parse_dataset_controlled`, `from_dataset_with_control`):
 the caller's `Governor` bounds parsing, catalog construction, and vocabulary
-property validation and typed construction. Both stages use admitted native RDF rows.
+property validation and typed construction. Both stages use admitted native
+RDF rows.
 Statement-level refusals carry the exact `SourceExtent` when they identify a
 specific statement. The loader charges one work unit per 64 native units.
 Use `Governor::usage()` to inspect charged work and peak scratch for a
@@ -34,8 +35,9 @@ the caller's budget.
 
 Temporary typed-construction indexes refund their scratch storage when loading
 finishes. The loaded graph retains its typed storage reservation until drop.
-The published RDF dataset copy allocates outside the scratch account. See `docs/tool-graph/TOOLS.md` for the differences between
-the Rust shape table and SHACL. Full SHACL admission remains #33 work.
+The published RDF dataset copy allocates outside the scratch account. See
+`docs/tool-graph/TOOLS.md` for the differences between the Rust shape table
+and SHACL. Full SHACL admission remains #33 work.
 Authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 `ToolGraph::tool_set` is implemented: it builds the core `ToolSet` through the governed MCP adapter.
