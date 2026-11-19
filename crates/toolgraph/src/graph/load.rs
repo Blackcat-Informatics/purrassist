@@ -12,13 +12,14 @@ use std::convert::Infallible;
 
 use purrassist_core::{Governor, StopReason, contract::Resource, output::FieldMask};
 use purrdf_core::{
-    NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermValue, dataset_from_view,
+    NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue, dataset_from_view,
     dataset_view::DatasetView,
     fno::{FnoCatalog, FnoReadError, FnoReadFailure},
 };
 use purrdf_lex::{
-    allocation::{Admission, Memory},
-    control::ControlledError,
+    allocation::{Admission, Memory, StorageError},
+    control::{ControlledError, Progress, compare_bytes},
+    walk::try_sort_unstable_by,
 };
 use purrdf_rdf::{BorrowedSource, SourceStatementKind};
 
@@ -72,9 +73,9 @@ struct Reifier {
 struct Doc<'v> {
     vocabulary: &'v Vocabulary,
     namespace: &'v str,
-    names: BTreeMap<&'v str, &'static str>,
+    names: Vec<(&'v str, &'static str)>,
     rows: Vec<Row>,
-    by_subject: BTreeMap<TermValue, Vec<usize>>,
+    by_subject: Vec<usize>,
     reifiers: Vec<Reifier>,
 }
 
@@ -134,8 +135,8 @@ pub(super) fn load(
             return Err(error);
         }
     };
-    // `PurRDF` exposes only a borrowed retained parse. The owned dataset copy,
-    // `Doc` rows and subject index are outside the governor's storage account.
+    // `PurRDF` exposes only a borrowed retained parse. The published dataset
+    // copy is outside the governor's storage account.
     let dataset = dataset_from_view(&view)
         .map_err(|cause| control::read_failure("dataset-materialisation", cause))?;
     Ok(ToolGraph {
@@ -155,38 +156,103 @@ fn analyse<V: DatasetView<Id = TermId>>(
 where
     V::ReadError: std::fmt::Display,
 {
-    let doc = Doc::collect(view, source, vocabulary, &mut governor.borrow_mut())?;
-    doc.scan_vocabulary(&mut governor.borrow_mut())?;
-    let nodes = doc.classify(&mut governor.borrow_mut())?;
-    doc.own_every_row(&nodes, &mut governor.borrow_mut())?;
-    doc.validate_nodes(&nodes, &mut governor.borrow_mut())?;
-    let catalog = doc.read_catalog(&nodes, governor)?;
-    let tools = doc.build_tools(&nodes, catalog.as_ref(), &mut governor.borrow_mut())?;
-    Ok((tools, catalog))
+    with_doc(view, source, vocabulary, governor, |doc| {
+        doc.scan_vocabulary(&mut governor.borrow_mut())?;
+        let nodes = doc.classify(&mut governor.borrow_mut())?;
+        doc.own_every_row(&nodes, &mut governor.borrow_mut())?;
+        doc.validate_nodes(&nodes, &mut governor.borrow_mut())?;
+        let catalog = doc.read_catalog(&nodes, governor)?;
+        let tools = doc.build_tools(&nodes, catalog.as_ref(), &mut governor.borrow_mut())?;
+        Ok((tools, catalog))
+    })
+}
+
+/// Retain the original row and index account through all consumers of the document.
+fn with_doc<V: DatasetView<Id = TermId>, T>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    vocabulary: &Vocabulary,
+    governor: &Shared<'_>,
+    read: impl FnOnce(&Doc<'_>) -> Result<T, LoadError>,
+) -> Result<T, LoadError> {
+    let (mut account, rejection) = ControlledStorage::owned(governor);
+    let doc = Doc::collect(
+        view,
+        source,
+        vocabulary,
+        governor,
+        &mut Memory::new(&mut account),
+        &|cause| control::storage_stop(governor, &rejection, &cause),
+    )?;
+    read(&doc)
+}
+
+// Each subject's rows keep their original encounter order.
+fn subject_index<S: Admission>(
+    rows: &[Row],
+    memory: &mut Memory<'_, S>,
+    progress: &mut impl FnMut(u64) -> Result<(), LoadError>,
+    storage_error: &impl Fn(StorageError) -> LoadError,
+) -> Result<Vec<usize>, LoadError> {
+    let mut by_subject = Vec::new();
+    memory
+        .reserve(&mut by_subject, rows.len())
+        .map_err(storage_error)?;
+    memory
+        .extend(&mut by_subject, 0..rows.len())
+        .map_err(storage_error)?;
+    try_sort_unstable_by(&mut by_subject, |&left, &right| {
+        rows[left]
+            .s
+            .try_cmp_with_control(&rows[right].s, memory, progress)
+            .map(|order| order.then(left.cmp(&right)))
+            .map_err(|failure| match failure {
+                ControlledError::Native(cause) => storage_error(cause),
+                ControlledError::Control(error) => error,
+            })
+    })?;
+    Ok(by_subject)
 }
 
 impl<'v> Doc<'v> {
-    fn collect<V: DatasetView<Id = TermId>>(
+    fn collect<V: DatasetView<Id = TermId>, S: Admission>(
         view: &V,
         source: &BorrowedSource<'_>,
         vocabulary: &'v Vocabulary,
-        governor: &mut Governor,
+        governor: &Shared<'_>,
+        memory: &mut Memory<'_, S>,
+        storage_error: &impl Fn(StorageError) -> LoadError,
     ) -> Result<Self, LoadError>
     where
         V::ReadError: std::fmt::Display,
     {
-        let mut names = BTreeMap::new();
-        for (name, iri) in &vocabulary.terms().local_names {
+        let mut names = Vec::new();
+        let bindings = &vocabulary.terms().local_names;
+        memory
+            .reserve(&mut names, bindings.len())
+            .map_err(storage_error)?;
+        for (name, iri) in bindings {
+            work(&mut governor.borrow_mut(), 1)?;
             if let Ok(at) = crate::TERM_NAMES.binary_search(&name.as_str()) {
-                names.insert(iri.as_str(), crate::TERM_NAMES[at]);
+                memory
+                    .push(&mut names, (iri.as_str(), crate::TERM_NAMES[at]))
+                    .map_err(storage_error)?;
             }
         }
-        let value = |id| -> Result<TermValue, LoadError> {
-            view.term_value(id)
-                .map_err(|cause| control::read_failure("dataset-read", cause))
+        let mut native_work = Work::new(governor);
+        let mut progress = |units| native_work.charge(units).map_err(stop);
+        try_sort_unstable_by(&mut names, |(left, _), (right, _)| {
+            compare_bytes(left.as_bytes(), right.as_bytes(), &mut progress)
+        })?;
+        let value = |id, memory: &mut Memory<'_, S>| {
+            view.term_value_with_memory(
+                id,
+                memory,
+                |cause| control::read_failure("dataset-read", cause),
+                |cause, _| storage_error(cause),
+            )
         };
         let mut rows = Vec::new();
-        let mut by_subject: BTreeMap<TermValue, Vec<usize>> = BTreeMap::new();
         // Statement rows, then annotation side-table rows: both describe a subject.
         let statements = view
             .quads()
@@ -196,48 +262,60 @@ impl<'v> Doc<'v> {
                     .map(|quad| (quad, SourceStatementKind::Annotation)),
             );
         for (quad, layer) in statements {
-            work(governor, 1)?;
-            let (s, o) = (value(quad.s)?, value(quad.o)?);
-            let TermValue::Iri(p) = value(quad.p)? else {
+            work(&mut governor.borrow_mut(), 1)?;
+            let s = value(quad.s, memory)?;
+            let TermValue::Iri(p) = value(quad.p, memory)? else {
                 return Err(unsupported(&s, "-", Construct::UnownedStatement));
             };
             if quad.g.is_some() {
-                let at = control::quad_extent(source, quad, layer, governor)?;
+                let at = control::quad_extent(source, quad, layer, &mut governor.borrow_mut())?;
                 return Err(named_graph(&s, &p, at));
             }
-            by_subject.entry(s.clone()).or_default().push(rows.len());
-            rows.push(Row { s, p, o });
+            let o = value(quad.o, memory)?;
+            memory
+                .push(&mut rows, Row { s, p, o })
+                .map_err(storage_error)?;
         }
         let mut reifiers = Vec::new();
         for quad in view.reifier_quads() {
-            work(governor, 1)?;
-            let id = value(quad.s)?;
+            work(&mut governor.borrow_mut(), 1)?;
+            let id = value(quad.s, memory)?;
             if quad.g.is_some() {
                 // A reifier row in a named graph would need a graph on its hint.
-                let at =
-                    control::quad_extent(source, quad, SourceStatementKind::Reifier, governor)?;
+                let at = control::quad_extent(
+                    source,
+                    quad,
+                    SourceStatementKind::Reifier,
+                    &mut governor.borrow_mut(),
+                )?;
                 return Err(named_graph(&id, "-", at));
             }
-            let TermValue::Triple { s, p, o } = value(quad.o)? else {
+            let Some((s, p, o)) = view
+                .with_term(quad.o, |term| match term {
+                    TermRef::Triple { s, p, o } => Some((s, p, o)),
+                    _ => None,
+                })
+                .map_err(|cause| control::read_failure("dataset-read", cause))?
+            else {
                 return Err(unsupported(&id, "-", Construct::Reifier));
             };
-            let TermValue::Iri(p) = (*p).clone() else {
+            let TermValue::Iri(p) = value(p, memory)? else {
                 return Err(unsupported(&id, "-", Construct::Reifier));
             };
-            reifiers.push(Reifier {
-                id,
-                s: (*s).clone(),
-                p,
-                o: (*o).clone(),
-            });
+            let s = value(s, memory)?;
+            let o = value(o, memory)?;
+            memory
+                .push(&mut reifiers, Reifier { id, s, p, o })
+                .map_err(storage_error)?;
         }
         // A declared named graph with no statements has no quad to refuse above, so
         // read the view's declared graphs and refuse any that remain.
         if let Some(graph) = view.named_graphs().next() {
-            work(governor, 1)?;
-            let at = control::graph_extent(source, graph, governor)?;
-            return Err(named_graph(&value(graph)?, "-", at));
+            work(&mut governor.borrow_mut(), 1)?;
+            let at = control::graph_extent(source, graph, &mut governor.borrow_mut())?;
+            return Err(named_graph(&value(graph, memory)?, "-", at));
         }
+        let by_subject = subject_index(&rows, memory, &mut progress, storage_error)?;
         Ok(Self {
             vocabulary,
             namespace: vocabulary.terms().namespace_iri.as_str(),
@@ -257,7 +335,10 @@ impl<'v> Doc<'v> {
     }
 
     fn bound(&self, iri: &str) -> Option<&'static str> {
-        self.names.get(iri).copied()
+        self.names
+            .binary_search_by_key(&iri, |&(key, _)| key)
+            .ok()
+            .map(|position| self.names[position].1)
     }
 
     fn in_namespace(&self, iri: &str) -> bool {
@@ -265,15 +346,15 @@ impl<'v> Doc<'v> {
     }
 
     fn rows_of<'a>(&'a self, subject: &TermValue) -> impl Iterator<Item = &'a Row> + 'a {
-        self.by_subject
-            .get(subject)
-            .into_iter()
-            .flatten()
-            .map(|&at| &self.rows[at])
+        let start = self
+            .by_subject
+            .partition_point(|&row| self.rows[row].s < *subject);
+        let matching = &self.by_subject[start..];
+        let length = matching.partition_point(|&row| self.rows[row].s == *subject);
+        matching[..length].iter().map(|&row| &self.rows[row])
     }
 
     fn objects<'a>(&'a self, subject: &TermValue, predicate: &str) -> Vec<&'a TermValue> {
-        let predicate = predicate.to_owned();
         self.rows_of(subject)
             .filter(|row| row.p == predicate)
             .map(|row| &row.o)
@@ -423,8 +504,31 @@ impl Doc<'_> {
                 self.claim_list(&row.o, &mut shape_cells, governor)?;
             }
         }
+        let mut fno = self.fno_subjects();
+        let mut cells = BTreeSet::new();
+        for subject in &fno {
+            for predicate in [FNO_EXPECTS, FNO_RETURNS] {
+                for head in self.objects(subject, predicate) {
+                    self.claim_list(head, &mut cells, governor)?;
+                }
+            }
+        }
+        fno.extend(cells);
+        Ok(Nodes {
+            roles,
+            fno,
+            shapes,
+            shape_cells,
+        })
+    }
+
+    fn fno_subjects(&self) -> BTreeSet<TermValue> {
         let mut fno = BTreeSet::new();
-        for (subject, indexes) in &self.by_subject {
+        for indexes in self
+            .by_subject
+            .chunk_by(|&left, &right| self.rows[left].s == self.rows[right].s)
+        {
+            let subject = &self.rows[indexes[0]].s;
             let is_fno = indexes.iter().any(|&at| {
                 let row = &self.rows[at];
                 row.p == DCTERMS_IS_PART_OF
@@ -439,21 +543,7 @@ impl Doc<'_> {
                 fno.insert(subject.clone());
             }
         }
-        let mut cells = BTreeSet::new();
-        for subject in fno.clone() {
-            for predicate in [FNO_EXPECTS, FNO_RETURNS] {
-                for head in self.objects(&subject, predicate) {
-                    self.claim_list(head, &mut cells, governor)?;
-                }
-            }
-        }
-        fno.extend(cells);
-        Ok(Nodes {
-            roles,
-            fno,
-            shapes,
-            shape_cells,
-        })
+        fno
     }
 
     /// Collect the blank cells of the RDF list starting at `head`.
@@ -1379,23 +1469,25 @@ mod tests {
     use purrdf_core::loss::LossProfile;
     use purrdf_rdf::NativeRdfFormat;
 
-    #[test]
-    fn temporary_fno_storage_is_scoped_to_the_reader_and_refunds_on_refusal() {
-        let namespace = "urn:toolgraph:";
-        let vocabulary = Vocabulary::new(
+    const NAMESPACE: &str = "urn:toolgraph:";
+
+    fn fixture_vocabulary() -> Vocabulary {
+        Vocabulary::new(
             "pa",
-            PrefixTable(vec![("pa".into(), namespace.into())]),
+            PrefixTable(vec![("pa".into(), NAMESPACE.into())]),
             TermBindings {
-                namespace_iri: namespace.into(),
+                namespace_iri: NAMESPACE.into(),
                 local_names: TERM_NAMES
                     .iter()
-                    .map(|name| ((*name).into(), format!("{namespace}{name}")))
+                    .map(|name| ((*name).into(), format!("{NAMESPACE}{name}")))
                     .collect(),
             },
             register_loss_profile(LossProfile::builtin()).unwrap(),
         )
-        .unwrap();
-        let source = br#"
+        .unwrap()
+    }
+
+    const CATALOG_SOURCE: &[u8] = br#"
             @prefix owl: <http://www.w3.org/2002/07/owl#> .
             @prefix dcterms: <http://purl.org/dc/terms/> .
             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
@@ -1404,31 +1496,36 @@ mod tests {
               rdfs:label "Loader test catalog" ;
               rdfs:comment "A catalog without functions." .
         "#;
+
+    #[test]
+    fn temporary_fno_storage_is_scoped_to_the_reader_and_refunds_on_refusal() {
+        let vocabulary = fixture_vocabulary();
         let mut fixture = Governor::new(Budget::default());
         let source_owner = RefCell::new(&mut fixture);
-        let parsed = control::parse(source, NativeRdfFormat::Turtle, None, &source_owner).unwrap();
+        let parsed =
+            control::parse(CATALOG_SOURCE, NativeRdfFormat::Turtle, None, &source_owner).unwrap();
         let view = parsed.dataset().unwrap();
-        let doc = Doc::collect(
-            &view,
-            &parsed.source(),
-            &vocabulary,
-            &mut source_owner.borrow_mut(),
-        )
+        with_doc(&view, &parsed.source(), &vocabulary, &source_owner, |doc| {
+            let nodes = doc.classify(&mut source_owner.borrow_mut()).unwrap();
+            check_fno_view_account(doc, &nodes);
+            Ok(())
+        })
         .unwrap();
-        let nodes = doc.classify(&mut source_owner.borrow_mut()).unwrap();
+    }
 
+    fn check_fno_view_account(doc: &Doc<'_>, nodes: &Nodes) {
         let mut ample = Governor::new(Budget::default());
         let governor = RefCell::new(&mut ample);
         let meter = governor.borrow().scratch_meter();
         let (view_peak, catalog_bytes, catalog) = doc
-            .with_fno_view(&nodes, &governor, |view| {
+            .with_fno_view(nodes, &governor, |view| {
                 let view_bytes = meter.live();
                 assert!(view_bytes > 0);
                 let peak = governor.borrow().usage().peak_scratch_bytes;
                 let (storage, _) = Storage::new(&governor);
                 let catalog = FnoCatalog::from_dataset_with_control(
                     view,
-                    namespace,
+                    NAMESPACE,
                     storage,
                     Work::new(&governor),
                 )
@@ -1447,7 +1544,7 @@ mod tests {
         });
         let governor = RefCell::new(&mut tight);
         let meter = governor.borrow().scratch_meter();
-        let refused = doc.with_fno_view(&nodes, &governor, |_| -> Result<(), LoadError> {
+        let refused = doc.with_fno_view(nodes, &governor, |_| -> Result<(), LoadError> {
             panic!("a refused temporary view must not reach its reader");
         });
         assert_eq!(
@@ -1456,6 +1553,72 @@ mod tests {
                 Resource::ScratchBytes
             )))
         );
+        assert_eq!(meter.live(), 0);
+    }
+
+    #[test]
+    fn retained_source_rows_refund_their_account_on_completion_and_refusal() {
+        let vocabulary = fixture_vocabulary();
+        let mut fixture = Governor::new(Budget::default());
+        let source_owner = RefCell::new(&mut fixture);
+        let parsed =
+            control::parse(CATALOG_SOURCE, NativeRdfFormat::Turtle, None, &source_owner).unwrap();
+        let view = parsed.dataset().unwrap();
+        let source = parsed.source();
+        let empty = control::parse(b"", NativeRdfFormat::Turtle, None, &source_owner).unwrap();
+
+        let mut ample = Governor::new(Budget::default());
+        let governor = RefCell::new(&mut ample);
+        let meter = governor.borrow().scratch_meter();
+        let other_owner = governor.borrow_mut().lease_scratch(31).unwrap();
+        let baseline = meter.live();
+        let names_peak = with_doc(
+            &empty.dataset().unwrap(),
+            &empty.source(),
+            &vocabulary,
+            &governor,
+            |doc| {
+                assert_eq!(doc.rows.first().map(|row| row.p.as_str()), None);
+                Ok(governor.borrow().usage().peak_scratch_bytes)
+            },
+        )
+        .unwrap();
+        assert_eq!(meter.live(), baseline);
+        let peak = with_doc(&view, &source, &vocabulary, &governor, |doc| {
+            assert_eq!(doc.rows.len(), 4);
+            assert!(meter.live() > baseline);
+            Ok(governor.borrow().usage().peak_scratch_bytes)
+        })
+        .unwrap();
+        assert!(peak > names_peak);
+        assert_eq!(meter.live(), baseline);
+        drop(other_owner);
+        assert_eq!(meter.live(), 0);
+
+        let mut tight = Governor::new(Budget {
+            scratch_bytes: peak - 1,
+            ..Budget::default()
+        });
+        let governor = RefCell::new(&mut tight);
+        let meter = governor.borrow().scratch_meter();
+        let other_owner = governor.borrow_mut().lease_scratch(baseline).unwrap();
+        let refusal = with_doc(
+            &view,
+            &source,
+            &vocabulary,
+            &governor,
+            |_| -> Result<(), LoadError> {
+                panic!("partial rows must not reach the loader's validation stages");
+            },
+        );
+        assert_eq!(
+            refusal,
+            Err(LoadError::Exhausted(StopReason::BudgetExceeded(
+                Resource::ScratchBytes
+            )))
+        );
+        assert_eq!(meter.live(), baseline);
+        drop(other_owner);
         assert_eq!(meter.live(), 0);
     }
 }

@@ -18,11 +18,12 @@ it loads a tool graph (below) but does not execute one.
 or TriG with `purrdf_rdf::parse_dataset_controlled` into typed tools, all or
 nothing, and the worked example below loads. It is bounded as follows. The FnO
 catalog is built with `FnoCatalog::from_dataset_with_control`. The parser,
-the temporary FnO dataset builder, and the catalog reader charge live storage
-to the caller's scratch meter. They poll cancellation on every native step
-and charge one work unit per 64 native units, carrying the remainder across
-charges. The temporary dataset remains charged through catalog construction
-and releases its storage when destroyed. The catalog keeps its own charge.
+owned statement rows and lookup indexes, temporary FnO dataset builder, and
+catalog reader charge live storage to the caller's scratch meter. They poll
+cancellation on native steps and charge one work unit per 64 native units,
+carrying the remainder across charges. Statement rows and indexes remain
+charged through validation and typing. The temporary dataset remains charged
+through catalog construction. The catalog keeps its own charge.
 
 An exhausted work or scratch budget is `LoadError::Exhausted`.
 Cancellation is `LoadError::Cancelled`. Both withhold the graph. Native
@@ -34,9 +35,9 @@ range, line and column) of the first statement matching the refusal; refusals
 that name a node (shape, hint, profile, FnO binding) name subject and predicate
 only. Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
-code is `unsupported-format` for every such media type. The rows materialised for
-validation, their per-subject index, and the owned `RdfDataset` copy returned by
-`ToolGraph::dataset` remain outside the governor's storage account.
+code is `unsupported-format` for every such media type. Role classification,
+typed tool construction, and the owned `RdfDataset` copy returned by
+`ToolGraph::dataset` still allocate outside the scratch account.
 Only default-graph statements load. A statement in a named graph is refused as
 `UnsupportedConstruct` with the named-graph construct, and so is a reifier in a
 named graph. A default-graph reifier loads only as a parameter-path reifier: it
