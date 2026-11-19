@@ -231,6 +231,22 @@ fn negative(valid: &str, faulted: &str, kind: EventFaultKind, class: EventFaultC
     assert!(!bad.is_clean());
     assert_eq!(bad.usable().len(), 0);
     assert_eq!(bad.usable_accepting_guesses().len(), 0);
+    if let Outcome::Resolved(calls) | Outcome::BestGuess(calls) = &bad.recovery.outcome {
+        assert_eq!(
+            calls.usable(),
+            [] as [&purrassist_core::tool_call::ToolCall; 0]
+        );
+        assert_eq!(
+            calls.emitted_calls(),
+            [] as [&purrassist_core::tool_call::ToolCall; 0]
+        );
+        let emission = purrassist_core::tool_call::emit::openai_tool_calls(
+            calls,
+            &purrassist_core::tool_call::IdPolicy::default(),
+        )
+        .unwrap();
+        assert_eq!(emission.output.to_json(), "[]");
+    }
     assert_eq!(bad.log, faulted.as_bytes());
 }
 
@@ -408,9 +424,10 @@ fn refusal_and_cancellation_are_explicit_outcomes() {
     let cancelled = stream.finish(&mut events);
     assert_eq!(cancelled.recovery.receipt.stopped, StopReason::Cancelled);
 
-    // The refusal came at the first chunk, before any byte was admitted;
-    // the cancelled read keeps the half it admitted, not the bytes after.
-    assert_eq!(refused.log, [] as [u8; 0]);
+    // The refusal keeps only bytes that fit, and cancellation retains only
+    // bytes fed before the cancellation request.
+    assert!(log.as_bytes().starts_with(&refused.log));
+    assert!(refused.log.len() < log.len());
     assert_eq!(cancelled.log, first);
     for result in [refused, cancelled] {
         assert_eq!(result.recovery.outcome, Outcome::Unresolved);
@@ -524,7 +541,7 @@ fn unfinished_tool_input_is_withheld_and_never_absorbs_the_next_block() {
 /// The smallest budgets refuse at intake and the sweep ends in completion.
 /// Raising the work budget never turns a completed read back into a refusal,
 /// and every refusal is an explicit `Unresolved` that retains the admitted log
-/// (the whole chunk, or nothing when the chunk itself was refused).
+/// (possibly only a prefix of the first feed).
 #[test]
 fn work_budget_sweep_ends_in_explicit_refusals_then_completion() {
     let log = golden_log();
@@ -553,11 +570,61 @@ fn work_budget_sweep_ends_in_explicit_refusals_then_completion() {
             ));
             assert_eq!(result.recovery.outcome, Outcome::Unresolved);
             assert_eq!(result.usable().len(), 0);
-            assert!(
-                result.log.is_empty() || result.log == log.as_bytes(),
-                "work 2^{power}"
-            );
+            assert!(log.as_bytes().starts_with(&result.log), "work 2^{power}");
         }
     }
     assert!(completed && refused);
+}
+
+/// Both governed batch readers retain only admitted input and report the
+/// original caller governor, including work accumulated before reassembly.
+#[test]
+fn governed_provider_batches_share_original_budget_and_retain_refused_prefix() {
+    use purrassist_core::tool_call::ProviderLogFormat;
+    use purrassist_core::{Governor, contract::Resource};
+
+    let tools = tools();
+    let log = golden_log();
+    for format in [ProviderLogFormat::Anthropic, ProviderLogFormat::OpenAiChat] {
+        let mut governor = Governor::new(Budget {
+            input_bytes: 32,
+            ..Budget::default()
+        });
+        governor.charge(Resource::Work, 1_000).unwrap();
+        let result = tools.recover_provider_log(
+            format,
+            log.as_bytes(),
+            ToolRecoveryRequest::default(),
+            DialectSet::built_in(),
+            governor,
+        );
+        let node = result.to_node();
+        assert_eq!(
+            node.pointer("/provider/source/text")
+                .and_then(purrassist_core::json::Node::as_str),
+            Some(&log[..32])
+        );
+        assert_eq!(
+            node.pointer("/receipt/termination/kind")
+                .and_then(purrassist_core::json::Node::as_str),
+            Some("budget_exceeded")
+        );
+        let receipt = match result {
+            purrassist_core::tool_call::ProviderLogRecovery::Anthropic(result) => {
+                result.recovery.receipt
+            }
+            purrassist_core::tool_call::ProviderLogRecovery::OpenAiChat(result) => {
+                result.recovery.receipt
+            }
+            purrassist_core::tool_call::ProviderLogRecovery::NotStarted { .. } => {
+                panic!("reader started")
+            }
+        };
+        assert_eq!(
+            receipt.stopped,
+            StopReason::BudgetExceeded(Resource::InputBytes)
+        );
+        assert!(receipt.usage.work > 1_000);
+        assert_eq!(receipt.budget.input_bytes, 32);
+    }
 }

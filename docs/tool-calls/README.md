@@ -47,8 +47,9 @@ derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
 [README](../../crates/derive/README.md)). Streaming recognition (#16) is
 implemented. The Rust API reads Anthropic Messages event logs
 (`ToolSet::stream_anthropic_events`) and OpenAI chat-completions tool-call
-deltas (`ToolSet::stream_openai_chat`). CLI and MCP inputs, provider-log
-fixtures, fuzz seeds, and WASM parity remain tracked under #17.
+deltas (`ToolSet::stream_openai_chat`). The batch Rust host, CLI and MCP
+interfaces accept both logs through an explicit input format. Authentic
+provider fixtures, fuzz seeds, and WASM parity remain tracked under #17.
 
 ## Marker-suppressed variants
 

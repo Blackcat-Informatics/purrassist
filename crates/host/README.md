@@ -65,6 +65,12 @@ assert_eq!(node.pointer("/value/finish").and_then(Node::as_str), Some("calls"));
 assert_eq!(node.pointer("/value/calls/0/dialect").and_then(Node::as_str), Some("hermes.v1"));
 ```
 
+Use `purrassist_host::tools::recover_tool_calls_input` for the shared batch
+input formats. Set `input_format` to `anthropic-events` or
+`openai-chat-events` to read a provider log. The batch result carries
+the admitted log, transport faults and reconstructed-message recovery.
+Its wire result and exit code include the provider's eligibility decision.
+
 Version 0.1.0. Capabilities, known limitations and verification are recorded in
 the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/QUALIFICATION.md).
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.

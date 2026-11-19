@@ -1428,3 +1428,158 @@ fn project_result_cli_mcp_keep_checked_bytes_and_structured_refusals() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// Provider inputs use one batch contract across the Rust host, CLI and MCP.
+/// A transport fault remains evidence and cannot make a diagnostic call usable.
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "compare both providers through every batch surface"
+)]
+fn provider_recovery_batch_surfaces_agree_on_source_and_usability() {
+    use purrassist_host::tools::recover_tool_calls_input;
+
+    const DECLARATIONS: &str = r#"[{"type":"function","function":{"name":"look","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]"#;
+    let root = fresh_dir("provider-recovery");
+    let declarations = root.join("tools.json");
+    fs::write(&declarations, DECLARATIONS).unwrap();
+    let definitions = Tools::definitions().unwrap();
+    let Value::Array(tools) = definitions.value else {
+        panic!("MCP definitions");
+    };
+    let definition = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Node::as_str) == Some("recover_tool_calls"))
+        .unwrap();
+    let output_schema =
+        Schema::compile(&definition.get("outputSchema").unwrap().to_json()).unwrap();
+    let tools = Tools::new(&root).unwrap();
+
+    for (format, body, clean_stop, length_stop, terminal, late) in [
+        (
+            "anthropic-events",
+            concat!(
+                "data: {\"type\":\"message_start\"}\n\n",
+                "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"a\",\"name\":\"look\",\"input\":{}}}\n\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"src\\\"}\"}}\n\n",
+                "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"b\",\"name\":\"look\",\"input\":{}}}\n\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"tests\\\"}\"}}\n\n",
+                "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            ),
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" \"}}\n\n",
+        ),
+        (
+            "openai-chat-events",
+            concat!(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"look\",\"arguments\":\"{\\\"path\\\":\\\"src\\\"}\"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"b\",\"type\":\"function\",\"function\":{\"name\":\"look\",\"arguments\":\"{\\\"path\\\":\\\"tests\\\"}\"}}]}}]}\n\n",
+            ),
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: [DONE]\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\" \"}}]}}]}\n\n",
+        ),
+    ] {
+        for (extra, stop, end, usable, all_transports) in [
+            ("", clean_stop, terminal, 2, true),
+            ("", clean_stop, "", 0, true),
+            ("data: {\n\n", clean_stop, terminal, 0, false),
+            ("", length_stop, terminal, 0, false),
+            (late, clean_stop, terminal, 1, false),
+        ] {
+            let log = format!("{body}{extra}{stop}{end}");
+            let args = object([
+                ("input_format", string(format)),
+                ("output", string(&log)),
+                ("tools", string(DECLARATIONS)),
+                ("emit", string("openai")),
+            ]);
+            let host = recover_tool_calls_input(log.as_bytes(), &args).unwrap();
+            let wire = tools.call("recover_tool_calls", &args).unwrap();
+            assert_eq!(wire, host.to_node(), "{format}");
+            assert!(output_schema.validate(&wire).unwrap().valid);
+            assert_eq!(
+                wire.pointer("/provider/source/text").and_then(Node::as_str),
+                Some(log.as_str())
+            );
+            assert_ne!(
+                wire.pointer("/receipt/source"),
+                wire.pointer("/provider/source/digest")
+            );
+            assert_eq!(
+                wire.pointer("/value/usable_calls").unwrap().to_json(),
+                usable.to_string()
+            );
+            let emission = wire.pointer("/value/emitted").unwrap();
+            let Value::Array(output) = &emission.get("output").unwrap().value else {
+                panic!("OpenAI array");
+            };
+            assert_eq!(output.len(), usable);
+            assert_eq!(
+                wire.pointer("/value/calls/0/id").and_then(Node::as_str),
+                Some("a")
+            );
+            assert_eq!(
+                wire.pointer("/value/calls/0/transport_permitted")
+                    .unwrap()
+                    .to_json(),
+                (usable == 2).to_string()
+            );
+            if usable != 2 {
+                assert!(wire.pointer("/provider/faults/0").is_some());
+                assert_eq!(
+                    emission
+                        .pointer("/skipped/0/reason/code")
+                        .and_then(Node::as_str),
+                    Some("provider_transport"),
+                );
+            }
+            if usable == 1 {
+                assert_eq!(output[0].get("id").and_then(Node::as_str), Some("b"));
+            }
+            let expected_exit = if usable == 0 { 4 } else { 0 };
+            assert_eq!(host.exit_code(), expected_exit);
+            if all_transports {
+                assert_eq!(
+                    run_mcp("recover_tool_calls", &args.to_json(), &root).to_json(),
+                    wire.to_json()
+                );
+                let (code, stdout) = run_cli_command(
+                    &[
+                        "recover-tool-calls",
+                        "--tools",
+                        declarations.to_str().unwrap(),
+                        "--input-format",
+                        format,
+                        "--emit",
+                        "openai",
+                    ],
+                    &log,
+                );
+                assert_eq!(code, i32::from(expected_exit));
+                assert_eq!(stdout.trim_end(), wire.to_json());
+            }
+        }
+        let caller_stop = object([
+            ("input_format", string(format)),
+            ("tools", string(DECLARATIONS)),
+            ("stop", string("stop")),
+        ]);
+        assert!(recover_tool_calls_input(body.as_bytes(), &caller_stop).is_err());
+    }
+
+    let raw = object([("tools", string(DECLARATIONS))]);
+    let input = b"<tool_call>{\"name\":\"look\",\"arguments\":{\"path\":\"src\"}}</tool_call>";
+    let legacy = purrassist_host::tools::recover_tool_calls(input, &raw).unwrap();
+    let shared = recover_tool_calls_input(input, &raw).unwrap();
+    assert_eq!(shared.to_node(), legacy.to_node());
+    assert_eq!(
+        shared.exit_code(),
+        purrassist::tool_call::exit_code(&legacy.outcome)
+    );
+    fs::remove_dir_all(root).unwrap();
+}

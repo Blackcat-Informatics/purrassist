@@ -39,6 +39,7 @@
 //! argument completeness checks through the shared governor. The inner
 //! [`ToolCallStream`] admits its own work on the assembled message.
 
+use super::provider::{DiscardEvents, FaultScope, provider_input};
 use super::stream::{debug_provider_stream, usable_provider_calls};
 use super::{
     DialectSet, GenerationStop, StreamEvent, ToolCall, ToolCallStream, ToolCalls,
@@ -52,18 +53,8 @@ use crate::json::{Node, OwnedDocument, OwnedParseFailure, Value};
 use core::fmt;
 use core::ops::Range;
 
-/// Which kind of problem a [`ChatFaultKind`] is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChatFaultClass {
-    /// A chunk that is not valid or not understood.
-    Malformed,
-    /// The log ended before the completion did.
-    Truncated,
-    /// A valid chunk in a place the protocol does not allow.
-    OutOfOrder,
-    /// The provider reported an error chunk.
-    Provider,
-}
+/// The transport class of a [`ChatFaultKind`].
+pub use super::provider::ProviderFaultClass as ChatFaultClass;
 
 /// What was wrong with one chunk, or with the log as a whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +115,34 @@ pub enum ChatFaultKind {
 }
 
 impl ChatFaultKind {
+    pub(super) const fn wire_code(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            Self::NotUtf8 => ("not_utf8", None),
+            Self::NotJson => ("not_json", None),
+            Self::MissingMember(member) => ("missing_member", Some(member)),
+            Self::DuplicateMember(member) => ("duplicate_member", Some(member)),
+            Self::UnsupportedChoice => ("unsupported_choice", None),
+            Self::UnsupportedDelta => ("unsupported_delta", None),
+            Self::UnsupportedCallType => ("unsupported_call_type", None),
+            Self::MissingData => ("missing_data", None),
+            Self::RepeatedChoice => ("repeated_choice", None),
+            Self::UnrecognizedFinishReason => ("unrecognized_finish_reason", None),
+            Self::MissingName => ("missing_name", None),
+            Self::PartialEvent => ("partial_event", None),
+            Self::MissingFinishReason => ("missing_finish_reason", None),
+            Self::MissingDone => ("missing_done", None),
+            Self::LengthStop => ("length_stop", None),
+            Self::UnfinishedArguments => ("unfinished_arguments", None),
+            Self::EventAfterDone => ("event_after_done", None),
+            Self::DeltaAfterFinish => ("delta_after_finish", None),
+            Self::FinishRepeated => ("finish_repeated", None),
+            Self::IndexSequence => ("index_sequence", None),
+            Self::DeltaForClosedCall => ("delta_for_closed_call", None),
+            Self::ContentAfterToolCalls => ("content_after_tool_calls", None),
+            Self::ProviderError => ("provider_error", None),
+        }
+    }
+
     /// The class of this fault.
     ///
     /// ```
@@ -217,19 +236,14 @@ pub struct ChatLogRecovery {
     /// The original log, up to the last byte admitted before refusal or
     /// cancellation. The receipt's `stopped` reports why admission ended.
     pub log: Vec<u8>,
+    pub(super) whole_fault: bool,
 }
 
 impl ChatLogRecovery {
     /// The `tool_calls` index of the log's call `call` was read from.
     #[must_use]
     pub fn index_of(&self, call: &ToolCall) -> Option<u64> {
-        let position = self
-            .calls
-            .partition_point(|entry| entry.span.end <= call.span.start);
-        self.calls
-            .get(position)
-            .filter(|entry| entry.span.contains(&call.span.start))
-            .map(|entry| entry.call)
+        index_at(&self.calls, call)
     }
 
     /// Whether the log had no fault.
@@ -238,43 +252,27 @@ impl ChatLogRecovery {
         self.faults.is_empty()
     }
 
-    fn permitted<'a>(&self, calls: Vec<&'a ToolCall>) -> Vec<&'a ToolCall> {
-        let Some(faulted) = self
-            .faults
-            .iter()
-            .map(|fault| fault.call)
-            .collect::<Option<std::collections::BTreeSet<_>>>()
-        else {
-            return Vec::new();
-        };
-        calls
-            .into_iter()
-            .filter(|call| {
-                self.index_of(call)
-                    .is_some_and(|index| !faulted.contains(&index))
-            })
-            .collect()
-    }
-
     /// The calls that may run as is: [`ToolCalls::usable`] without the calls
     /// of any faulted index, and none at all when a fault belongs to the whole
     /// log (a log cut short, a provider error, an unreadable chunk).
     #[must_use]
     pub fn usable(&self) -> Vec<&ToolCall> {
-        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable, |calls| {
-            self.permitted(calls)
-        })
+        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable)
     }
 
     /// Like [`Self::usable`], built on [`ToolCalls::usable_accepting_guesses`].
     #[must_use]
     pub fn usable_accepting_guesses(&self) -> Vec<&ToolCall> {
-        usable_provider_calls(
-            &self.recovery.outcome,
-            ToolCalls::usable_accepting_guesses,
-            |calls| self.permitted(calls),
-        )
+        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable_accepting_guesses)
     }
+}
+
+fn index_at(spans: &[ChatCallSpan], call: &ToolCall) -> Option<u64> {
+    let position = spans.partition_point(|entry| entry.span.end <= call.span.start);
+    spans
+        .get(position)
+        .filter(|entry| entry.span.contains(&call.span.start))
+        .map(|entry| entry.call)
 }
 
 /// How much of the message has been written, which fixes what may follow.
@@ -418,8 +416,7 @@ fn stop_of(reason: &str) -> Option<GenerationStop> {
 }
 
 impl<'s> OpenAiChatStream<'s> {
-    fn new(tools: &'s ToolSet, request: ToolRecoveryRequest, dialects: &'s DialectSet) -> Self {
-        let stream = tools.stream_with_dialects(request, dialects);
+    pub(super) fn with_stream(stream: ToolCallStream<'s>) -> Self {
         let governor = stream.governor();
         Self {
             log: ScratchVec::new(governor),
@@ -443,21 +440,7 @@ impl<'s> OpenAiChatStream<'s> {
         }
     }
 
-    /// Feed log bytes, which may end anywhere (inside a line, a multi-byte
-    /// character, or a CR LF pair), and append the recognizer's newly settled
-    /// [`StreamEvent`]s to `events`. Their spans are offsets in the
-    /// reassembled message, not in the log. Empty feeds charge nothing.
-    ///
-    /// Governor refusal and cancellation stop interpretation; they are
-    /// reported by [`Self::finish`], never by panic or a partial result.
-    pub fn feed(&mut self, bytes: &[u8], events: &mut impl Extend<StreamEvent>) {
-        if self.halted || bytes.is_empty() {
-            return;
-        }
-        if let Err(reason) = self.take(bytes, events) {
-            self.halt(reason);
-        }
-    }
+    provider_input!();
 
     /// Cancel interpretation. The first governor refusal is preserved.
     pub fn cancel(&mut self) {
@@ -469,35 +452,6 @@ impl<'s> OpenAiChatStream<'s> {
             self.halted = true;
             self.stream.stop_producer(reason);
         }
-    }
-
-    fn take(
-        &mut self,
-        bytes: &[u8],
-        events: &mut impl Extend<StreamEvent>,
-    ) -> Result<(), StopReason> {
-        for &byte in bytes {
-            let at = self.log.len();
-            let governor = self.stream.governor_mut();
-            governor.charge(Resource::InputBytes, size(at).saturating_add(1))?;
-            governor.charge(
-                Resource::Work,
-                self.log.compact_relocation_work().saturating_add(2),
-            )?;
-            self.log.reserve_compact(1)?;
-            self.log.push(byte)?;
-            if core::mem::take(&mut self.skip_lf) && byte == b'\n' {
-                self.line_start = at + 1;
-                continue;
-            }
-            if byte == b'\n' || byte == b'\r' {
-                self.skip_lf = byte == b'\r';
-                let start = core::mem::replace(&mut self.line_start, at + 1);
-                self.at = at;
-                self.line(start, at, events)?;
-            }
-        }
-        Ok(())
     }
 
     /// One complete line of the log, `log[start..end]` without terminator.
@@ -917,11 +871,23 @@ impl<'s> OpenAiChatStream<'s> {
     /// in the receipt and no usable calls. The admitted prefix remains in `log`.
     #[must_use]
     pub fn finish(mut self, events: &mut impl Extend<StreamEvent>) -> ChatLogRecovery {
-        if !self.halted
-            && let Err(reason) = self.seal(events)
-        {
-            self.halt(reason);
-        }
+        let scope = if self.halted {
+            FaultScope::Whole
+        } else {
+            match self.seal(events).and_then(|()| {
+                self.stream.governor().check()?;
+                FaultScope::prepare(
+                    self.faults.as_slice().iter().map(|fault| fault.call),
+                    self.stream.governor_mut(),
+                )
+            }) {
+                Ok(scope) => scope,
+                Err(reason) => {
+                    self.halt(reason);
+                    FaultScope::Whole
+                }
+            }
+        };
         let Self {
             stream,
             log,
@@ -932,14 +898,17 @@ impl<'s> OpenAiChatStream<'s> {
             open,
             ..
         } = self;
-        drop(data);
-        drop(open);
-        let recovery = stream.finish_with_events(finish.unwrap_or(GenerationStop::Unknown), events);
+        drop((data, open));
+        let index = |call: &ToolCall| index_at(&spans, call);
+        let transport = scope.transport(&index, spans.len());
+        let recovery =
+            stream.finish_provider(finish.unwrap_or(GenerationStop::Unknown), events, transport);
         ChatLogRecovery {
             recovery,
             faults: faults.into_vec(),
             calls: spans.into_vec(),
             log: log.into_vec(),
+            whole_fault: matches!(scope, FaultScope::Whole),
         }
     }
 }
@@ -953,7 +922,7 @@ impl ToolSet {
         request: ToolRecoveryRequest,
         dialects: &'s DialectSet,
     ) -> OpenAiChatStream<'s> {
-        OpenAiChatStream::new(self, request, dialects)
+        OpenAiChatStream::with_stream(self.stream_with_dialects(request, dialects))
     }
 
     /// Read a complete `OpenAI` chat-completions log in one call: the result of
@@ -981,14 +950,5 @@ impl ToolSet {
         let mut events = DiscardEvents;
         stream.feed(log, &mut events);
         stream.finish(&mut events)
-    }
-}
-
-/// Discard batch events as they are handed off by the recognizer.
-struct DiscardEvents;
-
-impl Extend<StreamEvent> for DiscardEvents {
-    fn extend<T: IntoIterator<Item = StreamEvent>>(&mut self, events: T) {
-        for _ in events {}
     }
 }
