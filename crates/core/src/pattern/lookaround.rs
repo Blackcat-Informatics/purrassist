@@ -884,6 +884,7 @@ pub struct LookaroundDfa {
 impl LookaroundDfa {
     /// Visit rows in their state order and each row's inclusive scalar ranges.
     /// Each range names the destination row.
+    #[must_use = "iterate the rows to inspect the automaton"]
     pub fn rows(
         &self,
     ) -> impl ExactSizeIterator<
