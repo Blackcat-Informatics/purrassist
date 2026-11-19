@@ -311,6 +311,12 @@ impl Role {
         }
     }
 
+    /// Rule classes distinguished by this predicate rather than shared by all rules.
+    pub(super) const fn specific_rule_domain(domain: u16) -> u16 {
+        let rules = domain & Self::RULES;
+        if rules == Self::RULES { 0 } else { rules }
+    }
+
     /// The lowest set role bit.
     pub(super) const fn first(mask: u16) -> u16 {
         mask.isolate_lowest_one()
