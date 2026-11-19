@@ -1,0 +1,111 @@
+{
+  "issue": 17,
+  "pr_number": 249,
+  "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider",
+  "observed_at": "2026-11-19T08:35:00.111859+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "next_actions": [],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "72fb6dffbb3929a993bdfd8c889e1c57cf9df997",
+    "headRefName": "paudley/17-tool-call-recovery-reassemble-provider",
+    "headRefOid": "fb77fb89001720ac3af8fffa2dc72ee1bdb4416a",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 249,
+    "state": "OPEN",
+    "title": "Replay recorded provider event logs in native and WASM",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/249"
+  },
+  "checks": {
+    "state": "pass",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167853",
+        "name": "fuzz",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167776",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167645",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167631",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167576",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167598",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402168323",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167336",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "fb77fb89001720ac3af8fffa2dc72ee1bdb4416a",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "fb77fb89001720ac3af8fffa2dc72ee1bdb4416a",
+    "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 249,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #249 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

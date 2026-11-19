@@ -1,0 +1,10 @@
+$ stagectl pr-checks 249
+SUCCESS fuzz https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167853
+SUCCESS wasm https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167776
+SUCCESS corpus https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167645
+SUCCESS reuse https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167631
+SUCCESS windows-engines https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167576
+SUCCESS native (ubuntu-24.04) https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167598
+SUCCESS native (macos-15) https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402168323
+SUCCESS release-gate https://github.com/Blackcat-Informatics/purrassist/actions/runs/44477709325/job/135402167336
+state: pass

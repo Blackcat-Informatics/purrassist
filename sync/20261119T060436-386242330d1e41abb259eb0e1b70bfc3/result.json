@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider",
+  "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+  "base_ref": "origin/paudley/246-expose-provider-event-logs-through",
+  "head": "c14c27fda63ba832e3e7610dae6ddc23d693a0c4",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/sync/20261119T060436-386242330d1e41abb259eb0e1b70bfc3",
+  "conflicts": [],
+  "status": "completed",
+  "base": "24b977133365bc8a57217e03f7466858e8a783b5",
+  "merge_bases": [
+    "b20c6ae78c0eb741291b6e22865af00d5565cf5a"
+  ],
+  "merge_index": "643501adb9d0d120af2a90a02e10aefaef2058b3ba20d713265049c5a2cf99f5",
+  "candidate_tree": "6aa8adb3192322fac5df638880ffb3e044a2ec0c",
+  "candidate_patch": "candidate-3c3bc8c4832e4f9fa99b4658e7335239.patch",
+  "stdout_log": "commit-3c3bc8c4832e4f9fa99b4658e7335239.stdout.log",
+  "stderr_log": "commit-3c3bc8c4832e4f9fa99b4658e7335239.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 2.307425515999057,
+  "commit": "49ac047c312b1933460345b9cc19e6ddedbfe196",
+  "tree": "6aa8adb3192322fac5df638880ffb3e044a2ec0c",
+  "exit_code": 0
+}

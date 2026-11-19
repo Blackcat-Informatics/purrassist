@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 17,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider",
+  "branch": "paudley/17-tool-call-recovery-reassemble-provider",
+  "slug": "tool-call-recovery-reassemble-provider",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "c14c27fda63ba832e3e7610dae6ddc23d693a0c4",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider",
+    "branch:paudley/17-tool-call-recovery-reassemble-provider",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:already present",
+    "stage:/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider",
+    "issue:/home/paudley/Active/purrassist/.worktrees/17-tool-call-recovery-reassemble-provider/.stage/tool-call-recovery-reassemble-provider/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-18T23:02:27-0600",
+  "seed_error": ""
+}
