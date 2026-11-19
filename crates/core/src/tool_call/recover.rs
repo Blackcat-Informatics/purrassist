@@ -3312,7 +3312,7 @@ impl<'s> RecoveryIntake<'s> {
 
     /// Cleanup never charges, allocates diagnostics, or replaces a first
     /// nonsemantic refusal. Admitted receipt source remains independently owned.
-    fn abandon(&mut self, reason: StopReason, governor: &Governor) {
+    pub(super) fn abandon(&mut self, reason: StopReason, governor: &Governor) {
         if self
             .failed
             .as_ref()

@@ -15,11 +15,11 @@
 //! ```
 //!
 //! A call is `{"id":ID,"type":"function","function":{"name":"NAME","arguments":"ARGS"}}`.
-//! `NAME` and `ARGS` are the concatenation of the call's `function.name` and
+//! `ID`, `NAME` and `ARGS` concatenate the call's `id`, `function.name` and
 //! `function.arguments` fragments, byte for byte inside their JSON string
 //! quotes, so their escapes are those the provider wrote. The `id` member is
 //! left out when the call never carried one, and `content` when there was no
-//! text. The message bytes are fed, delta by delta, through the same
+//! text. The assembled message bytes are fed through the same
 //! [`ToolCallStream`] as raw output, so the recovered calls, repairs, losses
 //! and receipt are those of [`ToolSet::recover`] on that message with the stop
 //! reason the log states. Each fragment depends only on the sequence of
@@ -27,23 +27,25 @@
 //! result.
 //!
 //! Calls are read strictly in index order: a call is open from its first
-//! fragment until the next call starts, and its name must be complete before
-//! its arguments begin. Everything the log does wrong is a [`ChatFault`],
-//! never a silent drop: a faulted fragment contributes nothing to the message,
-//! and a call that is faulted (or any call, when the fault belongs to the whole
+//! fragment until the next call starts. Its fields can arrive independently.
+//! A malformed or out-of-order event records a [`ChatFault`].
+//! A faulted call (or any call, when the fault belongs to the whole
 //! log, such as a missing finish reason or a missing `[DONE]`) is never offered
-//! by [`ChatLogRecovery::usable`], whatever the call's own outcome.
+//! by [`ChatLogRecovery::usable`], whatever the call's own outcome. A length
+//! stop withholds all calls. An unfinished argument payload withholds its call
+//! while preserving the arguments for batch-equivalent recovery.
 //!
-//! Cost is linear in the log: each byte is charged to the governor once for
-//! intake and once for retention, each chunk once for its size, and the
-//! message bytes are charged by the inner [`ToolCallStream`].
+//! Reassembly admits source scanning, buffer growth, event parsing, and
+//! argument completeness checks through the shared governor. The inner
+//! [`ToolCallStream`] admits its own work on the assembled message.
 
+use super::stream::{debug_provider_stream, usable_provider_calls};
 use super::{
     DialectSet, GenerationStop, StreamEvent, ToolCall, ToolCallStream, ToolCalls,
     ToolRecoveryRequest, ToolSet,
 };
 use crate::contract::{
-    AssistResult, Outcome, Resource, ScratchCharge, ScratchVec, StopReason, push_scratch,
+    AssistResult, Resource, ScratchCharge, ScratchString, ScratchVec, StopReason, push_scratch,
     saturating_size as size,
 };
 use crate::json::{Node, OwnedDocument, OwnedParseFailure, Value};
@@ -74,6 +76,8 @@ pub enum ChatFaultKind {
     /// tool call fragment or chunk that holds it when it is required to place
     /// the fragment, is skipped.
     MissingMember(&'static str),
+    /// An envelope member occurs more than once in the same object.
+    DuplicateMember(&'static str),
     /// A choice other than index 0. The choice is skipped.
     UnsupportedChoice,
     /// A delta carrying the legacy `function_call` member. It is skipped.
@@ -81,9 +85,12 @@ pub enum ChatFaultKind {
     /// A tool call whose `type` is present and is not `function`. The call is
     /// still assembled, as a function call.
     UnsupportedCallType,
-    /// A fragment names a different `id` than the call's, or an `id` after the
-    /// call began without one. The fragment's id is skipped.
-    IdChanged,
+    /// A chunk has fields but no `data` line.
+    MissingData,
+    /// A chunk lists the single supported choice more than once.
+    RepeatedChoice,
+    /// A finish reason is not recognized by this reader.
+    UnrecognizedFinishReason,
     /// A tool call ended without any `function.name` fragment. The call is
     /// still assembled, without a name.
     MissingName,
@@ -94,6 +101,10 @@ pub enum ChatFaultKind {
     MissingFinishReason,
     /// The log ended without the terminating `data: [DONE]`.
     MissingDone,
+    /// The provider ended the response at its generation limit.
+    LengthStop,
+    /// A call's argument JSON ended while still expecting input.
+    UnfinishedArguments,
     /// A chunk after `[DONE]`. It is skipped.
     EventAfterDone,
     /// Content or tool call fragments after the chunk with the `finish_reason`.
@@ -106,9 +117,6 @@ pub enum ChatFaultKind {
     /// A fragment for a call that is no longer open: a later call has started.
     /// It is skipped, even if its bytes would complete the call's arguments.
     DeltaForClosedCall,
-    /// A `function.name` fragment after the call's arguments began. It is
-    /// skipped.
-    NameAfterArguments,
     /// A `content` fragment after the first tool call began. It is skipped.
     ContentAfterToolCalls,
     /// An `error` chunk.
@@ -130,20 +138,24 @@ impl ChatFaultKind {
             Self::NotUtf8
             | Self::NotJson
             | Self::MissingMember(_)
+            | Self::DuplicateMember(_)
             | Self::UnsupportedChoice
             | Self::UnsupportedDelta
             | Self::UnsupportedCallType
-            | Self::IdChanged
+            | Self::MissingData
+            | Self::RepeatedChoice
+            | Self::UnrecognizedFinishReason
             | Self::MissingName => ChatFaultClass::Malformed,
-            Self::PartialEvent | Self::MissingFinishReason | Self::MissingDone => {
-                ChatFaultClass::Truncated
-            }
+            Self::PartialEvent
+            | Self::MissingFinishReason
+            | Self::MissingDone
+            | Self::LengthStop
+            | Self::UnfinishedArguments => ChatFaultClass::Truncated,
             Self::EventAfterDone
             | Self::DeltaAfterFinish
             | Self::FinishRepeated
             | Self::IndexSequence
             | Self::DeltaForClosedCall
-            | Self::NameAfterArguments
             | Self::ContentAfterToolCalls => ChatFaultClass::OutOfOrder,
             Self::ProviderError => ChatFaultClass::Provider,
         }
@@ -202,8 +214,8 @@ pub struct ChatLogRecovery {
     pub faults: Vec<ChatFault>,
     /// The tool calls that were assembled into the message, in order.
     pub calls: Vec<ChatCallSpan>,
-    /// The original log, exactly as supplied. Empty when the governor refused
-    /// or the caller cancelled; the receipt's `stopped` then says why.
+    /// The original log, up to the last byte admitted before refusal or
+    /// cancellation. The receipt's `stopped` reports why admission ended.
     pub log: Vec<u8>,
 }
 
@@ -211,9 +223,12 @@ impl ChatLogRecovery {
     /// The `tool_calls` index of the log's call `call` was read from.
     #[must_use]
     pub fn index_of(&self, call: &ToolCall) -> Option<u64> {
+        let position = self
+            .calls
+            .partition_point(|entry| entry.span.end <= call.span.start);
         self.calls
-            .iter()
-            .find(|entry| entry.span.contains(&call.span.start))
+            .get(position)
+            .filter(|entry| entry.span.contains(&call.span.start))
             .map(|entry| entry.call)
     }
 
@@ -224,23 +239,21 @@ impl ChatLogRecovery {
     }
 
     fn permitted<'a>(&self, calls: Vec<&'a ToolCall>) -> Vec<&'a ToolCall> {
-        if self.faults.iter().any(|fault| fault.call.is_none()) {
+        let Some(faulted) = self
+            .faults
+            .iter()
+            .map(|fault| fault.call)
+            .collect::<Option<std::collections::BTreeSet<_>>>()
+        else {
             return Vec::new();
-        }
+        };
         calls
             .into_iter()
             .filter(|call| {
                 self.index_of(call)
-                    .is_some_and(|index| !self.faults.iter().any(|fault| fault.call == Some(index)))
+                    .is_some_and(|index| !faulted.contains(&index))
             })
             .collect()
-    }
-
-    const fn read(&self) -> Option<&ToolCalls> {
-        match &self.recovery.outcome {
-            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => Some(calls),
-            Outcome::Ambiguous(_) | Outcome::Unresolved => None,
-        }
     }
 
     /// The calls that may run as is: [`ToolCalls::usable`] without the calls
@@ -248,16 +261,19 @@ impl ChatLogRecovery {
     /// log (a log cut short, a provider error, an unreadable chunk).
     #[must_use]
     pub fn usable(&self) -> Vec<&ToolCall> {
-        self.read()
-            .map_or_else(Vec::new, |calls| self.permitted(calls.usable()))
+        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable, |calls| {
+            self.permitted(calls)
+        })
     }
 
     /// Like [`Self::usable`], built on [`ToolCalls::usable_accepting_guesses`].
     #[must_use]
     pub fn usable_accepting_guesses(&self) -> Vec<&ToolCall> {
-        self.read().map_or_else(Vec::new, |calls| {
-            self.permitted(calls.usable_accepting_guesses())
-        })
+        usable_provider_calls(
+            &self.recovery.outcome,
+            ToolCalls::usable_accepting_guesses,
+            |calls| self.permitted(calls),
+        )
     }
 }
 
@@ -272,22 +288,21 @@ enum Part {
     Calls,
 }
 
-/// The string of the open call that is being written.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Stage {
-    Name,
-    Arguments,
-}
-
-/// The one open call. Calls stream one after another.
+/// Fragments are retained until the call can be emitted in canonical order.
+/// The provider can send more ID bytes after the arguments begin.
 struct Open {
     index: u64,
-    /// The `id` string as supplied, with its quotes; empty when there was none.
-    id: ScratchVec<u8>,
-    stage: Stage,
-    named: bool,
-    /// Where the call starts in the message.
-    start: usize,
+    id: Option<ScratchVec<u8>>,
+    name: ScratchVec<u8>,
+    arguments: ScratchVec<u8>,
+    decoded_arguments: ScratchString,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lines {
+    Empty,
+    Fields,
+    Data,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -300,8 +315,7 @@ enum Phase {
 ///
 /// Feed the log's bytes in any chunks, then [`Self::finish`]. Refusal by the
 /// governor, or [`Self::cancel`], stops interpretation; the result is then
-/// `Unresolved` with the reason in its receipt and an empty log, as for
-/// [`ToolCallStream`].
+/// `Unresolved` with the reason in its receipt and the admitted log bytes.
 ///
 /// ```
 /// use purrassist_core::tool_call::{DialectSet, Param, ToolDefinition, ToolRecoveryRequest, ToolSet};
@@ -335,7 +349,7 @@ pub struct OpenAiChatStream<'s> {
     data: ScratchVec<u8>,
     faults: ScratchVec<ChatFault>,
     spans: ScratchVec<ChatCallSpan>,
-    has_data: bool,
+    lines: Lines,
     line_start: usize,
     skip_lf: bool,
     /// The offset of the line terminator being handled.
@@ -353,11 +367,7 @@ pub struct OpenAiChatStream<'s> {
 
 impl fmt::Debug for OpenAiChatStream<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("OpenAiChatStream")
-            .field("events", &self.events)
-            .field("halted", &self.halted)
-            .finish_non_exhaustive()
+        debug_provider_stream(formatter, "OpenAiChatStream", self.events, self.halted)
     }
 }
 
@@ -369,17 +379,25 @@ fn inner<'t>(node: &Node, key: &str, text: &'t str) -> Option<&'t str> {
     whole.get(1..whole.len().checked_sub(1)?)
 }
 
-/// The raw bytes of a JSON string member including its quotes.
-fn quoted<'t>(node: &Node, key: &str, text: &'t str) -> Option<&'t str> {
-    let member = node.get(key)?;
-    member.as_str()?;
-    text.get(member.span.clone()?)
-}
-
 /// A member that is present and not `null`.
 fn present<'n>(node: &'n Node, key: &str) -> Option<&'n Node> {
     node.get(key)
         .filter(|member| !matches!(member.value, Value::Null))
+}
+
+/// Check recognized envelope fields before looking them up. The JSON tree's
+/// unique-member lookup otherwise treats a duplicate as an absent field.
+fn duplicate_member(node: &Node, keys: &[&'static str]) -> Option<&'static str> {
+    let Value::Object(members) = &node.value else {
+        return None;
+    };
+    keys.iter().copied().find(|key| {
+        members
+            .iter()
+            .filter(|member| member.key == *key)
+            .nth(1)
+            .is_some()
+    })
 }
 
 fn number_of(node: &Node, key: &str) -> Option<u64> {
@@ -389,14 +407,14 @@ fn number_of(node: &Node, key: &str) -> Option<u64> {
     }
 }
 
-fn stop_of(reason: &str) -> GenerationStop {
-    match reason {
+fn stop_of(reason: &str) -> Option<GenerationStop> {
+    Some(match reason {
         "stop" => GenerationStop::Stop,
         "tool_calls" | "function_call" => GenerationStop::ToolCalls,
         "length" => GenerationStop::Length,
         "content_filter" => GenerationStop::ContentFilter,
-        _ => GenerationStop::Unknown,
-    }
+        _ => return None,
+    })
 }
 
 impl<'s> OpenAiChatStream<'s> {
@@ -409,7 +427,7 @@ impl<'s> OpenAiChatStream<'s> {
             faults: ScratchVec::new(governor),
             spans: ScratchVec::new(governor),
             stream,
-            has_data: false,
+            lines: Lines::Empty,
             line_start: 0,
             skip_lf: false,
             at: 0,
@@ -436,19 +454,21 @@ impl<'s> OpenAiChatStream<'s> {
         if self.halted || bytes.is_empty() {
             return;
         }
-        if self.take(bytes, events).is_err() {
-            self.halt();
+        if let Err(reason) = self.take(bytes, events) {
+            self.halt(reason);
         }
     }
 
     /// Cancel interpretation. The first governor refusal is preserved.
     pub fn cancel(&mut self) {
-        self.halt();
+        self.halt(StopReason::Cancelled);
     }
 
-    fn halt(&mut self) {
-        self.halted = true;
-        self.stream.cancel();
+    fn halt(&mut self, reason: StopReason) {
+        if !self.halted {
+            self.halted = true;
+            self.stream.stop_producer(reason);
+        }
     }
 
     fn take(
@@ -456,13 +476,16 @@ impl<'s> OpenAiChatStream<'s> {
         bytes: &[u8],
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
-        let governor = self.stream.governor_mut();
-        governor.charge(Resource::Work, size(bytes.len()))?;
-        self.log.reserve(bytes.len())?;
-        self.log.extend(bytes.iter().copied())?;
-        let base = self.log.len() - bytes.len();
-        for (offset, &byte) in bytes.iter().enumerate() {
-            let at = base + offset;
+        for &byte in bytes {
+            let at = self.log.len();
+            let governor = self.stream.governor_mut();
+            governor.charge(Resource::InputBytes, size(at).saturating_add(1))?;
+            governor.charge(
+                Resource::Work,
+                self.log.compact_relocation_work().saturating_add(2),
+            )?;
+            self.log.reserve_compact(1)?;
+            self.log.push(byte)?;
             if core::mem::take(&mut self.skip_lf) && byte == b'\n' {
                 self.line_start = at + 1;
                 continue;
@@ -485,10 +508,14 @@ impl<'s> OpenAiChatStream<'s> {
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
         if start == end {
-            return if self.has_data {
-                self.dispatch(events)
-            } else {
-                Ok(())
+            return match core::mem::replace(&mut self.lines, Lines::Empty) {
+                Lines::Empty => Ok(()),
+                Lines::Fields => {
+                    self.current = self.events;
+                    self.events += 1;
+                    self.fault(ChatFaultKind::MissingData, None)
+                }
+                Lines::Data => self.dispatch(events),
             };
         }
         let line = &self.log.as_slice()[start..end];
@@ -503,19 +530,21 @@ impl<'s> OpenAiChatStream<'s> {
             value += 1;
         }
         if !is_data {
-            return Ok(()); // `event`, `id`, `retry`: the chunk's own members govern
+            if self.lines == Lines::Empty {
+                self.lines = Lines::Fields;
+            }
+            return Ok(());
         }
-        if self.has_data {
+        if self.lines == Lines::Data {
             self.data.push(b'\n')?;
         }
-        self.has_data = true;
+        self.lines = Lines::Data;
         self.data
             .extend(self.log.as_slice()[value..end].iter().copied())
     }
 
     fn dispatch(&mut self, events: &mut impl Extend<StreamEvent>) -> Result<(), StopReason> {
         let mut data = core::mem::replace(&mut self.data, ScratchVec::new(self.stream.governor()));
-        self.has_data = false;
         self.current = self.events;
         self.events += 1;
         let result = self.event(data.as_slice(), events);
@@ -529,9 +558,12 @@ impl<'s> OpenAiChatStream<'s> {
         data: &[u8],
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
-        self.stream
-            .governor_mut()
-            .charge(Resource::Work, size(data.len()).saturating_add(1))?;
+        // Validation scans the event and the retained fragments can incur up
+        // to six additional byte moves, including decoded text and relocation.
+        self.stream.governor_mut().charge(
+            Resource::Work,
+            size(data.len()).saturating_mul(7).saturating_add(1),
+        )?;
         if self.phase == Phase::Ended {
             return self.fault(ChatFaultKind::EventAfterDone, None);
         }
@@ -566,14 +598,18 @@ impl<'s> OpenAiChatStream<'s> {
         text: &str,
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
+        if let Some(key) = duplicate_member(root, &["error", "choices"]) {
+            return self.fault(ChatFaultKind::DuplicateMember(key), None);
+        }
         if present(root, "error").is_some() {
             return self.fault(ChatFaultKind::ProviderError, None);
         }
         let Some(Value::Array(choices)) = root.get("choices").map(|node| &node.value) else {
             return self.fault(ChatFaultKind::MissingMember("choices"), None);
         };
+        let mut seen_choice = false;
         for choice in choices {
-            self.choice(choice, text, events)?;
+            self.choice(choice, text, &mut seen_choice, events)?;
         }
         Ok(())
     }
@@ -582,12 +618,19 @@ impl<'s> OpenAiChatStream<'s> {
         &mut self,
         choice: &Node,
         text: &str,
+        seen_choice: &mut bool,
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
+        if let Some(key) = duplicate_member(choice, &["index", "delta", "finish_reason"]) {
+            return self.fault(ChatFaultKind::DuplicateMember(key), None);
+        }
         match number_of(choice, "index") {
             Some(0) => {}
             Some(_) => return self.fault(ChatFaultKind::UnsupportedChoice, None),
             None => return self.fault(ChatFaultKind::MissingMember("choices.index"), None),
+        }
+        if core::mem::replace(seen_choice, true) {
+            return self.fault(ChatFaultKind::RepeatedChoice, None);
         }
         let finish = present(choice, "finish_reason");
         match present(choice, "delta") {
@@ -610,8 +653,15 @@ impl<'s> OpenAiChatStream<'s> {
         if self.finish.is_some() {
             return self.fault(ChatFaultKind::FinishRepeated, None);
         }
-        self.finish = Some(stop_of(reason));
-        Ok(())
+        if let Some(stop) = stop_of(reason) {
+            if stop == GenerationStop::Length {
+                self.fault(ChatFaultKind::LengthStop, None)?;
+            }
+            self.finish = Some(stop);
+            Ok(())
+        } else {
+            self.fault(ChatFaultKind::UnrecognizedFinishReason, None)
+        }
     }
 
     fn delta(
@@ -620,6 +670,12 @@ impl<'s> OpenAiChatStream<'s> {
         text: &str,
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
+        if !matches!(delta.value, Value::Object(_)) {
+            return self.fault(ChatFaultKind::MissingMember("choices.delta"), None);
+        }
+        if let Some(key) = duplicate_member(delta, &["content", "function_call", "tool_calls"]) {
+            return self.fault(ChatFaultKind::DuplicateMember(key), None);
+        }
         if present(delta, "content").is_some() {
             match inner(delta, "content", text) {
                 None => self.fault(ChatFaultKind::MissingMember("delta.content"), None)?,
@@ -642,9 +698,15 @@ impl<'s> OpenAiChatStream<'s> {
     }
 
     /// Send message bytes to the recognizer.
-    fn put(&mut self, bytes: &[u8], events: &mut impl Extend<StreamEvent>) {
-        self.message_len += bytes.len();
+    fn put(
+        &mut self,
+        bytes: &[u8],
+        events: &mut impl Extend<StreamEvent>,
+    ) -> Result<(), StopReason> {
         self.stream.feed(bytes, events);
+        self.stream.governor().check()?;
+        self.message_len += bytes.len();
+        Ok(())
     }
 
     fn content(
@@ -655,16 +717,18 @@ impl<'s> OpenAiChatStream<'s> {
         if self.finish.is_some() {
             return self.fault(ChatFaultKind::DeltaAfterFinish, None);
         }
+        if self.open.is_some() {
+            return self.fault(ChatFaultKind::ContentAfterToolCalls, None);
+        }
         match self.part {
             Part::Fresh => {
-                self.put(br#"{"role":"assistant","content":""#, events);
+                self.put(br#"{"role":"assistant","content":""#, events)?;
                 self.part = Part::Content;
             }
             Part::Content => {}
             Part::Calls => return self.fault(ChatFaultKind::ContentAfterToolCalls, None),
         }
-        self.put(raw.as_bytes(), events);
-        Ok(())
+        self.put(raw.as_bytes(), events)
     }
 
     fn tool_call(
@@ -673,30 +737,38 @@ impl<'s> OpenAiChatStream<'s> {
         text: &str,
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
-        let Some(index) = number_of(element, "index") else {
-            return self.fault(ChatFaultKind::MissingMember("tool_calls.index"), None);
-        };
         if self.finish.is_some() {
             return self.fault(ChatFaultKind::DeltaAfterFinish, None);
         }
-        let fresh = if self.open.as_ref().is_some_and(|open| open.index == index) {
-            false
-        } else if index >= self.next_index {
-            self.begin(index, element, text, events)?;
-            true
-        } else {
-            return self.fault(ChatFaultKind::DeltaForClosedCall, Some(index));
+        let Some(index) = number_of(element, "index") else {
+            let kind = if duplicate_member(element, &["index"]).is_some() {
+                ChatFaultKind::DuplicateMember("index")
+            } else {
+                ChatFaultKind::MissingMember("tool_calls.index")
+            };
+            return self.fault(kind, None);
         };
-        self.fields(index, element, text, fresh, events)
+        if let Some(key) = duplicate_member(element, &["id", "type", "function"]) {
+            return self.fault(ChatFaultKind::DuplicateMember(key), Some(index));
+        }
+        let function = present(element, "function");
+        if let Some(key) =
+            function.and_then(|function| duplicate_member(function, &["name", "arguments"]))
+        {
+            return self.fault(ChatFaultKind::DuplicateMember(key), Some(index));
+        }
+        if self.open.as_ref().is_none_or(|open| open.index != index) {
+            if index < self.next_index {
+                return self.fault(ChatFaultKind::DeltaForClosedCall, Some(index));
+            }
+            self.begin(index, events)?;
+        }
+        self.fields(index, element, function, text)
     }
 
-    /// Close the open call and start the one at `index`, written up to the
-    /// opening of its name string.
     fn begin(
         &mut self,
         index: u64,
-        element: &Node,
-        text: &str,
         events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
         self.close(events)?;
@@ -704,62 +776,34 @@ impl<'s> OpenAiChatStream<'s> {
             self.fault(ChatFaultKind::IndexSequence, Some(index))?;
         }
         self.next_index = index.saturating_add(1);
-        match self.part {
-            Part::Fresh => self.put(br#"{"role":"assistant","tool_calls":["#, events),
-            Part::Content => self.put(br#"","tool_calls":["#, events),
-            Part::Calls => self.put(b",", events),
-        }
-        self.part = Part::Calls;
-        let start = self.message_len;
-        let mut id = ScratchVec::new(self.stream.governor());
-        let raw = quoted(element, "id", text);
-        if let Some(raw) = raw {
-            id.reserve(raw.len())?;
-            id.extend(raw.bytes())?;
-            self.put(br#"{"id":"#, events);
-            self.put(raw.as_bytes(), events);
-            self.put(b",", events);
-        } else {
-            if present(element, "id").is_some() {
-                self.fault(ChatFaultKind::MissingMember("tool_calls.id"), Some(index))?;
-            }
-            self.put(b"{", events);
-        }
-        self.put(br#""type":"function","function":{"name":""#, events);
+        let governor = self.stream.governor();
         self.open = Some(Open {
             index,
-            id,
-            stage: Stage::Name,
-            named: false,
-            start,
+            id: None,
+            name: ScratchVec::new(governor),
+            arguments: ScratchVec::new(governor),
+            decoded_arguments: ScratchString::new(governor),
         });
         Ok(())
     }
 
-    /// Apply one fragment's members to the open call `index`.
+    /// Apply one fragment's members to the open call.
     fn fields(
         &mut self,
         index: u64,
         element: &Node,
+        function: Option<&Node>,
         text: &str,
-        fresh: bool,
-        events: &mut impl Extend<StreamEvent>,
     ) -> Result<(), StopReason> {
-        if !fresh && present(element, "id").is_some() {
-            match quoted(element, "id", text) {
-                Some(raw) => {
-                    let same = self
-                        .open
-                        .as_ref()
-                        .is_some_and(|open| open.id.as_slice() == raw.as_bytes());
-                    self.stream
-                        .governor_mut()
-                        .charge(Resource::Work, size(raw.len()).saturating_add(1))?;
-                    if !same {
-                        self.fault(ChatFaultKind::IdChanged, Some(index))?;
-                    }
-                }
-                None => self.fault(ChatFaultKind::MissingMember("tool_calls.id"), Some(index))?,
+        if present(element, "id").is_some() {
+            if let Some(raw) = inner(element, "id", text) {
+                let governor = self.stream.governor();
+                let open = self.open.as_mut().expect("call fragment has an open call");
+                open.id
+                    .get_or_insert_with(|| ScratchVec::new(governor))
+                    .extend(raw.bytes())?;
+            } else {
+                self.fault(ChatFaultKind::MissingMember("tool_calls.id"), Some(index))?;
             }
         }
         if let Some(kind) = present(element, "type")
@@ -767,7 +811,7 @@ impl<'s> OpenAiChatStream<'s> {
         {
             self.fault(ChatFaultKind::UnsupportedCallType, Some(index))?;
         }
-        let Some(function) = present(element, "function") else {
+        let Some(function) = function else {
             return Ok(());
         };
         if !matches!(function.value, Value::Object(_)) {
@@ -776,74 +820,70 @@ impl<'s> OpenAiChatStream<'s> {
         if present(function, "name").is_some() {
             match inner(function, "name", text) {
                 None => self.fault(ChatFaultKind::MissingMember("function.name"), Some(index))?,
-                Some("") => {}
-                Some(raw) => self.name(index, raw, events)?,
+                Some(raw) => self
+                    .open
+                    .as_mut()
+                    .expect("call fragment has an open call")
+                    .name
+                    .extend(raw.bytes())?,
             }
         }
         if present(function, "arguments").is_some() {
-            match inner(function, "arguments", text) {
-                None => {
-                    self.fault(
-                        ChatFaultKind::MissingMember("function.arguments"),
-                        Some(index),
-                    )?;
-                }
-                Some("") => {}
-                Some(raw) => self.arguments(raw, events),
+            if let Some(raw) = inner(function, "arguments", text) {
+                let decoded = function
+                    .get("arguments")
+                    .and_then(Node::as_str)
+                    .expect("a source string fragment is a parsed string");
+                let open = self.open.as_mut().expect("call fragment has an open call");
+                open.arguments.extend(raw.bytes())?;
+                open.decoded_arguments.push_str(decoded)?;
+            } else {
+                self.fault(
+                    ChatFaultKind::MissingMember("function.arguments"),
+                    Some(index),
+                )?;
             }
         }
         Ok(())
     }
 
-    fn name(
-        &mut self,
-        index: u64,
-        raw: &str,
-        events: &mut impl Extend<StreamEvent>,
-    ) -> Result<(), StopReason> {
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.stage == Stage::Arguments)
-        {
-            return self.fault(ChatFaultKind::NameAfterArguments, Some(index));
-        }
-        if let Some(open) = self.open.as_mut() {
-            open.named = true;
-        }
-        self.put(raw.as_bytes(), events);
-        Ok(())
-    }
-
-    fn arguments(&mut self, raw: &str, events: &mut impl Extend<StreamEvent>) {
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.stage == Stage::Name)
-        {
-            self.put(br#"","arguments":""#, events);
-            if let Some(open) = self.open.as_mut() {
-                open.stage = Stage::Arguments;
-            }
-        }
-        self.put(raw.as_bytes(), events);
-    }
-
-    /// Close the open call with its own closers and record its span.
+    /// Emit the finished call in the same member order as the batch message.
     fn close(&mut self, events: &mut impl Extend<StreamEvent>) -> Result<(), StopReason> {
         let Some(open) = self.open.take() else {
             return Ok(());
         };
-        if !open.named {
+        if open.name.is_empty() {
             self.fault(ChatFaultKind::MissingName, Some(open.index))?;
         }
-        match open.stage {
-            Stage::Name => self.put(br#"","arguments":""}}"#, events),
-            Stage::Arguments => self.put(br#""}}"#, events),
+        match OwnedDocument::parse(open.decoded_arguments.as_str(), self.stream.governor_mut()) {
+            Err(OwnedParseFailure::Syntax(error)) if error.at_end => {
+                self.fault(ChatFaultKind::UnfinishedArguments, Some(open.index))?;
+            }
+            Err(OwnedParseFailure::Resource(reason)) => return Err(reason),
+            _ => {}
         }
+        drop(open.decoded_arguments);
+        match self.part {
+            Part::Fresh => self.put(br#"{"role":"assistant","tool_calls":["#, events)?,
+            Part::Content => self.put(br#"","tool_calls":["#, events)?,
+            Part::Calls => self.put(b",", events)?,
+        }
+        self.part = Part::Calls;
+        let start = self.message_len;
+        self.put(b"{", events)?;
+        if let Some(id) = open.id {
+            self.put(br#""id":""#, events)?;
+            self.put(id.as_slice(), events)?;
+            self.put(br#"","#, events)?;
+        }
+        self.put(br#""type":"function","function":{"name":""#, events)?;
+        self.put(open.name.as_slice(), events)?;
+        self.put(br#"","arguments":""#, events)?;
+        self.put(open.arguments.as_slice(), events)?;
+        self.put(br#""}}"#, events)?;
         let span = ChatCallSpan {
             call: open.index,
-            span: open.start..self.message_len,
+            span: start..self.message_len,
         };
         push_scratch(&mut self.spans, span, self.stream.governor_mut())
     }
@@ -852,7 +892,7 @@ impl<'s> OpenAiChatStream<'s> {
     fn seal(&mut self, events: &mut impl Extend<StreamEvent>) -> Result<(), StopReason> {
         self.current = self.events;
         self.at = self.log.len();
-        if self.line_start < self.log.len() || self.has_data {
+        if self.line_start < self.log.len() || self.lines != Lines::Empty {
             self.fault(ChatFaultKind::PartialEvent, None)?;
         }
         if self.phase != Phase::Ended {
@@ -867,7 +907,6 @@ impl<'s> OpenAiChatStream<'s> {
             Part::Content => self.put(br#""}"#, events),
             Part::Calls => self.put(b"]}", events),
         }
-        Ok(())
     }
 
     /// Finish the log. A log that ends early is reported by its faults, and
@@ -875,11 +914,13 @@ impl<'s> OpenAiChatStream<'s> {
     /// the one the `finish_reason` chunk stated, or unknown when none arrived.
     ///
     /// A governor refusal or cancellation returns `Unresolved` with the reason
-    /// in the receipt, with no calls and an empty `log`.
+    /// in the receipt and no usable calls. The admitted prefix remains in `log`.
     #[must_use]
     pub fn finish(mut self, events: &mut impl Extend<StreamEvent>) -> ChatLogRecovery {
-        if !self.halted && self.seal(events).is_err() {
-            self.halt();
+        if !self.halted
+            && let Err(reason) = self.seal(events)
+        {
+            self.halt(reason);
         }
         let Self {
             stream,
@@ -887,15 +928,18 @@ impl<'s> OpenAiChatStream<'s> {
             faults,
             spans,
             finish,
-            halted,
+            data,
+            open,
             ..
         } = self;
+        drop(data);
+        drop(open);
         let recovery = stream.finish_with_events(finish.unwrap_or(GenerationStop::Unknown), events);
         ChatLogRecovery {
             recovery,
             faults: faults.into_vec(),
             calls: spans.into_vec(),
-            log: if halted { Vec::new() } else { log.into_vec() },
+            log: log.into_vec(),
         }
     }
 }
@@ -934,8 +978,17 @@ impl ToolSet {
         dialects: &DialectSet,
     ) -> ChatLogRecovery {
         let mut stream = self.stream_openai_chat(request, dialects);
-        let mut events = Vec::new();
+        let mut events = DiscardEvents;
         stream.feed(log, &mut events);
         stream.finish(&mut events)
+    }
+}
+
+/// Discard batch events as they are handed off by the recognizer.
+struct DiscardEvents;
+
+impl Extend<StreamEvent> for DiscardEvents {
+    fn extend<T: IntoIterator<Item = StreamEvent>>(&mut self, events: T) {
+        for _ in events {}
     }
 }

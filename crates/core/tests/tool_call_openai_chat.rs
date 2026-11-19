@@ -9,9 +9,10 @@
 //! The logs here are written from the chunk shapes of the `OpenAI` chat
 //! completions streaming reference (`chat.completion.chunk`); they are not
 //! captured from a provider.
+use purrassist_core::contract::Resource;
 use purrassist_core::tool_call::{
     ChatFaultClass, ChatFaultKind, ChatLogRecovery, DialectSet, GenerationStop, Param, StreamEvent,
-    ToolDefinition, ToolRecoveryRequest, ToolSet,
+    ToolChoice, ToolDefinition, ToolRecoveryRequest, ToolSet,
 };
 use purrassist_core::{Budget, Outcome, StopReason};
 
@@ -57,13 +58,20 @@ const HEAD: &str = r#","id":"call_1","type":"function""#;
 /// The argument fragments, split inside a string and a number.
 const FRAGMENTS: [&str; 3] = [r#"{"path": "sr"#, r#"c/main.rs", "li"#, r#"mit": 20}"#];
 
-/// A call opened with a name split in two, then its arguments.
+/// A call with a split name, arguments and ID. The last ID fragment arrives
+/// after argument bytes, so serialization must wait for the complete ID.
 fn tool_call(index: u32) -> String {
-    let mut log = call(index, HEAD, r#""name":"read_","arguments":"""#);
+    let mut log = call(
+        index,
+        r#","id":"call_","type":"function""#,
+        r#""name":"read_","arguments":"""#,
+    );
+    log += &args(index, FRAGMENTS[0]);
     log += &call(index, "", r#""name":"file""#);
-    for fragment in FRAGMENTS {
+    for fragment in &FRAGMENTS[1..] {
         log += &args(index, fragment);
     }
+    log += &call(index, r#","id":"1""#, "");
     log
 }
 
@@ -144,6 +152,48 @@ fn golden_log_matches_batch_reading_of_the_equivalent_message() {
     assert_eq!(left.validations, right.validations);
 }
 
+/// Complete but malformed argument JSON reaches the same repair and tool-choice
+/// checks as the equivalent batch message.
+#[test]
+fn repaired_arguments_and_strict_choice_match_batch() {
+    let log =
+        call(0, HEAD, r#""name":"read_file""#) + &args(0, r#"{"path":"a",}"#) + &end("tool_calls");
+    let message = br#"{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\",}"}}]}"#;
+    let tools = tools();
+    let dialects = DialectSet::built_in();
+    for choice in [ToolChoice::Auto, ToolChoice::None] {
+        let prohibited = choice == ToolChoice::None;
+        let request = ToolRecoveryRequest::default()
+            .stop(GenerationStop::ToolCalls)
+            .tool_choice(choice);
+        let batch = tools.recover(message, &request, dialects);
+        let log = tools.recover_openai_chat(log.as_bytes(), request, dialects);
+        assert!(log.is_clean(), "{:?}", log.faults);
+        assert_eq!(log.recovery.outcome, batch.outcome);
+        assert_eq!(log.recovery.receipt.evidence, batch.receipt.evidence);
+        assert_eq!(log.recovery.receipt.losses, batch.receipt.losses);
+        assert_eq!(log.recovery.receipt.validations, batch.receipt.validations);
+        if prohibited {
+            assert_eq!(log.usable_accepting_guesses().len(), 0);
+            assert!(
+                batch
+                    .receipt
+                    .validations
+                    .iter()
+                    .any(|check| { check.constraint == "tool_choice=none" && !check.passed })
+            );
+        } else {
+            let (Outcome::Resolved(turn) | Outcome::BestGuess(turn)) = &batch.outcome else {
+                panic!(
+                    "argument repair did not yield a reading: {:?}",
+                    batch.outcome
+                );
+            };
+            assert_eq!(turn.calls[0].arguments.to_json(), r#"{"path":"a"}"#);
+        }
+    }
+}
+
 /// Everything observable except resource usage, which varies with feeding.
 fn observed(result: &ChatLogRecovery, events: &[StreamEvent]) -> String {
     let receipt = &result.recovery.receipt;
@@ -215,14 +265,51 @@ fn negative(valid: &str, faulted: &str, kind: ChatFaultKind, class: ChatFaultCla
 #[test]
 fn malformed_chunk_is_an_explicit_fault() {
     let valid = tool_call(0) + &end("tool_calls");
-    let faulted = tool_call(0) + &sse(r#"{"choices":[{"index":0,"#) + &end("tool_calls");
+    for (event, kind) in [
+        (sse(r#"{"choices":[{"index":0,"#), ChatFaultKind::NotJson),
+        (
+            chunk("42", "null"),
+            ChatFaultKind::MissingMember("choices.delta"),
+        ),
+        ("event: message\n\n".into(), ChatFaultKind::MissingData),
+        (
+            chunk("{}", r#""unknown""#),
+            ChatFaultKind::UnrecognizedFinishReason,
+        ),
+        (
+            sse(r#"{"choices":[{"index":0,"delta":{}},{"index":0,"delta":{}}]}"#),
+            ChatFaultKind::RepeatedChoice,
+        ),
+    ] {
+        let faulted = tool_call(0) + &event + &end("tool_calls");
+        negative(&valid, &faulted, kind, ChatFaultClass::Malformed);
+        assert_eq!(recover(&faulted).faults[0].call, None);
+    }
+    let duplicate = call(
+        0,
+        r#","id":"discard""#,
+        r#""arguments":"x","arguments":"y""#,
+    );
+    let faulted = tool_call(0) + &duplicate + &end("tool_calls");
+    let kind = ChatFaultKind::DuplicateMember("arguments");
+    negative(&valid, &faulted, kind, ChatFaultClass::Malformed);
+    let result = recover(&faulted);
+    assert_eq!(result.faults[0].call, Some(0));
+    assert_eq!(
+        result.recovery.receipt.source,
+        recover(&valid).recovery.receipt.source
+    );
+
+    let duplicate_after_finish = tool_call(0)
+        + &chunk("{}", r#""tool_calls""#)
+        + &call(0, r#","id":"a","id":"b""#, "")
+        + &sse("[DONE]");
     negative(
         &valid,
-        &faulted,
-        ChatFaultKind::NotJson,
-        ChatFaultClass::Malformed,
+        &duplicate_after_finish,
+        ChatFaultKind::DeltaAfterFinish,
+        ChatFaultClass::OutOfOrder,
     );
-    assert_eq!(recover(&faulted).faults[0].call, None);
 }
 
 /// A log that stops before its finish reason and `[DONE]` is truncated and
@@ -256,6 +343,22 @@ fn truncated_log_is_an_explicit_fault() {
     let bad = recover(&partial);
     assert!(kinds(&bad).contains(&ChatFaultKind::PartialEvent));
     assert_eq!(bad.usable().len(), 0);
+
+    let length = tool_call(0) + &end("length");
+    negative(
+        &valid,
+        &length,
+        ChatFaultKind::LengthStop,
+        ChatFaultClass::Truncated,
+    );
+    let unfinished =
+        call(0, HEAD, r#""name":"read_file""#) + &args(0, r#"{"path":"a""#) + &end("tool_calls");
+    negative(
+        &valid,
+        &unfinished,
+        ChatFaultKind::UnfinishedArguments,
+        ChatFaultClass::Truncated,
+    );
 }
 
 /// A fragment for a call after a later call has started is not applied, even
@@ -276,9 +379,17 @@ fn out_of_order_fragment_for_a_closed_call_is_an_explicit_fault() {
     let valid = open.clone() + &args(0, "}") + &end("tool_calls");
     let faulted = open + &next + &args(0, "}") + &end("tool_calls");
     let bad = recover(&faulted);
+    let faults: Vec<_> = bad
+        .faults
+        .iter()
+        .map(|fault| (fault.kind, fault.call, fault.event))
+        .collect();
     assert_eq!(
-        (bad.faults[0].kind, bad.faults[0].call, bad.faults[0].event),
-        (ChatFaultKind::DeltaForClosedCall, Some(0), 2)
+        faults,
+        [
+            (ChatFaultKind::UnfinishedArguments, Some(0), 1),
+            (ChatFaultKind::DeltaForClosedCall, Some(0), 2),
+        ]
     );
     assert_eq!(
         ChatFaultKind::DeltaForClosedCall.class(),
@@ -317,21 +428,29 @@ fn clean_call_stays_usable_beside_a_faulted_one() {
 }
 
 /// A governor refusal is an explicit `Unresolved` result that names the
-/// exhausted resource in the receipt and retains no log; it is never a
-/// clean empty turn.
+/// exhausted resource and retains the same admitted source across feed sizes.
 #[test]
-fn governor_refusal_is_an_explicit_unresolved_outcome_with_no_log() {
+fn governor_refusal_keeps_the_admitted_log_prefix_across_chunkings() {
+    let limit = 64;
     let request = ToolRecoveryRequest::default().budget(Budget {
-        work: 64,
+        input_bytes: limit,
         ..Budget::default()
     });
     let log = golden_log();
-    let result = tools().recover_openai_chat(log.as_bytes(), request, DialectSet::built_in());
-    assert!(matches!(result.recovery.outcome, Outcome::Unresolved));
-    assert!(matches!(
-        result.recovery.receipt.stopped,
-        StopReason::BudgetExceeded(_)
-    ));
-    assert_eq!(result.log.len(), 0);
-    assert_eq!(result.usable().len(), 0);
+    let tools = tools();
+    for size in [1, 31, log.len()] {
+        let mut stream = tools.stream_openai_chat(request.clone(), DialectSet::built_in());
+        let mut events = Vec::new();
+        for bytes in log.as_bytes().chunks(size) {
+            stream.feed(bytes, &mut events);
+        }
+        let result = stream.finish(&mut events);
+        assert!(matches!(result.recovery.outcome, Outcome::Unresolved));
+        assert_eq!(
+            result.recovery.receipt.stopped,
+            StopReason::BudgetExceeded(Resource::InputBytes)
+        );
+        assert_eq!(result.log, log.as_bytes()[..64]);
+        assert_eq!(result.usable().len(), 0);
+    }
 }

@@ -37,12 +37,13 @@
 //! intake and once for retention, each event once for its size, and the
 //! message bytes are charged by the inner [`ToolCallStream`].
 
+use super::stream::{debug_provider_stream, usable_provider_calls};
 use super::{
     DialectSet, GenerationStop, StreamEvent, ToolCall, ToolCallStream, ToolCalls,
     ToolRecoveryRequest, ToolSet,
 };
 use crate::contract::{
-    AssistResult, Outcome, Resource, ScratchCharge, ScratchVec, StopReason, push_scratch,
+    AssistResult, Resource, ScratchCharge, ScratchVec, StopReason, push_scratch,
     saturating_size as size,
 };
 use crate::json::{Node, OwnedDocument, OwnedParseFailure, Value};
@@ -273,28 +274,24 @@ impl EventLogRecovery {
             .collect()
     }
 
-    const fn calls(&self) -> Option<&ToolCalls> {
-        match &self.recovery.outcome {
-            Outcome::Resolved(calls) | Outcome::BestGuess(calls) => Some(calls),
-            Outcome::Ambiguous(_) | Outcome::Unresolved => None,
-        }
-    }
-
     /// The calls that may run as is: [`ToolCalls::usable`] without the calls
     /// of any faulted block, and none at all when a fault belongs to the whole
     /// log (a log cut short, a provider error, a missing `message_start`).
     #[must_use]
     pub fn usable(&self) -> Vec<&ToolCall> {
-        self.calls()
-            .map_or_else(Vec::new, |calls| self.permitted(calls.usable()))
+        usable_provider_calls(&self.recovery.outcome, ToolCalls::usable, |calls| {
+            self.permitted(calls)
+        })
     }
 
     /// Like [`Self::usable`], built on [`ToolCalls::usable_accepting_guesses`].
     #[must_use]
     pub fn usable_accepting_guesses(&self) -> Vec<&ToolCall> {
-        self.calls().map_or_else(Vec::new, |calls| {
-            self.permitted(calls.usable_accepting_guesses())
-        })
+        usable_provider_calls(
+            &self.recovery.outcome,
+            ToolCalls::usable_accepting_guesses,
+            |calls| self.permitted(calls),
+        )
     }
 }
 
@@ -420,11 +417,7 @@ pub struct AnthropicEventStream<'s> {
 
 impl fmt::Debug for AnthropicEventStream<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AnthropicEventStream")
-            .field("events", &self.events)
-            .field("halted", &self.halted)
-            .finish_non_exhaustive()
+        debug_provider_stream(formatter, "AnthropicEventStream", self.events, self.halted)
     }
 }
 

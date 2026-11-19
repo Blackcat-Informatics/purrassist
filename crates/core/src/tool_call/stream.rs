@@ -23,14 +23,41 @@ use super::{
     Rejection, Segment, ToolCall, ToolCalls, ToolRecoveryRequest, ToolSet, UnresolvedReason,
 };
 use crate::contract::{
-    AssistResult, Governor, Resource, ScratchCharge, ScratchLease, ScratchString, ScratchVec,
-    StopReason, invalid_input, push_scratch, reserve_failure, saturating_size as size,
+    AssistResult, Governor, Outcome, Resource, ScratchCharge, ScratchLease, ScratchString,
+    ScratchVec, StopReason, invalid_input, push_scratch, reserve_failure, saturating_size as size,
 };
 use crate::grammar::CaptureKind;
 use crate::grammar::edit::{EditOperator, OPERATOR_COUNT, OPERATOR_TABLE, OPERATORS};
 use crate::json::{Node, OwnedDocument, Value};
 use core::fmt;
 use core::ops::Range;
+
+/// Select usable calls from a single reading, then apply the provider's
+/// transport-fault policy.
+pub(super) fn usable_provider_calls<'a>(
+    outcome: &'a Outcome<ToolCalls>,
+    select: fn(&'a ToolCalls) -> Vec<&'a ToolCall>,
+    permit: impl FnOnce(Vec<&'a ToolCall>) -> Vec<&'a ToolCall>,
+) -> Vec<&'a ToolCall> {
+    match outcome {
+        Outcome::Resolved(calls) | Outcome::BestGuess(calls) => permit(select(calls)),
+        Outcome::Ambiguous(_) | Outcome::Unresolved => Vec::new(),
+    }
+}
+
+/// Report provider progress without formatting buffered source or call data.
+pub(super) fn debug_provider_stream(
+    formatter: &mut fmt::Formatter<'_>,
+    name: &str,
+    events: usize,
+    halted: bool,
+) -> fmt::Result {
+    formatter
+        .debug_struct(name)
+        .field("events", &events)
+        .field("halted", &halted)
+        .finish_non_exhaustive()
+}
 
 #[path = "stream_revision.rs"]
 mod revision;
@@ -1236,6 +1263,12 @@ impl<'s> ToolCallStream<'s> {
     /// The stream's governor, mutably, for the same producers.
     pub(super) const fn governor_mut(&mut self) -> &mut Governor {
         &mut self.governor
+    }
+
+    /// Stop a producer on its original refusal, even if no charge made it sticky.
+    pub(super) fn stop_producer(&mut self, reason: StopReason) {
+        let reason = self.governor.check().err().unwrap_or(reason);
+        self.intake.abandon(reason, &self.governor);
     }
 
     /// Feed raw output bytes and append each newly settled event to `events`.

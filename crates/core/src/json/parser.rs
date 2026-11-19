@@ -153,12 +153,15 @@ struct Parser<'a, 'g> {
     lease: ScratchLease,
 }
 impl Parser<'_, '_> {
-    const fn fail<T>(&self, message: &'static str) -> Result<T, OwnedParseFailure> {
+    fn fail<T>(&self, message: &'static str) -> Result<T, OwnedParseFailure> {
         Err(self.syntax(SyntaxMessage::Static(message)))
     }
-    const fn syntax(&self, message: SyntaxMessage) -> OwnedParseFailure {
+    fn syntax(&self, message: SyntaxMessage) -> OwnedParseFailure {
         OwnedParseFailure::Syntax(Syntax {
             offset: self.position,
+            at_end: self.position == self.input.len()
+                || matches!(&message, SyntaxMessage::ExpectedLiteral(literal)
+                    if literal.starts_with(&self.input[self.position..])),
             message,
         })
     }
@@ -229,6 +232,7 @@ impl Parser<'_, '_> {
             .map_err(|failure| match failure {
                 super::NumberParseError::Syntax(_) => OwnedParseFailure::Syntax(Syntax {
                     offset: start,
+                    at_end: self.position == self.input.len(),
                     message: SyntaxMessage::Static("invalid JSON number"),
                 }),
                 super::NumberParseError::Resource(reason) => OwnedParseFailure::Resource(reason),
