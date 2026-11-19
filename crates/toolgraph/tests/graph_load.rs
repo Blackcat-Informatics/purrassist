@@ -266,24 +266,80 @@ fn an_incomplete_fno_binding_is_refused() {
     load(&worked()).expect("neighbouring valid input");
 }
 
-// Rationale: a predicate outside the caller's vocabulary on an FnO-view subject is refused
-// by the strict FnO reader as a statement; the refusal must name that subject and predicate
-// rather than the vocabulary namespace.
+// A refused statement may share its subject and predicate with valid rows.
+// The locator follows the exact statement that the FnO reader declined.
 #[test]
-fn an_fno_view_statement_refusal_names_its_subject_and_predicate() {
-    let source = edited(
-        "pa:title \"Customer orders\"",
-        "pa:title \"Customer orders\" ; ex:custom 1",
-    );
-    let error = load(&source).expect_err("non-vocabulary predicate on an FnO-view subject");
+fn an_fno_view_statement_refusal_locates_the_exact_row() {
+    let extra_type = "a fno:UnexpectedRole";
+    let literal = r#"ex:custom "01"^^xsd:integer"#;
+    for (source, written, predicate_iri) in [
+        (
+            format!("{}\nex:query_customer_orders {extra_type} .\n", worked()),
+            extra_type,
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_owned(),
+        ),
+        (
+            edited(
+                r#"pa:title "Customer orders""#,
+                &format!(r#"pa:title "Customer orders" ; {literal}"#),
+            ),
+            literal,
+            format!("{EX}custom"),
+        ),
+    ] {
+        let error = load(&source).expect_err("unclaimed FnO statement");
+        let LoadError::InvalidFnoBinding {
+            subject,
+            predicate,
+            at: Some(at),
+            ..
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(subject, format!("{EX}query_customer_orders"));
+        assert_eq!(predicate.as_deref(), Some(predicate_iri.as_str()));
+        assert_eq!(&source[at.start..at.end], written);
+    }
+    load(&worked()).expect("neighbouring valid input");
+}
+
+// The reader identifies the list head even when it cannot admit the count.
+#[test]
+fn an_empty_returns_list_is_located_at_its_written_clause() {
+    let written = "fno:returns ()";
+    let source = edited("fno:returns ( ex:ordersOutput )", written);
+    let error = load(&source).expect_err("a callable must have one return");
     let LoadError::InvalidFnoBinding {
-        subject, predicate, ..
+        subject,
+        predicate,
+        at: Some(at),
+        ..
     } = error
     else {
         panic!("{error:?}");
     };
     assert_eq!(subject, format!("{EX}query_customer_orders"));
-    assert_eq!(predicate.as_deref(), Some(&*format!("{EX}custom")));
+    assert_eq!(
+        predicate.as_deref(),
+        Some("https://w3id.org/function/ontology#returns")
+    );
+    assert_eq!(&source[at.start..at.end], written);
+    load(&worked()).expect("neighbouring valid input");
+}
+
+// An absent parameter predicate has no statement to highlight.
+#[test]
+fn a_missing_callable_predicate_has_no_statement_extent() {
+    let error = load(&edited("fno:predicate ex:limit ; ", ""))
+        .expect_err("the mapped parameter requires a predicate");
+    let LoadError::InvalidFnoBinding {
+        at: None, detail, ..
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert!(detail.contains("requires an RDF predicate"), "{detail}");
     load(&worked()).expect("neighbouring valid input");
 }
 

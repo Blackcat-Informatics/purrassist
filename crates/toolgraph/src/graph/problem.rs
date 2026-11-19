@@ -144,13 +144,12 @@ impl fmt::Display for SourceExtent {
 
 /// Why a tool graph was refused.
 ///
-/// Every variant names its subject; predicate-level variants also name the
-/// predicate. [`UnknownTerm`](Self::UnknownTerm),
+/// A refusal identifies its subject and predicate when available.
+/// [`UnknownTerm`](Self::UnknownTerm),
 /// [`UnsupportedConstruct`](Self::UnsupportedConstruct), and
-/// [`UnsupportedProjection`](Self::UnsupportedProjection) also carry the exact
-/// [`SourceExtent`] of the statement they refuse when the governed parser
-/// retained it; variants that name a node rather than one statement do not (see
-/// the stated limits in the `graph` module documentation).
+/// [`UnsupportedProjection`](Self::UnsupportedProjection) can carry the exact
+/// [`SourceExtent`] of their refused statement. [`InvalidFnoBinding`](Self::InvalidFnoBinding)
+/// carries it when the reader identifies a specific written statement.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum LoadError {
@@ -194,6 +193,8 @@ pub enum LoadError {
         predicate: Option<String>,
         /// The upstream explanation.
         detail: String,
+        /// The written statement extent when the reader identifies one exact row.
+        at: Option<SourceExtent>,
     },
     /// A reified parameter hint is malformed or attaches to no parameter.
     InvalidHint {
@@ -289,11 +290,15 @@ impl fmt::Display for LoadError {
                 subject,
                 predicate,
                 detail,
-            } => write!(
-                f,
-                "{subject} {}: {detail}",
-                predicate.as_deref().unwrap_or("-")
-            ),
+                at,
+            } => {
+                write!(
+                    f,
+                    "{subject} {}: {detail}",
+                    predicate.as_deref().unwrap_or("-")
+                )?;
+                at.iter().try_for_each(|at| write!(f, " ({at})"))
+            }
             Self::UnsupportedConstruct {
                 subject,
                 predicate,

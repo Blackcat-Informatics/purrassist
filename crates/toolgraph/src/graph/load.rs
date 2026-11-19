@@ -161,7 +161,7 @@ where
         let nodes = doc.classify(&mut governor.borrow_mut())?;
         doc.own_every_row(&nodes, &mut governor.borrow_mut())?;
         doc.validate_nodes(&nodes, &mut governor.borrow_mut())?;
-        let catalog = doc.read_catalog(&nodes, governor)?;
+        let catalog = doc.read_catalog(&nodes, view, source, governor)?;
         let tools = doc.build_tools(&nodes, catalog.as_ref(), &mut governor.borrow_mut())?;
         Ok((tools, catalog))
     })
@@ -859,9 +859,11 @@ impl Doc<'_> {
 impl Doc<'_> {
     /// Read the strict `FnO` catalog from the rows the `FnO` view owns, under the
     /// governor's storage, work and stop authority.
-    fn read_catalog(
+    fn read_catalog<V: DatasetView<Id = TermId>>(
         &self,
         nodes: &Nodes,
+        original: &V,
+        source: &BorrowedSource<'_>,
         governor: &Shared<'_>,
     ) -> Result<Option<FnoCatalog>, LoadError> {
         if nodes.fno.is_empty() {
@@ -881,7 +883,9 @@ impl Doc<'_> {
                 ControlledError::Native(purrdf_core::fno::FnoConstructionFailure::Storage(
                     cause,
                 )) => control::storage_stop(governor, &rejection, &cause),
-                ControlledError::Native(native) => self.fno_error(&native),
+                ControlledError::Native(native) => {
+                    self.fno_error(&native, original, source, &mut governor.borrow_mut())
+                }
             })
         })
     }
@@ -907,6 +911,7 @@ impl Doc<'_> {
                     subject: self.namespace.to_owned(),
                     predicate: None,
                     detail: format!("FnO view construction was refused: {failure}"),
+                    at: None,
                 }
             })?;
         read(&view)
@@ -936,28 +941,52 @@ impl Doc<'_> {
         builder.freeze_with_memory(memory)
     }
 
-    fn fno_error(&self, failure: &FnoReadFailure<Infallible>) -> LoadError {
-        let detail = failure.to_string();
-        let (subject, predicate) = match failure {
+    fn fno_error<V: DatasetView<Id = TermId>>(
+        &self,
+        failure: &FnoReadFailure<Infallible>,
+        original: &V,
+        source: &BorrowedSource<'_>,
+        governor: &mut Governor,
+    ) -> LoadError {
+        let (subject, predicate, object) = match failure {
             purrdf_core::fno::FnoConstructionFailure::Semantic(shared) => match &**shared {
                 FnoReadError::Field {
                     subject, predicate, ..
                 }
                 | FnoReadError::List {
                     subject, predicate, ..
-                }
-                | FnoReadError::Returns {
-                    subject, predicate, ..
-                } => (show(subject), Some(predicate.clone())),
-                FnoReadError::Statement { row, .. } => (show(&row.s), Some(show(&row.p))),
-                _ => (self.namespace.to_owned(), None),
+                } => (Some(subject), Some(predicate.clone()), None),
+                FnoReadError::Returns {
+                    subject,
+                    predicate,
+                    head,
+                    ..
+                } => (Some(subject), Some(predicate.clone()), Some(head)),
+                FnoReadError::Statement { row, .. } => (
+                    Some(&row.s),
+                    Some(show(&row.p)),
+                    row.g.is_none().then_some(&row.o),
+                ),
+                _ => (None, None, None),
             },
-            _ => (self.namespace.to_owned(), None),
+            _ => (None, None, None),
+        };
+        let at = match (subject, predicate.as_deref(), object) {
+            (Some(subject), Some(predicate), Some(object)) => {
+                match control::default_row_extent(
+                    original, source, subject, predicate, object, governor,
+                ) {
+                    Ok(at) => at,
+                    Err(error) => return error,
+                }
+            }
+            _ => None,
         };
         LoadError::InvalidFnoBinding {
-            subject,
+            subject: subject.map_or_else(|| self.namespace.to_owned(), show),
             predicate,
-            detail,
+            detail: failure.to_string(),
+            at,
         }
     }
 }
@@ -997,6 +1026,7 @@ impl Doc<'_> {
                     subject: show(node),
                     predicate: Some(RDF_TYPE.to_owned()),
                     detail: "a tool must be typed as an fno:Function".to_owned(),
+                    at: None,
                 });
             };
             let tool = self.build_tool(node, catalog, &tool_iris, &mut consumed, governor)?;
@@ -1132,6 +1162,7 @@ impl Doc<'_> {
             subject: iri.to_owned(),
             predicate: None,
             detail,
+            at: None,
         };
         let mappings: Vec<usize> = catalog
             .as_input()
