@@ -144,7 +144,8 @@ pub enum Coercion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Hint {
-    /// The reifier node carrying the hint.
+    /// The reifier node carrying the hint. A blank reifier uses the same
+    /// scope-preserving label as the retained Turtle graph.
     pub reifier: String,
     /// The property shape whose path this hint annotates.
     pub shape: String,

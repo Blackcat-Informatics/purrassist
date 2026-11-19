@@ -11,7 +11,11 @@ use purrassist_toolgraph::{
     register_loss_profile,
 };
 use purrdf_core::loss::LossProfile;
-use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY, datasets_isomorphic};
+use purrdf_core::{
+    BlankScope, CanonicalizationControl, RDFC_V2_CORPUS_POLICY,
+    blank_label::{LabelAlphabet, encode_blank_label},
+    datasets_isomorphic,
+};
 use purrdf_rdf::SerializeGraph;
 use purrdf_shapes::{engine, shapes};
 
@@ -118,6 +122,44 @@ fn decode_of_encode_returns_the_same_graph_and_ledger() {
     assert_eq!(decoded_losses, encoded_losses);
     let (again, _) = mcp::encode(&decoded, &vocabulary(), &mut governor()).expect("re-encode");
     assert_eq!(again, manifest);
+}
+
+#[test]
+fn manifest_recovery_hints_distinguish_blank_reifiers_with_the_same_local_label() {
+    let scoped = encode_blank_label("claim", BlankScope(9), LabelAlphabet::BlankNodeLabel);
+    let scoped = format!("_:{scoped}");
+    let source = worked()
+        .replace("ex:pathClaim", &scoped)
+        .replace("ex:customerClaim", "_:claim");
+    let graph = load(&source);
+    let (manifest, losses) = mcp::encode(&graph, &vocabulary(), &mut governor()).expect("encode");
+    let root = json::parse(manifest.as_str()).expect("manifest JSON");
+    for (pointer, expected) in [
+        ("/tools/0/_meta/security/recoveryHints/0", scoped.as_str()),
+        ("/tools/1/_meta/security/recoveryHints/0", "_:claim"),
+    ] {
+        assert_eq!(
+            root.pointer(pointer).and_then(json::Node::as_str),
+            Some(expected)
+        );
+    }
+    let (decoded, decoded_losses) =
+        mcp::decode(&manifest, &vocabulary(), &mut governor()).expect("decode scoped hints");
+    assert_eq!(decoded.tools(), graph.tools());
+    assert_eq!(decoded_losses, losses);
+
+    let ambiguous = ManifestJson::from_text(manifest.as_str().replacen(
+        &format!(r#""recoveryHints":["{scoped}"]"#),
+        r#""recoveryHints":["_:claim"]"#,
+        1,
+    ));
+    assert!(matches!(
+        mcp::decode(&ambiguous, &vocabulary(), &mut governor()),
+        Err(CodecError::Disagreement {
+            tool: Some(0),
+            member: "_meta.security",
+        })
+    ));
 }
 
 // The projected schema admits both inputs. The retained SHACL shape must still

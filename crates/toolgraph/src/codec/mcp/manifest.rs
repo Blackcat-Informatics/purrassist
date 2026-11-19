@@ -193,6 +193,8 @@ impl std::error::Error for CodecError {
 /// original statements, reifiers and unprojected nodes survive. Output byte
 /// limits keep their exact unit: `maxOutputBytes` with
 /// `outputEnforcement: "exact-bytes"`.
+/// Each blank reifier reference in `recoveryHints` uses the same
+/// scope-preserving label as the retained Turtle.
 ///
 /// The returned ledger holds exactly the losses the upstream schema compiler
 /// reported, each checked against the vocabulary's loss profile; it is empty
@@ -283,6 +285,8 @@ pub(crate) fn encode_with_schema_losses(
 /// retained source is loaded with [`ToolGraph::load`] and every declaration,
 /// in order, must equal a fresh projection of the loaded graph; the first
 /// disagreeing member is reported.
+/// A recovery hint using a bare label for a scoped blank reifier is a
+/// declaration disagreement.
 ///
 /// The ledger holds the schema-compiler losses of that projection, checked
 /// against the vocabulary's loss profile. For a manifest produced by
