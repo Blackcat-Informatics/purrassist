@@ -233,7 +233,7 @@ pub fn encode(
 }
 
 /// Encode the same manifest while observing each schema's native losses.
-pub(crate) fn encode_with_schema_losses(
+pub fn encode_with_schema_losses(
     graph: &ToolGraph,
     vocabulary: &Vocabulary,
     governor: &mut Governor,
@@ -405,7 +405,7 @@ fn project(
 
 /// The declaration member whose schema compiler produced a loss.
 #[derive(Clone, Copy)]
-pub(crate) enum SchemaDirection {
+pub enum SchemaDirection {
     Input,
     Output,
 }
