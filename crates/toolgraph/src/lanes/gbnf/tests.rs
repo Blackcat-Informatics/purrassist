@@ -14,6 +14,7 @@ use std::{
 
 use purrassist_core::{
     Budget, Effort, Governor, StopReason, contract::Resource, json, schema::Schema,
+    tool_call::ToolSet,
 };
 use purrdf_core::loss::LossProfile;
 
@@ -482,6 +483,59 @@ fn the_worked_example_grammars_accept_only_schema_valid_strings() {
     assert_eq!(codes("json-string-validity-not-expressible"), 1);
     assert_eq!(codes("output-shape-not-expressible"), 2);
     assert_eq!(codes("input-shape-not-expressible"), 0);
+}
+
+#[test]
+fn removing_the_worked_query_maximum_exposes_an_unledgered_input_loss() {
+    let (vocabulary, graph) = load_example(worked_turtle());
+    let mut governor = Governor::new(Budget::default());
+    let (grammars, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("GBNF");
+    let grammar = grammars
+        .iter()
+        .find(|grammar| grammar.tool() == "query_customer_orders")
+        .expect("query grammar")
+        .as_str();
+    let limit_rule = grammar
+        .lines()
+        .find(|line| line.contains(r#""\"limit\"""#))
+        .and_then(|line| line.split_ascii_whitespace().last())
+        .expect("rule for the limit member");
+    let bound = grammar
+        .lines()
+        .find(|line| {
+            line.split_once(" ::= ")
+                .is_some_and(|(name, _)| name == limit_rule)
+        })
+        .expect("emitted integer bound");
+    // Keep the integer type and the minimum of one. Remove only the maximum.
+    let widened = grammar.replacen(bound, &format!("{limit_rule} ::= [1-9] [0-9]*"), 1);
+    let lower = r#"{"customer_id":"customer-42","limit":0}"#;
+    let boundary = r#"{"customer_id":"customer-42","limit":100}"#;
+    for version in [grammar, &widened] {
+        assert!(!accepts(version, lower));
+        assert!(accepts(version, boundary));
+    }
+
+    let (manifest, _) = mcp::encode(&graph, &vocabulary, &mut governor).expect("manifest");
+    let tools = ToolSet::from_mcp(manifest.as_str(), Budget::default()).expect("adapt manifest");
+    let schema = tools
+        .tool("query_customer_orders")
+        .expect("query tool")
+        .schema();
+    let witness = r#"{"customer_id":"customer-42","limit":101}"#;
+    let instance = json::parse(witness).expect("witness JSON");
+    let report = schema.validate(&instance).expect("validate witness");
+    let [violation] = report.violations.as_slice() else {
+        panic!("{report:?}");
+    };
+    assert_eq!(violation.keyword, "maximum");
+    let ledgered = ledger
+        .entries()
+        .iter()
+        .any(|entry| entry.code == "input-shape-not-expressible");
+    let unledgered_loss = |version| accepts(version, witness) && !report.valid && !ledgered;
+    assert!(!unledgered_loss(grammar));
+    assert!(unledgered_loss(&widened));
 }
 
 /// The public lane enforces SHACL property counts and each item's pattern

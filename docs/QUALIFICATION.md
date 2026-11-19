@@ -127,6 +127,22 @@ Current qualification of the added
 recipes is pending automatic CI; the recorded evaluation numbers above
 refer to the prior source.
 
+## Tool-graph grammar qualification
+
+The GBNF lane emits both grammars from the worked Turtle graph. The Linux x86-64
+qualification at `02ac7860` used the upstream parser and recognizer in
+`test-gbnf-validator`, built from llama.cpp `b12543` and linked with the
+matching CPU release. The validator ran with no model.
+[Worked Turtle](tool-graph/TOOLS.md) · [Validator source](https://github.com/ggml-org/llama.cpp/blob/41d8297fe4c26b9ff304805178199dc14aa9ab52/tests/test-gbnf-validator.cpp)
+
+The reference validator accepted both valid argument objects and refused
+a non-string edit value, a customer ID outside its declared pattern, and
+a grammar with an unresolved rule. The unmodified query grammar refused
+`limit: 101`. Removing its upper bound admitted that value while leaving
+zero refused and 100 accepted. The repository regression checks that the
+original input schema refuses 101 and the lane records no input loss for
+that bound.
+
 ## Resource and platform qualification
 
 The core scratch governor uses shared meters, leases, and budgeted containers.
