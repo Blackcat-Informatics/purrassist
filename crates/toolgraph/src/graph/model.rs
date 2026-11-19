@@ -198,6 +198,10 @@ pub struct Waiver {
 }
 
 /// One confinement contract; loading proves it well formed, not available or trusted.
+///
+/// The loader admits profile nesting against the caller's depth budget with the
+/// root at depth one. This value remains a recursive tree. Callers raising that
+/// budget must supply enough stack to traverse, clone, compare, or drop the tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ToolExecutionProfile {

@@ -222,6 +222,35 @@ fn field_masks_consume_only_the_closed_language() {
     );
 }
 
+/// Mask allocations stay charged through use and refund after drop or refusal.
+#[test]
+fn field_mask_storage_follows_the_returned_lease() {
+    let mut governor = Governor::new(Budget::default());
+    let meter = governor.scratch_meter();
+    let baseline = 64;
+    meter.charge(baseline).unwrap();
+
+    for source in [".customer.name", "{customer, order}", ".orders[]?", ".[]"] {
+        let parsed = FieldMask::parse_with_lease(source, &mut governor).unwrap();
+        assert_eq!(parsed.0.to_string(), source);
+        let charge = parsed.1.bytes();
+        assert_eq!(meter.live(), baseline + charge);
+        assert_eq!(charge == 0, source == ".[]");
+        drop(parsed);
+        assert_eq!(meter.live(), baseline);
+    }
+
+    for invalid in [
+        "{customer, order} trailing",
+        ".customer.",
+        "{customer, customer}",
+    ] {
+        FieldMask::parse_with_lease(invalid, &mut governor).unwrap_err();
+        assert_eq!(meter.live(), baseline);
+    }
+    meter.release(baseline).unwrap();
+}
+
 #[test]
 fn field_mask_scans_and_retention_obey_the_governor() {
     let input = "{customer, order, total}";

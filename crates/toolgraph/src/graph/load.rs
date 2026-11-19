@@ -5,15 +5,16 @@
 
 mod classification;
 mod control;
+mod profile;
 mod roles;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+
 use std::convert::Infallible;
 
 use purrassist_core::{
     Governor, StopReason,
-    contract::{Resource, saturating_size},
+    contract::{Resource, ScratchLease, saturating_size},
     output::FieldMask,
 };
 use purrdf_core::{
@@ -24,9 +25,9 @@ use purrdf_core::{
     fno::{FnoCatalog, FnoReadError, FnoReadFailure},
 };
 use purrdf_lex::{
-    allocation::{Admission, Memory, Resident, StorageError},
+    allocation::{Admission, Memory, OrderedTable, OwnedAdmission, StorageError},
     control::{ControlledError, Progress, compare_bytes},
-    walk::try_sort_unstable_by,
+    walk::{try_equal_range_by, try_sort_unstable_by},
 };
 use purrdf_rdf::{BorrowedSource, SourceStatementKind};
 
@@ -41,6 +42,7 @@ use crate::{
 };
 use classification::{Nodes, RoleNode};
 use control::{ControlledStorage, Shared, Storage, Work};
+use profile::{BuildStorage, Profiles, matches_predicate};
 use roles::{Kind, Role, Spec};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -72,9 +74,25 @@ struct Row {
     o: TermValue,
 }
 
+#[derive(Clone, Copy)]
+struct Node<'a> {
+    id: TermId,
+    term: &'a TermValue,
+}
+
+impl<'a> Node<'a> {
+    const fn object(row: &'a Row) -> Self {
+        Self {
+            id: row.object_id,
+            term: &row.o,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Reifier {
     term_id: TermId,
+    target_subject: TermId,
     id: TermValue,
     s: TermValue,
     p: String,
@@ -89,6 +107,20 @@ struct Doc<'v> {
     rows: Vec<Row>,
     by_subject: Vec<usize>,
     reifiers: Vec<Reifier>,
+}
+
+/// The typed payload drops before its field-mask leases and native allocation account.
+#[derive(Debug)]
+pub(super) struct RetainedTools {
+    tools: Vec<Tool>,
+    masks: Vec<ScratchLease>,
+    storage: OwnedAdmission<Storage>,
+}
+
+impl RetainedTools {
+    pub(super) fn as_slice(&self) -> &[Tool] {
+        &self.tools
+    }
 }
 
 pub(super) fn show(term: &TermValue) -> String {
@@ -145,6 +177,7 @@ pub(super) fn load(
     // copy is outside the governor's storage account.
     let dataset = dataset_from_view(&view)
         .map_err(|cause| control::read_failure("dataset-materialisation", cause))?;
+    governor.borrow().check().map_err(stop)?;
     Ok(ToolGraph {
         tools,
         dataset,
@@ -158,7 +191,7 @@ fn analyse<V: DatasetView<Id = TermId>>(
     source: &BorrowedSource<'_>,
     vocabulary: &Vocabulary,
     governor: &Shared<'_>,
-) -> Result<(Vec<Tool>, Option<FnoCatalog>), LoadError>
+) -> Result<(RetainedTools, Option<FnoCatalog>), LoadError>
 where
     V::ReadError: std::fmt::Display,
 {
@@ -169,12 +202,7 @@ where
             doc.own_every_row(nodes, view, source, &mut governor.borrow_mut())?;
             doc.validate_nodes(nodes, &locations, governor)?;
             let catalog = doc.read_catalog(nodes, view, source, governor)?;
-            let tools = doc.build_tools(
-                nodes,
-                catalog.as_ref(),
-                &locations,
-                &mut governor.borrow_mut(),
-            )?;
+            let tools = doc.build_tools(nodes, catalog.as_ref(), &locations, governor)?;
             Ok((tools, catalog))
         })
     })
@@ -328,10 +356,12 @@ impl<'v> Doc<'v> {
             let TermValue::Iri(p) = value(p, memory)? else {
                 return Err(unsupported(&id, "-", Construct::Reifier, None));
             };
+            let target_subject = s;
             let s = value(s, memory)?;
             let o = value(o, memory)?;
             let reifier = Reifier {
                 term_id: quad.s,
+                target_subject,
                 id,
                 s,
                 p,
@@ -398,31 +428,6 @@ impl<'v> Doc<'v> {
 
     fn in_namespace(&self, iri: &str) -> bool {
         iri.starts_with(self.namespace)
-    }
-
-    fn rows_of<'a>(&'a self, subject: &TermValue) -> impl Iterator<Item = &'a Row> + 'a {
-        let start = self
-            .by_subject
-            .partition_point(|&row| self.rows[row].s < *subject);
-        let matching = &self.by_subject[start..];
-        let length = matching.partition_point(|&row| self.rows[row].s == *subject);
-        matching[..length].iter().map(|&row| &self.rows[row])
-    }
-
-    fn objects<'a>(&'a self, subject: &TermValue, predicate: &str) -> Vec<&'a TermValue> {
-        self.rows_of(subject)
-            .filter(|row| row.p == predicate)
-            .map(|row| &row.o)
-            .collect()
-    }
-
-    fn objects_of(&self, subject: &TermValue, name: &'static str) -> Vec<&TermValue> {
-        self.objects(subject, self.term(name))
-    }
-
-    fn has_type(&self, subject: &TermValue, class: &str) -> bool {
-        self.rows_of(subject)
-            .any(|row| row.p == RDF_TYPE && iri_of(&row.o) == Some(class))
     }
 
     /// Refuse every caller-namespace term the vocabulary does not bind.
@@ -675,16 +680,9 @@ fn boolean(value: &TermValue) -> bool {
     matches!(value, TermValue::Literal { lexical_form, .. } if matches!(lexical_form.as_str(), "true" | "1"))
 }
 
-fn lexical(value: &TermValue) -> String {
-    match value {
-        TermValue::Literal { lexical_form, .. } => lexical_form.clone(),
-        other => show(other),
-    }
-}
-
 impl Doc<'_> {
     /// The concrete roles of a node: its recognised bits, with rule markers resolved.
-    fn concrete(
+    fn resolve_concrete(
         &self,
         node: &TermValue,
         mask: u16,
@@ -755,8 +753,8 @@ impl Doc<'_> {
     ) -> Result<(), LoadError> {
         let mut progress = Work::new(governor);
         for classified in nodes.roles() {
-            let node = classified.term;
-            let mask = self.concrete(node, classified.mask, || classified.rule_domain)?;
+            let node = classified.identity.term;
+            let mask = self.resolve_concrete(node, classified.mask, || classified.rule_domain)?;
             for &index in classified.rows {
                 let row = &self.rows[index];
                 work(&mut governor.borrow_mut(), 1)?;
@@ -814,7 +812,7 @@ impl Doc<'_> {
             let predicate = self.term(spec.name);
             let mut found = 0;
             for &index in node.rows {
-                if Self::matches_property(&self.rows[index], predicate, governor, progress)? {
+                if matches_predicate(&self.rows[index], predicate, progress)? {
                     found += 1;
                 }
             }
@@ -826,7 +824,13 @@ impl Doc<'_> {
                 None
             };
             if let Some(violation) = cardinality {
-                return Err(Self::wrap(role, node.term, predicate, violation, None));
+                return Err(Self::wrap(
+                    role,
+                    node.identity.term,
+                    predicate,
+                    violation,
+                    None,
+                ));
             }
             if found == 0 {
                 continue;
@@ -837,7 +841,7 @@ impl Doc<'_> {
             }
             for &index in node.rows {
                 let row = &self.rows[index];
-                if !Self::matches_property(row, predicate, governor, progress)? {
+                if !matches_predicate(row, predicate, progress)? {
                     continue;
                 }
                 let value = &row.o;
@@ -848,12 +852,18 @@ impl Doc<'_> {
                 }
                 if let Err(violation) = check_value(spec.kind, value) {
                     let at = locations.statement(
-                        node.term,
+                        node.identity.term,
                         predicate,
                         value,
                         &mut governor.borrow_mut(),
                     )?;
-                    return Err(Self::wrap(role, node.term, predicate, violation, at));
+                    return Err(Self::wrap(
+                        role,
+                        node.identity.term,
+                        predicate,
+                        violation,
+                        at,
+                    ));
                 }
                 if role == Role::MOUNT && spec.name == "deny" && !boolean(value) {
                     mount_allow = Some(value);
@@ -863,7 +873,7 @@ impl Doc<'_> {
         if role == Role::NETWORK && socket_type == protocol {
             return Err(Self::wrap(
                 role,
-                node.term,
+                node.identity.term,
                 self.term("protocol"),
                 Violation::Exclusive,
                 None,
@@ -871,11 +881,15 @@ impl Doc<'_> {
         }
         if let Some(value) = mount_allow {
             let predicate = self.term("deny");
-            let at =
-                locations.statement(node.term, predicate, value, &mut governor.borrow_mut())?;
+            let at = locations.statement(
+                node.identity.term,
+                predicate,
+                value,
+                &mut governor.borrow_mut(),
+            )?;
             return Err(Self::wrap(
                 role,
-                node.term,
+                node.identity.term,
                 predicate,
                 Violation::OutOfRange {
                     expected: "true: a mount rule is always a denial",
@@ -892,21 +906,6 @@ impl Doc<'_> {
             return Ok(false);
         };
         compare_bytes(namespace, prefix, progress)
-            .map(std::cmp::Ordering::is_eq)
-            .map_err(stop)
-    }
-
-    fn matches_property(
-        row: &Row,
-        predicate: &str,
-        governor: &Shared<'_>,
-        progress: &mut Work<'_, '_>,
-    ) -> Result<bool, LoadError> {
-        work(&mut governor.borrow_mut(), 1)?;
-        if row.p.len() != predicate.len() {
-            return Ok(false);
-        }
-        compare_bytes(row.p.as_bytes(), predicate.as_bytes(), progress)
             .map(std::cmp::Ordering::is_eq)
             .map_err(stop)
     }
@@ -1047,129 +1046,264 @@ impl Doc<'_> {
     }
 }
 
+struct ToolLookup<'i, 'n, 'd> {
+    iris: &'i [&'d str],
+    profiles: Profiles<'n, 'd>,
+}
+
+impl ToolLookup<'_, '_, '_> {
+    fn contains(&self, iri: &str, progress: &mut Work<'_, '_>) -> Result<bool, LoadError> {
+        let found = try_equal_range_by(self.iris, |key| {
+            compare_bytes(key.as_bytes(), iri.as_bytes(), progress).map_err(stop)
+        })?;
+        Ok(!found.is_empty())
+    }
+}
+
 impl Doc<'_> {
     fn build_tools<V: DatasetView<Id = TermId>>(
         &self,
         nodes: &Nodes<'_>,
         catalog: Option<&FnoCatalog>,
         locations: &Locations<'_, V>,
-        governor: &mut Governor,
-    ) -> Result<Vec<Tool>, LoadError> {
-        let tool_nodes: Vec<&TermValue> = nodes
-            .roles()
-            .filter(|node| node.mask & Role::TOOL != 0)
-            .map(|node| node.term)
-            .collect();
-        let tool_iris: BTreeSet<&str> = tool_nodes.iter().filter_map(|node| iri_of(node)).collect();
-        if let Some(catalog) = catalog {
-            for function in &catalog.as_input().functions {
-                if !tool_iris.contains(function.iri.as_str()) {
-                    let subject = TermValue::Iri(function.iri.clone());
-                    let class = TermValue::Iri(FNO_FUNCTION.to_owned());
-                    let at = locations.statement(&subject, RDF_TYPE, &class, governor)?;
-                    return Err(unsupported(
-                        &subject,
-                        RDF_TYPE,
-                        Construct::FunctionWithoutTool,
-                        at,
-                    ));
-                }
+        governor: &Shared<'_>,
+    ) -> Result<RetainedTools, LoadError> {
+        let (scratch, rejection) = Storage::new(governor);
+        let mut scratch = OwnedAdmission::new(scratch);
+        let mut scratch = BuildStorage::new(&mut scratch, governor, rejection);
+        let mut progress = Work::new(governor);
+        let mut iris = Vec::new();
+        for role in nodes.roles() {
+            let node = role.identity;
+            scratch.charge(1)?;
+            if role.mask & Role::TOOL != 0
+                && let Some(iri) = iri_of(node.term)
+            {
+                scratch.push(&mut iris, iri)?;
             }
         }
-        let mut consumed = BTreeSet::new();
-        let mut tools = Vec::new();
-        let mut seen_names = BTreeSet::new();
-        for node in tool_nodes {
-            let Some(catalog) = catalog.filter(|_| self.has_type(node, FNO_FUNCTION)) else {
-                return Err(LoadError::InvalidFnoBinding {
-                    subject: show(node),
-                    predicate: Some(RDF_TYPE.to_owned()),
-                    detail: "a tool must be typed as an fno:Function".to_owned(),
-                    at: None,
-                });
+        try_sort_unstable_by(&mut iris, |left, right| {
+            compare_bytes(left.as_bytes(), right.as_bytes(), &mut progress).map_err(stop)
+        })?;
+        let lookup = ToolLookup {
+            iris: &iris,
+            profiles: Profiles { nodes },
+        };
+        if let Some(catalog) = catalog {
+            self.check_catalog_tools(catalog, &lookup, locations, governor, &mut progress)?;
+        }
+        let mut consumed = Vec::new();
+        scratch.fill(&mut consumed, self.reifiers.len(), false)?;
+        let (storage, rejection) = Storage::new(governor);
+        let mut retained = RetainedTools {
+            tools: Vec::new(),
+            masks: Vec::new(),
+            storage: OwnedAdmission::new(storage),
+        };
+        let mut storage = BuildStorage::new(&mut retained.storage, governor, rejection);
+        let mut seen_names = OrderedTable::default();
+        for role in nodes.roles() {
+            let node = role.identity;
+            storage.charge(1)?;
+            if role.mask & Role::TOOL == 0 {
+                continue;
+            }
+            let Some(catalog) = catalog else {
+                return Err(Self::missing_function(node.term));
             };
-            let tool = self.build_tool(
+            if !self.has_type_id(nodes, node.id, FNO_FUNCTION, &mut progress)? {
+                return Err(Self::missing_function(node.term));
+            }
+            let candidate = self.build_tool(
                 node,
                 catalog,
-                &tool_iris,
+                &lookup,
                 &mut consumed,
                 locations,
-                governor,
+                &mut storage,
             )?;
-            if !seen_names.insert(tool.name.clone()) {
+            let original_name = self
+                .first_property(nodes, node.id, self.term("name"), &mut progress)?
+                .map_or("", |row| lexical_str(&row.o));
+            if scratch.record_name(&mut seen_names, original_name, &mut progress)? {
                 return Err(LoadError::InvalidShape {
-                    subject: show(node),
+                    subject: show(node.term),
                     predicate: self.term("name").to_owned(),
                     at: None,
                     violation: Violation::Duplicate,
                 });
             }
-            tools.push(tool);
+            storage.reserve_next(&mut retained.tools)?;
+            storage.reserve_next(&mut retained.masks)?;
+            let (tool, mask) = candidate;
+            retained.tools.push(tool);
+            retained.masks.push(mask);
         }
-        for (index, reifier) in self.reifiers.iter().enumerate() {
-            if consumed.contains(&index) {
+        self.check_reifiers(nodes, &consumed, locations, governor, &mut progress)?;
+        // The classified node iterator already visits the IRI subjects in lexical order.
+        Ok(retained)
+    }
+
+    fn check_catalog_tools<V: DatasetView<Id = TermId>>(
+        &self,
+        catalog: &FnoCatalog,
+        lookup: &ToolLookup<'_, '_, '_>,
+        locations: &Locations<'_, V>,
+        governor: &Shared<'_>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<(), LoadError> {
+        for function in &catalog.as_input().functions {
+            work(&mut governor.borrow_mut(), 1)?;
+            if lookup.contains(function.iri.as_str(), progress)? {
+                continue;
+            }
+            let mut at = None;
+            for row in &self.rows {
+                if matches_predicate(row, RDF_TYPE, progress)?
+                    && iri_of(&row.o) == Some(FNO_FUNCTION)
+                    && let Some(subject) = iri_of(&row.s)
+                    && compare_bytes(subject.as_bytes(), function.iri.as_bytes(), progress)
+                        .map_err(stop)?
+                        .is_eq()
+                {
+                    at = locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut())?;
+                    break;
+                }
+            }
+            return Err(LoadError::UnsupportedConstruct {
+                subject: function.iri.clone(),
+                predicate: RDF_TYPE.to_owned(),
+                construct: Construct::FunctionWithoutTool,
+                at,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_reifiers<V: DatasetView<Id = TermId>>(
+        &self,
+        nodes: &Nodes<'_>,
+        consumed: &[bool],
+        locations: &Locations<'_, V>,
+        governor: &Shared<'_>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<(), LoadError> {
+        for (used, reifier) in consumed.iter().copied().zip(&self.reifiers) {
+            work(&mut governor.borrow_mut(), 1)?;
+            if used {
                 continue;
             }
             let at = control::default_reifier_extent(
                 locations.view,
                 locations.source,
                 reifier,
-                governor,
+                &mut governor.borrow_mut(),
             )?;
-            return Err(if self.has_type(&reifier.id, self.term("Hint")) {
-                LoadError::InvalidHint {
-                    subject: show(&reifier.id),
-                    predicate: reifier.p.clone(),
-                    at: at.map(Box::new),
-                    violation: Violation::Unresolved,
-                }
-            } else {
-                unsupported(&reifier.id, &reifier.p, Construct::Reifier, at)
-            });
+            return Err(
+                if self.has_type_id(nodes, reifier.term_id, self.term("Hint"), progress)? {
+                    LoadError::InvalidHint {
+                        subject: show(&reifier.id),
+                        predicate: reifier.p.clone(),
+                        at: at.map(Box::new),
+                        violation: Violation::Unresolved,
+                    }
+                } else {
+                    unsupported(&reifier.id, &reifier.p, Construct::Reifier, at)
+                },
+            );
         }
-        tools.sort_by(|left, right| left.iri.cmp(&right.iri));
-        Ok(tools)
+        Ok(())
     }
 
-    fn single<'a>(&'a self, node: &TermValue, name: &'static str) -> Option<&'a TermValue> {
-        self.objects_of(node, name).first().copied()
+    fn missing_function(node: &TermValue) -> LoadError {
+        LoadError::InvalidFnoBinding {
+            subject: show(node),
+            predicate: Some(RDF_TYPE.to_owned()),
+            detail: "a tool must be typed as an fno:Function".to_owned(),
+            at: None,
+        }
     }
 
-    fn text(&self, node: &TermValue, name: &'static str) -> String {
-        self.single(node, name).map_or_else(String::new, lexical)
+    fn first_property<'d>(
+        &'d self,
+        nodes: &Nodes<'_>,
+        id: TermId,
+        predicate: &str,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<Option<&'d Row>, LoadError> {
+        for &index in nodes.rows(id) {
+            let row = &self.rows[index];
+            if matches_predicate(row, predicate, progress)? {
+                return Ok(Some(row));
+            }
+        }
+        Ok(None)
     }
 
-    fn flag(&self, node: &TermValue, name: &'static str) -> Option<bool> {
-        self.single(node, name).map(boolean)
+    fn has_type_id(
+        &self,
+        nodes: &Nodes<'_>,
+        id: TermId,
+        class: &str,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<bool, LoadError> {
+        for &index in nodes.rows(id) {
+            let row = &self.rows[index];
+            if matches_predicate(row, RDF_TYPE, progress)?
+                && let Some(iri) = iri_of(&row.o)
+                && compare_bytes(iri.as_bytes(), class.as_bytes(), progress)
+                    .map_err(stop)?
+                    .is_eq()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
-    fn texts(&self, node: &TermValue, name: &'static str) -> Vec<String> {
-        let mut all: Vec<String> = self
-            .objects_of(node, name)
-            .into_iter()
-            .map(lexical)
-            .collect();
-        all.sort();
-        all
+    fn typed_value<'d>(
+        &'d self,
+        nodes: &Nodes<'_>,
+        id: TermId,
+        name: &'static str,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<Option<&'d TermValue>, LoadError> {
+        Ok(self
+            .first_property(nodes, id, self.term(name), progress)?
+            .map(|row| &row.o))
     }
 
-    fn number(&self, node: &TermValue, name: &'static str) -> u64 {
-        // INVARIANT: `validate_nodes` admitted this value as an unsigned 64-bit integer.
-        parse_u64(&self.text(node, name)).expect("validated integer")
+    fn typed_number(
+        &self,
+        nodes: &Nodes<'_>,
+        id: TermId,
+        name: &'static str,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<u64, LoadError> {
+        let value = self
+            .typed_value(nodes, id, name, progress)?
+            .map_or("", lexical_str);
+        progress
+            .charge(purrassist_core::contract::saturating_size(value.len()))
+            .map_err(stop)?;
+        // INVARIANT: vocabulary validation admitted this unsigned integer.
+        Ok(parse_u64(value).expect("validated integer"))
     }
 
     fn build_tool<V: DatasetView<Id = TermId>>(
         &self,
-        node: &TermValue,
+        node: Node<'_>,
         catalog: &FnoCatalog,
-        tool_iris: &BTreeSet<&str>,
-        consumed: &mut BTreeSet<usize>,
+        lookup: &ToolLookup<'_, '_, '_>,
+        consumed: &mut [bool],
         locations: &Locations<'_, V>,
-        governor: &mut Governor,
-    ) -> Result<Tool, LoadError> {
-        let TermValue::Iri(iri) = node else {
+        storage: &mut BuildStorage<'_, '_, '_>,
+    ) -> Result<(Tool, ScratchLease), LoadError> {
+        let mut progress = Work::new(storage.governor);
+        let nodes = lookup.profiles.nodes;
+        let TermValue::Iri(iri) = node.term else {
             return Err(LoadError::InvalidShape {
-                subject: show(node),
+                subject: show(node.term),
                 predicate: self.term("name").to_owned(),
                 at: None,
                 violation: Violation::WrongKind {
@@ -1177,256 +1311,431 @@ impl Doc<'_> {
                 },
             });
         };
-        let mut subtools = self.texts(node, "subtool");
-        if subtools.iter().any(|iri| !tool_iris.contains(iri.as_str())) {
-            return Err(LoadError::InvalidShape {
-                subject: iri.clone(),
-                predicate: self.term("subtool").to_owned(),
-                at: None,
-                violation: Violation::Unresolved,
-            });
+        let subtools = self.retained_texts(nodes, node.id, "subtool", storage)?;
+        for subtool in &subtools {
+            if !lookup.contains(subtool, &mut progress)? {
+                return Err(LoadError::InvalidShape {
+                    subject: iri.clone(),
+                    predicate: self.term("subtool").to_owned(),
+                    at: None,
+                    violation: Violation::Unresolved,
+                });
+            }
         }
-        subtools.sort();
         let (parameters, output, implementation) =
-            self.build_callable(node, iri, catalog, consumed, locations, governor)?;
-        let annotations = ToolAnnotations {
-            title: self.single(node, "title").map(lexical),
-            read_only_hint: self.flag(node, "readOnlyHint"),
-            destructive_hint: self.flag(node, "destructiveHint"),
-            idempotent_hint: self.flag(node, "idempotentHint"),
-            open_world_hint: self.flag(node, "openWorldHint"),
+            self.build_callable(node, nodes, catalog, consumed, locations, storage)?;
+        let flag = |name, progress: &mut Work<'_, '_>| {
+            Ok::<_, LoadError>(
+                self.typed_value(nodes, node.id, name, progress)?
+                    .map(boolean),
+            )
         };
-        let profile_node = self.node_of(node, "executionProfile")?;
-        let mut stack = Vec::new();
-        Ok(Tool {
-            iri: iri.clone(),
-            name: self.text(node, "name"),
-            description: self.text(node, "description"),
-            annotations,
-            input_shape: show(&self.node_of(node, "inputShape")?),
-            output_shape: show(&self.node_of(node, "outputShape")?),
-            implementation,
-            parameters,
-            output,
-            execution_profile: self.build_profile(&profile_node, &mut stack, governor)?,
-            context: self.build_context(
-                &self.node_of(node, "contextManagement")?,
-                locations,
-                governor,
-            )?,
-            parameter_constraints: self.text(node, "parameterConstraints"),
-            subtools,
-        })
+        let annotations = ToolAnnotations {
+            title: self
+                .typed_value(nodes, node.id, "title", &mut progress)?
+                .map(|term| storage.lexical(term))
+                .transpose()?,
+            read_only_hint: flag("readOnlyHint", &mut progress)?,
+            destructive_hint: flag("destructiveHint", &mut progress)?,
+            idempotent_hint: flag("idempotentHint", &mut progress)?,
+            open_world_hint: flag("openWorldHint", &mut progress)?,
+        };
+        let profile = self.required_property(nodes, node, "executionProfile", &mut progress)?;
+        let execution_profile = lookup.profiles.build(self, profile, storage)?;
+        let context_node = Node::object(self.required_property(
+            nodes,
+            node,
+            "contextManagement",
+            &mut progress,
+        )?);
+        let context = self.build_context(nodes, context_node, locations, storage)?;
+        let iri = storage.string(iri)?;
+        let name = self.retained_text(nodes, node.id, "name", storage, &mut progress)?;
+        let description =
+            self.retained_text(nodes, node.id, "description", storage, &mut progress)?;
+        let input_shape = storage.lexical(
+            &self
+                .required_property(nodes, node, "inputShape", &mut progress)?
+                .o,
+        )?;
+        let output_shape = storage.lexical(
+            &self
+                .required_property(nodes, node, "outputShape", &mut progress)?
+                .o,
+        )?;
+        let parameter_constraints = self.retained_text(
+            nodes,
+            node.id,
+            "parameterConstraints",
+            storage,
+            &mut progress,
+        )?;
+        let (context, mask_lease) = context;
+        Ok((
+            Tool {
+                iri,
+                name,
+                description,
+                annotations,
+                input_shape,
+                output_shape,
+                implementation,
+                parameters,
+                output,
+                execution_profile,
+                context,
+                parameter_constraints,
+                subtools,
+            },
+            mask_lease,
+        ))
     }
 
-    fn node_of(&self, node: &TermValue, name: &'static str) -> Result<TermValue, LoadError> {
-        self.single(node, name)
-            .cloned()
+    fn required_property<'d>(
+        &'d self,
+        nodes: &Nodes<'_>,
+        node: Node<'_>,
+        name: &'static str,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<&'d Row, LoadError> {
+        let predicate = self.term(name);
+        self.first_property(nodes, node.id, predicate, progress)?
             .ok_or_else(|| LoadError::InvalidShape {
-                subject: show(node),
-                predicate: self.term(name).to_owned(),
+                subject: show(node.term),
+                predicate: predicate.to_owned(),
                 at: None,
                 violation: Violation::Missing,
             })
     }
+
+    fn retained_text(
+        &self,
+        nodes: &Nodes<'_>,
+        id: TermId,
+        name: &'static str,
+        storage: &mut BuildStorage<'_, '_, '_>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<String, LoadError> {
+        self.typed_value(nodes, id, name, progress)?
+            .map(|term| storage.lexical(term))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    fn retained_texts(
+        &self,
+        nodes: &Nodes<'_>,
+        id: TermId,
+        name: &'static str,
+        storage: &mut BuildStorage<'_, '_, '_>,
+    ) -> Result<Vec<String>, LoadError> {
+        let mut values = Vec::new();
+        let predicate = self.term(name);
+        let mut progress = Work::new(storage.governor);
+        for &index in nodes.rows(id) {
+            let row = &self.rows[index];
+            if matches_predicate(row, predicate, &mut progress)? {
+                let value = storage.lexical(&row.o)?;
+                storage.push(&mut values, value)?;
+            }
+        }
+        try_sort_unstable_by(&mut values, |left, right| {
+            compare_bytes(left.as_bytes(), right.as_bytes(), &mut progress).map_err(stop)
+        })?;
+        Ok(values)
+    }
+}
+
+struct ShapePath<'a> {
+    iri: &'a str,
+    property: Node<'a>,
+    used: bool,
+}
+
+fn check_shape_complete(
+    shape: Node<'_>,
+    paths: &[ShapePath<'_>],
+    storage: &BuildStorage<'_, '_, '_>,
+) -> Result<(), LoadError> {
+    for path in paths {
+        storage.charge(1)?;
+        if !path.used {
+            return Err(LoadError::InvalidShape {
+                subject: show(shape.term),
+                predicate: path.iri.to_owned(),
+                at: None,
+                violation: Violation::Unresolved,
+            });
+        }
+    }
+    Ok(())
 }
 
 impl Doc<'_> {
     fn build_callable<V: DatasetView<Id = TermId>>(
         &self,
-        node: &TermValue,
-        iri: &str,
+        node: Node<'_>,
+        nodes: &Nodes<'_>,
         catalog: &FnoCatalog,
-        consumed: &mut BTreeSet<usize>,
+        consumed: &mut [bool],
         locations: &Locations<'_, V>,
-        governor: &mut Governor,
+        storage: &mut BuildStorage<'_, '_, '_>,
     ) -> Result<(Vec<ToolParameter>, ToolOutput, ToolImplementation), LoadError> {
+        // INVARIANT: build_tool admitted an IRI before inspecting its binding.
+        let iri = iri_of(node.term).expect("tool subject is an IRI");
+        let binding = Self::admit_callable(catalog, iri, storage)?;
+        let mut progress = Work::new(storage.governor);
+        let input_shape =
+            Node::object(self.required_property(nodes, node, "inputShape", &mut progress)?);
+        let output_shape =
+            Node::object(self.required_property(nodes, node, "outputShape", &mut progress)?);
+        let (scratch, rejection) = Storage::new(storage.governor);
+        let mut scratch = OwnedAdmission::new(scratch);
+        let mut scratch = BuildStorage::new(&mut scratch, storage.governor, rejection);
+        let mut input_paths =
+            self.shape_paths(nodes, input_shape, locations, &mut scratch, &mut progress)?;
+        let mut output_paths =
+            self.shape_paths(nodes, output_shape, locations, &mut scratch, &mut progress)?;
+        let mut parameters = Vec::new();
+        for parameter in binding.parameters() {
+            storage.charge(1)?;
+            // INVARIANT: `CallableBinding::admit` refuses a parameter without a predicate.
+            let predicate = parameter
+                .parameter
+                .predicate
+                .as_deref()
+                .expect("admitted predicate");
+            let shape = Self::path_shape(input_shape, &mut input_paths, predicate, &mut progress)?;
+            let hint = self.build_hint(nodes, shape, predicate, consumed, storage)?;
+            let parameter = ToolParameter {
+                iri: storage.string(&parameter.parameter.iri)?,
+                predicate: storage.string(predicate)?,
+                datatype: storage.string(&parameter.parameter.r#type)?,
+                required: parameter.parameter.required,
+                implementation_property: storage
+                    .string(&parameter.mapping.implementation_property)?,
+                hint,
+            };
+            storage.push(&mut parameters, parameter)?;
+        }
+        check_shape_complete(input_shape, &input_paths, storage)?;
+        let returned = binding.output();
+        // INVARIANT: `CallableBinding::admit` refuses an output without a predicate.
+        let output_predicate = returned
+            .output
+            .predicate
+            .as_deref()
+            .expect("admitted predicate");
+        Self::path_shape(
+            output_shape,
+            &mut output_paths,
+            output_predicate,
+            &mut progress,
+        )?;
+        check_shape_complete(output_shape, &output_paths, storage)?;
+        let implementation = binding.implementation();
+        Ok((
+            parameters,
+            ToolOutput {
+                iri: storage.string(&returned.output.iri)?,
+                predicate: storage.string(output_predicate)?,
+                datatype: storage.string(&returned.output.r#type)?,
+                implementation_property: storage
+                    .string(&returned.mapping.implementation_property)?,
+            },
+            ToolImplementation {
+                iri: storage.string(&implementation.iri)?,
+                format: storage.string(&implementation.format)?,
+                see_also: storage.string(&implementation.see_also)?,
+            },
+        ))
+    }
+
+    fn admit_callable<'a>(
+        catalog: &'a FnoCatalog,
+        iri: &str,
+        storage: &BuildStorage<'_, '_, '_>,
+    ) -> Result<CallableBinding<'a>, LoadError> {
         let fno_error = |detail: String| LoadError::InvalidFnoBinding {
             subject: iri.to_owned(),
             predicate: None,
             detail,
             at: None,
         };
-        let mappings: Vec<usize> = catalog
-            .as_input()
-            .mappings
-            .iter()
-            .enumerate()
-            .filter(|(_, mapping)| mapping.function == iri)
-            .map(|(at, _)| at)
-            .collect();
-        let [mapping] = mappings[..] else {
+        let mut found = 0;
+        let mut mapping = 0;
+        let mut progress = Work::new(storage.governor);
+        for (at, row) in catalog.as_input().mappings.iter().enumerate() {
+            storage.charge(1)?;
+            if compare_bytes(row.function.as_bytes(), iri.as_bytes(), &mut progress)
+                .map_err(stop)?
+                .is_eq()
+            {
+                mapping = at;
+                found += 1;
+            }
+        }
+        if found != 1 {
             return Err(fno_error(format!(
-                "a tool needs exactly one fno:Mapping, found {}",
-                mappings.len()
+                "a tool needs exactly one fno:Mapping, found {found}"
             )));
-        };
-        let binding =
-            CallableBinding::admit(catalog, mapping, governor).map_err(|error| match error {
+        }
+        CallableBinding::admit(catalog, mapping, &mut storage.governor.borrow_mut()).map_err(
+            |error| match error {
                 crate::BindingError::Resource(reason) => stop(reason),
                 other => fno_error(other.to_string()),
-            })?;
-        let input_shape = self.node_of(node, "inputShape")?;
-        let output_shape = self.node_of(node, "outputShape")?;
-        let input_paths = self.shape_paths(&input_shape, locations, governor)?;
-        let output_paths = self.shape_paths(&output_shape, locations, governor)?;
-        let mut parameters = Vec::new();
-        let mut used = BTreeSet::new();
-        for parameter in binding.parameters() {
-            work(governor, 1)?;
-            // INVARIANT: `CallableBinding::admit` refuses a parameter without a predicate.
-            let predicate = parameter
-                .parameter
-                .predicate
-                .clone()
-                .expect("admitted predicate");
-            let shape = Self::path_shape(&input_shape, &input_paths, &predicate)?;
-            used.insert(predicate.clone());
-            let hint = self.build_hint(&shape, &predicate, consumed, governor)?;
-            parameters.push(ToolParameter {
-                iri: parameter.parameter.iri.clone(),
-                predicate,
-                datatype: parameter.parameter.r#type.clone(),
-                required: parameter.parameter.required,
-                implementation_property: parameter.mapping.implementation_property.clone(),
-                hint,
-            });
-        }
-        if let Some((extra, _)) = input_paths.iter().find(|(path, _)| !used.contains(*path)) {
-            return Err(LoadError::InvalidShape {
-                subject: show(&input_shape),
-                predicate: extra.clone(),
-                at: None,
-                violation: Violation::Unresolved,
-            });
-        }
-        let returned = binding.output();
-        // INVARIANT: `CallableBinding::admit` refuses an output without a predicate.
-        let output_predicate = returned
-            .output
-            .predicate
-            .clone()
-            .expect("admitted predicate");
-        Self::path_shape(&output_shape, &output_paths, &output_predicate)?;
-        if let Some((extra, _)) = output_paths
-            .iter()
-            .find(|(path, _)| **path != output_predicate)
-        {
-            return Err(LoadError::InvalidShape {
-                subject: show(&output_shape),
-                predicate: extra.clone(),
-                at: None,
-                violation: Violation::Unresolved,
-            });
-        }
-        let implementation = binding.implementation();
-        Ok((
-            parameters,
-            ToolOutput {
-                iri: returned.output.iri.clone(),
-                predicate: output_predicate,
-                datatype: returned.output.r#type.clone(),
-                implementation_property: returned.mapping.implementation_property.clone(),
             },
-            ToolImplementation {
-                iri: implementation.iri.clone(),
-                format: implementation.format.clone(),
-                see_also: implementation.see_also.clone(),
-            },
-        ))
+        )
     }
 
-    /// `sh:path` IRI -> property shapes of a node shape, refusing anything else.
-    fn shape_paths<V: DatasetView<Id = TermId>>(
-        &self,
-        shape: &TermValue,
+    /// Index simple paths in lexical order, preserving the graph nodes as borrows.
+    fn shape_paths<'d, V: DatasetView<Id = TermId>>(
+        &'d self,
+        nodes: &Nodes<'_>,
+        shape: Node<'_>,
         locations: &Locations<'_, V>,
-        governor: &mut Governor,
-    ) -> Result<BTreeMap<String, Vec<TermValue>>, LoadError> {
-        if !self.has_type(shape, SH_NODE_SHAPE) {
+        storage: &mut BuildStorage<'_, '_, '_>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<Vec<ShapePath<'d>>, LoadError> {
+        if !self.has_type_id(nodes, shape.id, SH_NODE_SHAPE, progress)? {
             return Err(LoadError::InvalidShape {
-                subject: show(shape),
+                subject: show(shape.term),
                 predicate: RDF_TYPE.to_owned(),
                 at: None,
                 violation: Violation::Unresolved,
             });
         }
-        let mut paths: BTreeMap<String, Vec<TermValue>> = BTreeMap::new();
-        for property in self.objects(shape, SH_PROPERTY) {
-            let [path] = self.objects(property, SH_PATH)[..] else {
+        let mut paths = Vec::new();
+        for &index in nodes.rows(shape.id) {
+            let row = &self.rows[index];
+            if !matches_predicate(row, SH_PROPERTY, progress)? {
+                continue;
+            }
+            let property = Node::object(row);
+            let mut path = None;
+            for &index in nodes.rows(property.id) {
+                let row = &self.rows[index];
+                if matches_predicate(row, SH_PATH, progress)? && path.replace(row).is_some() {
+                    path = None;
+                    break;
+                }
+            }
+            let Some(path) = path else {
                 return Err(LoadError::InvalidShape {
-                    subject: show(property),
+                    subject: show(property.term),
                     predicate: SH_PATH.to_owned(),
                     at: None,
                     violation: Violation::Missing,
                 });
             };
-            let Some(path) = iri_of(path) else {
-                let at = locations.statement(property, SH_PATH, path, governor)?;
-                return Err(unsupported(property, SH_PATH, Construct::ComplexPath, at));
+            let Some(iri) = iri_of(&path.o) else {
+                let at = locations.statement(
+                    property.term,
+                    SH_PATH,
+                    &path.o,
+                    &mut storage.governor.borrow_mut(),
+                )?;
+                return Err(unsupported(
+                    property.term,
+                    SH_PATH,
+                    Construct::ComplexPath,
+                    at,
+                ));
             };
-            paths
-                .entry(path.to_owned())
-                .or_default()
-                .push(property.clone());
+            storage.push(
+                &mut paths,
+                ShapePath {
+                    iri,
+                    property,
+                    used: false,
+                },
+            )?;
         }
+        try_sort_unstable_by(&mut paths, |left, right| {
+            compare_bytes(left.iri.as_bytes(), right.iri.as_bytes(), progress).map_err(stop)
+        })?;
         Ok(paths)
     }
 
-    fn path_shape(
-        shape: &TermValue,
-        paths: &BTreeMap<String, Vec<TermValue>>,
+    fn path_shape<'d>(
+        shape: Node<'_>,
+        paths: &mut [ShapePath<'d>],
         predicate: &str,
-    ) -> Result<TermValue, LoadError> {
-        match paths.get(predicate).map(Vec::as_slice) {
-            Some([only]) => Ok(only.clone()),
-            Some(_) => Err(LoadError::InvalidShape {
-                subject: show(shape),
-                predicate: SH_PROPERTY.to_owned(),
-                at: None,
-                violation: Violation::Duplicate,
-            }),
-            None => Err(LoadError::InvalidShape {
-                subject: show(shape),
-                predicate: SH_PROPERTY.to_owned(),
-                at: None,
-                violation: Violation::Unresolved,
-            }),
-        }
+        progress: &mut Work<'_, '_>,
+    ) -> Result<Node<'d>, LoadError> {
+        let range = try_equal_range_by(paths, |path| {
+            compare_bytes(path.iri.as_bytes(), predicate.as_bytes(), progress).map_err(stop)
+        })?;
+        let violation = match &mut paths[range] {
+            [only] => {
+                only.used = true;
+                return Ok(only.property);
+            }
+            [] => Violation::Unresolved,
+            _ => Violation::Duplicate,
+        };
+        Err(LoadError::InvalidShape {
+            subject: show(shape.term),
+            predicate: SH_PROPERTY.to_owned(),
+            at: None,
+            violation,
+        })
     }
 
     fn build_hint(
         &self,
-        shape: &TermValue,
+        nodes: &Nodes<'_>,
+        shape: Node<'_>,
         predicate: &str,
-        consumed: &mut BTreeSet<usize>,
-        governor: &mut Governor,
+        consumed: &mut [bool],
+        storage: &mut BuildStorage<'_, '_, '_>,
     ) -> Result<Option<Hint>, LoadError> {
-        let path = TermValue::Iri(predicate.to_owned());
-        let matching: Vec<usize> = self
-            .reifiers
-            .iter()
-            .enumerate()
-            .filter(|(_, reifier)| &reifier.s == shape && reifier.p == SH_PATH && reifier.o == path)
-            .map(|(at, _)| at)
-            .collect();
-        let [at] = matching[..] else {
-            return match matching.get(1) {
-                Some(&second) => Err(LoadError::InvalidHint {
-                    subject: show(&self.reifiers[second].id),
+        let mut matched = None;
+        let mut progress = Work::new(storage.governor);
+        for (at, reifier) in self.reifiers.iter().enumerate() {
+            storage.charge(1)?;
+            if reifier.target_subject != shape.id || reifier.p != SH_PATH {
+                continue;
+            }
+            let Some(path) = iri_of(&reifier.o) else {
+                continue;
+            };
+            if !compare_bytes(path.as_bytes(), predicate.as_bytes(), &mut progress)
+                .map_err(stop)?
+                .is_eq()
+            {
+                continue;
+            }
+            if matched.replace(at).is_some() {
+                return Err(LoadError::InvalidHint {
+                    subject: show(&reifier.id),
                     predicate: SH_PATH.to_owned(),
                     at: None,
                     violation: Violation::Duplicate,
-                }),
-                None => Ok(None),
-            };
-        };
-        consumed.insert(at);
+                });
+            }
+        }
+        let Some(at) = matched else { return Ok(None) };
+        consumed[at] = true;
         let reifier = &self.reifiers[at];
         let id = &reifier.id;
-        let coercions = self.texts(id, "typeCoercion");
-        let converting = coercions.iter().filter(|name| *name != "none").count();
-        if converting != 0 && converting != coercions.len() {
+        let mut none = false;
+        let mut integer_to_string = false;
+        let mut string_to_integer = false;
+        let coercion_predicate = self.term("typeCoercion");
+        for &index in nodes.rows(reifier.term_id) {
+            let row = &self.rows[index];
+            if !matches_predicate(row, coercion_predicate, &mut progress)? {
+                continue;
+            }
+            match lexical_str(&row.o) {
+                "none" => none = true,
+                "integer-to-string" => integer_to_string = true,
+                "string-to-integer" => string_to_integer = true,
+                _ => unreachable!("validated type coercion"),
+            }
+        }
+        if none && (integer_to_string || string_to_integer) {
             return Err(LoadError::InvalidHint {
                 subject: show(id),
                 predicate: self.term("typeCoercion").to_owned(),
@@ -1436,35 +1745,52 @@ impl Doc<'_> {
                 },
             });
         }
+        let mut coercions = Vec::new();
+        for (enabled, coercion) in [
+            (integer_to_string, Coercion::IntegerToString),
+            (string_to_integer, Coercion::StringToInteger),
+        ] {
+            if enabled {
+                storage.push(&mut coercions, coercion)?;
+            }
+        }
         Ok(Some(Hint {
-            reifier: Self::reifier_reference(id, governor)?,
-            shape: show(shape),
-            max_edit_distance: self.number(id, "maxEditDistance"),
-            aliases: self.texts(id, "alias"),
-            coercions: coercions
-                .iter()
-                .filter_map(|name| match name.as_str() {
-                    "string-to-integer" => Some(Coercion::StringToInteger),
-                    "integer-to-string" => Some(Coercion::IntegerToString),
-                    _ => None,
-                })
-                .collect(),
-            case_fold: self.flag(id, "caseFold").unwrap_or(false),
-            unicode_fold: self.flag(id, "unicodeFold").unwrap_or(false),
-            taints: self.texts(id, "taint"),
-            session_binding: self.single(id, "sessionBinding").map(show),
+            reifier: Self::reifier_reference(id, storage)?,
+            shape: storage.lexical(shape.term)?,
+            max_edit_distance: self.typed_number(
+                nodes,
+                reifier.term_id,
+                "maxEditDistance",
+                &mut progress,
+            )?,
+            aliases: self.retained_texts(nodes, reifier.term_id, "alias", storage)?,
+            coercions,
+            case_fold: self
+                .typed_value(nodes, reifier.term_id, "caseFold", &mut progress)?
+                .is_some_and(boolean),
+            unicode_fold: self
+                .typed_value(nodes, reifier.term_id, "unicodeFold", &mut progress)?
+                .is_some_and(boolean),
+            taints: self.retained_texts(nodes, reifier.term_id, "taint", storage)?,
+            session_binding: self
+                .typed_value(nodes, reifier.term_id, "sessionBinding", &mut progress)?
+                .map(|value| storage.lexical(value))
+                .transpose()?,
         }))
     }
 
     /// Use the same scoped blank label as the retained Turtle graph.
-    fn reifier_reference(id: &TermValue, governor: &mut Governor) -> Result<String, LoadError> {
+    fn reifier_reference(
+        id: &TermValue,
+        storage: &mut BuildStorage<'_, '_, '_>,
+    ) -> Result<String, LoadError> {
         let Some((label, scope)) = id.as_blank() else {
-            return Ok(show(id));
+            return storage.lexical(id);
         };
-        let shared = RefCell::new(governor);
-        let (mut account, rejection) = ControlledStorage::owned(&shared);
+        let shared = storage.governor;
+        let (mut account, rejection) = ControlledStorage::owned(shared);
         let mut memory = Memory::new(&mut account);
-        let storage_error = |cause| control::storage_stop(&shared, &rejection, &cause);
+        let storage_error = |cause| control::storage_stop(shared, &rejection, &cause);
         let label = encode_blank_label_with_memory(
             label,
             scope,
@@ -1472,31 +1798,24 @@ impl Doc<'_> {
             &mut memory,
         )
         .map_err(storage_error)?;
-        work(
-            &mut shared.borrow_mut(),
-            u64::try_from(label.len())
-                .unwrap_or(u64::MAX)
-                .saturating_add(2),
-        )?;
-        // The published Tool value has its own storage. Only the temporary
-        // encoded label belongs to the scratch account.
-        Memory::new(&mut Resident)
-            .format(&format_args!("_:{label}"))
-            .map_err(storage_error)
+        storage.blank_label(&label)
     }
 }
 
 impl Doc<'_> {
     fn build_context<V: DatasetView<Id = TermId>>(
         &self,
-        node: &TermValue,
+        nodes: &Nodes<'_>,
+        node: Node<'_>,
         locations: &Locations<'_, V>,
-        governor: &mut Governor,
-    ) -> Result<ContextManagement, LoadError> {
+        storage: &mut BuildStorage<'_, '_, '_>,
+    ) -> Result<(ContextManagement, ScratchLease), LoadError> {
         let predicate = self.term("outputProjectionJq");
-        let row = self.rows_of(node).find(|row| row.p == predicate);
-        let projection = row.map_or_else(String::new, |row| lexical(&row.o));
-        let mask = match FieldMask::parse_governed(&projection, governor) {
+        let mut progress = Work::new(storage.governor);
+        let row = self.first_property(nodes, node.id, predicate, &mut progress)?;
+        let projection = row.map_or("", |row| lexical_str(&row.o));
+        let mask = FieldMask::parse_with_lease(projection, &mut storage.governor.borrow_mut());
+        let mask = match mask {
             Ok(mask) => mask,
             Err(purrassist_core::output::FieldMaskError::Resource(reason)) => {
                 return Err(stop(reason));
@@ -1504,139 +1823,45 @@ impl Doc<'_> {
             Err(error) => {
                 let at = match row {
                     Some(row) => locations
-                        .statement(&row.s, &row.p, &row.o, governor)?
+                        .statement(&row.s, &row.p, &row.o, &mut storage.governor.borrow_mut())?
                         .map(Box::new),
                     None => None,
                 };
                 return Err(LoadError::UnsupportedProjection {
-                    subject: show(node),
-                    blank_scope: node.as_blank().map(|(_, scope)| scope),
+                    subject: show(node.term),
+                    blank_scope: node.term.as_blank().map(|(_, scope)| scope),
                     predicate: predicate.to_owned(),
-                    projection,
+                    projection: projection.to_owned(),
                     error,
                     at,
                 });
             }
         };
-        let limit = OutputByteLimit::new(self.number(node, "maxOutputBytes"))
-            // INVARIANT: `validate_nodes` admitted a positive value.
-            .expect("validated positive byte limit");
-        let loading = if self.text(node, "loadingStrategy") == "always" {
+        let limit = OutputByteLimit::new(self.typed_number(
+            nodes,
+            node.id,
+            "maxOutputBytes",
+            &mut progress,
+        )?)
+        // INVARIANT: `validate_nodes` admitted a positive value.
+        .expect("validated positive byte limit");
+        let loading = if self
+            .typed_value(nodes, node.id, "loadingStrategy", &mut progress)?
+            .map(lexical_str)
+            == Some("always")
+        {
             LoadingStrategy::Always
         } else {
             LoadingStrategy::OnDemand
         };
-        Ok(ContextManagement::new(
-            mask,
-            limit,
-            self.number(node, "historyRetentionTurns"),
-            self.texts(node, "intentTags"),
-            loading,
+        let tags = self.retained_texts(nodes, node.id, "intentTags", storage)?;
+        let turns = self.typed_number(nodes, node.id, "historyRetentionTurns", &mut progress)?;
+        let (mask, lease) = mask;
+        Ok((
+            ContextManagement::new(mask, limit, turns, tags, loading),
+            lease,
         ))
     }
-
-    fn build_profile(
-        &self,
-        node: &TermValue,
-        stack: &mut Vec<TermValue>,
-        governor: &mut Governor,
-    ) -> Result<ToolExecutionProfile, LoadError> {
-        work(governor, 1)?;
-        if stack.contains(node) {
-            return Err(LoadError::InvalidExecutionProfile {
-                subject: show(node),
-                predicate: self.term("subprofile").to_owned(),
-                at: None,
-                violation: Violation::Cycle,
-            });
-        }
-        let depth = u32::try_from(stack.len()).unwrap_or(u32::MAX);
-        if depth >= governor.limits().depth {
-            return Err(stop(StopReason::BudgetExceeded(Resource::Depth)));
-        }
-        stack.push(node.clone());
-        let mut subprofiles = Vec::new();
-        let mut children: Vec<&TermValue> = self.objects_of(node, "subprofile");
-        children.sort();
-        for child in children {
-            subprofiles.push(self.build_profile(child, stack, governor)?);
-        }
-        stack.pop();
-        let mut rules = Vec::new();
-        for rule in self.objects_of(node, "rule") {
-            rules.push(self.build_rule(rule)?);
-        }
-        rules.sort_by(|left, right| left.iri.cmp(&right.iri));
-        let mut waivers = Vec::new();
-        for waiver in self.objects_of(node, "waiver") {
-            waivers.push(Waiver {
-                iri: show(waiver),
-                waived_rule: self
-                    .single(waiver, "waivedRule")
-                    .map_or_else(String::new, show),
-                reviewer: self.text(waiver, "reviewer"),
-                rationale: self.text(waiver, "rationale"),
-                source: self.text(waiver, "waiverSource"),
-            });
-        }
-        waivers.sort_by(|left, right| left.iri.cmp(&right.iri));
-        let mode = if self.text(node, "confinementMode") == "aa-exec" {
-            ExecutionMode::AaExec
-        } else {
-            ExecutionMode::ChangeHat
-        };
-        Ok(ToolExecutionProfile {
-            iri: show(node),
-            mode,
-            profile_name: self.text(node, "profileName"),
-            hat_name: self.text(node, "hatName"),
-            egress_allowed: self.flag(node, "egressAllowed").unwrap_or(false),
-            limits: ResourceLimits {
-                address_space_bytes: self.number(node, "addressSpaceBytes"),
-                file_size_bytes: self.number(node, "fileSizeBytes"),
-                processes: self.number(node, "processCount"),
-                cpu_seconds: self.number(node, "cpuSeconds"),
-                open_files: self.number(node, "openFileCount"),
-            },
-            rules,
-            subprofiles,
-            waivers,
-        })
-    }
-
-    fn build_rule(&self, node: &TermValue) -> Result<ProfileRule, LoadError> {
-        let mask = node_mask(self, node);
-        let mask = self.concrete(node, mask, || {
-            self.rows_of(node)
-                .filter_map(|row| self.bound(&row.p))
-                .map(|name| Role::specific_rule_domain(Role::domain(name)))
-                .fold(0, |all, domain| all | domain)
-        })?;
-        let class = Role::label_class(mask & Role::RULES);
-        let mut properties: Vec<(&'static str, String)> = self
-            .rows_of(node)
-            .filter_map(|row| self.bound(&row.p).map(|name| (name, lexical(&row.o))))
-            .collect();
-        properties.sort();
-        Ok(ProfileRule {
-            iri: show(node),
-            class,
-            properties,
-        })
-    }
-}
-
-/// Recompute a rule node's raw role mask from its types and predicates.
-fn node_mask(doc: &Doc<'_>, node: &TermValue) -> u16 {
-    let mut mask = Role::RULE_ANY;
-    for row in doc.rows_of(node) {
-        if row.p == RDF_TYPE
-            && let Some(class) = iri_of(&row.o).and_then(|iri| doc.bound(iri))
-        {
-            mask |= Role::of_class(class);
-        }
-    }
-    mask
 }
 
 #[cfg(test)]
