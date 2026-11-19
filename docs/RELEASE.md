@@ -181,12 +181,10 @@ same-version crates and build artifacts cannot satisfy them. The verified
 archives are retained in a unique ignored `package-archives` run directory
 printed by the command, after the complete source/license audit.
 
-This workflow **never publishes, attests, or creates a GitHub release**, and it
-holds no `id-token` permission and no registry credential. `verify.yml`'s
-`qualification` job gathers the same class of evidence (independent syntax
-oracles, coverage-guided/differential fuzzing, packaging, resource
-measurement against the documented limits) on main pushes, pull requests, and
-manual runs, so regressions are visible long before a tag is cut.
+The release qualification job uses read-only repository permissions and
+produces package and audit evidence. Verify
+runs the independent syntax oracles in its Linux native job, packaging in
+its release gate, and fuzz coverage in its fuzz job.
 
 ## Publishing (publish.yml): the only workflow that publishes crates
 
@@ -288,7 +286,7 @@ For the exact `main` commit to be tagged:
    `unreleased` until now) to the tagging date and merge that change; the
    resulting `main` commit is the one every following step names.
 2. Verify hosted CI (`verify.yml`) for that commit, and run the portability,
-   conformance, syntax-oracle, fuzz, performance, and package checks listed
+   conformance, syntax-oracle, fuzz, and package checks listed
    in `QUALIFICATION.md`. Every job must pass. The hosted `fuzz` job runs
    `make fuzz-hosted`: all ten targets at the smoke count, stopping at every
    probe panic and using the default 10 s probe timeout for every target,

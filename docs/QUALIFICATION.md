@@ -36,7 +36,6 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 | Coverage-guided/differential probes | `make fuzz` (see [Known limitations](#known-limitations)) | Ten targets (including `tool-call` and `tool-call-ref`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons. The default `make fuzz` stops on the #11 signatures, so the historical reports do not establish a passing default run for `tool-call-ref` |
 | Typed tool definitions (`purrassist-derive`) | `crates/derive/tests/derive.rs`, `crates/derive/tests/crate_override.rs`, the `compile_fail` doctests in `crates/derive/src/lib.rs` (each rejected construct with a passing twin) and the derive README doctest, `crates/derive/src/{model,write,parse}.rs` unit tests (including the default-number agreement test against core's JSON parser), `crates/purrassist/tests/derive_facade.rs`, `crates/host/tests/derive_facade.rs`, core `tool_call::derive_support` unit tests and doctests, and `scripts/check-repository.py`'s README derive-example drift check | Derived definitions equal hand-built ones; recovery through `hermes.v1` and `qwen3-coder-xml.v1` converts to the struct with exact `FromNodeError` pointers; single-pass member classification (duplicate vs. missing vs. unknown); defaults, naming, `extra`, hygiene against shadowed names, recursion and every rejected input; nested undeclared members dropped with a recorded loss unless the nested struct declares `unknown`; `f32` and `Box<T>` fields; the `#[tool(crate = ..)]` override; the `__DERIVE_ABI_<major>_<minor>` marker; facade derives work with no direct core dependency; the crate has no dependencies (`make hygiene` audit) |
 | Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone; see [Known limitations](#known-limitations)) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking. The probe checks for panics, budget overruns, mutating-guess guards and span invariants, but the default `make fuzz` stops on the #11 signatures and neither tool-call target has a recorded 10,000-mutation baseline; see [FUZZING.md](FUZZING.md) |
-| Resource/performance observations | `make resources`, resource-limit checker | Latency, real allocations, heap/RSS, artifact hashes, cache-disabled cold build |
 | Structural helper detector | `make helper-test`, `make helper-census`, `make helper-check` | syn-based normalized body/shim/constant/table census, strict ledger validity and exact group enforcement; repository tooling only |
 | Local release artifacts | `make package` | Six Cargo-verified archives in dependency order; source identity and registered notice audit |
 
@@ -183,10 +182,9 @@ regressions as well as the independent comparison.
 
 [RESOURCES.md](RESOURCES.md) distinguishes accounting from measured allocations,
 requested heap from RSS, whole-process time from per-operation latency, and
-cache-disabled cold build cost from warm compilation. Reports contain raw
-measured observations and executable limits. Hygiene validates the committed
-report schema; hosted qualification regenerates measurements and applies limits
-to that fresh report. Results are machine-specific observations.
+cache-disabled cold build cost from warm compilation. Use `make resources`
+to collect diagnostic measurements on a comparable host. Hygiene validates
+the committed report schema. Results are machine-specific observations.
 
 ## Helper census contract
 
@@ -241,8 +239,6 @@ make corpus
 make syntax-oracles
 make wasm-test
 make fuzz-hosted
-make resources
-python3 scripts/check-resource-limits.py .cache/resource-report.json
 make package
 RUSTUP_TOOLCHAIN=1.98.0 make release-gate
 ```
