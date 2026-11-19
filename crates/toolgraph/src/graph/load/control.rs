@@ -17,7 +17,7 @@ use purrassist_core::{
     Governor, ScratchMeter, StopReason,
     contract::{Resource, saturating_size},
 };
-use purrdf_core::{QuadIds, TermId, TermRef, dataset_view::DatasetView};
+use purrdf_core::{BlankScope, QuadIds, TermId, TermRef, dataset_view::DatasetView};
 use purrdf_lex::{
     allocation::{Admission, OwnedAdmission, StorageError},
     control::{ControlledError, Progress},
@@ -310,6 +310,27 @@ pub(super) fn locate<V: DatasetView<Id = TermId>>(
     source: &BorrowedSource<'_>,
     governor: &mut Governor,
 ) -> Result<(), LoadError> {
+    if let LoadError::UnsupportedProjection {
+        subject,
+        blank_scope,
+        predicate,
+        at,
+        ..
+    } = error
+    {
+        // The context role admits exactly one projection predicate.
+        *at = statement_extent(
+            view,
+            source,
+            subject,
+            *blank_scope,
+            predicate,
+            None,
+            governor,
+        )?
+        .map(Box::new);
+        return Ok(());
+    }
     let (subject, predicate, term, at) = match error {
         LoadError::UnknownTerm {
             subject,
@@ -332,21 +353,33 @@ pub(super) fn locate<V: DatasetView<Id = TermId>>(
         }
         _ => return Ok(()),
     };
-    *at = find_statement(source, governor, |_, [s, p, o], graph, governor| {
+    *at = statement_extent(view, source, subject, None, predicate, term, governor)?;
+    Ok(())
+}
+
+fn statement_extent<V: DatasetView<Id = TermId>>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    subject: &str,
+    blank_scope: Option<BlankScope>,
+    predicate: &str,
+    term: Option<&str>,
+    governor: &mut Governor,
+) -> Result<Option<SourceExtent>, LoadError> {
+    find_statement(source, governor, |_, [s, p, o], graph, governor| {
         if graph.is_some()
-            || !spells(view, source, s, subject, governor)?
-            || !spells(view, source, p, predicate, governor)?
+            || !spells(view, source, s, subject, blank_scope, governor)?
+            || !spells(view, source, p, predicate, None, governor)?
         {
             return Ok(false);
         }
         Ok(match term {
             Some(wanted) if wanted != subject && wanted != predicate => {
-                spells(view, source, o, wanted, governor)?
+                spells(view, source, o, wanted, None, governor)?
             }
             _ => true,
         })
-    })?;
-    Ok(())
+    })
 }
 
 /// Locate the exact refused RDF statement, including its graph and native layer.
@@ -391,6 +424,7 @@ fn spells<V: DatasetView<Id = TermId>>(
     source: &BorrowedSource<'_>,
     origin: SourceOriginId,
     wanted: &str,
+    blank_scope: Option<BlankScope>,
     governor: &mut Governor,
 ) -> Result<bool, LoadError> {
     let Some(id) = term_id(source, origin, governor)? else {
@@ -398,11 +432,12 @@ fn spells<V: DatasetView<Id = TermId>>(
     };
     view.with_term(id, |term| match term {
         TermRef::Iri(iri) => matches_text(iri, wanted, governor),
-        TermRef::Blank { label, .. } => {
+        TermRef::Blank { label, scope } => {
             let Some(wanted) = wanted.strip_prefix("_:") else {
                 return Ok(false);
             };
-            matches_text(label, wanted, governor)
+            Ok(blank_scope.is_none_or(|wanted| scope == wanted)
+                && matches_text(label, wanted, governor)?)
         }
         TermRef::Literal { lexical, .. } => {
             work(

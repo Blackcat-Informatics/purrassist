@@ -1343,8 +1343,11 @@ impl Doc<'_> {
                 purrassist_core::output::FieldMaskError::Resource(reason) => stop(reason),
                 error => LoadError::UnsupportedProjection {
                     subject: show(node),
-                    projection: projection.clone(),
+                    blank_scope: node.as_blank().map(|(_, scope)| scope),
+                    predicate: self.term("outputProjectionJq").to_owned(),
+                    projection,
                     error,
+                    at: None,
                 },
             })?;
         let limit = OutputByteLimit::new(self.number(node, "maxOutputBytes"))

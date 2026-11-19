@@ -145,8 +145,9 @@ impl fmt::Display for SourceExtent {
 /// Why a tool graph was refused.
 ///
 /// Every variant names its subject; predicate-level variants also name the
-/// predicate. [`UnknownTerm`](Self::UnknownTerm) and
-/// [`UnsupportedConstruct`](Self::UnsupportedConstruct) also carry the exact
+/// predicate. [`UnknownTerm`](Self::UnknownTerm),
+/// [`UnsupportedConstruct`](Self::UnsupportedConstruct), and
+/// [`UnsupportedProjection`](Self::UnsupportedProjection) also carry the exact
 /// [`SourceExtent`] of the statement they refuse when the governed parser
 /// retained it; variants that name a node rather than one statement do not (see
 /// the stated limits in the `graph` module documentation).
@@ -227,10 +228,16 @@ pub enum LoadError {
     UnsupportedProjection {
         /// The context node.
         subject: String,
-        /// The projection text, verbatim.
+        /// The native scope when the context is a blank node.
+        blank_scope: Option<purrdf_core::BlankScope>,
+        /// The bound RDF predicate for the context's projection.
+        predicate: String,
+        /// The decoded projection text passed to the field-mask parser.
         projection: String,
-        /// The field-mask parser's refusal with its byte offset.
+        /// The field-mask parser's refusal with its byte offset in `projection`.
         error: FieldMaskError,
+        /// The extent of the projection predicate and value in the RDF source.
+        at: Option<Box<SourceExtent>>,
     },
     /// The caller's budget (work, input bytes or scratch storage) stopped the load,
     /// in this crate's accounting or in the governed parser or `FnO` reader.
@@ -298,12 +305,18 @@ impl fmt::Display for LoadError {
             }
             Self::UnsupportedProjection {
                 subject,
+                predicate,
                 projection,
                 error,
-            } => write!(
-                f,
-                "{subject}: projection {projection:?} is not a field mask: {error}"
-            ),
+                at,
+                ..
+            } => {
+                write!(
+                    f,
+                    "{subject} {predicate}: projection {projection:?} is not a field mask: {error}"
+                )?;
+                at.iter().try_for_each(|at| write!(f, " ({at})"))
+            }
             Self::Exhausted(reason) => write!(f, "tool graph load stopped: {reason:?}"),
             Self::Cancelled => f.write_str("tool graph load cancelled"),
         }
