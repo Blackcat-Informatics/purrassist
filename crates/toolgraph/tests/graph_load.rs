@@ -642,6 +642,134 @@ fn a_projection_refusal_locates_the_correct_scoped_blank_context() {
     );
 }
 
+/// Shared subprofiles expand at each edge. Only an edge to an ancestor is a cycle.
+#[test]
+fn shared_profiles_preserve_structure_depth_and_cycle_precedence() {
+    let mut source = edited(
+        "pa:egressAllowed true ;",
+        "pa:egressAllowed true ; pa:subprofile ex:SharedProfile, ex:FileProfile ;",
+    );
+    source.push_str(
+        r#"
+ex:FileProfile pa:subprofile ex:SharedProfile .
+ex:SharedProfile a pa:ExecutionProfile ;
+    pa:confinementMode "aa-exec" ; pa:profileName "shared" ; pa:hatName "shared" ;
+    pa:egressAllowed false ; pa:addressSpaceBytes 1 ; pa:fileSizeBytes 1 ;
+    pa:processCount 1 ; pa:cpuSeconds 1 ; pa:openFileCount 1 .
+"#,
+    );
+    let vocabulary = vocabulary();
+    let load = |source: &str, depth| {
+        ToolGraph::load(
+            source.as_bytes(),
+            "text/turtle",
+            None,
+            &vocabulary,
+            &mut Governor::new(Budget {
+                depth,
+                ..WORKED_BUDGET
+            }),
+        )
+    };
+    let graph = load(&source, 3).expect("the longest branch has three profiles");
+    let query = graph.tool("query_customer_orders").unwrap();
+    let [file, shared] = query.execution_profile.subprofiles.as_slice() else {
+        panic!("the root keeps both children");
+    };
+    assert!(file.iri.ends_with("/FileProfile"));
+    assert!(shared.iri.ends_with("/SharedProfile"));
+    assert_eq!(file.subprofiles.as_slice(), std::slice::from_ref(shared));
+
+    assert_eq!(
+        load(&source, 2).unwrap_err(),
+        LoadError::Exhausted(StopReason::BudgetExceeded(Resource::Depth))
+    );
+
+    source.push_str(
+        "ex:SharedProfile pa:subprofile ex:DatabaseProfile .
+",
+    );
+    // The loader builds edit_file first, so FileProfile is its active root.
+    let cycle = load(&source, 3).unwrap_err();
+    assert!(
+        matches!(
+            &cycle,
+            LoadError::InvalidExecutionProfile {
+                subject,
+                violation: Violation::Cycle,
+                ..
+            } if subject == &format!("{EX}FileProfile")
+        ),
+        "{cycle:?}"
+    );
+}
+
+/// Typed tools keep their scratch reservation while borrowed from the graph.
+#[test]
+fn a_graph_releases_typed_storage_after_drop_or_late_refusal() {
+    let mut governor = Governor::new(WORKED_BUDGET);
+    let meter = governor.scratch_meter();
+    let baseline = 64;
+    meter.charge(baseline).unwrap();
+    let vocabulary = vocabulary();
+    let graph = ToolGraph::load(
+        worked().as_bytes(),
+        "text/turtle",
+        None,
+        &vocabulary,
+        &mut governor,
+    )
+    .expect("worked graph");
+    assert_eq!(graph.tools().len(), 2);
+    assert!(meter.live() > baseline);
+    let completed_work = governor.usage().work;
+    drop(graph);
+    assert_eq!(meter.live(), baseline);
+
+    let duplicate = edited(
+        r#"pa:name "query_customer_orders""#,
+        r#"pa:name "edit_file""#,
+    );
+    assert!(matches!(
+        ToolGraph::load(
+            duplicate.as_bytes(),
+            "text/turtle",
+            None,
+            &vocabulary,
+            &mut governor,
+        ),
+        Err(LoadError::InvalidShape {
+            predicate,
+            violation: Violation::Duplicate,
+            ..
+        }) if predicate == format!("{NAMESPACE}name")
+    ));
+    assert_eq!(meter.live(), baseline);
+    meter.release(baseline).unwrap();
+
+    // The final charged work belongs to typing. A one-unit reduction refuses
+    // after typed values have already been constructed.
+    let mut limited = Governor::new(Budget {
+        work: completed_work - 1,
+        ..WORKED_BUDGET
+    });
+    let meter = limited.scratch_meter();
+    meter.charge(baseline).unwrap();
+    assert_eq!(
+        ToolGraph::load(
+            worked().as_bytes(),
+            "text/turtle",
+            None,
+            &vocabulary,
+            &mut limited,
+        )
+        .unwrap_err(),
+        LoadError::Exhausted(StopReason::BudgetExceeded(Resource::Work))
+    );
+    assert_eq!(meter.live(), baseline);
+    meter.release(baseline).unwrap();
+}
+
 // Rationale: budget exhaustion and cancellation are explicit errors, never a partial
 // graph; the same input loads under the Standard budget.
 #[test]
@@ -1020,6 +1148,28 @@ fn a_function_without_a_tool_is_refused_as_a_function_without_a_tool() {
             Construct::FunctionWithoutTool
         )
     );
+}
+
+/// A required path must bind exactly one property shape, even when both use the same IRI.
+#[test]
+fn two_property_shapes_for_the_same_callable_path_are_refused() {
+    let mut source = worked();
+    source.push_str(
+        r"
+ex:QueryInput sh:property ex:duplicateCustomerShape .
+ex:duplicateCustomerShape a sh:PropertyShape ; sh:path ex:customer_id .
+",
+    );
+    assert!(matches!(
+        load(&source).unwrap_err(),
+        LoadError::InvalidShape {
+            subject,
+            predicate,
+            violation: Violation::Duplicate,
+            ..
+        } if subject == format!("{EX}QueryInput")
+            && predicate == "http://www.w3.org/ns/shacl#property"
+    ));
 }
 
 // Rationale: only a plain predicate IRI is a parameter path; a `sh:path` that is a

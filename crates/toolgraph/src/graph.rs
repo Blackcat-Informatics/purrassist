@@ -23,12 +23,16 @@
 //! across charges. The loader also charges work per statement and validated
 //! property. The temporary dataset stays charged through catalog reading.
 //! The rows and classification tables stay charged through validation and typing.
+//! Typed construction reads those classified native identities. Temporary
+//! indexes and profile traversal frames release their reservations at the end
+//! of construction. The graph keeps the typed payload, field masks and catalog
+//! charged until their owners are dropped.
 //!
 //! An exhausted work or scratch budget the governor recorded is
 //! [`LoadError::Exhausted`] and a cancellation is [`LoadError::Cancelled`],
 //! in any governed stage. Both outcomes withhold the graph. Native allocation
 //! and layout failures preserve the cause as [`LoadError::Parse`] with code
-//! `storage` during parsing, classification or catalog reading, and as
+//! `storage` during parsing, classification, catalog reading or typing, and as
 //! [`LoadError::InvalidFnoBinding`] during temporary view construction. A
 //! rejected scratch release is [`LoadError::Parse`] with code `storage-accounting`.
 //! The catalog's own storage stays charged while the [`ToolGraph`] holds it.
@@ -38,10 +42,9 @@
 //! * Only Turtle and `TriG` load: `PurRDF` 4.0.2 governs and retains source
 //!   occurrences for those formats alone, so another media type is a
 //!   [`LoadError::Parse`] with code `unsupported-format`.
-//! * Typed tool construction still allocates outside the scratch account.
-//!   The published [`RdfDataset`] copy returned by
-//!   [`ToolGraph::dataset`] is also outside that account. `PurRDF` exposes a
-//!   borrowed view of the retained parse.
+//! * The published [`RdfDataset`] copy returned by [`ToolGraph::dataset`] is
+//!   outside the scratch account. `PurRDF` exposes a borrowed view of the
+//!   retained parse.
 //! * For a diagnostic that identifies a specific row or reifier binding,
 //!   [`SourceExtent`] names the first written occurrence of that RDF statement.
 //!   Matching preserves blank scopes and literal facets. Refusals that identify
@@ -103,7 +106,7 @@ use crate::Vocabulary;
 /// ```
 #[derive(Debug)]
 pub struct ToolGraph {
-    tools: Vec<Tool>,
+    tools: load::RetainedTools,
     dataset: Arc<RdfDataset>,
     catalog: Option<FnoCatalog>,
 }
@@ -114,7 +117,7 @@ impl ToolGraph {
     /// `media_type` selects the `PurRDF` text codec (`text/turtle` or
     /// `application/trig`) and `base` is the optional document base IRI.
     /// `governor` supplies the parser, temporary `FnO` view, catalog reader, and
-    /// loader passes with their work and cancellation authority.
+    /// loader passes with their work, depth, storage and cancellation authority.
     ///
     /// # Errors
     /// Returns [`LoadError`] for the first parse failure (including a media type
@@ -137,13 +140,13 @@ impl ToolGraph {
     /// The loaded tools in IRI order.
     #[must_use]
     pub fn tools(&self) -> &[Tool] {
-        &self.tools
+        self.tools.as_slice()
     }
 
     /// Find a tool by its unique `name` property.
     #[must_use]
     pub fn tool(&self, name: &str) -> Option<&Tool> {
-        self.tools.iter().find(|tool| tool.name == name)
+        self.tools().iter().find(|tool| tool.name == name)
     }
 
     /// The dataset re-interned from the parse (a copy, not the parser's own

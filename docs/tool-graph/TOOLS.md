@@ -41,9 +41,15 @@ predicate on the wrong role and a value of the wrong kind or range. Refusals
 that identify only a node name the subject and predicate where available.
 Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
-code is `unsupported-format` for every such media type. Role classification,
-typed tool construction, and the owned `RdfDataset` copy returned by
-`ToolGraph::dataset` still allocate outside the scratch account.
+code is `unsupported-format` for every such media type. The owned `RdfDataset` copy returned by `ToolGraph::dataset` allocates outside
+the scratch account.
+Typed tool construction uses the classified RDF identities and admits the
+temporary path and tool indexes, profile traversal, field masks, and retained
+typed values against the caller's budget. Temporary storage is refunded when
+construction ends. The graph retains the typed values and their reservations
+until drop. The profile depth limit counts the root as one. Callers who raise
+that limit supply enough native stack to operate on or drop a recursive
+profile value.
 Only default-graph statements load. A statement in a named graph is refused as
 `UnsupportedConstruct` with the named-graph construct, and so is a reifier in a
 named graph. A default-graph reifier loads only as a parameter-path reifier: it

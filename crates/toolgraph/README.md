@@ -24,35 +24,19 @@ violation, unowned statement and unsupported construct is a `LoadError` naming
 subject and predicate. `outputProjectionJq` must be a field mask or the load
 fails with `LoadError::UnsupportedProjection`. The load runs through the governed
 `PurRDF` entry points (`parse_dataset_controlled`, `from_dataset_with_control`):
-the caller's `Governor` bounds parsing and catalog construction, and
-statement-level refusals (`UnknownTerm`, `UnsupportedConstruct`) carry the exact
-`SourceExtent`. The loader charges one work unit per 64 native units. Measured with a governor's
-`usage()` after a load: On the worked example (9,518 bytes) a load charges 33,191 work units (3.49 per
-source byte) and peaks at 569,829 scratch bytes (59.9 per source byte). On the
-bulk document (the worked example body repeated 114 times under distinct
-prefixes, names and blank-node labels; 1,049,171 bytes) it charges 4,084,594 work
-units (3.89 per source byte) and peaks at 66,933,394 scratch bytes (63.8 per
-source byte). The sizes scale with document shape. Each level has the same
-scratch limit (64 MiB), so whichever of work and scratch is reached first limits
-the admitted size, and a larger document is the explicit `Exhausted` outcome.
+the caller's `Governor` bounds parsing, catalog construction, and vocabulary
+property validation and typed construction. Both stages use admitted native RDF rows.
+Statement-level refusals carry the exact `SourceExtent` when they identify a
+specific statement. The loader charges one work unit per 64 native units.
+Use `Governor::usage()` to inspect charged work and peak scratch for a
+particular input. The admitted input size depends on the graph's shape and
+the caller's budget.
 
-| Effort | Work budget | Admitted Turtle size (measured) | Binding resource |
-| --- | --- | --- | --- |
-| `Exact` | 100,000 | 27,648 bytes (about 27.6 KB) | work |
-| `Quick` | 250,000 | 63,724 bytes (about 63.7 KB) | work |
-| `Standard` | 1,000,000 | 265,429 bytes (about 265.4 KB) | work |
-| `Deep` | 10,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
-| `Maximum` | 50,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
-
-The worked example loads at every level; `Deep` and `Maximum` admit the same size
-because the scratch limit is shared. The method is in `docs/tool-graph/TOOLS.md`.
-
-Remaining limits (the owned rows, their index, the `FnO` view dataset and
-the dataset copy sit outside the storage account; node-level refusals carry no
-extent; only Turtle and `TriG`) are listed in the `graph` module documentation. The Rust shape table is
-not equivalent to the shapes document; its differences and the unchecked
-requirements are listed in `docs/tool-graph/TOOLS.md` and remain #33 work. See
-the `graph` module documentation. Authorization and execution remain specified in
+Temporary typed-construction indexes refund their scratch storage when loading
+finishes. The loaded graph retains its typed storage reservation until drop.
+The published RDF dataset copy allocates outside the scratch account. See `docs/tool-graph/TOOLS.md` for the differences between
+the Rust shape table and SHACL. Full SHACL admission remains #33 work.
+Authorization and execution remain specified in
 the repository's tool-graph documents; this crate does not yet provide them.
 `ToolGraph::tool_set` is implemented: it builds the core `ToolSet` through the governed MCP adapter.
 The MCP Extended manifest codec described next is implemented.

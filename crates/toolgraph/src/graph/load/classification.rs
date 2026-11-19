@@ -13,8 +13,8 @@ use purrdf_lex::{
 
 use super::{
     Construct, ControlledStorage, DCTERMS_IS_PART_OF, Doc, FNO, FNO_EXPECTS, FNO_RETURNS, FNOM,
-    LoadError, Locations, RDF_FIRST, RDF_REST, RDF_TYPE, Role, Row, SH_NODE_SHAPE, SH_PROPERTY,
-    SH_PROPERTY_SHAPE, Shared, Work, control, iri_of, stop, work,
+    LoadError, Locations, Node, RDF_FIRST, RDF_REST, RDF_TYPE, Role, Row, SH_NODE_SHAPE,
+    SH_PROPERTY, SH_PROPERTY_SHAPE, Shared, Work, control, iri_of, stop, work,
 };
 
 const FNO_SUBJECT: u8 = 1;
@@ -52,7 +52,7 @@ impl<'doc> NodeState<'doc> {
 /// Classifications stay in the same admitted account through every consumer.
 pub(super) struct Nodes<'doc> {
     by_id: Vec<NodeState<'doc>>,
-    roles: Vec<(&'doc TermValue, u16)>,
+    roles: Vec<(Node<'doc>, u16)>,
     pub(super) has_fno: bool,
 }
 
@@ -63,8 +63,12 @@ impl<'doc> Nodes<'doc> {
         })
     }
 
-    pub(super) fn roles(&self) -> impl Iterator<Item = (&'doc TermValue, u16)> + '_ {
+    pub(super) fn roles(&self) -> impl Iterator<Item = (Node<'doc>, u16)> + '_ {
         self.roles.iter().copied()
+    }
+
+    pub(super) fn rows(&self, id: TermId) -> &'doc [usize] {
+        self.by_id[id.index()].rows
     }
 
     pub(super) fn role_of(&self, id: TermId) -> Option<u16> {
@@ -307,23 +311,27 @@ fn collect_roles<S: Admission>(
     memory: &mut Memory<'_, S>,
     storage_error: impl Fn(StorageError) -> LoadError,
 ) -> Result<(), LoadError> {
-    for node in &nodes.by_id {
+    for (index, node) in nodes.by_id.iter().enumerate() {
         work(&mut governor.borrow_mut(), 1)?;
         if let (Some(term), Some(role)) = (node.term, node.role()) {
+            // INVARIANT: the node table has the retained dataset's checked term count.
+            let index = u32::try_from(index).expect("index fits in a retained term table");
+            let id = TermId::from_index(index).expect("index addresses a retained term");
             memory
-                .push(&mut nodes.roles, (term, role))
+                .push(&mut nodes.roles, (Node { id, term }, role))
                 .map_err(&storage_error)?;
         }
     }
     // Native term IDs follow acquisition order. Diagnostics use RDF value order.
     let mut progress = Work::new(governor);
     try_sort_unstable_by(&mut nodes.roles, |(left, _), (right, _)| {
-        left.try_cmp_with_control(right, memory, &mut |units| {
-            progress.charge(units).map_err(stop)
-        })
-        .map_err(|failure| match failure {
-            ControlledError::Native(cause) => storage_error(cause),
-            ControlledError::Control(error) => error,
-        })
+        left.term
+            .try_cmp_with_control(right.term, memory, &mut |units| {
+                progress.charge(units).map_err(stop)
+            })
+            .map_err(|failure| match failure {
+                ControlledError::Native(cause) => storage_error(cause),
+                ControlledError::Control(error) => error,
+            })
     })
 }
