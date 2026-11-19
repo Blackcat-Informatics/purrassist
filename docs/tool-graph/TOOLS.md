@@ -36,7 +36,9 @@ matching the refusal. An unsupported projection also preserves the field-mask
 parser's offset in the decoded string. An FnO refusal carries a statement
 extent when the reader identifies the exact refused row or return-list head.
 Missing facts and ambiguous field or list failures have no statement extent.
-Refusals that name a node identify the subject and predicate where available.
+Vocabulary role checks also locate specific rejected statements, including a
+predicate on the wrong role and a value of the wrong kind or range. Refusals
+that identify only a node name the subject and predicate where available.
 Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
 code is `unsupported-format` for every such media type. Role classification,
