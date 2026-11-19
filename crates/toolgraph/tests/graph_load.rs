@@ -624,12 +624,13 @@ fn an_empty_named_graph_is_refused_not_dropped() {
     };
     let source = worked();
     load(&source).expect("the unedited worked example loads as TriG");
-    let error = load(&format!("{source}\nGRAPH <urn:empty-graph> {{}}\n")).unwrap_err();
+    let source = format!("{source}\nGRAPH <urn:empty-graph> {{}}\n");
+    let error = load(&source).unwrap_err();
     let LoadError::UnsupportedConstruct {
         subject,
         predicate,
         construct,
-        ..
+        at: Some(at),
     } = error
     else {
         panic!("{error:?}");
@@ -638,6 +639,7 @@ fn an_empty_named_graph_is_refused_not_dropped() {
         (subject.as_str(), predicate.as_str(), construct),
         ("urn:empty-graph", "-", Construct::NamedGraph)
     );
+    assert_eq!(&source[at.start..at.end], "<urn:empty-graph>");
 }
 
 /// Unwrap an `UnsupportedConstruct` refusal into its subject, predicate and construct.
@@ -669,11 +671,20 @@ fn a_statement_in_a_named_graph_is_refused_as_a_named_graph() {
         )
     };
     load_trig(&worked()).expect("the unedited worked example loads as TriG");
-    let source = edited(
-        "ex:EditResult a rdfs:Class .",
-        "GRAPH <urn:named> { ex:EditResult a rdfs:Class . }",
+    let source = format!(
+        "{}\nGRAPH <urn:named> {{ ex:EditResult a rdfs:Class . }}\n",
+        worked()
     );
-    let (subject, predicate, construct) = unsupported_construct(load_trig(&source).unwrap_err());
+    let error = load_trig(&source).unwrap_err();
+    let LoadError::UnsupportedConstruct {
+        subject,
+        predicate,
+        construct,
+        at: Some(at),
+    } = error
+    else {
+        panic!("{error:?}");
+    };
     assert_eq!(
         (subject.as_str(), predicate.as_str(), construct),
         (
@@ -682,6 +693,68 @@ fn a_statement_in_a_named_graph_is_refused_as_a_named_graph() {
             Construct::NamedGraph
         )
     );
+    assert_eq!(&source[at.start..at.end], "a rdfs:Class");
+    assert_eq!(at.start, source.rfind("a rdfs:Class").unwrap());
+}
+
+#[test]
+fn a_named_graph_reifier_refusal_points_to_its_source_occurrence() {
+    let statement = "<< ex:EditResult rdfs:label \"x\" ~ ex:scopedReifier >>";
+    let source = format!("{}\nGRAPH <urn:named> {{ {statement} . }}\n", worked());
+    let error = ToolGraph::load(
+        source.as_bytes(),
+        "application/trig",
+        None,
+        &vocabulary(),
+        &mut Governor::new(WORKED_BUDGET),
+    )
+    .unwrap_err();
+    let LoadError::UnsupportedConstruct {
+        subject,
+        predicate,
+        construct: Construct::NamedGraph,
+        at: Some(at),
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, "https://example.org/tools/scopedReifier");
+    assert_eq!(predicate, "-");
+    assert_eq!(&source[at.start..at.end], statement);
+    assert_eq!(at.start, source.rfind(statement).unwrap());
+}
+
+#[test]
+fn a_named_graph_annotation_refusal_points_to_the_annotation() {
+    let vocabulary = vocabulary();
+    let annotation = "ex:scopedReifier pa:maxEditDistance 0";
+    let source = format!(
+        "{}\n{annotation} .\nGRAPH <urn:named> {{\n  \
+         << ex:EditResult rdfs:label \"x\" ~ ex:scopedReifier >> .\n  {annotation} .\n}}",
+        worked()
+    );
+    let error = ToolGraph::load(
+        source.as_bytes(),
+        "application/trig",
+        None,
+        &vocabulary,
+        &mut Governor::new(WORKED_BUDGET),
+    )
+    .unwrap_err();
+    let LoadError::UnsupportedConstruct {
+        subject,
+        predicate,
+        construct: Construct::NamedGraph,
+        at: Some(at),
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, "https://example.org/tools/scopedReifier");
+    assert_eq!(Some(predicate.as_str()), vocabulary.term("maxEditDistance"));
+    let spelling = "pa:maxEditDistance 0";
+    assert_eq!(&source[at.start..at.end], spelling);
+    assert_eq!(at.start, source.rfind(spelling).unwrap());
 }
 
 // Rationale: a reifier no tool parameter consumes and that is not a typed hint is

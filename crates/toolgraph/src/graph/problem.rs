@@ -97,11 +97,11 @@ impl fmt::Display for Construct {
     }
 }
 
-/// The exact extent of a statement in the source text.
+/// The exact extent of a statement or graph declaration in the source text.
 ///
 /// It spans the statement's predicate and object as written (or, for a term the
-/// grammar generates, the syntax that introduced it), so it points into the
-/// original input rather than at a rebuilt serialization.
+/// grammar generates, the syntax that introduced it). For an empty named graph
+/// it spans the written graph label. Offsets address the original input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SourceExtent {
