@@ -12,12 +12,14 @@ use std::convert::Infallible;
 
 use purrassist_core::{Governor, StopReason, contract::Resource, output::FieldMask};
 use purrdf_core::{
-    NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue, dataset_from_view,
+    NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
+    blank_label::{LabelAlphabet, encode_blank_label_with_memory},
+    dataset_from_view,
     dataset_view::DatasetView,
     fno::{FnoCatalog, FnoReadError, FnoReadFailure},
 };
 use purrdf_lex::{
-    allocation::{Admission, Memory, StorageError},
+    allocation::{Admission, Memory, Resident, StorageError},
     control::{ControlledError, Progress, compare_bytes},
     walk::try_sort_unstable_by,
 };
@@ -1270,7 +1272,7 @@ impl Doc<'_> {
                 .expect("admitted predicate");
             let shape = Self::path_shape(&input_shape, &input_paths, &predicate)?;
             used.insert(predicate.clone());
-            let hint = self.build_hint(&shape, &predicate, consumed)?;
+            let hint = self.build_hint(&shape, &predicate, consumed, governor)?;
             parameters.push(ToolParameter {
                 iri: parameter.parameter.iri.clone(),
                 predicate,
@@ -1385,6 +1387,7 @@ impl Doc<'_> {
         shape: &TermValue,
         predicate: &str,
         consumed: &mut BTreeSet<usize>,
+        governor: &mut Governor,
     ) -> Result<Option<Hint>, LoadError> {
         let path = TermValue::Iri(predicate.to_owned());
         let matching: Vec<usize> = self
@@ -1421,7 +1424,7 @@ impl Doc<'_> {
             });
         }
         Ok(Some(Hint {
-            reifier: show(id),
+            reifier: Self::reifier_reference(id, governor)?,
             shape: show(shape),
             max_edit_distance: self.number(id, "maxEditDistance"),
             aliases: self.texts(id, "alias"),
@@ -1438,6 +1441,35 @@ impl Doc<'_> {
             taints: self.texts(id, "taint"),
             session_binding: self.single(id, "sessionBinding").map(show),
         }))
+    }
+
+    /// Use the same scoped blank label as the retained Turtle graph.
+    fn reifier_reference(id: &TermValue, governor: &mut Governor) -> Result<String, LoadError> {
+        let Some((label, scope)) = id.as_blank() else {
+            return Ok(show(id));
+        };
+        let shared = RefCell::new(governor);
+        let (mut account, rejection) = ControlledStorage::owned(&shared);
+        let mut memory = Memory::new(&mut account);
+        let storage_error = |cause| control::storage_stop(&shared, &rejection, &cause);
+        let label = encode_blank_label_with_memory(
+            label,
+            scope,
+            LabelAlphabet::BlankNodeLabel,
+            &mut memory,
+        )
+        .map_err(storage_error)?;
+        work(
+            &mut shared.borrow_mut(),
+            u64::try_from(label.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(2),
+        )?;
+        // The published Tool value has its own storage. Only the temporary
+        // encoded label belongs to the scratch account.
+        Memory::new(&mut Resident)
+            .format(&format_args!("_:{label}"))
+            .map_err(storage_error)
     }
 }
 
