@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat",
+  "branch": "paudley/236-tool-call-recovery-openai-chat",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "ba61fe6d8c006b31f0b4934c7c03ea3bb5a1b96d",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/sync/20261119T023120-f1b06e0dea62466a9b951170b69f6095",
+  "conflicts": [
+    "crates/core/src/tool_call/mod.rs",
+    "docs/IMPLEMENTATION.md",
+    "docs/tool-calls/README.md"
+  ],
+  "status": "completed",
+  "base": "450a99dea43ae14e59f67739bf4237e782a5e962",
+  "merge_bases": [
+    "5d325d6660eb12df1bde0900fdf2f797f73e54eb"
+  ],
+  "merge_index": "e5aa5a862df911d756f82313587a5ecfa2a9a06d30d05b5a15113f662dc7590b",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/core/src/tool_call/mod.rs'\nRecorded preimage for 'docs/IMPLEMENTATION.md'\nRecorded preimage for 'docs/tool-calls/README.md'\n",
+  "candidate_tree": "da098bd952591d9ed9c7d6905098d0a1ed37c325",
+  "candidate_patch": "candidate-6e83a1a67a5b4cc1a9de14805cebc562.patch",
+  "stdout_log": "commit-6e83a1a67a5b4cc1a9de14805cebc562.stdout.log",
+  "stderr_log": "commit-6e83a1a67a5b4cc1a9de14805cebc562.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 0.8031503240003985,
+  "commit": "581ff7f04bb694f750a33dbedab3d9d862fa7181",
+  "tree": "da098bd952591d9ed9c7d6905098d0a1ed37c325",
+  "exit_code": 0
+}

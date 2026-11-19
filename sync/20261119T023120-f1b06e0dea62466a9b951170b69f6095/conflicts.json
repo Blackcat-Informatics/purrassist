@@ -1,0 +1,62 @@
+{
+  "crates/core/src/tool_call/mod.rs": [
+    {
+      "mode": "100644",
+      "oid": "6ad1e0f93c136e26ba6e45eb2a77acbe9d87775a",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "d5352dd093f22dbfccc2d63677665ec4fdebfad7",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "e34c4bf5e91c1701005f1398b309a7328ccb4cc3",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "docs/IMPLEMENTATION.md": [
+    {
+      "mode": "100644",
+      "oid": "6a0d6dec18e0b74e31d7be68539ffec6eb381e1f",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "a8a0e9d24f2f42f07dfd8baa544dce868b44da69",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "5b774bad507fd218f2341204f1b4a82125690442",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ],
+  "docs/tool-calls/README.md": [
+    {
+      "mode": "100644",
+      "oid": "1d163c6909d42d8649e874b94adb6e7d1af6f1bd",
+      "stage": 1,
+      "content": "inputs/2-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "3dcd47a9a8e69f7e13cb998fd7b6e42503f4b562",
+      "stage": 2,
+      "content": "inputs/2-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "ed9feaf4eaf240fcf1a9745a166226d589247910",
+      "stage": 3,
+      "content": "inputs/2-3.bin"
+    }
+  ]
+}

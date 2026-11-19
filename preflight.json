@@ -1,0 +1,171 @@
+{
+  "issue": 236,
+  "pr_number": 239,
+  "branch": "paudley/236-tool-call-recovery-openai-chat",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat",
+  "observed_at": "2026-11-19T04:04:35.568322+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "ci_fail",
+      "message": "CI state is fail"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Inspect saved failed-job excerpts"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "450a99dea43ae14e59f67739bf4237e782a5e962",
+    "headRefName": "paudley/236-tool-call-recovery-openai-chat",
+    "headRefOid": "a38c77c77e5550179dff370a9755692e993ea588",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 239,
+    "state": "OPEN",
+    "title": "Reassemble OpenAI chat-completions streaming logs into tool calls",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/239"
+  },
+  "checks": {
+    "state": "fail",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515878",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515514",
+        "name": "qualification",
+        "state": "FAILURE"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515589",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515785",
+        "name": "release-gate",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515784",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515691",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515702",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515292",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515905",
+        "name": "reuse",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "a38c77c77e5550179dff370a9755692e993ea588",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "a38c77c77e5550179dff370a9755692e993ea588",
+    "branch": "paudley/236-tool-call-recovery-openai-chat",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 239,
+    "jobs": [
+      {
+        "name": "qualification",
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515514",
+        "path": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/ci-logs/github-job-135319515514.log",
+        "excerpt": [
+          "271: 2026-11-19T03:38:27.2676163Z     raise HTTPError(req.full_url, code, msg, hdrs, fp)",
+          "272: 2026-11-19T03:38:27.2676484Z urllib.error.HTTPError: HTTP Error 404: Not Found",
+          "273: 2026-11-19T03:38:27.2849021Z ##[error]Process completed with exit code 1.",
+          "274: 2026-11-19T03:38:27.2970341Z Post job cleanup.",
+          "275: 2026-11-19T03:38:27.3623525Z [command]/usr/bin/git version"
+        ]
+      }
+    ],
+    "ok": true,
+    "summary": "# PR #239 failed CI logs\n\n## qualification\nhttps://github.com/Blackcat-Informatics/purrassist/actions/runs/44452481025/job/135319515514\n\n/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/ci-logs/github-job-135319515514.log\n271: 2026-11-19T03:38:27.2676163Z     raise HTTPError(req.full_url, code, msg, hdrs, fp)\n272: 2026-11-19T03:38:27.2676484Z urllib.error.HTTPError: HTTP Error 404: Not Found\n273: 2026-11-19T03:38:27.2849021Z ##[error]Process completed with exit code 1.\n274: 2026-11-19T03:38:27.2970341Z Post job cleanup.\n275: 2026-11-19T03:38:27.3623525Z [command]/usr/bin/git version\n\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 36,
+      "bytes": 965168,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "450a99dea43ae14e59f67739bf4237e782a5e962",
+      "head": "a38c77c77e5550179dff370a9755692e993ea588",
+      "status": "clean"
+    }
+  }
+}

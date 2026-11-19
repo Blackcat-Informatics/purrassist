@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 236,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat",
+  "branch": "paudley/236-tool-call-recovery-openai-chat",
+  "slug": "tool-call-recovery-openai-chat",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "5d325d6660eb12df1bde0900fdf2f797f73e54eb",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat",
+    "branch:paudley/236-tool-call-recovery-openai-chat",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/223-tool-graph-gbnf-compiler-for-tool caches into /home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat plus 0 dependency units from 0 other checkouts in 240.1s; 2238 unchanged files keep their built mtimes; 0 other files take the seed time and rebuild; 71 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat",
+    "issue:/home/paudley/Active/purrassist/.worktrees/236-tool-call-recovery-openai-chat/.stage/tool-call-recovery-openai-chat/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-14T12:31:05-0600",
+  "seed_error": ""
+}

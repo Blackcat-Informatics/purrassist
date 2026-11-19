@@ -1,0 +1,20 @@
+[
+  {
+    "path": "crates/core/src/tool_call/mod.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/0.bin"
+  },
+  {
+    "path": "docs/IMPLEMENTATION.md",
+    "kind": "file",
+    "executable": false,
+    "content": "original/1.bin"
+  },
+  {
+    "path": "docs/tool-calls/README.md",
+    "kind": "file",
+    "executable": false,
+    "content": "original/2.bin"
+  }
+]
