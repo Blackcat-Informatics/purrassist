@@ -1,0 +1,19 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 6257a3d227ad425a40350b02703210973096f494
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrassist
+GhpRsq-GitHub-Pull-Request: 243
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrassist/pull/243
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 450a99dea43ae14e59f67739bf4237e782a5e962
+GhpRsq-Head-Ref: paudley/180-macos-verify-job-cannot-run-its-runner
+GhpRsq-Head-OID: 6257a3d227ad425a40350b02703210973096f494
+GhpRsq-Result-Tree: 0469a7954533439766b68c64f248a16aa49c87d3
+GhpRsq-Result-Commit: e9ad92a82ef3d16140ca43692c1a873dd8ce120b
+GhpRsq-Parent-Hashes: 6257a3d227ad425a40350b02703210973096f494
+GhpRsq-Squash-Notes-SHA256: fca8886ac879a9f33c3602ecc070ec9c793bca6c2e2207bfd9f4b5b353c560a6
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
