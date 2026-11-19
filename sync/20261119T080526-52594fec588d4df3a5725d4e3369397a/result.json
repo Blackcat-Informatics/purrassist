@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary",
+  "branch": "paudley/252-govern-the-tool-graph-loader-temporary",
+  "base_ref": "origin/paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+  "head": "c98a266e85a233810af9ebcd0c20defdb48f96c7",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary/sync/20261119T080526-52594fec588d4df3a5725d4e3369397a",
+  "conflicts": [
+    "crates/toolgraph/src/graph/load.rs"
+  ],
+  "status": "completed",
+  "base": "f2d914fa6d86327b8a95ba03aef03a02505ed45e",
+  "merge_bases": [
+    "72fb6dffbb3929a993bdfd8c889e1c57cf9df997"
+  ],
+  "merge_index": "69d5526927405e4516c1e8af7d7f6eedb04ea91d63e8bccd3e3daef4873bca57",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/toolgraph/src/graph/load.rs'\n",
+  "candidate_tree": "fc9c43412ae9d3ad0b85a59e139c76edd074c226",
+  "candidate_patch": "candidate-e92b17dcbdb74e99a0a98daa8cafe855.patch",
+  "stdout_log": "commit-e92b17dcbdb74e99a0a98daa8cafe855.stdout.log",
+  "stderr_log": "commit-e92b17dcbdb74e99a0a98daa8cafe855.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 1.818901585000276,
+  "commit": "447e5cc7c661c163ae105dabf140c6d6ff13adcb",
+  "tree": "fc9c43412ae9d3ad0b85a59e139c76edd074c226",
+  "exit_code": 0
+}

@@ -1,0 +1,153 @@
+{
+  "issue": 252,
+  "pr_number": 253,
+  "branch": "paudley/252-govern-the-tool-graph-loader-temporary",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary",
+  "observed_at": "2026-11-19T08:52:11.589412+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "72fb6dffbb3929a993bdfd8c889e1c57cf9df997",
+    "headRefName": "paudley/252-govern-the-tool-graph-loader-temporary",
+    "headRefOid": "447e5cc7c661c163ae105dabf140c6d6ff13adcb",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 253,
+    "state": "OPEN",
+    "title": "Govern the temporary FnO dataset through catalog reading",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/253"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426228307",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426228226",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426228169",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426228142",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426228080",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426228113",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426227789",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44485028035/job/135426228166",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "447e5cc7c661c163ae105dabf140c6d6ff13adcb",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "447e5cc7c661c163ae105dabf140c6d6ff13adcb",
+    "branch": "paudley/252-govern-the-tool-graph-loader-temporary",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 253,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #253 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 24,
+      "bytes": 368188,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "72fb6dffbb3929a993bdfd8c889e1c57cf9df997",
+      "head": "447e5cc7c661c163ae105dabf140c6d6ff13adcb",
+      "status": "clean"
+    }
+  }
+}

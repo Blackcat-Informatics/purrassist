@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 252,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary",
+  "branch": "paudley/252-govern-the-tool-graph-loader-temporary",
+  "slug": "govern-the-tool-graph-loader-temporary",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "72fb6dffbb3929a993bdfd8c889e1c57cf9df997",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary",
+    "branch:paudley/252-govern-the-tool-graph-loader-temporary",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl caches into /home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary plus 0 dependency units from 0 other checkouts in 67.7s; 2238 unchanged files keep their built mtimes; 4 other files take the seed time and rebuild; 38 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary",
+    "issue:/home/paudley/Active/purrassist/.worktrees/252-govern-the-tool-graph-loader-temporary/.stage/govern-the-tool-graph-loader-temporary/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-19T01:44:49-0600",
+  "seed_error": ""
+}

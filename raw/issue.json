@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Part of #33.\n\nThe loader's controlled FnO reader consumes a temporary RDF dataset. The\nloader currently builds and freezes that dataset outside the caller's\nstorage account, so the reader can begin with unaccounted live buffers.\n\nBuild and freeze the temporary dataset with the pinned PurRDF native\nmemory APIs. Route allocation, work, and cancellation through the graph\nloader's governor. Keep the account alive while the FnO catalog reads\nthe temporary dataset. Release it after the dataset is destroyed on\nboth success and refusal. Preserve the existing selected statement set\nand typed FnO and resource failures.\n\nVerify that a storage refusal during temporary view construction is\nreported by the real loader path. Verify that dropping the view restores\nits storage charge, without releasing the independently owned catalog.\nRun the graph loader cases and the local gate.\n\nThe published dataset's ownership, the remaining temporary row and index\naccounting, the original SHACL checks, and WASM integration stay in #33.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-19T07:43:13Z",
+  "labels": [],
+  "milestone": null,
+  "number": 252,
+  "state": "OPEN",
+  "title": "Govern the tool graph loader temporary FnO dataset",
+  "updatedAt": "2026-11-19T07:43:13Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/252"
+}
