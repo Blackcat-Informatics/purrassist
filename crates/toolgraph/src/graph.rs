@@ -15,13 +15,14 @@
 //!
 //! # Governance
 //!
-//! The governed parser, temporary `FnO` dataset builder and catalog reader
-//! share the caller's [`Governor`]. Each native account admits its live storage
+//! The parser, owned statement rows and indexes, temporary `FnO` dataset
+//! builder, and catalog reader share the caller's [`Governor`].
+//! Each native account admits its live storage
 //! through the scratch meter and polls cancellation on every native step.
 //! It charges one work unit per 64 native units, carrying the remainder
 //! across charges. The loader also charges work per statement and validated
-//! property. The temporary dataset stays charged until the catalog reader
-//! completes and the view is destroyed.
+//! property. The temporary dataset stays charged through catalog reading.
+//! The rows and indexes stay charged through validation and typing.
 //!
 //! An exhausted work or scratch budget the governor recorded is
 //! [`LoadError::Exhausted`] and a cancellation is [`LoadError::Cancelled`],
@@ -37,12 +38,10 @@
 //! * Only Turtle and `TriG` load: `PurRDF` 4.0.2 governs and retains source
 //!   occurrences for those formats alone, so another media type is a
 //!   [`LoadError::Parse`] with code `unsupported-format`.
-//! * The owned rows this crate materialises for validation, their per-subject
-//!   index, and the owned [`RdfDataset`] copy returned by [`ToolGraph::dataset`]
-//!   (`PurRDF` offers no
-//!   governed detach of a retained parse), are allocated outside the governor's
-//!   storage account; their size is proportional to the document and bounded by
-//!   the input-byte limit and the per-statement work charge.
+//! * Role classification and typed tool construction still allocate outside
+//!   the scratch account. The published [`RdfDataset`] copy returned by
+//!   [`ToolGraph::dataset`] is also outside that account. `PurRDF` exposes a
+//!   borrowed view of the retained parse.
 //! * [`SourceExtent`] names the first statement in source order whose subject and
 //!   predicate (and term) match the refusal. Refusals that name a node rather than
 //!   one statement (shape, hint, profile, `FnO` binding) carry subject and
