@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Part of #33. Apply the caller's RDF vocabulary to the full statement value, including literal datatype IRIs, embedded triple terms, and reifier identities. Preserve the first written source extent and the refusal order for existing top-level cases.\n\nUse admitted iterative traversal and charge namespace and vocabulary comparisons through the caller's governor. Apply the same namespace comparison to statement ownership and the temporary FnO view. Keep named-graph refusals and the native SHACL acceptance under #33.\n\nQualify an unknown IRI in each newly covered value kind, neighbouring valid input, and a refusal reached during vocabulary scanning under a limited budget.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-19T18:22:14Z",
+  "labels": [],
+  "milestone": null,
+  "number": 272,
+  "state": "OPEN",
+  "title": "Govern RDF vocabulary and statement ownership scans",
+  "updatedAt": "2026-11-19T18:22:14Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/272"
+}

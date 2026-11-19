@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "head": "fb24a3ec20cfa5ada9e9f42cbf48eb3ad0bc30e5",
+  "items": [],
+  "coverage": {
+    "comments": "complete",
+    "reviews": "complete",
+    "inline_comments": "complete",
+    "threads": "complete"
+  },
+  "bodies": "kept on the forge; each item carries body_sha256 of the original"
+}

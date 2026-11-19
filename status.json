@@ -1,0 +1,118 @@
+{
+  "issue": 272,
+  "pr_number": 274,
+  "branch": "paudley/272-govern-rdf-vocabulary-and-statement",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement",
+  "observed_at": "2026-11-19T20:25:23.141060+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "a8899648f9010f0f1b7422aa7daf53d98fb02fb7",
+    "headRefName": "paudley/272-govern-rdf-vocabulary-and-statement",
+    "headRefOid": "fb24a3ec20cfa5ada9e9f42cbf48eb3ad0bc30e5",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 274,
+    "state": "OPEN",
+    "title": "Govern RDF vocabulary and statement ownership scans",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/274"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166843",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166920",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166827",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166615",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166784",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166245",
+        "name": "wasm",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166688",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44601598986/job/135834166717",
+        "name": "reuse",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "fb24a3ec20cfa5ada9e9f42cbf48eb3ad0bc30e5",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "fb24a3ec20cfa5ada9e9f42cbf48eb3ad0bc30e5",
+    "branch": "paudley/272-govern-rdf-vocabulary-and-statement",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 274,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #274 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

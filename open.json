@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 272,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement",
+  "branch": "paudley/272-govern-rdf-vocabulary-and-statement",
+  "slug": "govern-rdf-vocabulary-and-statement",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "598a22561371e6097496016f7b23c401cc6998ea",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement",
+    "branch:paudley/272-govern-rdf-vocabulary-and-statement",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:skipping busy source /opt/.cargo/30/b17df029e60a29: /opt/.cargo/30/b17df029e60a29/debug/.cargo-build-lock; skipping busy source /opt/.cargo/30/b17df029e60a29: /opt/.cargo/30/b17df029e60a29/debug/.cargo-build-lock; reflinked /home/paudley/Active/purrassist/.worktrees/204-tool-graph-run-the-loader-under-the caches into /home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement plus 0 dependency units from 0 other checkouts in 0.9s; 2163 unchanged files keep their built mtimes; 88 other files take the seed time and rebuild; 0 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement",
+    "issue:/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-19T12:22:31-0600",
+  "seed_error": ""
+}

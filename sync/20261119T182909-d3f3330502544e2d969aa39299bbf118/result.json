@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement",
+  "branch": "paudley/272-govern-rdf-vocabulary-and-statement",
+  "base_ref": "origin/paudley/270-govern-typed-rdf-tool-construction-and",
+  "head": "5b5985b536cd6b2dcc47a19471092361b2a74e3c",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/272-govern-rdf-vocabulary-and-statement/.stage/govern-rdf-vocabulary-and-statement/sync/20261119T182909-d3f3330502544e2d969aa39299bbf118",
+  "conflicts": [
+    "crates/toolgraph/src/graph/load.rs",
+    "crates/toolgraph/tests/graph_load.rs"
+  ],
+  "status": "completed",
+  "base": "8abdcfbdbca669b88156b952f832b787ad4fbcd5",
+  "merge_bases": [
+    "598a22561371e6097496016f7b23c401cc6998ea"
+  ],
+  "merge_index": "9af9fa476480a0312aa402f84e8ef7ddc30bd78ea46add24b685aea11ebec9af",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/toolgraph/src/graph/load.rs'\nRecorded preimage for 'crates/toolgraph/tests/graph_load.rs'\n",
+  "candidate_tree": "413c4c69e14e3f37e76ee1a533868e2dde4f524f",
+  "candidate_patch": "candidate-88bfb81854494e96a3718a6f6657191c.patch",
+  "stdout_log": "commit-88bfb81854494e96a3718a6f6657191c.stdout.log",
+  "stderr_log": "commit-88bfb81854494e96a3718a6f6657191c.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 3.317112737997377,
+  "commit": "9ce1bf2b3d68c722a0ffdc297c156eeb9feb4f80",
+  "tree": "413c4c69e14e3f37e76ee1a533868e2dde4f524f",
+  "exit_code": 0
+}

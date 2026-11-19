@@ -1,0 +1,14 @@
+[
+  {
+    "path": "crates/toolgraph/src/graph/load.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/0.bin"
+  },
+  {
+    "path": "crates/toolgraph/tests/graph_load.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/1.bin"
+  }
+]
