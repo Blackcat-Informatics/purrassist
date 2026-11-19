@@ -1221,14 +1221,20 @@ configuration is admitted only when its selected chat template uses the same
 Define `Oq` and `Oe` as the following two complete declaration objects, each
 without a final LF. These are the exact bytes from the existing renderer with
 the input-schema key order shown here. The RDF → JSON Schema lane must freeze
-this canonical ordering for the worked fixture; alternate raw declaration
-ordering is preserved on decode but cannot alter canonical artifacts. The
-worked fixture's `pattern` `^customer-[0-9]+$` is written in the XML Schema
-(XPath) regular-expression flavour, the flavour of a SHACL `sh:pattern`; JSON
-Schema's `pattern` is the ECMAScript flavour. The two agree on the common subset
-this pattern uses, and the lane translates a pattern to ECMAScript through the
-core translator, which must leave a pattern unchanged when it is already valid
-and equivalent in both flavours and rewrite only what must be rewritten.
+this canonical ordering and member set for the worked fixture. Decoding
+preserves alternate raw declaration ordering without changing canonical artifacts.
+
+SHACL `sh:pattern` uses XPath regular-expression syntax based on XML Schema.
+JSON Schema `pattern` uses ECMAScript syntax. The upstream PurRDF compiler
+translates through `purrdf_core::xsd_regex::to_ecma_262`. For canonical
+declarations, the translation must preserve a pattern's spelling when it is
+valid and equivalent in ECMAScript. The worked fixture requires
+`^customer-[0-9]+$` verbatim.
+
+PurRDF's plain argument-schema compiler currently sorts object members by key,
+adds `$schema` and `$defs`, and rewrites the worked pattern. The changes needed
+for the canonical bytes are tracked in
+[PurRDF #1324](https://github.com/Blackcat-Informatics/purrdf/issues/1324).
 
 ```json
 {"type":"function","function":{"name":"query_customer_orders","description":"Query customer orders.","parameters":{"type":"object","properties":{"customer_id":{"type":"string","pattern":"^customer-[0-9]+$"},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["customer_id","limit"],"additionalProperties":false}}}
