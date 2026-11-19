@@ -99,7 +99,6 @@ SPDX-License-Identifier = "Unlicense"
 [[annotations]]
 path = [
   "vendor/licenses/libarchive-3.8.9/BSD-2-Clause.txt",
-  "vendor/licenses/libarchive-tools-3.7.2-2ubuntu0.8/COPYRIGHT",
 ]
 SPDX-FileCopyrightText = "libarchive authors"
 SPDX-License-Identifier = "BSD-2-Clause"

@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
-# The one and only publish lane. Distinct from release-qualification.yml
-# (package/audit evidence only, never publishes) and from verify.yml's
-# `qualification` job (PR-time evidence gathering, never publishes). Triggers
-# on `rust-v*` tags. After a crates.io name and owner preflight, publishes
-# core -> derive -> syntax -> purrassist -> host -> cli via crates.io trusted
+# The publish lane triggers on `rust-v*` tags. After checking crates.io names
+# and ownership, it publishes core -> derive -> syntax -> purrassist -> host
+# -> cli via crates.io trusted
 # publishing (OIDC; no long-lived registry token is stored
 # anywhere in this repository or its secrets), gated on release-qualification.yml
 # having already succeeded for this exact commit.

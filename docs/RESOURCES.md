@@ -1105,18 +1105,17 @@ then use that loader/libc; other libraries still come from the host. The report
 records the runtime archive and extracted-file hashes. These measurements qualify
 that runtime, not the host's alternate allocator implementation. Appropriate
 loader debug symbols must be available; installed debuginfod configuration is
-inherited for ordinary system-runtime profiling. Portable profiling instead
-downloads the exact loader's debug file from the public Arch source registered
-in `vendor/profiling-runtime.json`, verifies its SHA-256, and keeps it beside
-the loader under its GNU debuglink name. The report includes this file's digest.
-This mode requires no ambient debuginfod configuration or system debug package.
+inherited for ordinary system-runtime profiling. Portable profiling verifies
+the matching loader debug file against the SHA-256 in
+`vendor/profiling-runtime.json` and uses it beside the loader under its GNU
+debuglink name. A cold cache requires the pinned debug file to be available
+from the registered source. The report includes its digest.
 
 Every measurement first runs the real empty workload natively and under both
 Memcheck and Massif, with the same strict flags and output/log validation as the
 campaign. `python3 scripts/measure-resources.py --portable-runtime --check-tools`
-runs only that prerequisite check and writes no measurement report. Verify runs
-it before its independent qualification campaigns; its toolchain installs both
-WASM targets and its hosted runner provisions `libarchive-tools` for `bsdtar`.
+runs the startup prerequisite check. Use it before running a manual profiling
+campaign with the compatibility runtime.
 
 Profiler stdout, stderr and raw tool logs are retained in the announced ignored
 resource-log directory. Any nonzero profiler exit, including startup exit 1 or
@@ -2309,16 +2308,11 @@ commit `dd95ec8` with this change applied:
 
 ## Resource limits
 
-`scripts/check-resource-limits.py <report.json>` checks a resource report
-(freshly generated, or the committed baseline above) against the table
-below, extracted from the first ```` ```json ```` fence following this
-heading. Every limit is set with headroom over an actually measured value
-recorded above (never below one); a limit failing here means measured
-resource use grew past a deliberately generous ceiling, not that it
-regressed by any amount. `make hygiene` uses `--schema-only` against the *committed*
-`qualification/resources-linux-x86_64.json` (complete inventories, valid types,
-digests, uncached-build evidence and correctness observations); the CI `qualification` job runs `make resources` fresh and
-checks that output instead.
+`scripts/check-resource-limits.py <report.json>` compares a report with the
+reference ceilings below for diagnosis on a comparable host. The checker
+reads the first ```` ```json ```` fence following this heading. The ceilings
+include headroom over the recorded measurements. `make hygiene` validates
+the committed report's schema with `--schema-only`.
 
 Rationale per category:
 
@@ -2330,8 +2324,7 @@ Rationale per category:
   are 10/15 milliseconds; syntax median/p95 ceilings are 3/4 milliseconds.
   These provide headroom over the recorded workloads while detecting large
   slowdowns. Tail latency includes scheduling interference on a loaded
-  machine; these ceilings are qualification thresholds, not a guarantee
-  that every host will pass them.
+  machine. Use the ceilings to flag large differences for investigation.
 - `workloads` (the existing Memcheck/Massif/RSS fields): roughly 8-10x the
   largest measured workload in the recorded baseline table above, wide
   enough to tolerate the allocator/libc/loader differences the "Loader

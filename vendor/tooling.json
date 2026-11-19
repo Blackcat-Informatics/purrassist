@@ -99,18 +99,6 @@
     "notice_normalization": "LF; trailing whitespace and final blank lines removed."
   },
   {
-    "name": "libarchive-tools-ubuntu",
-    "version": "3.7.2 (Ubuntu 24.04; distribution revision recorded by CI)",
-    "license": "Mixed licenses; exact per-file terms preserved in the registered upstream COPYRIGHT",
-    "source": "https://archive.ubuntu.com/ubuntu/pool/main/liba/libarchive/libarchive_3.7.2-2ubuntu0.8.debian.tar.xz",
-    "source_sha256": "e814fc50367b8dd96aeaf1ed111dc0a00bf95e07b1ff3444f89007a42a29c53f",
-    "scope": "External Ubuntu qualification archive extractor only; not linked or packaged into PurRAssist crates. Ubuntu apt selects the supported distribution revision; CI logs its exact installed package version and the resource report records bsdtar --version. The preserved source copyright comes from distribution revision 2ubuntu0.8; this is not a claim of a pinned executable.",
-    "notices": {
-      "vendor/licenses/libarchive-tools-3.7.2-2ubuntu0.8/COPYRIGHT": "21e7f99bb2808ddf4ac9cb7126a9af6e130d4342f2bcafdbe84fe9e4344cf4c0"
-    },
-    "notice_normalization": "None; original debian/copyright bytes preserved."
-  },
-  {
     "name": "cmark-gfm",
     "version": "0.29.0.gfm.13",
     "license": "BSD-2-Clause AND MIT",
