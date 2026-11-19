@@ -45,10 +45,10 @@ derived from Rust structs and enums with `#[derive(ToolDefinition)]` and
 `#[derive(ToolEnum)]` (the `purrassist-derive` crate, re-exported by the
 `purrassist` facade; see [INTEGRATION.md](INTEGRATION.md) and the crate's
 [README](../../crates/derive/README.md)). Streaming recognition (#16) is
-implemented. Of provider streaming events (#17), the Rust API reads OpenAI
-chat-completions `tool_calls` deltas (`ToolSet::stream_openai_chat`); the other
-providers, the batch CLI and MCP input, and the provider-log fixtures remain
-tracked.
+implemented. The Rust API reads Anthropic Messages event logs
+(`ToolSet::stream_anthropic_events`) and OpenAI chat-completions tool-call
+deltas (`ToolSet::stream_openai_chat`). CLI and MCP inputs, provider-log
+fixtures, fuzz seeds, and WASM parity remain tracked under #17.
 
 ## Marker-suppressed variants
 

@@ -67,6 +67,7 @@ pub mod rules;
 mod scope;
 mod shape;
 mod stream;
+mod stream_anthropic;
 mod stream_capture;
 mod stream_finish;
 mod stream_openai;
@@ -114,6 +115,9 @@ pub use shape::{
     ShapeStep, ValueShape,
 };
 pub use stream::{StreamEvent, ToolCallStream};
+pub use stream_anthropic::{
+    AnthropicEventStream, BlockSpan, EventFault, EventFaultClass, EventFaultKind, EventLogRecovery,
+};
 pub use stream_openai::{
     ChatCallSpan, ChatFault, ChatFaultClass, ChatFaultKind, ChatLogRecovery, OpenAiChatStream,
 };
