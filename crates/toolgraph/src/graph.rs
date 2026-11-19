@@ -15,42 +15,22 @@
 //!
 //! # Governance
 //!
-//! The caller's [`Governor`] bounds the whole load. The parser and the `FnO`
-//! reader charge their live storage to the governor's scratch meter and poll its
-//! work and cancellation authority at their native counting points; this crate's
-//! own passes charge one unit of work per statement and per validated property.
-//! The native steps are finer than a work unit: the loader charges one work unit
-//! per 64 native units, carrying the remainder, and polls cancellation on every
-//! native step. Measured with a governor's `usage()` after a load, on the worked example (9,518 bytes) a load charges 33,191 work units (3.49 per
-//! source byte) and peaks at 569,829 scratch bytes (59.9 per source byte). On the
-//! bulk document (the worked example body repeated 114 times under distinct
-//! prefixes, names and blank-node labels; 1,049,171 bytes) it charges 4,084,594 work
-//! units (3.89 per source byte) and peaks at 66,933,394 scratch bytes (63.8 per
-//! source byte). The sizes scale with document shape. Each level has the same
-//! scratch limit (64 MiB), so whichever of work and scratch is reached first limits
-//! the admitted size, and a larger document is the explicit `Exhausted` outcome.
-//! Sizes are measured on the bulk document to within one repetition (about 9,100
-//! bytes); the method and table are in `docs/tool-graph/TOOLS.md`.
-//!
-//! | Effort | Work budget | Admitted Turtle size (measured) | Binding resource |
-//! | --- | --- | --- | --- |
-//! | `Exact` | 100,000 | 27,648 bytes (about 27.6 KB) | work |
-//! | `Quick` | 250,000 | 63,724 bytes (about 63.7 KB) | work |
-//! | `Standard` | 1,000,000 | 265,429 bytes (about 265.4 KB) | work |
-//! | `Deep` | 10,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
-//! | `Maximum` | 50,000,000 | 1,049,171 bytes (about 1.05 MB) | scratch |
-//!
-//! The worked example loads at every level; `Deep` and `Maximum` admit the same size
-//! because the scratch limit is shared.
+//! The governed parser, temporary `FnO` dataset builder and catalog reader
+//! share the caller's [`Governor`]. Each native account admits its live storage
+//! through the scratch meter and polls cancellation on every native step.
+//! It charges one work unit per 64 native units, carrying the remainder
+//! across charges. The loader also charges work per statement and validated
+//! property. The temporary dataset stays charged until the catalog reader
+//! completes and the view is destroyed.
 //!
 //! An exhausted work or scratch budget the governor recorded is
 //! [`LoadError::Exhausted`] and a cancellation is [`LoadError::Cancelled`],
-//! whichever stage observed it; neither is reported as invalid syntax, and no
-//! partial graph escapes. A native storage failure the governor did not record (an
-//! allocation or layout limit) is not claimed as a budget: it is a
-//! [`LoadError::Parse`] with code `storage` and the native cause, and a rejected
-//! scratch release is a [`LoadError::Parse`] with code `storage-accounting`. The storage a catalog holds
-//! stays charged to the governor's scratch meter until the [`ToolGraph`] is dropped.
+//! in any governed stage. Both outcomes withhold the graph. Native allocation
+//! and layout failures preserve the cause as [`LoadError::Parse`] with code
+//! `storage` during parsing or catalog reading, and as
+//! [`LoadError::InvalidFnoBinding`] during temporary view construction. A
+//! rejected scratch release is [`LoadError::Parse`] with code `storage-accounting`.
+//! The catalog's own storage stays charged while the [`ToolGraph`] holds it.
 //!
 //! # Stated limits
 //!
@@ -58,8 +38,8 @@
 //!   occurrences for those formats alone, so another media type is a
 //!   [`LoadError::Parse`] with code `unsupported-format`.
 //! * The owned rows this crate materialises for validation, their per-subject
-//!   index, the `FnO` view dataset built for the catalog reader, and the owned
-//!   [`RdfDataset`] copy returned by [`ToolGraph::dataset`] (`PurRDF` offers no
+//!   index, and the owned [`RdfDataset`] copy returned by [`ToolGraph::dataset`]
+//!   (`PurRDF` offers no
 //!   governed detach of a retained parse), are allocated outside the governor's
 //!   storage account; their size is proportional to the document and bounded by
 //!   the input-byte limit and the per-statement work charge.
@@ -134,23 +114,17 @@ impl ToolGraph {
     ///
     /// `media_type` selects the `PurRDF` text codec (`text/turtle` or
     /// `application/trig`) and `base` is the optional document base IRI.
-    /// `governor` bounds the parser, the `FnO` reader and this crate's own passes
-    /// and carries cancellation (see the module's governance notes).
+    /// `governor` supplies the parser, temporary `FnO` view, catalog reader, and
+    /// loader passes with their work and cancellation authority.
     ///
     /// # Errors
     /// Returns [`LoadError`] for the first parse failure (including a media type
     /// the governed parser does not support, code `unsupported-format`), out-of-vocabulary term, unowned
     /// statement, violated vocabulary shape, invalid hint, execution profile or
     /// `FnO` binding, unsupported context projection, exhausted budget or
-    /// cancellation. A work or scratch budget the governor recorded as exhausted by
-    /// the parser or the `FnO` reader is [`LoadError::Exhausted`], and a
-    /// cancellation observed there is [`LoadError::Cancelled`]. A native storage
-    /// failure the governor did not record is a [`LoadError::Parse`] (code `storage`
-    /// or `storage-accounting`) carrying the native cause, not a budget claim. No
-    /// partial graph escapes.
-    ///
-    /// The Turtle size each effort level admits, measured, is in the module's
-    /// governance notes.
+    /// cancellation. Resource exhaustion is [`LoadError::Exhausted`]. Cancellation
+    /// is [`LoadError::Cancelled`]. Native storage failures retain the original
+    /// cause under the stage's error category. Every refusal withholds the graph.
     pub fn load(
         bytes: &[u8],
         media_type: &str,
