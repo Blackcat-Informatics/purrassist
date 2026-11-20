@@ -26,6 +26,8 @@ subject rows directly. It charges for row visits, predicate comparisons, and
 variable-length lexical checks. Statement rows and indexes remain charged
 through validation and typing. The temporary dataset remains charged
 through catalog construction. The catalog keeps its own charge.
+Parameter hint lookup uses an admitted index over native shape and path
+identities. Competing bindings retain native reifier order for diagnostics.
 
 An exhausted work or scratch budget is `LoadError::Exhausted`.
 Cancellation is `LoadError::Cancelled`. Both withhold the graph. Native

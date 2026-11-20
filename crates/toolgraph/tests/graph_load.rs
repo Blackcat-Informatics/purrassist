@@ -465,6 +465,30 @@ fn an_incomplete_parameter_hint_is_refused_at_the_hint() {
     load(&worked()).expect("neighbouring valid input");
 }
 
+#[test]
+fn competing_reifiers_for_one_parameter_path_name_the_second_binding() {
+    let source = format!(
+        "{}\n<< ex:pathShape sh:path ex:path ~ ex:secondPathClaim >> .\n\
+         ex:secondPathClaim a pa:Hint ; pa:maxEditDistance 0 ;\n\
+         pa:typeCoercion \"none\" ; pa:caseFold false ; pa:unicodeFold false .",
+        worked()
+    );
+    let error = load(&source).expect_err("a parameter path admits only one reifier");
+    assert!(
+        matches!(
+            &error,
+            LoadError::InvalidHint {
+                subject,
+                predicate,
+                violation: Violation::Duplicate,
+                at: None,
+            } if subject == &format!("{EX}secondPathClaim")
+                && predicate == "http://www.w3.org/ns/shacl#path"
+        ),
+        "{error:?}"
+    );
+}
+
 // Rationale: confinement fields outside the closed vocabulary are refused; the
 // nested-profile cycle check keeps a self-referencing child from looping.
 #[test]
