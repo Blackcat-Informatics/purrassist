@@ -237,6 +237,7 @@ pub struct Vocabulary {
     prefixes: PrefixTable,
     terms: TermBindings,
     losses: LossProfile,
+    fno_mapping_normalization: bool,
 }
 
 impl Vocabulary {
@@ -285,11 +286,16 @@ impl Vocabulary {
             .sort_unstable_by(|left, right| left.0.cmp(&right.0));
         let namespaces = Namespaces::new(primary_prefix, &prefixes.0)
             .map_err(VocabularyError::NamespaceConstruction)?;
+        let definition = FNOM_MAPPING_NORMALIZATION;
+        let fno_mapping_normalization =
+            losses.description(&definition.from, &definition.to, &definition.code)
+                == Some(definition.description.as_ref());
         Ok(Self {
             namespaces,
             prefixes,
             terms,
             losses,
+            fno_mapping_normalization,
         })
     }
 
@@ -326,6 +332,10 @@ impl Vocabulary {
     #[must_use]
     pub const fn loss_profile(&self) -> &LossProfile {
         &self.losses
+    }
+
+    pub(super) const fn admits_fno_mapping_normalization(&self) -> bool {
+        self.fno_mapping_normalization
     }
 }
 

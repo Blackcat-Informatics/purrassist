@@ -712,9 +712,14 @@ impl Doc<'_> {
                 )?);
             }
         }
-        if let Some(row) = first_alias
-            && !self.mapping_alias_declared
-        {
+        if let Some(row) = first_alias {
+            let detail = if !self.mapping_alias_declared {
+                "fnom:Mapping requires its owl:equivalentClass declaration for fno:Mapping"
+            } else if !self.vocabulary.admits_fno_mapping_normalization() {
+                "fnom:Mapping requires the registered FnO view normalization"
+            } else {
+                return Ok(true);
+            };
             let at = control::default_row_extent_or_iri(
                 locations.view,
                 locations.source,
@@ -727,12 +732,11 @@ impl Doc<'_> {
             return Err(LoadError::InvalidFnoBinding {
                 subject: show(&row.s),
                 predicate: Some(RDF_TYPE.to_owned()),
-                detail: "fnom:Mapping requires its owl:equivalentClass declaration for fno:Mapping"
-                    .to_owned(),
+                detail: detail.to_owned(),
                 at,
             });
         }
-        Ok(first_alias.is_some())
+        Ok(false)
     }
 }
 

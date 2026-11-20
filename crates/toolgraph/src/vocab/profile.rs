@@ -268,7 +268,6 @@ pub(super) fn definitions() -> impl Iterator<Item = LossDefinition> {
                 description: Cow::Borrowed(meaning.description),
             })
     })
-    .chain(std::iter::once(FNOM_MAPPING_NORMALIZATION))
 }
 
 /// Extend an explicit upstream profile with the complete versioned tool-graph meanings.
@@ -291,5 +290,5 @@ pub(super) fn definitions() -> impl Iterator<Item = LossDefinition> {
 /// assert_eq!(profile.codes_for(SOURCE_REPRESENTATION, "mcp-extended-v1").count(), 0);
 /// ```
 pub fn register_loss_profile(profile: LossProfile) -> Result<LossProfile, LossProfileError> {
-    profile.extend(definitions())
+    profile.extend(definitions().chain(std::iter::once(FNOM_MAPPING_NORMALIZATION)))
 }

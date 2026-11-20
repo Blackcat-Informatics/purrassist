@@ -165,6 +165,8 @@ accepted only when declared equivalent as below. PurRDF's FnO reader receives
 the normalized `fno:Mapping` statements. `ToolGraph::fno_view_losses()` records
 each rewritten type with its scoped mapping identity. The original declaration
 and type remain in the retained RDF and pass through the MCP manifest.
+Loading a graph that uses the alias requires the normalization meaning from
+`register_loss_profile`.
 
 ```turtle
 @prefix pa: <https://example.org/toolgraph#> .
