@@ -533,20 +533,32 @@ fn an_invalid_execution_profile_is_refused() {
     assert!(matches!(violation, Violation::OutOfRange { .. }));
     assert_eq!(&source[at.start..at.end], written);
 
-    // Multiplicity is reported before checking either value's kind.
-    let duplicate = load(&edited(
+    // Earlier interning of the description makes the native order differ
+    // from the order of the three confinement mode statements.
+    let written = "pa:confinementMode 42";
+    let excess = edited(
         r#"pa:confinementMode "change_hat""#,
-        r#"pa:confinementMode 42, "change_hat""#,
-    ))
-    .expect_err("a single-valued field has two values");
-    assert!(matches!(
-        duplicate,
-        LoadError::InvalidExecutionProfile {
-            violation: Violation::TooMany { found: 2 },
-            at: None,
-            ..
-        }
-    ));
+        &format!(r#"{written} ; pa:confinementMode "change_hat" ; pa:confinementMode "unknown""#),
+    )
+    .replace(
+        r#"pa:description "Query customer orders.""#,
+        r#"pa:description "change_hat""#,
+    );
+    let duplicate = load(&excess).expect_err("a single-valued field has three values");
+    assert!(
+        matches!(
+            &duplicate,
+            LoadError::InvalidExecutionProfile {
+                subject,
+                predicate,
+            violation: Violation::TooMany { found: 3 },
+                at: Some(at),
+            } if subject == &format!("{EX}DatabaseProfile")
+                && predicate == &format!("{NAMESPACE}confinementMode")
+                && &excess[at.start..at.end] == written
+        ),
+        "{duplicate:?}"
+    );
 
     let written = "pa:deny false";
     let source = edited(
