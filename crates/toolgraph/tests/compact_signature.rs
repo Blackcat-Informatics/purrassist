@@ -194,7 +194,7 @@ fn compact_and_gbnf_read_only_the_projected_declarations() {
 #[test]
 fn cancelled_projection_refuses_even_without_tools() {
     let (vocabulary, graph) = load("");
-    assert!(graph.tools().is_empty());
+    assert_eq!(graph.tools(), []);
     let mut governor = Governor::new(Budget::default());
     governor.cancel();
     assert!(matches!(
