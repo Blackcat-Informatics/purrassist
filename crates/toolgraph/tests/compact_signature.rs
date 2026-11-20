@@ -3,10 +3,12 @@
 
 //! The compact signature lane over the worked example in `docs/tool-graph/TOOLS.md`.
 
-use purrassist_core::{Budget, Governor};
+use purrassist_core::{Budget, Governor, StopReason};
 use purrassist_toolgraph::{
     PrefixTable, ProjectionTarget, SOURCE_REPRESENTATION, TERM_NAMES, TermBindings, ToolGraph,
-    Vocabulary, lanes, register_loss_profile,
+    Vocabulary,
+    codec::mcp::{self, CodecError},
+    lanes, register_loss_profile,
 };
 use purrdf_core::loss::{LossLedger, LossProfile, check_ledger_sound_in};
 
@@ -164,6 +166,47 @@ fn compact_and_gbnf_are_identical_after_reordering_tool_declarations() {
         project_grammars(&graph, &vocabulary),
         project_grammars(&reordered_graph, &reordered_vocabulary)
     );
+}
+
+#[test]
+fn compact_and_gbnf_read_only_the_projected_declarations() {
+    let (vocabulary, graph) = load(&worked());
+    let ample = || Governor::new(Budget::default());
+    let (manifest, _) = mcp::encode(&graph, &vocabulary, &mut ample()).expect("manifest");
+    let budget = Budget {
+        input_bytes: u64::try_from(manifest.as_str().len() - 1).expect("test manifest size"),
+        ..Budget::default()
+    };
+    let compact = lanes::compact(&graph, &vocabulary, 2, &mut ample()).expect("compact lane");
+    let grammar = lanes::gbnf(&graph, &vocabulary, &mut ample()).expect("GBNF lane");
+    assert_eq!(
+        lanes::compact(&graph, &vocabulary, 2, &mut Governor::new(budget))
+            .expect("declaration budget admits compact projection"),
+        compact
+    );
+    assert_eq!(
+        lanes::gbnf(&graph, &vocabulary, &mut Governor::new(budget))
+            .expect("declaration budget admits GBNF projection"),
+        grammar
+    );
+}
+
+#[test]
+fn cancelled_projection_refuses_even_without_tools() {
+    let (vocabulary, graph) = load("");
+    assert!(graph.tools().is_empty());
+    let mut governor = Governor::new(Budget::default());
+    governor.cancel();
+    assert!(matches!(
+        lanes::compact(&graph, &vocabulary, 2, &mut governor),
+        Err(lanes::CompactError::Manifest(cause))
+            if matches!(*cause, CodecError::Resource(StopReason::Cancelled))
+    ));
+    assert!(matches!(
+        lanes::gbnf(&graph, &vocabulary, &mut governor),
+        Err(lanes::GbnfError::Manifest(cause))
+            if matches!(*cause, CodecError::Resource(StopReason::Cancelled))
+    ));
 }
 
 // Invariant: a depth too small to expand the result object renders `object` and

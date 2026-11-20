@@ -1112,6 +1112,10 @@ shape, policy or confinement checks.
 
 ### GBNF and signatures — specified
 
+The GBNF and compact signature lanes consume the declaration schemas from
+the shared MCP projection. Full manifest encoding serializes the retained
+Turtle graph into the outer bundle.
+
 This worked grammar is the canonical generated subset for `hermes.v1`. It
 admits one call, uses the existing envelope's canonical print branch, and
 allows arbitrary valid JSON string values for the two tools. All other model

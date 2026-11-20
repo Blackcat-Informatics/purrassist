@@ -3,9 +3,8 @@
 
 //! Ledger rows and schema bookkeeping common to the projection lanes.
 //!
-//! Every lane derives from the same `mcp::encode` schemas and names the same
-//! source constructs it cannot carry, so the rows and the uncarried-keyword scan
-//! live here once.
+//! Each lane uses the MCP declaration schemas and identifies the source
+//! constructs it omits through the shared rows and keyword scan.
 
 use std::borrow::Cow;
 
