@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 279,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint",
+  "branch": "paudley/279-index-tool-graph-parameter-hint",
+  "slug": "index-tool-graph-parameter-hint",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "fd1526800b9c71d50decd97ff8fce7c046ef28f5",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint",
+    "branch:paudley/279-index-tool-graph-parameter-hint",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl caches into /home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint plus 0 dependency units from 0 other checkouts in 67.2s; 2245 unchanged files keep their built mtimes; 2 other files take the seed time and rebuild; 33 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint",
+    "issue:/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-19T22:25:26-0600",
+  "seed_error": ""
+}

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint",
+  "branch": "paudley/279-index-tool-graph-parameter-hint",
+  "base_ref": "bcbeb63067140fc6212ac0bd43f05183ac6a861a",
+  "head": "fd1526800b9c71d50decd97ff8fce7c046ef28f5",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint/sync/20261120T043250-903b8a5de9cb4badb4b923da01e1877c",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "bcbeb63067140fc6212ac0bd43f05183ac6a861a",
+  "merge_bases": [
+    "fd1526800b9c71d50decd97ff8fce7c046ef28f5"
+  ],
+  "commit": "bcbeb63067140fc6212ac0bd43f05183ac6a861a"
+}

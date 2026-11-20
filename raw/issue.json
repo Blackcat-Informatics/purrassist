@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Part of #33. The RDF loader scans the full reifier table for every FnO input parameter. Build a temporary, admitted lookup over parameter-path reifiers so each lookup searches by native statement identity.\n\nPreserve blank-node scope, duplicate detection, the encounter order used for refusals, and the original source diagnostics for unconsumed reifiers. Admit index storage and work under the existing caller governor. Use native loader fixtures to exercise a matching hint and a competing binding, then run the repository gate.\n\nThis delivery covers parameter hint lookup. The remaining loader, codec and SHACL acceptance stays in #33.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-20T04:23:39Z",
+  "labels": [],
+  "milestone": null,
+  "number": 279,
+  "state": "OPEN",
+  "title": "Index tool graph parameter hint reifiers during RDF loading",
+  "updatedAt": "2026-11-20T04:23:39Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/279"
+}

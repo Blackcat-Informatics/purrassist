@@ -1,0 +1,148 @@
+{
+  "issue": 279,
+  "pr_number": 280,
+  "branch": "paudley/279-index-tool-graph-parameter-hint",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint",
+  "observed_at": "2026-11-20T05:34:14.803722+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/279-index-tool-graph-parameter-hint/.stage/index-tool-graph-parameter-hint/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "fd1526800b9c71d50decd97ff8fce7c046ef28f5",
+    "headRefName": "paudley/279-index-tool-graph-parameter-hint",
+    "headRefOid": "1e8ea480b790073292ee9aa647c82c7f80b14a85",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 280,
+    "state": "OPEN",
+    "title": "Index parameter hint reifiers by native RDF path",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/280"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44676989056/job/136091062346",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44676989056/job/136091062120",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44676989056/job/136091062366",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44676989056/job/136091062144",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44676989056/job/136091062197",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44676989056/job/136091062344",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44676989056/job/136091061947",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "1e8ea480b790073292ee9aa647c82c7f80b14a85",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "1e8ea480b790073292ee9aa647c82c7f80b14a85",
+    "branch": "paudley/279-index-tool-graph-parameter-hint",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 280,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #280 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 12,
+      "bytes": 10937,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "fd1526800b9c71d50decd97ff8fce7c046ef28f5",
+      "head": "1e8ea480b790073292ee9aa647c82c7f80b14a85",
+      "status": "clean"
+    }
+  }
+}
