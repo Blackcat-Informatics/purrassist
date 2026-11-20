@@ -1902,26 +1902,23 @@ impl Doc<'_> {
                     found += 1;
                 }
             }
-            let path = match (path, found) {
-                (Some(path), 1) => path,
-                _ => {
-                    let at = locations.statement(
-                        &row.s,
-                        &row.p,
-                        &row.o,
-                        &mut storage.governor.borrow_mut(),
-                    )?;
-                    return Err(LoadError::InvalidShape {
-                        subject: show(property.term),
-                        predicate: SH_PATH.to_owned(),
-                        at: at.map(Box::new),
-                        violation: if found == 0 {
-                            Violation::Missing
-                        } else {
-                            Violation::TooMany { found }
-                        },
-                    });
-                }
+            let (Some(path), 1) = (path, found) else {
+                let at = locations.statement(
+                    &row.s,
+                    &row.p,
+                    &row.o,
+                    &mut storage.governor.borrow_mut(),
+                )?;
+                return Err(LoadError::InvalidShape {
+                    subject: show(property.term),
+                    predicate: SH_PATH.to_owned(),
+                    at: at.map(Box::new),
+                    violation: if found == 0 {
+                        Violation::Missing
+                    } else {
+                        Violation::TooMany { found }
+                    },
+                });
             };
             let Some(iri) = iri_of(&path.o) else {
                 let at = locations.statement(

@@ -1421,7 +1421,7 @@ fn unresolved_shapes_point_to_the_written_tool_reference() {
                     at: Some(at),
                 } if subject == &format!("{EX}query_customer_orders")
                     && refused == &format!("{NAMESPACE}{predicate}")
-                    && &source[at.start..at.end] == written
+                    && source[at.start..at.end] == written
             ),
             "{error:?}"
         );
