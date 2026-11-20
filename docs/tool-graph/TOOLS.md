@@ -53,6 +53,8 @@ Vocabulary role checks also locate specific rejected statements, including a
 predicate on the wrong role and a value of the wrong kind or range.
 An excess-value refusal reports the exact count and points to the first
 excess value in native row order.
+When the loader identifies an original RDF row, the extent comes from that
+row's native statement layer.
 Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
 code is `unsupported-format` for every such media type. The owned `RdfDataset`

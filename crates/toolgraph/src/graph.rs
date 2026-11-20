@@ -46,8 +46,8 @@
 //! * The published [`RdfDataset`] copy returned by [`ToolGraph::dataset`] is
 //!   outside the scratch account. `PurRDF` exposes a borrowed view of the
 //!   retained parse.
-//! * For a diagnostic that identifies a specific row or reifier binding,
-//!   [`SourceExtent`] names the first written occurrence of that RDF statement.
+//! * When a diagnostic identifies an original parsed row or reifier binding,
+//!   [`SourceExtent`] names its first written occurrence in the native layer.
 //!   Matching preserves blank scopes and literal facets. A tool declaration
 //!   missing its required `FnO` function type points to the written tool type.
 //!   Refusals that identify only a node carry no statement extent.

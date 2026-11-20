@@ -535,7 +535,7 @@ impl<'v> Doc<'v> {
                 .inspect_vocabulary_statement(&row.s, &row.p, &row.o, &mut memory)
                 .map_err(refusal)?
             {
-                let at = locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut())?;
+                let at = locations.row(row, &mut governor.borrow_mut())?;
                 return Err(LoadError::UnknownTerm {
                     subject: show(&row.s),
                     predicate: row.p.clone(),
@@ -654,14 +654,8 @@ struct Locations<'a, V> {
 }
 
 impl<V: DatasetView<Id = TermId>> Locations<'_, V> {
-    fn statement(
-        &self,
-        subject: &TermValue,
-        predicate: &str,
-        object: &TermValue,
-        governor: &mut Governor,
-    ) -> Result<Option<SourceExtent>, LoadError> {
-        control::default_row_extent(self.view, self.source, subject, predicate, object, governor)
+    fn row(&self, row: &Row, governor: &mut Governor) -> Result<Option<SourceExtent>, LoadError> {
+        control::classified_row_extent(self.view, self.source, row, governor)
     }
 
     fn reifier(
@@ -678,7 +672,7 @@ impl<V: DatasetView<Id = TermId>> Locations<'_, V> {
         construct: Construct,
         governor: &mut Governor,
     ) -> Result<LoadError, LoadError> {
-        let at = self.statement(&row.s, &row.p, &row.o, governor)?;
+        let at = self.row(row, governor)?;
         Ok(unsupported(&row.s, &row.p, construct, at))
     }
 
@@ -688,7 +682,7 @@ impl<V: DatasetView<Id = TermId>> Locations<'_, V> {
         violation: Violation,
         governor: &mut Governor,
     ) -> Result<LoadError, LoadError> {
-        let at = self.statement(&row.s, &row.p, &row.o, governor)?;
+        let at = self.row(row, governor)?;
         Ok(LoadError::InvalidShape {
             subject: show(&row.s),
             predicate: row.p.clone(),
@@ -696,20 +690,6 @@ impl<V: DatasetView<Id = TermId>> Locations<'_, V> {
             violation,
         })
     }
-}
-
-fn unowned_row<V: DatasetView<Id = TermId>>(
-    row: &Row,
-    view: &V,
-    source: &BorrowedSource<'_>,
-    governor: &mut Governor,
-) -> Result<LoadError, LoadError> {
-    Ok(LoadError::UnsupportedConstruct {
-        subject: show(&row.s),
-        predicate: row.p.clone(),
-        construct: Construct::UnownedStatement,
-        at: control::default_row_extent(view, source, &row.s, &row.p, &row.o, governor)?,
-    })
 }
 
 impl Doc<'_> {
@@ -760,10 +740,9 @@ impl Doc<'_> {
                 declaration
             };
             if !owned {
-                return Err(unowned_row(
+                return Err(locations.unsupported_row(
                     row,
-                    locations.view,
-                    locations.source,
+                    Construct::UnownedStatement,
                     &mut governor.borrow_mut(),
                 )?);
             }
@@ -776,15 +755,7 @@ impl Doc<'_> {
             } else {
                 return Ok(true);
             };
-            let at = control::default_row_extent_or_iri(
-                locations.view,
-                locations.source,
-                &row.s,
-                RDF_TYPE,
-                None,
-                Some(FNOM_MAPPING),
-                &mut governor.borrow_mut(),
-            )?;
+            let at = locations.row(row, &mut governor.borrow_mut())?;
             return Err(LoadError::InvalidFnoBinding {
                 subject: show(&row.s),
                 predicate: Some(RDF_TYPE.to_owned()),
@@ -1003,10 +974,9 @@ impl Doc<'_> {
                 if mask == 0 {
                     // An abstract role or bare shape has no property table.
                     if self.is_vocabulary_row(row, &mut progress).map_err(stop)? {
-                        return Err(unowned_row(
+                        return Err(locations.unsupported_row(
                             row,
-                            locations.view,
-                            locations.source,
+                            Construct::UnownedStatement,
                             &mut governor.borrow_mut(),
                         )?);
                     }
@@ -1014,8 +984,7 @@ impl Doc<'_> {
                     compare_bytes(key.as_bytes(), row.p.as_bytes(), &mut progress).map_err(stop)
                 })? && Role::domain(name) & mask == 0
                 {
-                    let at =
-                        locations.statement(node, &row.p, &row.o, &mut governor.borrow_mut())?;
+                    let at = locations.row(row, &mut governor.borrow_mut())?;
                     return Err(Self::wrap(
                         Role::first(mask),
                         node,
@@ -1043,7 +1012,7 @@ impl Doc<'_> {
         progress: &mut Work<'_, '_>,
     ) -> Result<(), LoadError> {
         let mut socket_type = false;
-        let mut protocol = false;
+        let mut protocol = None;
         let mut mount_allow = None;
         for spec in Spec::table(role) {
             work(&mut governor.borrow_mut(), 1)?;
@@ -1060,12 +1029,7 @@ impl Doc<'_> {
                 ));
             }
             if let Some(row) = excess {
-                let at = control::classified_row_extent(
-                    locations.view,
-                    locations.source,
-                    row,
-                    &mut governor.borrow_mut(),
-                )?;
+                let at = locations.row(row, &mut governor.borrow_mut())?;
                 return Err(Self::wrap(
                     role,
                     node.identity.term,
@@ -1076,10 +1040,6 @@ impl Doc<'_> {
             }
             if found == 0 {
                 continue;
-            }
-            if role == Role::NETWORK {
-                socket_type |= spec.name == "socketType";
-                protocol |= spec.name == "protocol";
             }
             for &index in node.rows {
                 let row = &self.rows[index];
@@ -1093,12 +1053,7 @@ impl Doc<'_> {
                         .map_err(stop)?;
                 }
                 if let Some(violation) = property_violation(spec.kind, value, governor)? {
-                    let at = locations.statement(
-                        node.identity.term,
-                        predicate,
-                        value,
-                        &mut governor.borrow_mut(),
-                    )?;
+                    let at = locations.row(row, &mut governor.borrow_mut())?;
                     return Err(Self::wrap(
                         role,
                         node.identity.term,
@@ -1107,28 +1062,30 @@ impl Doc<'_> {
                         at,
                     ));
                 }
-                if role == Role::MOUNT && spec.name == "deny" && !boolean(value) {
-                    mount_allow = Some(value);
+                match (role, spec.name) {
+                    (Role::NETWORK, "socketType") => socket_type = true,
+                    (Role::NETWORK, "protocol") => protocol = Some(row),
+                    (Role::MOUNT, "deny") if !boolean(value) => mount_allow = Some(row),
+                    _ => {}
                 }
             }
         }
-        if role == Role::NETWORK && socket_type == protocol {
+        if role == Role::NETWORK && socket_type == protocol.is_some() {
+            let at = protocol
+                .map(|row| locations.row(row, &mut governor.borrow_mut()))
+                .transpose()?
+                .flatten();
             return Err(Self::wrap(
                 role,
                 node.identity.term,
                 self.term("protocol"),
                 Violation::Exclusive,
-                None,
+                at,
             ));
         }
-        if let Some(value) = mount_allow {
+        if let Some(row) = mount_allow {
             let predicate = self.term("deny");
-            let at = locations.statement(
-                node.identity.term,
-                predicate,
-                value,
-                &mut governor.borrow_mut(),
-            )?;
+            let at = locations.row(row, &mut governor.borrow_mut())?;
             return Err(Self::wrap(
                 role,
                 node.identity.term,
@@ -1434,8 +1391,7 @@ impl Doc<'_> {
                 self.build_tool(node, catalog, &lookup, &mut hints, locations, &mut storage)?;
             let name = self.required_property(nodes, node, "name", &mut progress)?;
             if scratch.record_name(&mut seen_names, lexical_str(&name.o), &mut progress)? {
-                let at =
-                    locations.statement(&name.s, &name.p, &name.o, &mut governor.borrow_mut())?;
+                let at = locations.row(name, &mut governor.borrow_mut())?;
                 return Err(LoadError::InvalidShape {
                     subject: show(node.term),
                     predicate: name.p.clone(),
@@ -1517,7 +1473,7 @@ impl Doc<'_> {
                         .map_err(stop)?
                         .is_eq()
                 {
-                    at = locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut())?;
+                    at = locations.row(row, &mut governor.borrow_mut())?;
                     break;
                 }
             }
@@ -1571,7 +1527,7 @@ impl Doc<'_> {
     ) -> Result<LoadError, LoadError> {
         let at = self
             .type_row(nodes, node.id, self.term("Tool"), progress)?
-            .map(|row| locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut()))
+            .map(|row| locations.row(row, &mut governor.borrow_mut()))
             .transpose()?
             .flatten();
         Ok(LoadError::InvalidFnoBinding {
@@ -2001,7 +1957,7 @@ impl Doc<'_> {
                     .map_err(stop)?
                     .is_eq()
             {
-                return locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut());
+                return locations.row(row, &mut governor.borrow_mut());
             }
         }
         Ok(None)
@@ -2018,12 +1974,7 @@ impl Doc<'_> {
     ) -> Result<Vec<ShapePath<'d>>, LoadError> {
         let shape = Node::object(reference);
         if !self.has_type_id(nodes, shape.id, SH_NODE_SHAPE, progress)? {
-            let at = locations.statement(
-                &reference.s,
-                &reference.p,
-                &reference.o,
-                &mut storage.governor.borrow_mut(),
-            )?;
+            let at = locations.row(reference, &mut storage.governor.borrow_mut())?;
             return Err(LoadError::InvalidShape {
                 subject: show(&reference.s),
                 predicate: reference.p.clone(),
@@ -2048,12 +1999,7 @@ impl Doc<'_> {
                 }
             }
             let (Some(path), 1) = (path, found) else {
-                let at = locations.statement(
-                    &row.s,
-                    &row.p,
-                    &row.o,
-                    &mut storage.governor.borrow_mut(),
-                )?;
+                let at = locations.row(row, &mut storage.governor.borrow_mut())?;
                 return Err(LoadError::InvalidShape {
                     subject: show(property.term),
                     predicate: SH_PATH.to_owned(),
@@ -2066,12 +2012,7 @@ impl Doc<'_> {
                 });
             };
             let Some(iri) = iri_of(&path.o) else {
-                let at = locations.statement(
-                    property.term,
-                    SH_PATH,
-                    &path.o,
-                    &mut storage.governor.borrow_mut(),
-                )?;
+                let at = locations.row(path, &mut storage.governor.borrow_mut())?;
                 return Err(unsupported(
                     property.term,
                     SH_PATH,
@@ -2178,8 +2119,7 @@ impl Doc<'_> {
         if let Some(row) = none
             && (integer_to_string || string_to_integer)
         {
-            let at =
-                locations.statement(&row.s, &row.p, &row.o, &mut storage.governor.borrow_mut())?;
+            let at = locations.row(row, &mut storage.governor.borrow_mut())?;
             return Err(LoadError::InvalidHint {
                 subject: show(id),
                 predicate: coercion_predicate.to_owned(),
@@ -2267,7 +2207,7 @@ impl Doc<'_> {
             Err(error) => {
                 let at = match row {
                     Some(row) => locations
-                        .statement(&row.s, &row.p, &row.o, &mut storage.governor.borrow_mut())?
+                        .row(row, &mut storage.governor.borrow_mut())?
                         .map(Box::new),
                     None => None,
                 };
