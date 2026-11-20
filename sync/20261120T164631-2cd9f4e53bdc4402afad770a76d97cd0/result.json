@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and",
+  "branch": "paudley/39-tool-graph-phase-4-verification-and",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "d58c52e192fec49a13fd4cb56dd587a84137b11b",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/sync/20261120T164631-2cd9f4e53bdc4402afad770a76d97cd0",
+  "conflicts": [],
+  "status": "completed",
+  "base": "a6178a57b24b5ed8ddfd9a8d5868fc63cf74b5f7",
+  "merge_bases": [
+    "3a2cae24ff689c2bd417a1cb929aec53c21415ea"
+  ],
+  "merge_index": "c66adab34d5d901dbe45e08b67cb359f2f747bb5d9196cba6affaa03d73950b5",
+  "candidate_tree": "1f305997f115198b7bc069905cb35d38ea7288b0",
+  "candidate_patch": "candidate-a039e8ebcff04eef9660747688de3f14.patch",
+  "stdout_log": "commit-a039e8ebcff04eef9660747688de3f14.stdout.log",
+  "stderr_log": "commit-a039e8ebcff04eef9660747688de3f14.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 2.3316150980244856,
+  "commit": "eca37f461eed1f8f0081edda10c02c93440cf137",
+  "tree": "1f305997f115198b7bc069905cb35d38ea7288b0",
+  "exit_code": 0
+}

@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 39,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and",
+  "branch": "paudley/39-tool-graph-phase-4-verification-and",
+  "slug": "tool-graph-phase-4-verification-and",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "3a2cae24ff689c2bd417a1cb929aec53c21415ea",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and",
+    "branch:paudley/39-tool-graph-phase-4-verification-and",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:already present",
+    "stage:/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and",
+    "issue:/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-20T09:50:28-0600",
+  "seed_error": ""
+}

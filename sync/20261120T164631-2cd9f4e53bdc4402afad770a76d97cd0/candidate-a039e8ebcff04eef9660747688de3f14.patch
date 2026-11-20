@@ -1,0 +1,173 @@
+diff --git crates/toolgraph/src/graph.rs crates/toolgraph/src/graph.rs
+index c99ae08f..9cd1c360 100644
+--- crates/toolgraph/src/graph.rs
++++ crates/toolgraph/src/graph.rs
+@@ -48,8 +48,9 @@
+ //!   retained parse.
+ //! * For a diagnostic that identifies a specific row or reifier binding,
+ //!   [`SourceExtent`] names the first written occurrence of that RDF statement.
+-//!   Matching preserves blank scopes and literal facets. Refusals that identify
+-//!   only a node, including missing `FnO` facts, carry no statement extent.
++//!   Matching preserves blank scopes and literal facets. A tool declaration
++//!   missing its required `FnO` function type points to the written tool type.
++//!   Refusals that identify only a node carry no statement extent.
+ //!   The syntax that introduces a generated term supplies its location.
+ //! * Only default-graph statements and reifiers load; a named-graph one is refused.
+ //! * The vocabulary shapes are checked by a Rust table that is not equivalent to
+diff --git crates/toolgraph/src/graph/load.rs crates/toolgraph/src/graph/load.rs
+index a341f834..d737cc30 100644
+--- crates/toolgraph/src/graph/load.rs
++++ crates/toolgraph/src/graph/load.rs
+@@ -1387,12 +1387,22 @@ impl Doc<'_> {
+             if role.mask & Role::TOOL == 0 {
+                 continue;
+             }
+-            let Some(catalog) = catalog else {
+-                return Err(Self::missing_function(node.term));
++            let catalog = match catalog {
++                Some(catalog)
++                    if self.has_type_id(nodes, node.id, FNO_FUNCTION, &mut progress)? =>
++                {
++                    catalog
++                }
++                _ => {
++                    return Err(self.missing_function(
++                        nodes,
++                        node,
++                        locations,
++                        governor,
++                        &mut progress,
++                    )?);
++                }
+             };
+-            if !self.has_type_id(nodes, node.id, FNO_FUNCTION, &mut progress)? {
+-                return Err(Self::missing_function(node.term));
+-            }
+             let candidate =
+                 self.build_tool(node, catalog, &lookup, &mut hints, locations, &mut storage)?;
+             let name = self.required_property(nodes, node, "name", &mut progress)?;
+@@ -1524,13 +1534,25 @@ impl Doc<'_> {
+         Ok(())
+     }
+ 
+-    fn missing_function(node: &TermValue) -> LoadError {
+-        LoadError::InvalidFnoBinding {
+-            subject: show(node),
++    fn missing_function<V: DatasetView<Id = TermId>>(
++        &self,
++        nodes: &Nodes<'_>,
++        node: Node<'_>,
++        locations: &Locations<'_, V>,
++        governor: &Shared<'_>,
++        progress: &mut Work<'_, '_>,
++    ) -> Result<LoadError, LoadError> {
++        let at = self
++            .type_row(nodes, node.id, self.term("Tool"), progress)?
++            .map(|row| locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut()))
++            .transpose()?
++            .flatten();
++        Ok(LoadError::InvalidFnoBinding {
++            subject: show(node.term),
+             predicate: Some(RDF_TYPE.to_owned()),
+             detail: "a tool must be typed as an fno:Function".to_owned(),
+-            at: None,
+-        }
++            at,
++        })
+     }
+ 
+     fn first_property<'d>(
+@@ -1556,6 +1578,16 @@ impl Doc<'_> {
+         class: &str,
+         progress: &mut Work<'_, '_>,
+     ) -> Result<bool, LoadError> {
++        Ok(self.type_row(nodes, id, class, progress)?.is_some())
++    }
++
++    fn type_row<'d>(
++        &'d self,
++        nodes: &Nodes<'_>,
++        id: TermId,
++        class: &str,
++        progress: &mut Work<'_, '_>,
++    ) -> Result<Option<&'d Row>, LoadError> {
+         for &index in nodes.rows(id) {
+             let row = &self.rows[index];
+             if matches_predicate(row, RDF_TYPE, progress)?
+@@ -1564,10 +1596,10 @@ impl Doc<'_> {
+                     .map_err(stop)?
+                     .is_eq()
+             {
+-                return Ok(true);
++                return Ok(Some(row));
+             }
+         }
+-        Ok(false)
++        Ok(None)
+     }
+ 
+     fn typed_value<'d>(
+diff --git crates/toolgraph/tests/graph_load.rs crates/toolgraph/tests/graph_load.rs
+index c1f05b2b..f4f86780 100644
+--- crates/toolgraph/tests/graph_load.rs
++++ crates/toolgraph/tests/graph_load.rs
+@@ -1373,6 +1373,37 @@ fn a_function_without_a_tool_is_refused_as_a_function_without_a_tool() {
+     );
+ }
+ 
++#[test]
++fn a_tool_without_a_function_is_located_at_its_written_type() {
++    let source = worked();
++    load(&source).expect("neighbouring valid input");
++    let written = "a pa:Tool";
++    let source = format!(
++        "{source}\nex:orphanTool a pa:Node ; {written} ;\n\
++         pa:name \"orphan_tool\" ; pa:description \"An orphan tool.\" ;\n\
++         pa:inputShape ex:EditInput ; pa:outputShape ex:EditOutput ;\n\
++         pa:executionProfile ex:FileProfile ; pa:contextManagement ex:EditContext ;\n\
++         pa:parameterConstraints \"\" ."
++    );
++    let error = load(&source).expect_err("a declared tool requires a function type");
++    let LoadError::InvalidFnoBinding {
++        subject,
++        predicate,
++        detail,
++        at: Some(at),
++    } = error
++    else {
++        panic!("{error:?}");
++    };
++    assert_eq!(subject, format!("{EX}orphanTool"));
++    assert_eq!(
++        predicate.as_deref(),
++        Some("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
++    );
++    assert_eq!(detail, "a tool must be typed as an fno:Function");
++    assert_eq!(&source[at.start..at.end], written);
++}
++
+ #[test]
+ fn callable_mapping_selection_requires_exactly_one_mapping_per_tool() {
+     let source = worked();
+diff --git docs/tool-graph/TOOLS.md docs/tool-graph/TOOLS.md
+index 9d0b0846..9d8ab1ce 100644
+--- docs/tool-graph/TOOLS.md
++++ docs/tool-graph/TOOLS.md
+@@ -45,12 +45,12 @@ matching the refusal. An unsupported projection also preserves the field-mask
+ parser's offset in the decoded string. FnO refusals point to an exact row or
+ return-list head identified by the catalog reader. When several mappings
+ name one callable, the refusal points to the `fno:function` statement of the
+-second mapping in native catalog order. Missing facts and ambiguous field or
+-list failures have no statement extent. A hint that combines `none` with a
+-conversion points to the written `none` value.
++second mapping in native catalog order. A tool missing its required
++`fno:Function` type points to its written tool declaration. Refusals
++that identify only a node have no statement extent. A hint that combines
++`none` with a conversion points to the written `none` value.
+ Vocabulary role checks also locate specific rejected statements, including a
+-predicate on the wrong role and a value of the wrong kind or range. Refusals
+-that identify only a node name the subject and predicate where available.
++predicate on the wrong role and a value of the wrong kind or range.
+ Other media types than Turtle and TriG are refused as `LoadError::Parse`
+ because purrdf governs and retains occurrences for those two alone; the refusal
+ code is `unsupported-format` for every such media type. The owned `RdfDataset`
