@@ -1758,17 +1758,17 @@ impl Doc<'_> {
         let iri = iri_of(node.term).expect("tool subject is an IRI");
         let binding = Self::admit_callable(catalog, iri, storage)?;
         let mut progress = Work::new(storage.governor);
-        let input_shape =
-            Node::object(self.required_property(nodes, node, "inputShape", &mut progress)?);
-        let output_shape =
-            Node::object(self.required_property(nodes, node, "outputShape", &mut progress)?);
+        let input = self.required_property(nodes, node, "inputShape", &mut progress)?;
+        let output = self.required_property(nodes, node, "outputShape", &mut progress)?;
+        let input_shape = Node::object(input);
+        let output_shape = Node::object(output);
         let (scratch, rejection) = Storage::new(storage.governor);
         let mut scratch = OwnedAdmission::new(scratch);
         let mut scratch = BuildStorage::new(&mut scratch, storage.governor, rejection);
         let mut input_paths =
-            self.shape_paths(nodes, input_shape, locations, &mut scratch, &mut progress)?;
+            self.shape_paths(nodes, input, locations, &mut scratch, &mut progress)?;
         let mut output_paths =
-            self.shape_paths(nodes, output_shape, locations, &mut scratch, &mut progress)?;
+            self.shape_paths(nodes, output, locations, &mut scratch, &mut progress)?;
         let mut parameters = Vec::new();
         for parameter in binding.parameters() {
             storage.charge(1)?;
@@ -1866,16 +1866,23 @@ impl Doc<'_> {
     fn shape_paths<'d, V: DatasetView<Id = TermId>>(
         &'d self,
         nodes: &Nodes<'_>,
-        shape: Node<'_>,
+        reference: &Row,
         locations: &Locations<'_, V>,
         storage: &mut BuildStorage<'_, '_, '_>,
         progress: &mut Work<'_, '_>,
     ) -> Result<Vec<ShapePath<'d>>, LoadError> {
+        let shape = Node::object(reference);
         if !self.has_type_id(nodes, shape.id, SH_NODE_SHAPE, progress)? {
+            let at = locations.statement(
+                &reference.s,
+                &reference.p,
+                &reference.o,
+                &mut storage.governor.borrow_mut(),
+            )?;
             return Err(LoadError::InvalidShape {
-                subject: show(shape.term),
-                predicate: RDF_TYPE.to_owned(),
-                at: None,
+                subject: show(&reference.s),
+                predicate: reference.p.clone(),
+                at: at.map(Box::new),
                 violation: Violation::Unresolved,
             });
         }
@@ -1887,20 +1894,34 @@ impl Doc<'_> {
             }
             let property = Node::object(row);
             let mut path = None;
+            let mut found = 0;
             for &index in nodes.rows(property.id) {
-                let row = &self.rows[index];
-                if matches_predicate(row, SH_PATH, progress)? && path.replace(row).is_some() {
-                    path = None;
-                    break;
+                let candidate = &self.rows[index];
+                if matches_predicate(candidate, SH_PATH, progress)? {
+                    path = Some(candidate);
+                    found += 1;
                 }
             }
-            let Some(path) = path else {
-                return Err(LoadError::InvalidShape {
-                    subject: show(property.term),
-                    predicate: SH_PATH.to_owned(),
-                    at: None,
-                    violation: Violation::Missing,
-                });
+            let path = match (path, found) {
+                (Some(path), 1) => path,
+                _ => {
+                    let at = locations.statement(
+                        &row.s,
+                        &row.p,
+                        &row.o,
+                        &mut storage.governor.borrow_mut(),
+                    )?;
+                    return Err(LoadError::InvalidShape {
+                        subject: show(property.term),
+                        predicate: SH_PATH.to_owned(),
+                        at: at.map(Box::new),
+                        violation: if found == 0 {
+                            Violation::Missing
+                        } else {
+                            Violation::TooMany { found }
+                        },
+                    });
+                }
             };
             let Some(iri) = iri_of(&path.o) else {
                 let at = locations.statement(

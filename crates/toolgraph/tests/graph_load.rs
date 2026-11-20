@@ -1374,6 +1374,61 @@ ex:duplicateCustomerShape a sh:PropertyShape ; sh:path ex:customer_id .
     ));
 }
 
+#[test]
+fn a_property_shape_requires_exactly_one_path_value() {
+    let original = "sh:path ex:customer_id ;";
+    for (replacement, expected) in [
+        ("", Violation::Missing),
+        (
+            "sh:path ex:customer_id, ex:limit, ex:path ;",
+            Violation::TooMany { found: 3 },
+        ),
+    ] {
+        let written = "sh:property ex:customerIdShape";
+        let source = edited(original, replacement).replace(
+            "sh:property ex:customerIdShape, ex:limitShape",
+            "sh:property ex:customerIdShape ; sh:property ex:limitShape",
+        );
+        let error = load(&source).expect_err("invalid path count");
+        assert!(
+            matches!(
+                &error,
+                LoadError::InvalidShape { subject, predicate, violation, at: Some(at) }
+                    if subject == &format!("{EX}customerIdShape")
+                        && predicate == "http://www.w3.org/ns/shacl#path"
+                        && violation == &expected
+                        && &source[at.start..at.end] == written
+            ),
+            "{error:?}"
+        );
+    }
+    load(&worked()).expect("single path value");
+}
+
+#[test]
+fn unresolved_shapes_point_to_the_written_tool_reference() {
+    for (predicate, shape) in [("inputShape", "QueryInput"), ("outputShape", "QueryOutput")] {
+        let written = format!("pa:{predicate} <https://example.org/tools/UndeclaredShape>");
+        let source = edited(&format!("pa:{predicate} ex:{shape}"), &written);
+        let error = load(&source).expect_err("shape reference must resolve");
+        assert!(
+            matches!(
+                &error,
+                LoadError::InvalidShape {
+                    subject,
+                    predicate: refused,
+                    violation: Violation::Unresolved,
+                    at: Some(at),
+                } if subject == &format!("{EX}query_customer_orders")
+                    && refused == &format!("{NAMESPACE}{predicate}")
+                    && &source[at.start..at.end] == written
+            ),
+            "{error:?}"
+        );
+    }
+    load(&worked()).expect("declared shapes");
+}
+
 // Rationale: only a plain predicate IRI is a parameter path; a `sh:path` that is a
 // blank-node path expression is refused as a complex path, never read as an IRI.
 #[test]
