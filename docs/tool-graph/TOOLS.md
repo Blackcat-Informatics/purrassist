@@ -52,7 +52,8 @@ that identify only a node have no statement extent. A hint that combines
 Vocabulary role checks also locate specific rejected statements, including a
 predicate on the wrong role and a value of the wrong kind or range.
 An excess-value refusal reports the exact count and points to the first
-excess value in native row order.
+excess value in native row order. A missing `sh:path` points to the
+`sh:property` reference that requires it.
 When the loader identifies an original RDF row, the extent comes from that
 row's native statement layer.
 Other media types than Turtle and TriG are refused as `LoadError::Parse`
