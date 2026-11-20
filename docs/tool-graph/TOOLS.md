@@ -45,12 +45,12 @@ matching the refusal. An unsupported projection also preserves the field-mask
 parser's offset in the decoded string. FnO refusals point to an exact row or
 return-list head identified by the catalog reader. When several mappings
 name one callable, the refusal points to the `fno:function` statement of the
-second mapping in native catalog order. Missing facts and ambiguous field or
-list failures have no statement extent. A hint that combines `none` with a
-conversion points to the written `none` value.
+second mapping in native catalog order. A tool missing its required
+`fno:Function` type points to its written tool declaration. Refusals
+that identify only a node have no statement extent. A hint that combines
+`none` with a conversion points to the written `none` value.
 Vocabulary role checks also locate specific rejected statements, including a
-predicate on the wrong role and a value of the wrong kind or range. Refusals
-that identify only a node name the subject and predicate where available.
+predicate on the wrong role and a value of the wrong kind or range.
 Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
 code is `unsupported-format` for every such media type. The owned `RdfDataset`
