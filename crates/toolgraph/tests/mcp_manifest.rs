@@ -24,9 +24,13 @@ const TOOLS: &str = include_str!("../../../docs/tool-graph/TOOLS.md");
 const GOLDEN: &str = include_str!("data/worked_manifest.json");
 
 fn vocabulary() -> Vocabulary {
+    vocabulary_with_prefixes(vec![("pa".into(), NAMESPACE.into())])
+}
+
+fn vocabulary_with_prefixes(prefixes: Vec<(String, String)>) -> Vocabulary {
     Vocabulary::new(
         "pa",
-        PrefixTable(vec![("pa".into(), NAMESPACE.into())]),
+        PrefixTable(prefixes),
         TermBindings {
             namespace_iri: NAMESPACE.into(),
             local_names: TERM_NAMES
@@ -37,6 +41,41 @@ fn vocabulary() -> Vocabulary {
         register_loss_profile(LossProfile::builtin()).expect("loss profile"),
     )
     .expect("worked vocabulary")
+}
+
+#[test]
+fn manifest_prefixes_must_match_each_caller_binding_once_in_any_order() {
+    let vocabulary = vocabulary_with_prefixes(vec![
+        ("pa".into(), NAMESPACE.into()),
+        ("ex".into(), "urn:example:".into()),
+    ]);
+    let graph = ToolGraph::load(b"", "text/turtle", None, &vocabulary, &mut governor())
+        .expect("empty graph");
+    let (manifest, _) = mcp::encode(&graph, &vocabulary, &mut governor()).expect("manifest");
+    let expected = r#""prefixes":{"ex":"urn:example:","pa":"https://example.org/toolgraph#"}"#;
+    assert!(manifest.as_str().contains(expected));
+    let replace =
+        |prefixes| ManifestJson::from_text(manifest.as_str().replacen(expected, prefixes, 1));
+    let reordered =
+        replace(r#""prefixes":{"pa":"https://example.org/toolgraph#","ex":"urn:example:"}"#);
+    mcp::decode(&reordered, &vocabulary, &mut governor())
+        .expect("object member order is immaterial");
+    for prefixes in [
+        r#""prefixes":{"ex":"urn:example:","ex":"urn:example:"}"#,
+        r#""prefixes":{"ex":"urn:wrong:","pa":"https://example.org/toolgraph#"}"#,
+        r#""prefixes":{"ex":true,"pa":"https://example.org/toolgraph#"}"#,
+    ] {
+        assert!(
+            matches!(
+                mcp::decode(&replace(prefixes), &vocabulary, &mut governor()),
+                Err(CodecError::Disagreement {
+                    tool: None,
+                    member: "prefixes"
+                })
+            ),
+            "{prefixes}"
+        );
+    }
 }
 
 /// The Turtle fence of the "End-to-end example" section, read from the document itself.
