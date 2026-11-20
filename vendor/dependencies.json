@@ -1668,7 +1668,7 @@
     "host": {},
     "purrassist": {},
     "syntax": {},
-    "wasm-harness": {},
+    "acceptance-harness": {},
     "helper-census": {},
     "toolgraph": {
       "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",

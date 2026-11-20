@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check corpus fmt lint test doc hygiene reuse wasm-test benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check release-gate
+.PHONY: check corpus fmt lint test doc hygiene reuse benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check release-gate
 
 check: fmt hygiene helper-test helper-check lint test doc
 
@@ -41,9 +41,6 @@ corpus:
 
 doc:
 	RUSTDOCFLAGS="$${RUSTDOCFLAGS:-} -D warnings" cargo doc --workspace --no-deps --locked
-
-wasm-test:
-	python3 scripts/check-wasm.py
 
 benchmark:
 	cargo bench -p purrassist-core --bench recovery --locked

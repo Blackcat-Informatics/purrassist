@@ -1151,7 +1151,7 @@ class ReleaseQualificationSteps(Case):
     def test_a_step_that_runs_without_a_name_fails(self):
         tree = self.tree()
         tree.detach(self.WORKFLOW)
-        tree.append(self.WORKFLOW, '      - run: make wasm-test\n')
+        tree.append(self.WORKFLOW, '      - run: make syntax-oracles\n')
         line = tree.read(self.WORKFLOW).count('\n')
         self.assertFails(tree.errors(), 'release-qualification-steps', f'{self.WORKFLOW}:{line}', self.UNNAMED)
 
@@ -1166,9 +1166,9 @@ class ReleaseQualificationSteps(Case):
         self.assertEqual(CD.workflow_steps(text), [(4, 'Late', True), (6, None, False)])
         tree = self.tree()
         tree.detach(self.WORKFLOW)
-        tree.append(self.WORKFLOW, '      - run: make wasm-test\n        name: Verify wasm\n')
+        tree.append(self.WORKFLOW, '      - run: make syntax-oracles\n        name: Verify syntax oracles\n')
         errors = tree.errors()
-        self.assertFails(errors, 'release-qualification-steps', 'Verify wasm')
+        self.assertFails(errors, 'release-qualification-steps', 'Verify syntax oracles')
         self.assertFalse([error for error in errors if self.UNNAMED in error], errors)
 
     def test_a_run_body_line_that_starts_with_a_dash_is_not_a_step(self):
@@ -1464,8 +1464,8 @@ class CrateMap(Case):
 
     def test_an_internal_crate_must_be_named(self):
         tree = self.tree()
-        tree.replace('README.md', '`wasm-harness`', 'the wasm harness')
-        self.assertFails(tree.errors(), 'crate-map', "'wasm-harness'", 'internal')
+        tree.replace('README.md', '`acceptance-harness`', 'the acceptance harness')
+        self.assertFails(tree.errors(), 'crate-map', "'acceptance-harness'", 'internal')
 
     def test_the_order_comes_from_check_release(self):
         tree = self.tree()
@@ -1671,8 +1671,8 @@ class WorkspaceBoundaries(Case):
 
     def test_an_unpublished_member_must_say_internal(self):
         tree = self.tree()
-        tree.replace('docs/IMPLEMENTATION.md', '`wasm-harness`: internal, unpublished', '`wasm-harness`: unpublished')
-        self.assertFails(tree.errors(), 'workspace-boundaries', 'wasm-harness', 'internal')
+        tree.replace('docs/IMPLEMENTATION.md', '`acceptance-harness`: internal, unpublished', '`acceptance-harness`: unpublished')
+        self.assertFails(tree.errors(), 'workspace-boundaries', 'acceptance-harness', 'internal')
 
     def test_a_new_workspace_member_fails(self):
         tree = self.tree()

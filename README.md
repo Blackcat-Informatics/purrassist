@@ -114,8 +114,8 @@ Six crates make up the release set, published in this order:
 | `purrassist-host` | Filesystem and helper integration behind both the CLI and the MCP server: root-scoped files, journaled replacement, the shared tool registry. |
 | `purrassist-cli` | The CLI and stdio MCP server: the `purrassist` executable. |
 
-Three workspace crates are internal and not published: `wasm-harness` (native,
-WASI and browser-WASM acceptance transcripts), `purrassist-helper-census`
+Three workspace crates are internal and not published: `acceptance-harness` (native
+core acceptance transcripts), `purrassist-helper-census`
 (the duplicate-functionality census), and `purrassist-toolgraph` (validated
 caller-owned vocabulary, loss profiles, context masks and exact output byte
 bounds, with a direct consumer of the supported upstream plain FnO schema profile;
@@ -175,7 +175,7 @@ Current surfaces include:
   see the example below). Streaming recognition (#16) is implemented. Of provider
   streaming events (#17), Anthropic Messages event logs are read and
   reassembled by the Rust API; the OpenAI delta reading, CLI and MCP inputs,
-  provider-log fixtures, fuzz seeds and WASM parity remain tracked. See
+  provider-log fixtures and fuzz seeds have dedicated qualification. See
   [tool-call recovery](docs/tool-calls/README.md).
 - CLI, stdio MCP, and resumable helper request/response adapters
   (`prepare_helper` and `complete_helper`; see [helpers](docs/HELPERS.md)). No
@@ -299,7 +299,6 @@ rustfmt. No commit-verification bypass is permitted.
 
 ```sh
 make check       # formatting, attribution/dependencies, lint, optimized tests, docs
-make wasm-test   # compare native/WASI recovery, matching, embeddings, Markdown, and grammars
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 make fuzz       # eleven coverage-guided targets and independent pattern/Markdown oracles

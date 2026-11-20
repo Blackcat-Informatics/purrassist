@@ -341,12 +341,11 @@ targets' mutation tokens so mutation can create or move field boundaries).
   its cut terminal event, and a complete OpenAI seed projected to its
   `choices` members and terminal marker. The portable harness replays the
   complete source recording for each provider.
-  [Fixture provenance](../crates/wasm-harness/src/provider_logs/README.md)
+  [Fixture provenance](../crates/acceptance-harness/src/provider_logs/README.md)
 
 ## Differential probes
 
-**`pattern` vs Node's `RegExp`.** Node (pinned in `vendor/tooling.json`,
-already used for the wasm acceptance transcripts) is invoked out-of-process
+**`pattern` vs Node's `RegExp`.** Node (pinned in `vendor/tooling.json`) is invoked out-of-process
 per admitted execution whose pattern compiles and whose match completes:
 `new RegExp(pattern, 'u').test(subject)`. A pattern Node itself refuses to
 compile under `u` mode is counted as a reference rejection, not a mismatch — this restricts the

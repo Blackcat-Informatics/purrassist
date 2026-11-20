@@ -7,7 +7,6 @@
 * text=auto eol=lf
 
 # Binary artifacts are never normalized.
-*.wasm binary
 *.png binary
 *.jpg binary
 *.jpeg binary
@@ -19,4 +18,4 @@
 *.tar binary
 
 # Provider fixtures retain the terminal SSE separator and original bytes.
-crates/wasm-harness/src/provider_logs/*.sse -text whitespace=-blank-at-eof
+crates/acceptance-harness/src/provider_logs/*.sse -text whitespace=-blank-at-eof

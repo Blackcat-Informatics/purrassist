@@ -1074,7 +1074,7 @@ pub fn damerau_levenshtein(
     governor.charge(Resource::Work, size(cells))?;
     // Charge the portable, 64-bit-layout cell size (`usize::CHARGE`, never
     // `size_of::<usize>()`) so the same request has the same governor
-    // decision on native 64-bit and WASM 32-bit targets.
+    // decision on both 32-bit and 64-bit targets.
     let cell_bytes = usize::CHARGE;
     let scratch = size(cells)
         .saturating_mul(size(cell_bytes))

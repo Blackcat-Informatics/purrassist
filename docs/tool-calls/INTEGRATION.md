@@ -636,10 +636,8 @@ and resource usage, on every platform.
   `grammar_engine::push_split_equals_single_push`,
   `grammar_codecs::codec_every_split_equals_batch`, and
   `tool_call_cost::push_chunking_identical_work` (chunks of 1, 16, and 4096
-  bytes charge identical usage). `make wasm-test` executes the core
-  transcript, which includes a tool-call recovery with a fuzzy name and a
-  stray closer, natively, under WASI, and on `wasm32-unknown-unknown`, and
-  requires identical output.
+  bytes charge identical usage). The native core acceptance transcript
+  includes tool-call recovery with a fuzzy name and a stray closer.
 
 ### C4. Bounded cost
 

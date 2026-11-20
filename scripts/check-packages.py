@@ -27,7 +27,7 @@ directory = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(metadata['target_di
 report = []
 for package in metadata['packages']:
     if package.get('publish') == []:
-        # `publish = false` tooling crates (e.g. `crates/wasm-harness`) are
+        # `publish = false` tooling crates (e.g. `crates/acceptance-harness`) are
         # not part of the release this script audits and package-workspace.py
         # never packages them; mirrors the same filter check-release.py uses
         # to prove the publishable set.

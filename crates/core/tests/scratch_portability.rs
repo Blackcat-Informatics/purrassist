@@ -9,15 +9,8 @@
 //! (see `crates/core/src/contract.rs`), a literal fixed at that type's
 //! *64-bit* layout size, never by `core::mem::size_of::<T>()`. Every
 //! assertion below hard-codes the expected byte count rather than deriving
-//! it from `size_of` at test time: if a future change reverted any charge
-//! site back to `size_of`, this exact test, compiled for a 32-bit target
-//! (wasm32-wasip1/wasm32-unknown-unknown), would start failing even though
-//! it kept passing here on 64-bit native, because `size_of::<T>()` shrinks
-//! there while these literals cannot. That divergence — not a difference in
-//! *this* run's pass/fail status — is the regression this test exists to
-//! catch; `scripts/check-wasm.py` (and the direct native/WASI comparison in
-//! the acceptance evidence for this change) is what actually runs the other
-//! half of that comparison.
+//! it from `size_of` at test time. The published charges are independent of
+//! the target pointer width.
 use purrassist_core::json::{Member, Node, Value};
 use purrassist_core::provenance::{NodeId, ProvenanceNode};
 use purrassist_core::{Budget, Governor, ScratchCharge, ScratchMap, ScratchVec};

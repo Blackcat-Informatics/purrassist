@@ -14,7 +14,7 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 
 | Contract | Executable evidence | Scope |
 | --- | --- | --- |
-| Pure, portable first-party core | `make hygiene`, `make wasm-test` | Zero runtime dependencies; registered data/tooling/source notices; executed transcripts |
+| Pure, portable first-party core | `make hygiene`, `make check` | Zero runtime dependencies; registered data/tooling/source notices; executed transcripts |
 | JSON/schema validation | `schema_conformance`, `draft07`, `formats`, `vocabularies`, `schema_evidence` | 1,301 main Draft 2020-12 cases, 121 selected optional cases, all 878 vendored format/assertion cases; all 929 required Draft-07 cases and 905 of 911 Draft-07 optional cases (6 listed exclusions: annotation-only content, Draft 2019-09 cross-draft reference); nested observations and instance-scoped annotations |
 | Pattern engine | `pattern`, `pattern_corpus`, `pattern_generation`, `witness_pattern_generation` | 441 `test262` Unicode-property fixtures; derivative/backtracking agreement; assertion-sensitive witnesses and exclusions; 3,024 exhaustive finite generation cases |
 | Witness generation | `witness_algebra`, `witness_applicability`, `witness_formats`, `recursive_schemas` | 430 official-suite groups with valid instances witnessed; type-applicable bounds, occurrence-scoped contains counts, dialect-specific formats; explicit refutations and exhaustion; recursive/dynamic references |
@@ -119,10 +119,10 @@ Twenty-three dialects ship (`qwen3-coder-xml.v1`, `hermes.v1`,
 `mistral-v11.v1`, `deepseek-v3.1.v1`, `deepseek-v3.v1`, `kimi-k2.v1`,
 `anthropic-tool-use.v1`, `harmony.v1`, `gemma3-tool-code.v1`, `glm-4.5.v1`, `bare-json.v1`, `pythonic.v1`, `deepseek-v3-stripped.v1`, `deepseek-v3.1-stripped.v1`, `harmony-stripped.v1`, `hermes-stripped.v1`, `kimi-k2-stripped.v1`, `llama3-json-stripped.v1`, `mistral-v11-stripped.v1`, and `mistral-v3-stripped.v1`). Streaming recognition (#16) is implemented.
 The Rust APIs, CLI and MCP recover Anthropic Messages and OpenAI Chat
-Completions event logs. The portable harness replays recorded responses
+Completions event logs. The native acceptance harness replays recorded responses
 and truncated prefixes, and the `provider-log` fuzz target compares
 provider evidence and recovery across chunkings. The recording sources
-and licenses are pinned in the [fixture provenance](../crates/wasm-harness/src/provider_logs/README.md).
+and licenses are pinned in the [fixture provenance](../crates/acceptance-harness/src/provider_logs/README.md).
 Current qualification of the added
 recipes is pending automatic CI; the recorded evaluation numbers above
 refer to the prior source.
@@ -183,13 +183,10 @@ errors. Recovery deletes a temporary file only after validating its journal,
 recorded target-parent path, and bounded replacement-byte prefix. Unknown or
 unvalidated artifacts remain in place with an observable explanation.
 
-`make wasm-test` executes and compares native/WASI core, syntax, and fixed helper
-transcripts (the core transcript includes a tool-call recovery with a fuzzy
-tool name and a stray closer across two dialects); it also executes the core transcript on `wasm32-unknown-unknown`
-through Node's WebAssembly API. The unpublished harness supplies the host-free
-entry point. Fixed accounting layout charges keep the core decisions and receipt
-transcripts independent of native pointer width. These transcripts establish
-the exercised operations rather than every conceivable platform workload.
+The native acceptance harness exercises provider-log recovery, shared-token
+cancellation, and tool-call recovery with a fuzzy tool name and a stray closer.
+Run `cargo run --locked -p acceptance-harness --example portable-core` to print
+the core transcript. `make check` executes its Rustdoc and native tests.
 
 ## Quality, fuzzing, and performance limits
 
@@ -264,7 +261,6 @@ probe panic fails both fuzz commands.
 make check
 make corpus
 make syntax-oracles
-make wasm-test
 make fuzz-hosted
 make package
 RUSTUP_TOOLCHAIN=1.98.0 make release-gate
@@ -277,7 +273,7 @@ and the `Verify` workflow's `release-gate` job run.
 The `Verify` workflow additionally runs native Linux/macOS gates, the
 `release-gate` job (`make release-gate` on the release toolchain, Rust 1.98.0,
 which is also the MSRV 1.98 build-and-test evidence), Windows engines/files/CLI,
-executed WASM comparisons, and Linux qualification. Exact commit and run
+and Linux qualification. Exact commit and run
 evidence is recorded in issue #1 and the PR; a green run applies to its commit
 only. The trusted-publishing workflow is separate from qualification and uses
 the registered publisher identity.

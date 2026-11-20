@@ -51,8 +51,7 @@ complete source dataset is retained as Turtle in `_meta.security.sourceGraph`.
 Output is byte-deterministic. Decoding loads that source and requires every
 declaration to agree with it; legacy bundle formats and `maxOutputTokens` are
 refused. The pinned golden is `tests/data/worked_manifest.json`.
-`ToolGraph::tool_set` is implemented (#198). Wasm-harness wiring and host integration
-remain on #33.
+`ToolGraph::tool_set` is implemented (#198). Host integration remains on #33.
 
 `codec::mcp::ExecutionProfile` reads the complete execution-profile fragment
 from a caller-owned JSON DOM; `ManifestEnvelope::read` checks these fields for
@@ -132,7 +131,7 @@ masks. It preserves tag values, order and duplicates, accepts mathematical
 integer spellings across the full portable `u64` domain, and emits fixed field
 order with canonical masks and exact byte enforcement. Run
 `cargo run -p purrassist-toolgraph --example roundtrip_context` for an actual
-round trip. Wasm-harness wiring and host-release integration remain outstanding.
+round trip. Host-release integration remains outstanding.
 
 `codec::mcp::ManifestEnvelope` has a source implementation for borrowing a
 complete v2 bundle envelope from the existing ordered JSON DOM. It checks fixed

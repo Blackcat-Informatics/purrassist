@@ -1500,7 +1500,7 @@ as equivalent evidence. Both specification documents pass `prose-check`. The
 PR records actual command results and parser versions. Those checks validate this specification's
 examples, not the unimplemented loader or confinement runtime. Phase 3 adds
 the semantic and behavioral gates in TOOLS_PLAN.md; Phase 4 closes all
-cross-lane, host and native/WASM acceptance.
+cross-lane and native host acceptance.
 
 
 ## Validated single-result projection — implemented

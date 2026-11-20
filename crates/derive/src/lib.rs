@@ -299,7 +299,7 @@
 //! recovery and schema validation accept `300` for a `u8`, and the conversion
 //! then fails with `integer within the u8 range`. Prefer fixed-width integers
 //! in portable definitions: `usize` and `isize` have different ranges on
-//! `wasm32` than on 64-bit targets.
+//! 32-bit targets than on 64-bit targets.
 //!
 //! # Recursion
 //!
@@ -400,7 +400,7 @@ use write::Flavor;
 ///
 /// A `default` fills an absent argument (`Option<T>` included: it then reads
 /// as `Some(default)`). Integer types are range-checked only by the
-/// conversion; `usize`/`isize` differ on `wasm32`. Direct self-reference is
+/// conversion; `usize`/`isize` depend on pointer width. Direct self-reference is
 /// rejected and indirect recursion is a cycle error reported at the
 /// `#[derive]`.
 #[proc_macro_derive(ToolDefinition, attributes(tool, param))]

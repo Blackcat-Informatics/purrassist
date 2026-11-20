@@ -17,16 +17,16 @@ SPDX-License-Identifier = "MIT OR Apache-2.0 OR MulanPSL-2.0"
 # Recorded provider SSE and their accompanying upstream license texts.
 [[annotations]]
 path = [
-  "crates/wasm-harness/src/provider_logs/anthropic-parallel-weather.sse",
-  "crates/wasm-harness/src/provider_logs/LICENSE-Pydantic-AI",
+  "crates/acceptance-harness/src/provider_logs/anthropic-parallel-weather.sse",
+  "crates/acceptance-harness/src/provider_logs/LICENSE-Pydantic-AI",
 ]
 SPDX-FileCopyrightText = "2024 to present Pydantic Services Inc."
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
 path = [
-  "crates/wasm-harness/src/provider_logs/openai-weather.sse",
-  "crates/wasm-harness/src/provider_logs/LICENSE-OpenAI-Python",
+  "crates/acceptance-harness/src/provider_logs/openai-weather.sse",
+  "crates/acceptance-harness/src/provider_logs/LICENSE-OpenAI-Python",
 ]
 SPDX-FileCopyrightText = "2024 OpenAI"
 SPDX-License-Identifier = "Apache-2.0"
@@ -55,7 +55,6 @@ path = [
   "vendor/dependencies.json",
   "vendor/tooling.json",
   "vendor/profiling-runtime.json",
-  "vendor/wasi.json",
   "vendor/typescript.json",
 ]
 SPDX-FileCopyrightText = "2026 Blackcat Informatics Inc."
