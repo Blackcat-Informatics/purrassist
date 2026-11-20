@@ -680,6 +680,21 @@ impl<V: DatasetView<Id = TermId>> Locations<'_, V> {
         let at = self.statement(&row.s, &row.p, &row.o, governor)?;
         Ok(unsupported(&row.s, &row.p, construct, at))
     }
+
+    fn invalid_shape_row(
+        &self,
+        row: &Row,
+        violation: Violation,
+        governor: &mut Governor,
+    ) -> Result<LoadError, LoadError> {
+        let at = self.statement(&row.s, &row.p, &row.o, governor)?;
+        Ok(LoadError::InvalidShape {
+            subject: show(&row.s),
+            predicate: row.p.clone(),
+            at: at.map(Box::new),
+            violation,
+        })
+    }
 }
 
 fn unowned_row<V: DatasetView<Id = TermId>>(
@@ -1721,30 +1736,30 @@ impl Doc<'_> {
 struct ShapePath<'a> {
     iri: &'a str,
     path_id: TermId,
-    property: Node<'a>,
+    reference: usize,
     used: bool,
 }
 
-fn check_shape_complete(
-    shape: Node<'_>,
-    paths: &[ShapePath<'_>],
-    storage: &BuildStorage<'_, '_, '_>,
-) -> Result<(), LoadError> {
-    for path in paths {
-        storage.charge(1)?;
-        if !path.used {
-            return Err(LoadError::InvalidShape {
-                subject: show(shape.term),
-                predicate: path.iri.to_owned(),
-                at: None,
-                violation: Violation::Unresolved,
-            });
-        }
-    }
-    Ok(())
-}
-
 impl Doc<'_> {
+    fn check_shape_complete<V: DatasetView<Id = TermId>>(
+        &self,
+        paths: &[ShapePath<'_>],
+        locations: &Locations<'_, V>,
+        storage: &BuildStorage<'_, '_, '_>,
+    ) -> Result<(), LoadError> {
+        for path in paths {
+            storage.charge(1)?;
+            if !path.used {
+                return Err(locations.invalid_shape_row(
+                    &self.rows[path.reference],
+                    Violation::Unresolved,
+                    &mut storage.governor.borrow_mut(),
+                )?);
+            }
+        }
+        Ok(())
+    }
+
     fn build_callable<V: DatasetView<Id = TermId>>(
         &self,
         node: Node<'_>,
@@ -1778,8 +1793,14 @@ impl Doc<'_> {
                 .predicate
                 .as_deref()
                 .expect("admitted predicate");
-            let (shape, path_id) =
-                Self::path_shape(input_shape, &mut input_paths, predicate, &mut progress)?;
+            let (shape, path_id) = self.path_shape(
+                input_shape,
+                &mut input_paths,
+                predicate,
+                locations,
+                storage.governor,
+                &mut progress,
+            )?;
             let hint = self.build_hint(nodes, (shape.id, path_id), hints, locations, storage)?;
             let parameter = ToolParameter {
                 iri: storage.string(&parameter.parameter.iri)?,
@@ -1792,7 +1813,7 @@ impl Doc<'_> {
             };
             storage.push(&mut parameters, parameter)?;
         }
-        check_shape_complete(input_shape, &input_paths, storage)?;
+        self.check_shape_complete(&input_paths, locations, storage)?;
         let returned = binding.output();
         // INVARIANT: `CallableBinding::admit` refuses an output without a predicate.
         let output_predicate = returned
@@ -1800,13 +1821,15 @@ impl Doc<'_> {
             .predicate
             .as_deref()
             .expect("admitted predicate");
-        Self::path_shape(
+        self.path_shape(
             output_shape,
             &mut output_paths,
             output_predicate,
+            locations,
+            storage.governor,
             &mut progress,
         )?;
-        check_shape_complete(output_shape, &output_paths, storage)?;
+        self.check_shape_complete(&output_paths, locations, storage)?;
         let implementation = binding.implementation();
         Ok((
             parameters,
@@ -1939,40 +1962,48 @@ impl Doc<'_> {
                 ShapePath {
                     iri,
                     path_id: path.object_id,
-                    property,
+                    reference: index,
                     used: false,
                 },
             )?;
         }
         try_sort_unstable_by(&mut paths, |left, right| {
-            compare_bytes(left.iri.as_bytes(), right.iri.as_bytes(), progress).map_err(stop)
+            let order =
+                compare_bytes(left.iri.as_bytes(), right.iri.as_bytes(), progress).map_err(stop)?;
+            Ok::<_, LoadError>(order.then_with(|| left.reference.cmp(&right.reference)))
         })?;
         Ok(paths)
     }
 
-    fn path_shape<'d>(
+    fn path_shape<'d, V: DatasetView<Id = TermId>>(
+        &'d self,
         shape: Node<'_>,
-        paths: &mut [ShapePath<'d>],
+        paths: &mut [ShapePath<'_>],
         predicate: &str,
+        locations: &Locations<'_, V>,
+        governor: &Shared<'_>,
         progress: &mut Work<'_, '_>,
     ) -> Result<(Node<'d>, TermId), LoadError> {
         let range = try_equal_range_by(paths, |path| {
             compare_bytes(path.iri.as_bytes(), predicate.as_bytes(), progress).map_err(stop)
         })?;
-        let violation = match &mut paths[range] {
+        match &mut paths[range] {
             [only] => {
                 only.used = true;
-                return Ok((only.property, only.path_id));
+                Ok((Node::object(&self.rows[only.reference]), only.path_id))
             }
-            [] => Violation::Unresolved,
-            _ => Violation::Duplicate,
-        };
-        Err(LoadError::InvalidShape {
-            subject: show(shape.term),
-            predicate: SH_PROPERTY.to_owned(),
-            at: None,
-            violation,
-        })
+            [_, duplicate, ..] => Err(locations.invalid_shape_row(
+                &self.rows[duplicate.reference],
+                Violation::Duplicate,
+                &mut governor.borrow_mut(),
+            )?),
+            [] => Err(LoadError::InvalidShape {
+                subject: show(shape.term),
+                predicate: SH_PROPERTY.to_owned(),
+                at: None,
+                violation: Violation::Unresolved,
+            }),
+        }
     }
 
     fn build_hint<V: DatasetView<Id = TermId>>(
