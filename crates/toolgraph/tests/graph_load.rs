@@ -467,8 +467,9 @@ fn an_incomplete_parameter_hint_is_refused_at_the_hint() {
 
 #[test]
 fn competing_reifiers_for_one_parameter_path_name_the_second_binding() {
+    let binding = "<< ex:pathShape sh:path ex:path ~ ex:secondPathClaim >>";
     let source = format!(
-        "{}\n<< ex:pathShape sh:path ex:path ~ ex:secondPathClaim >> .\n\
+        "{}\n{binding} .\n\
          ex:secondPathClaim a pa:Hint ; pa:maxEditDistance 0 ;\n\
          pa:typeCoercion \"none\" ; pa:caseFold false ; pa:unicodeFold false .",
         worked()
@@ -481,9 +482,10 @@ fn competing_reifiers_for_one_parameter_path_name_the_second_binding() {
                 subject,
                 predicate,
                 violation: Violation::Duplicate,
-                at: None,
+                at: Some(at),
             } if subject == &format!("{EX}secondPathClaim")
                 && predicate == "http://www.w3.org/ns/shacl#path"
+                && &source[at.start..at.end] == binding
         ),
         "{error:?}"
     );
@@ -868,10 +870,8 @@ fn a_graph_releases_typed_storage_after_drop_or_late_refusal() {
     drop(graph);
     assert_eq!(meter.live(), baseline);
 
-    let duplicate = edited(
-        r#"pa:name "query_customer_orders""#,
-        r#"pa:name "edit_file""#,
-    );
+    let written = r#"pa:name "edit\u005ffile""#;
+    let duplicate = edited(r#"pa:name "query_customer_orders""#, written);
     assert!(matches!(
         ToolGraph::load(
             duplicate.as_bytes(),
@@ -881,10 +881,13 @@ fn a_graph_releases_typed_storage_after_drop_or_late_refusal() {
             &mut governor,
         ),
         Err(LoadError::InvalidShape {
+            subject,
             predicate,
             violation: Violation::Duplicate,
-            ..
-        }) if predicate == format!("{NAMESPACE}name")
+            at: Some(at),
+        }) if subject == format!("{EX}query_customer_orders")
+            && predicate == format!("{NAMESPACE}name")
+            && &duplicate[at.start..at.end] == written
     ));
     assert_eq!(meter.live(), baseline);
     meter.release(baseline).unwrap();
