@@ -74,15 +74,16 @@ the same way: after the statements are read the loader reads the view's declared
 named graphs and refuses the first one (subject the graph name, predicate `-`),
 so a graph it was given is never dropped silently. The vocabulary shapes are enforced by a Rust table, not by
 running the shapes document through the SHACL engine, and the table is not
-equivalent to the document. Known differences: `readOnlyHint`, `destructiveHint`,
+equivalent to the document. The loader checks `filePermissions` with the
+governed file-rule parser and retains the authored letter order.
+Known differences: `readOnlyHint`, `destructiveHint`,
 `idempotentHint` and `openWorldHint` are optional in the table but
-`sh:minCount 1` in the shapes; the `filePermissions` pattern `^[rwaklm]*$` is not
-enforced; `xsd:integer` is accepted where `xsd:positiveInteger` is specified;
+`sh:minCount 1` in the shapes; `xsd:integer` is accepted where
+`xsd:positiveInteger` is specified;
 `xsd:anyURI` values are not validated. Not checked at all: requiredness and
 datatype agreement between `FnO` parameters and shape paths, the content of
 `sh:*` constraints, and `pa:subtool` closure. The loader does not resolve
-`owl:imports`, and rule values are checked
-for kind but not interpreted. These checks remain on #33; the governed load is
+`owl:imports`. The remaining rule checks are tracked in #33. The governed load is
 delivered as described above. `ToolGraph::tool_set(vocabulary, governor)` is implemented: it
 imports the encoded manifest through `ToolSet::from_mcp_with_metadata_governed`
 with alias, effects and policy metadata, so the exact schema and declaration

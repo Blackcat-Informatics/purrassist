@@ -5,8 +5,8 @@
 //!
 //! This table is the loader's executable approximation of the structural shapes in
 //! `docs/tool-graph/TOOLS.md`, not an equivalent of them: the four tool
-//! annotation hints are optional here but required there, `filePermissions` has
-//! no pattern check, integers are not distinguished by `xsd:positiveInteger`,
+//! annotation hints are optional here but required there, integers are not
+//! distinguished by `xsd:positiveInteger`,
 //! `xsd:anyURI` is not validated, and `FnO` parameter agreement and `sh:*`
 //! constraint content are unchecked (remaining #33 work). It names only [`TERM_NAMES`](crate::TERM_NAMES)
 //! identifiers, never IRIs; the caller's `Vocabulary` supplies those.
@@ -20,6 +20,8 @@ pub(super) enum Kind {
     NonEmptyStr,
     /// A nonempty tool name of `[A-Za-z0-9_.:-]`.
     Name,
+    /// An `xsd:string` literal admitted by the shared file permission parser.
+    FilePermissions,
     /// An `xsd:boolean` literal.
     Bool,
     /// An integer literal that is positive and fits `u64`.
@@ -132,7 +134,7 @@ const FILE: &[Spec] = &[
     opt("audit", Kind::Bool),
     opt("deny", Kind::Bool),
     one("pathGlob", Kind::Str),
-    opt("filePermissions", Kind::Str),
+    opt("filePermissions", Kind::FilePermissions),
     opt(
         "execTransition",
         Kind::Choice(&["ix", "px", "cx", "ux", "Ux", "Pix", "Cix"]),
