@@ -1032,7 +1032,7 @@ impl Doc<'_> {
             }
             let cardinality = if found < usize::from(spec.min) {
                 Some(Violation::Missing)
-            } else if found > usize::from(spec.max) {
+            } else if spec.max.is_some_and(|max| found > usize::from(max)) {
                 Some(Violation::TooMany { found })
             } else {
                 None

@@ -610,6 +610,21 @@ fn file_permission_refusals_locate_the_written_property() {
     );
 }
 
+#[test]
+fn repeatable_intent_tags_have_no_fixed_cardinality_limit() {
+    let tags: Vec<_> = (0..256).map(|index| format!("tag-{index:03}")).collect();
+    let literals: Vec<_> = tags.iter().map(|tag| format!("\"{tag}\"")).collect();
+    let source = edited(
+        r#"pa:intentTags "customer", "orders""#,
+        &format!("pa:intentTags {}", literals.join(", ")),
+    );
+    let graph = load(&source).expect("the governor admits all authored tags");
+    let query = graph
+        .tool("query_customer_orders")
+        .expect("worked query tool");
+    assert_eq!(query.context.intent_tags(), tags.as_slice());
+}
+
 // Rationale: nothing is skipped: a statement no view owns is refused, while a plain
 // class declaration is an owned statement.
 #[test]
