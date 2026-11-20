@@ -19,11 +19,12 @@
 use std::fmt;
 
 use purrassist_core::{
-    Governor, StopReason,
-    contract::Resource,
+    Governor, ScratchVec, StopReason,
+    contract::{Resource, saturating_size},
     json::{self, Member, Node, ParseFailure, Value},
 };
 use purrdf_core::loss::{LossEntry, LossLedger, LossSoundnessError, check_ledger_sound_in};
+use purrdf_lex::walk::try_equal_range_by;
 use purrdf_rdf::{RdfDiagnostic, SerializeGraph};
 use purrdf_shapes::{
     ShapesError,
@@ -35,10 +36,10 @@ use purrdf_shapes::{
     term::Term,
 };
 
-use super::{EnvelopeError, ManifestEnvelope, ToolEnvelope, execution};
+use super::{EnvelopeError, ManifestEnvelope, execution};
 use crate::{
-    ContextCodecError, LOSS_PROFILE_ID, LoadError, MCP_CONTEXT_FORMAT, Tool, ToolAnnotations,
-    ToolGraph, Vocabulary,
+    ContextCodecError, ContextManagement, LOSS_PROFILE_ID, LoadError, MCP_CONTEXT_FORMAT, Tool,
+    ToolAnnotations, ToolGraph, Vocabulary,
 };
 
 /// The enclosing bundle format; legacy formats are refused rather than migrated.
@@ -281,8 +282,9 @@ pub(crate) fn encode_with_schema_losses(
 /// must declare format `purrassist-toolgraph-v2`, `text/turtle` and loss
 /// profile `purrassist-toolgraph-v1`, and every tool's context fragment must
 /// pass the context codec, so a legacy `maxOutputTokens` member is refused and
-/// never read as bytes. The prefix table must equal the vocabulary's. The
-/// retained source is loaded with [`ToolGraph::load`] and every declaration,
+/// never read as bytes. The prefix object must contain each vocabulary binding
+/// exactly once, in any member order. The retained source is loaded with
+/// [`ToolGraph::load`] and every declaration,
 /// in order, must equal a fresh projection of the loaded graph; the first
 /// disagreeing member is reported.
 /// A recovery hint using a bare label for a scoped blank reifier is a
@@ -323,29 +325,29 @@ pub fn decode(
 ) -> Result<(ToolGraph, LossLedger), CodecError> {
     let root = json::parse_with(manifest.as_str(), governor).map_err(CodecError::Json)?;
     let envelope = ManifestEnvelope::read(&root, governor).map_err(CodecError::Envelope)?;
-    let expected = prefixes(vocabulary);
-    if !envelope
-        .prefixes()
-        .equivalent_governed(&expected, governor)
-        .map_err(CodecError::Resource)?
-    {
+    let matching_prefixes =
+        prefixes_match(envelope.prefixes(), vocabulary, governor).map_err(CodecError::Resource)?;
+    governor.check().map_err(CodecError::Resource)?;
+    if !matching_prefixes {
         return Err(CodecError::Disagreement {
             tool: None,
             member: "prefixes",
         });
     }
-    let mut declarations = Vec::with_capacity(envelope.declarations().len());
-    for index in 0..envelope.declarations().len() {
-        let tool = envelope
-            .tool(index, governor)
-            .map_err(CodecError::Envelope)?
-            .ok_or(CodecError::Disagreement {
-                tool: None,
-                member: "tools",
-            })?;
-        tool.decode_context(governor)
+    let declarations = envelope.declarations();
+    for (index, declaration) in declarations.iter().enumerate() {
+        // The envelope has already checked the fixed declaration member sets.
+        governor
+            .charge(Resource::Work, 1)
+            .map_err(CodecError::Resource)?;
+        let context = lookup(declaration, &["_meta", "contextManagement"]).ok_or(
+            CodecError::Disagreement {
+                tool: Some(index),
+                member: "_meta.contextManagement",
+            },
+        )?;
+        ContextManagement::decode_mcp(Some(MCP_CONTEXT_FORMAT), context, governor)
             .map_err(|error| CodecError::Context { tool: index, error })?;
-        declarations.push(tool);
     }
     let graph = ToolGraph::load(
         envelope.source_graph().as_bytes(),
@@ -362,7 +364,7 @@ pub fn decode(
             member: "tools",
         });
     }
-    for (index, (expected, declared)) in projected.iter().zip(&declarations).enumerate() {
+    for (index, (expected, declared)) in projected.iter().zip(declarations).enumerate() {
         agree(index, expected, declared, governor)?;
     }
     Ok((graph, ledger))
@@ -576,12 +578,12 @@ fn root_class(shapes: &Shapes, shape: &str) -> Option<String> {
 fn agree(
     index: usize,
     expected: &Node,
-    declared: &ToolEnvelope<'_>,
+    declared: &Node,
     governor: &mut Governor,
 ) -> Result<(), CodecError> {
     for (member, path) in MEMBERS {
         let wanted = lookup(expected, path);
-        let found = lookup(declared.original(), path);
+        let found = lookup(declared, path);
         let equal = match (wanted, found) {
             (Some(wanted), Some(found)) => wanted
                 .equivalent_governed(found, governor)
@@ -642,6 +644,51 @@ fn prefixes(vocabulary: &Vocabulary) -> Node {
             .iter()
             .map(|(prefix, iri)| (prefix.as_str(), string(iri))),
     )
+}
+
+/// Match the original prefix object against the sorted, unique caller bindings.
+fn prefixes_match(
+    source: &Node,
+    vocabulary: &Vocabulary,
+    governor: &mut Governor,
+) -> Result<bool, StopReason> {
+    governor.check()?;
+    let Value::Object(members) = &source.value else {
+        return Ok(false);
+    };
+    let expected = &vocabulary.prefixes().0;
+    if members.len() != expected.len() {
+        return Ok(false);
+    }
+    let mut seen = ScratchVec::new(governor);
+    seen.reserve(expected.len())?;
+    for _ in expected {
+        governor.charge(Resource::Work, 1)?;
+        seen.push(false)?;
+    }
+    for member in members {
+        governor.charge(Resource::Work, 1)?;
+        let range = try_equal_range_by(expected, |(prefix, _)| {
+            governor.charge(
+                Resource::Work,
+                saturating_size(prefix.len().min(member.key.len())).saturating_add(1),
+            )?;
+            Ok::<_, StopReason>(prefix.cmp(&member.key))
+        })?;
+        if range.is_empty() || seen.as_slice()[range.start] {
+            return Ok(false);
+        }
+        let Value::String(iri) = &member.value.value else {
+            return Ok(false);
+        };
+        let wanted = &expected[range.start].1;
+        governor.charge(Resource::Work, saturating_size(wanted.len().min(iri.len())))?;
+        if iri != wanted {
+            return Ok(false);
+        }
+        seen.as_mut_slice()[range.start] = true;
+    }
+    Ok(true)
 }
 
 fn string(text: &str) -> Node {
