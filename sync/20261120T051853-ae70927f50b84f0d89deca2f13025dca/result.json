@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases",
+  "branch": "paudley/281-normalize-declared-fnom-mapping-aliases",
+  "base_ref": "1e8ea480b790073292ee9aa647c82c7f80b14a85",
+  "head": "003017f21c854278000275ee9127d3b8ceefc3d1",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases/.stage/normalize-declared-fnom-mapping-aliases/sync/20261120T051853-ae70927f50b84f0d89deca2f13025dca",
+  "conflicts": [
+    "crates/toolgraph/src/graph/load.rs"
+  ],
+  "status": "completed",
+  "base": "1e8ea480b790073292ee9aa647c82c7f80b14a85",
+  "merge_bases": [
+    "bcbeb63067140fc6212ac0bd43f05183ac6a861a"
+  ],
+  "merge_index": "5dfba5a5f30b0ab251f15ffbffd73fe6e5ce592daec5a18cac4494878b7d5241",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/toolgraph/src/graph/load.rs'\n",
+  "candidate_tree": "d18beb0edcfb02eec1e44f9509faded6c015e25b",
+  "candidate_patch": "candidate-1d3b77ef19d14bf0b7bf8a6b26072d63.patch",
+  "stdout_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stdout.log",
+  "stderr_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 2.616708009998547,
+  "commit": "fc078a2f303f73bf816cc057fefe11932516ff87",
+  "tree": "d18beb0edcfb02eec1e44f9509faded6c015e25b",
+  "exit_code": 0
+}

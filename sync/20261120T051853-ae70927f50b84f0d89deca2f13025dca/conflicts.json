@@ -1,0 +1,22 @@
+{
+  "crates/toolgraph/src/graph/load.rs": [
+    {
+      "mode": "100644",
+      "oid": "8a181ba8eb8851eceaaf40896b621a547938976f",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "0034085e290a3dc01a81fe6b186005136a4e7f1a",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "9304043dbec9f468996c4994d52f2e593393b27b",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ]
+}

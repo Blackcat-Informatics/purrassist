@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 281,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases",
+  "branch": "paudley/281-normalize-declared-fnom-mapping-aliases",
+  "slug": "normalize-declared-fnom-mapping-aliases",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases/.stage/normalize-declared-fnom-mapping-aliases",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "174e791839903bcc6973e42965fbfc0e111d95db",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases",
+    "branch:paudley/281-normalize-declared-fnom-mapping-aliases",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/204-tool-graph-run-the-loader-under-the caches into /home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases plus 0 dependency units from 0 other checkouts in 0.9s; 2121 unchanged files keep their built mtimes; 126 other files take the seed time and rebuild; 0 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases/.stage/normalize-declared-fnom-mapping-aliases",
+    "issue:/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases/.stage/normalize-declared-fnom-mapping-aliases/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-19T23:05:38-0600",
+  "seed_error": ""
+}

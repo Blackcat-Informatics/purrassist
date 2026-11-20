@@ -1,0 +1,7 @@
+{"time": "2026-11-20T05:18:53.476504+00:00", "status": "started"}
+{"time": "2026-11-20T05:18:53.545715+00:00", "status": "merging"}
+{"time": "2026-11-20T05:18:54.939219+00:00", "status": "conflicted"}
+{"time": "2026-11-20T05:18:54.954077+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'crates/toolgraph/src/graph/load.rs'\n"}
+{"time": "2026-11-20T05:19:50.090242+00:00", "status": "committing", "candidate_tree": "d18beb0edcfb02eec1e44f9509faded6c015e25b", "candidate_patch": "candidate-1d3b77ef19d14bf0b7bf8a6b26072d63.patch", "stdout_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stdout.log", "stderr_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stderr.log", "validation_records": []}
+{"time": "2026-11-20T05:19:52.920089+00:00", "status": "commit_returned", "exit_code": 0, "commit_duration_seconds": 2.616708009998547, "stdout_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stdout.log", "stderr_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stderr.log"}
+{"time": "2026-11-20T05:19:53.020193+00:00", "status": "completed", "commit": "fc078a2f303f73bf816cc057fefe11932516ff87", "tree": "d18beb0edcfb02eec1e44f9509faded6c015e25b", "exit_code": 0, "stdout_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stdout.log", "stderr_log": "commit-1d3b77ef19d14bf0b7bf8a6b26072d63.stderr.log"}

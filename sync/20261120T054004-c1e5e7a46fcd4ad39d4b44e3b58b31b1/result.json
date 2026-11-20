@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases",
+  "branch": "paudley/281-normalize-declared-fnom-mapping-aliases",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "c13645885f39992a92fddb905cdba56c26405728",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/281-normalize-declared-fnom-mapping-aliases/.stage/normalize-declared-fnom-mapping-aliases/sync/20261120T054004-c1e5e7a46fcd4ad39d4b44e3b58b31b1",
+  "conflicts": [],
+  "status": "completed",
+  "base": "6d6f7a4aa711708a348ef44b3e3ee59b85021ac2",
+  "merge_bases": [
+    "174e791839903bcc6973e42965fbfc0e111d95db",
+    "1e8ea480b790073292ee9aa647c82c7f80b14a85"
+  ],
+  "merge_index": "a682d33dea65e621b939ad5c9cff047f67fea7ae870a1e2eea92be465c2678b2",
+  "candidate_tree": "8aad215cd728f1ffac6afea812ce32cd9c7224ff",
+  "candidate_patch": "candidate-2a0087eb56214d588b4b18d9e2b7f7c6.patch",
+  "stdout_log": "commit-2a0087eb56214d588b4b18d9e2b7f7c6.stdout.log",
+  "stderr_log": "commit-2a0087eb56214d588b4b18d9e2b7f7c6.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 2.1471561590005876,
+  "commit": "8d70146ca640437315bb124d7459df6d7dc97743",
+  "tree": "8aad215cd728f1ffac6afea812ce32cd9c7224ff",
+  "exit_code": 0
+}

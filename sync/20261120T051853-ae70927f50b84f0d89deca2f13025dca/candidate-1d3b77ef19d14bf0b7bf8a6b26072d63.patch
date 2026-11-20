@@ -1,0 +1,282 @@
+diff --git crates/toolgraph/src/graph/load.rs crates/toolgraph/src/graph/load.rs
+index 0034085e..af6db0de 100644
+--- crates/toolgraph/src/graph/load.rs
++++ crates/toolgraph/src/graph/load.rs
+@@ -114,13 +114,44 @@ impl<'a> Node<'a> {
+ #[derive(Debug)]
+ struct Reifier {
+     term_id: TermId,
+-    target_subject: TermId,
++    target: (TermId, TermId),
+     id: TermValue,
+     s: TermValue,
+     p: String,
+     o: TermValue,
+ }
+ 
++/// Temporary lookup and consumption state for parameter-path reifiers.
++struct HintBindings {
++    by_path: Vec<usize>,
++    consumed: Vec<bool>,
++}
++
++impl HintBindings {
++    fn new(
++        reifiers: &[Reifier],
++        storage: &mut BuildStorage<'_, '_, '_>,
++    ) -> Result<Self, LoadError> {
++        let mut by_path = Vec::new();
++        for (index, reifier) in reifiers.iter().enumerate() {
++            storage.charge(1)?;
++            if reifier.p == SH_PATH && iri_of(&reifier.o).is_some() {
++                storage.push(&mut by_path, index)?;
++            }
++        }
++        // Keep native row order within each path for the duplicate diagnostic.
++        try_sort_unstable_by(&mut by_path, |&left, &right| {
++            storage.charge(1)?;
++            let left_key = (reifiers[left].target, left);
++            let right_key = (reifiers[right].target, right);
++            Ok::<_, LoadError>(left_key.cmp(&right_key))
++        })?;
++        let mut consumed = Vec::new();
++        storage.fill(&mut consumed, reifiers.len(), false)?;
++        Ok(Self { by_path, consumed })
++    }
++}
++
+ /// Owned materialisation of a parsed dataset, indexed by subject.
+ struct Doc<'v> {
+     vocabulary: &'v Vocabulary,
+@@ -398,12 +429,12 @@ impl<'v> Doc<'v> {
+             let TermValue::Iri(p) = value(p, memory)? else {
+                 return Err(unsupported(&id, "-", Construct::Reifier, None));
+             };
+-            let target_subject = s;
++            let target = (s, o);
+             let s = value(s, memory)?;
+             let o = value(o, memory)?;
+             let reifier = Reifier {
+                 term_id: quad.s,
+-                target_subject,
++                target,
+                 id,
+                 s,
+                 p,
+@@ -1274,8 +1305,7 @@ impl Doc<'_> {
+         if let Some(catalog) = catalog {
+             self.check_catalog_tools(catalog, &lookup, locations, governor, &mut progress)?;
+         }
+-        let mut consumed = Vec::new();
+-        scratch.fill(&mut consumed, self.reifiers.len(), false)?;
++        let mut hints = HintBindings::new(&self.reifiers, &mut scratch)?;
+         let (storage, rejection) = Storage::new(governor);
+         let mut retained = RetainedTools {
+             tools: Vec::new(),
+@@ -1297,14 +1327,8 @@ impl Doc<'_> {
+             if !self.has_type_id(nodes, node.id, FNO_FUNCTION, &mut progress)? {
+                 return Err(Self::missing_function(node.term));
+             }
+-            let candidate = self.build_tool(
+-                node,
+-                catalog,
+-                &lookup,
+-                &mut consumed,
+-                locations,
+-                &mut storage,
+-            )?;
++            let candidate =
++                self.build_tool(node, catalog, &lookup, &mut hints, locations, &mut storage)?;
+             let original_name = self
+                 .first_property(nodes, node.id, self.term("name"), &mut progress)?
+                 .map_or("", |row| lexical_str(&row.o));
+@@ -1322,7 +1346,7 @@ impl Doc<'_> {
+             retained.tools.push(tool);
+             retained.masks.push(mask);
+         }
+-        self.check_reifiers(nodes, &consumed, locations, governor, &mut progress)?;
++        self.check_reifiers(nodes, &hints.consumed, locations, governor, &mut progress)?;
+         if used_alias {
+             self.record_mapping_normalizations(
+                 &mut retained.fno_view_losses,
+@@ -1516,7 +1540,7 @@ impl Doc<'_> {
+         node: Node<'_>,
+         catalog: &FnoCatalog,
+         lookup: &ToolLookup<'_, '_, '_>,
+-        consumed: &mut [bool],
++        hints: &mut HintBindings,
+         locations: &Locations<'_, V>,
+         storage: &mut BuildStorage<'_, '_, '_>,
+     ) -> Result<(Tool, ScratchLease), LoadError> {
+@@ -1544,7 +1568,7 @@ impl Doc<'_> {
+             }
+         }
+         let (parameters, output, implementation) =
+-            self.build_callable(node, nodes, catalog, consumed, locations, storage)?;
++            self.build_callable(node, nodes, catalog, hints, locations, storage)?;
+         let flag = |name, progress: &mut Work<'_, '_>| {
+             Ok::<_, LoadError>(
+                 self.typed_value(nodes, node.id, name, progress)?
+@@ -1669,6 +1693,7 @@ impl Doc<'_> {
+ 
+ struct ShapePath<'a> {
+     iri: &'a str,
++    path_id: TermId,
+     property: Node<'a>,
+     used: bool,
+ }
+@@ -1698,7 +1723,7 @@ impl Doc<'_> {
+         node: Node<'_>,
+         nodes: &Nodes<'_>,
+         catalog: &FnoCatalog,
+-        consumed: &mut [bool],
++        hints: &mut HintBindings,
+         locations: &Locations<'_, V>,
+         storage: &mut BuildStorage<'_, '_, '_>,
+     ) -> Result<(Vec<ToolParameter>, ToolOutput, ToolImplementation), LoadError> {
+@@ -1726,8 +1751,9 @@ impl Doc<'_> {
+                 .predicate
+                 .as_deref()
+                 .expect("admitted predicate");
+-            let shape = Self::path_shape(input_shape, &mut input_paths, predicate, &mut progress)?;
+-            let hint = self.build_hint(nodes, shape, predicate, consumed, storage)?;
++            let (shape, path_id) =
++                Self::path_shape(input_shape, &mut input_paths, predicate, &mut progress)?;
++            let hint = self.build_hint(nodes, (shape.id, path_id), hints, storage)?;
+             let parameter = ToolParameter {
+                 iri: storage.string(&parameter.parameter.iri)?,
+                 predicate: storage.string(predicate)?,
+@@ -1867,6 +1893,7 @@ impl Doc<'_> {
+                 &mut paths,
+                 ShapePath {
+                     iri,
++                    path_id: path.object_id,
+                     property,
+                     used: false,
+                 },
+@@ -1883,14 +1910,14 @@ impl Doc<'_> {
+         paths: &mut [ShapePath<'d>],
+         predicate: &str,
+         progress: &mut Work<'_, '_>,
+-    ) -> Result<Node<'d>, LoadError> {
++    ) -> Result<(Node<'d>, TermId), LoadError> {
+         let range = try_equal_range_by(paths, |path| {
+             compare_bytes(path.iri.as_bytes(), predicate.as_bytes(), progress).map_err(stop)
+         })?;
+         let violation = match &mut paths[range] {
+             [only] => {
+                 only.used = true;
+-                return Ok(only.property);
++                return Ok((only.property, only.path_id));
+             }
+             [] => Violation::Unresolved,
+             _ => Violation::Duplicate,
+@@ -1906,38 +1933,29 @@ impl Doc<'_> {
+     fn build_hint(
+         &self,
+         nodes: &Nodes<'_>,
+-        shape: Node<'_>,
+-        predicate: &str,
+-        consumed: &mut [bool],
++        path: (TermId, TermId),
++        hints: &mut HintBindings,
+         storage: &mut BuildStorage<'_, '_, '_>,
+     ) -> Result<Option<Hint>, LoadError> {
+-        let mut matched = None;
+         let mut progress = Work::new(storage.governor);
+-        for (at, reifier) in self.reifiers.iter().enumerate() {
++        // The shape row and reifier components share the same native term table.
++        let range = try_equal_range_by(&hints.by_path, |&index| {
+             storage.charge(1)?;
+-            if reifier.target_subject != shape.id || reifier.p != SH_PATH {
+-                continue;
+-            }
+-            let Some(path) = iri_of(&reifier.o) else {
+-                continue;
+-            };
+-            if !compare_bytes(path.as_bytes(), predicate.as_bytes(), &mut progress)
+-                .map_err(stop)?
+-                .is_eq()
+-            {
+-                continue;
+-            }
+-            if matched.replace(at).is_some() {
++            Ok::<_, LoadError>(self.reifiers[index].target.cmp(&path))
++        })?;
++        let at = match hints.by_path[range] {
++            [] => return Ok(None),
++            [only] => only,
++            [_, duplicate, ..] => {
+                 return Err(LoadError::InvalidHint {
+-                    subject: show(&reifier.id),
++                    subject: show(&self.reifiers[duplicate].id),
+                     predicate: SH_PATH.to_owned(),
+                     at: None,
+                     violation: Violation::Duplicate,
+                 });
+             }
+-        }
+-        let Some(at) = matched else { return Ok(None) };
+-        consumed[at] = true;
++        };
++        hints.consumed[at] = true;
+         let reifier = &self.reifiers[at];
+         let id = &reifier.id;
+         let mut none = false;
+@@ -1977,7 +1995,7 @@ impl Doc<'_> {
+         }
+         Ok(Some(Hint {
+             reifier: Self::scoped_reference(id, storage)?,
+-            shape: storage.lexical(shape.term)?,
++            shape: storage.lexical(&reifier.s)?,
+             max_edit_distance: self.typed_number(
+                 nodes,
+                 reifier.term_id,
+diff --git crates/toolgraph/tests/graph_load.rs crates/toolgraph/tests/graph_load.rs
+index b1ccec52..d8416218 100644
+--- crates/toolgraph/tests/graph_load.rs
++++ crates/toolgraph/tests/graph_load.rs
+@@ -465,6 +465,30 @@ fn an_incomplete_parameter_hint_is_refused_at_the_hint() {
+     load(&worked()).expect("neighbouring valid input");
+ }
+ 
++#[test]
++fn competing_reifiers_for_one_parameter_path_name_the_second_binding() {
++    let source = format!(
++        "{}\n<< ex:pathShape sh:path ex:path ~ ex:secondPathClaim >> .\n\
++         ex:secondPathClaim a pa:Hint ; pa:maxEditDistance 0 ;\n\
++         pa:typeCoercion \"none\" ; pa:caseFold false ; pa:unicodeFold false .",
++        worked()
++    );
++    let error = load(&source).expect_err("a parameter path admits only one reifier");
++    assert!(
++        matches!(
++            &error,
++            LoadError::InvalidHint {
++                subject,
++                predicate,
++                violation: Violation::Duplicate,
++                at: None,
++            } if subject == &format!("{EX}secondPathClaim")
++                && predicate == "http://www.w3.org/ns/shacl#path"
++        ),
++        "{error:?}"
++    );
++}
++
+ // Rationale: confinement fields outside the closed vocabulary are refused; the
+ // nested-profile cycle check keeps a self-referencing child from looping.
+ #[test]
+diff --git docs/tool-graph/TOOLS.md docs/tool-graph/TOOLS.md
+index ba96441f..c9641759 100644
+--- docs/tool-graph/TOOLS.md
++++ docs/tool-graph/TOOLS.md
+@@ -26,6 +26,8 @@ subject rows directly. It charges for row visits, predicate comparisons, and
+ variable-length lexical checks. Statement rows and indexes remain charged
+ through validation and typing. The temporary dataset remains charged
+ through catalog construction. The catalog keeps its own charge.
++Parameter hint lookup uses an admitted index over native shape and path
++identities. Competing bindings retain native reifier order for diagnostics.
+ 
+ An exhausted work or scratch budget is `LoadError::Exhausted`.
+ Cancellation is `LoadError::Cancelled`. Both withhold the graph. Native

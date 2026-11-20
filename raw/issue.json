@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Part of #33. Accept the documented FnOM Mapping alias only when the graph explicitly declares it equivalent to the native FnO Mapping class. Normalize that type in the checked temporary FnO view and feed the existing native reader. Retain the original declaration and type in the published RDF.\n\nExpose the registered normalization ledger for the FnO projection. Preserve typed refusals and original source locations. Native tests cover the declared alias, an undeclared alias, a neighboring canonical graph, and a manifest round trip that retains the authored RDF.\n\nThe remaining loader, codec and SHACL acceptance stays in #33.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-20T05:04:35Z",
+  "labels": [],
+  "milestone": null,
+  "number": 281,
+  "state": "OPEN",
+  "title": "Normalize declared FnOM Mapping aliases in the native loader",
+  "updatedAt": "2026-11-20T05:04:35Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/281"
+}
