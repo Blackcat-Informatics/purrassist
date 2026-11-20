@@ -1,0 +1,113 @@
+{
+  "issue": 39,
+  "pr_number": 286,
+  "branch": "paudley/39-tool-graph-phase-4-verification-and",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and",
+  "observed_at": "2026-11-20T08:34:46.220427+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "6cace736e3ea53fc164e8be0f14f6c74d7b55092",
+    "headRefName": "paudley/39-tool-graph-phase-4-verification-and",
+    "headRefOid": "de406224b747c23d79f3c95a47c2b91f28a7ccbb",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 286,
+    "state": "OPEN",
+    "title": "Qualify result work refusals through CLI and MCP",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/286"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44698228222/job/136160029703",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44698228222/job/136160029535",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44698228222/job/136160029564",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44698228222/job/136160029563",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44698228222/job/136160029433",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44698228222/job/136160029361",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44698228222/job/136160029213",
+        "name": "corpus",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "de406224b747c23d79f3c95a47c2b91f28a7ccbb",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "de406224b747c23d79f3c95a47c2b91f28a7ccbb",
+    "branch": "paudley/39-tool-graph-phase-4-verification-and",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 286,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #286 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

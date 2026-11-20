@@ -1,0 +1,43 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Objective\n\nRun the conformance and verification suite that qualifies the tool graph as a whole. Phase 3 sub-issues carry their own focused tests. This phase adds the cross-cutting goldens and properties and closes the qualification record.\n\n## Depends on\n\n- #33, #34, #35, #36 and #37: all five complete implementation contracts delivered.\n- #40 coordinates this checklist after consolidation of the redundant wrapper #38. No implementation or qualification acceptance was removed.\n\n## Suite\n\n- **Turtle 1.2 \u2194 MCP Extended JSON round trip.** The TOOLS.md worked example and a generated corpus over the vocabulary must satisfy `decode(encode(g))` \u2245 `g`, modulo exactly the ledgered losses, checked with `purrdf_core` dataset isomorphism.\n- **LossLedger completeness and soundness.** Every lane's ledger is checked for every family under the registered loss profile. A mutation test removes one emitted constraint from a lane and confirms the ledger check catches the difference.\n- **GBNF.** Goldens for each family. The grammar is accepted by the llama.cpp grammar parser, or by the recorded equivalent. A property test checks that every accepted value validates or fails only on a ledgered constraint.\n- **AppArmor synthesis.** Goldens pass `apparmor_parser -QK` 4.1.x. **Negative Datalog conflict tests** check that a `readOnlyHint` tool declaring `w`, `a`, `k` or `l`, or `mount`, and an `egressAllowed false` tool declaring `network inet`, are each refused with the SARIF golden. The `/8` network refusal is included.\n- **Determinism.** Byte-identical artifacts and receipts across two runs, and across reordered input triples.\n- **Native worked-example artifacts.** Compile every lane for the worked example and match the pinned native artifact bytes.\n- **Qualification record.** `docs/QUALIFICATION.md` gains a tool-graph section that records exactly what ran, including the AppArmor-enabled confinement smoke test and the host it ran on.\n\n## Acceptance\n\n- `make check` passes. It is the repository's gate and includes `cargo fmt --check`, workspace clippy on all targets with `-D warnings`, and the tests.\n- Every new test names the production behavior or invariant it protects.\n\n\n## Output unit acceptance (#47)\n\nQualify #47 through full v2 manifest round trips preserving byte units and exact enforcement, rejection of v1/legacy token fields and invalid modes, and actual result-release boundary tests. Include exact-bound success, one-byte-over refusal, a multibyte result whose deterministic token count fits while its bytes exceed the bound, explicit governance failure, and receipts recording unit/mode/limit/measured. Qualification evidence must distinguish these result-byte semantics from prompt token accounting.\n",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOUvgSo88AAAABobQYDg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "The worked MCP manifest is sensitive to the order of equivalent Turtle\nstatements. This reproduces on `34d1f9da` with PurRDF 4.0.2.\n\nIn the worked example, exchange the complete\n`fno:expects ( ex:customerParam ex:limitParam )` and\n`fno:returns ( ex:ordersOutput )` clauses. Keep each list's member order.\nA focused native probe ran both inputs through `ToolGraph::load` and\n`mcp::encode`. PurRDF's direct comparator found the datasets isomorphic.\nThe typed tools and loss ledgers matched. The serialized Turtle and\ncomplete manifests differed.\n\nThe parser assigns anonymous list cells labels in encounter order. The\nserializer sorts the resulting labels. PurRDF's canonical relabeler\nhas a finite search budget and a stop signal, but its dataset rebuild\nhas no caller allocation admission. The loader also admits blank hint\nreifiers, and their identities appear in both the retained graph and\nthe projected `recoveryHints`. Any canonicalization must preserve that\ncorrespondence through decoding.\n\nPR #258 checks structural round-trip identity. Reordered-input byte\ndeterminism remains open.\n",
+      "createdAt": "2026-11-19T11:33:44Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrassist/issues/39#issuecomment-7007901710",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-25T17:05:17Z",
+  "labels": [
+    {
+      "id": "LA_kwDOUvgSo88AAAAC490QjQ",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    }
+  ],
+  "milestone": null,
+  "number": 39,
+  "state": "OPEN",
+  "title": "Tool graph phase 4: verification and conformance suite",
+  "updatedAt": "2026-11-20T01:06:06Z",
+  "url": "https://github.com/Blackcat-Informatics/purrassist/issues/39"
+}

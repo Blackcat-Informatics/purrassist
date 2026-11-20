@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and",
+  "branch": "paudley/39-tool-graph-phase-4-verification-and",
+  "base_ref": "12023d13f582e88334ada1e20d0f90f4faaec4fd",
+  "head": "6cace736e3ea53fc164e8be0f14f6c74d7b55092",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/39-tool-graph-phase-4-verification-and/.stage/tool-graph-phase-4-verification-and/sync/20261120T075209-a865a752cbd2427fb5733ef1a6f4c5fd",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "12023d13f582e88334ada1e20d0f90f4faaec4fd",
+  "merge_bases": [
+    "6cace736e3ea53fc164e8be0f14f6c74d7b55092"
+  ],
+  "commit": "12023d13f582e88334ada1e20d0f90f4faaec4fd"
+}
