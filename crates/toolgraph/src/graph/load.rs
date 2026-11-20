@@ -39,8 +39,9 @@ use super::{
     Waiver,
 };
 use crate::{
-    CallableBinding, ContextManagement, LoadingStrategy, OutputByteLimit, ResourceLimits,
-    Vocabulary, codec::mcp::ExecutionMode, vocab::FNOM_MAPPING_NORMALIZATION,
+    CallableBinding, ContextManagement, FilePermissions, FileRuleError, LoadingStrategy,
+    OutputByteLimit, ResourceLimits, Vocabulary, codec::mcp::ExecutionMode,
+    vocab::FNOM_MAPPING_NORMALIZATION,
 };
 use classification::{Nodes, RoleNode};
 use control::{ControlledStorage, Shared, Storage, Work};
@@ -819,8 +820,8 @@ fn check_integer(kind: Kind, value: &TermValue) -> Result<(), Violation> {
 fn check_value(kind: Kind, value: &TermValue) -> Result<(), Violation> {
     let text = lexical_str(value);
     match kind {
-        Kind::Str if is_literal(value, &[XSD_STRING]) => Ok(()),
-        Kind::Str => Err(wrong("xsd:string literal")),
+        Kind::Str | Kind::FilePermissions if is_literal(value, &[XSD_STRING]) => Ok(()),
+        Kind::Str | Kind::FilePermissions => Err(wrong("xsd:string literal")),
         Kind::NonEmptyStr => {
             check_value(Kind::Str, value)?;
             if text.is_empty() {
@@ -859,6 +860,29 @@ fn check_value(kind: Kind, value: &TermValue) -> Result<(), Violation> {
                 .then_some(())
                 .ok_or(range("one of the vocabulary's listed values"))
         }
+    }
+}
+
+fn property_violation(
+    kind: Kind,
+    value: &TermValue,
+    governor: &Shared<'_>,
+) -> Result<Option<Violation>, LoadError> {
+    let structural = check_value(kind, value).err();
+    if kind != Kind::FilePermissions || structural.is_some() {
+        return Ok(structural);
+    }
+    match FilePermissions::parse(lexical_str(value), &mut governor.borrow_mut()) {
+        Ok(_) => Ok(None),
+        Err(FileRuleError::Resource { reason, .. }) => Err(stop(reason)),
+        Err(FileRuleError::Permission { .. }) => Ok(Some(range(
+            "file permissions drawn from r, w, a, k, l and m",
+        ))),
+        Err(FileRuleError::DuplicatePermission { .. }) => Ok(Some(Violation::Duplicate)),
+        Err(FileRuleError::WriteAppend { .. }) => Ok(Some(range(
+            "file permissions without both write and append",
+        ))),
+        Err(_) => Ok(Some(range("a valid file permission set"))),
     }
 }
 
@@ -1040,7 +1064,7 @@ impl Doc<'_> {
                         .charge(saturating_size(lexical_str(value).len()))
                         .map_err(stop)?;
                 }
-                if let Err(violation) = check_value(spec.kind, value) {
+                if let Some(violation) = property_violation(spec.kind, value, governor)? {
                     let at = locations.statement(
                         node.identity.term,
                         predicate,

@@ -557,6 +557,59 @@ fn an_invalid_execution_profile_is_refused() {
     load(&worked()).expect("neighbouring valid input");
 }
 
+#[test]
+fn file_permission_refusals_locate_the_written_property() {
+    const PERMISSIONS: &str = r#"pa:filePermissions "rwkl""#;
+    for (permissions, expected) in [
+        (
+            r"r\u003F",
+            Violation::OutOfRange {
+                expected: "file permissions drawn from r, w, a, k, l and m",
+            },
+        ),
+        ("rr", Violation::Duplicate),
+        (
+            "wa",
+            Violation::OutOfRange {
+                expected: "file permissions without both write and append",
+            },
+        ),
+    ] {
+        let written = format!("pa:filePermissions \"{permissions}\"");
+        let source = edited(PERMISSIONS, &written);
+        let error = load(&source).expect_err("file permission set is invalid");
+        let LoadError::InvalidExecutionProfile {
+            subject,
+            predicate,
+            violation,
+            at: Some(at),
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(subject, format!("{EX}WorkspaceFile"));
+        assert_eq!(predicate, format!("{NAMESPACE}filePermissions"));
+        assert_eq!(&source[at.start..at.end], written);
+        assert_eq!(violation, expected);
+    }
+
+    let graph = load(&edited(PERMISSIONS, r#"pa:filePermissions "wklr""#))
+        .expect("the same valid permission set may use a different order");
+    let edit = graph.tool("edit_file").expect("worked edit tool");
+    let iri = format!("{EX}WorkspaceFile");
+    let file = edit
+        .execution_profile
+        .rules
+        .iter()
+        .find(|rule| rule.iri == iri)
+        .expect("worked file rule");
+    assert!(
+        file.properties
+            .iter()
+            .any(|(name, value)| *name == "filePermissions" && value == "wklr")
+    );
+}
+
 // Rationale: nothing is skipped: a statement no view owns is refused, while a plain
 // class declaration is an owned statement.
 #[test]
