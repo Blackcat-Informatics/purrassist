@@ -663,6 +663,14 @@ impl<V: DatasetView<Id = TermId>> Locations<'_, V> {
         control::default_row_extent(self.view, self.source, subject, predicate, object, governor)
     }
 
+    fn reifier(
+        &self,
+        reifier: &Reifier,
+        governor: &mut Governor,
+    ) -> Result<Option<SourceExtent>, LoadError> {
+        control::default_reifier_extent(self.view, self.source, reifier, governor)
+    }
+
     fn unsupported_row(
         &self,
         row: &Row,
@@ -1353,14 +1361,14 @@ impl Doc<'_> {
             }
             let candidate =
                 self.build_tool(node, catalog, &lookup, &mut hints, locations, &mut storage)?;
-            let original_name = self
-                .first_property(nodes, node.id, self.term("name"), &mut progress)?
-                .map_or("", |row| lexical_str(&row.o));
-            if scratch.record_name(&mut seen_names, original_name, &mut progress)? {
+            let name = self.required_property(nodes, node, "name", &mut progress)?;
+            if scratch.record_name(&mut seen_names, lexical_str(&name.o), &mut progress)? {
+                let at =
+                    locations.statement(&name.s, &name.p, &name.o, &mut governor.borrow_mut())?;
                 return Err(LoadError::InvalidShape {
                     subject: show(node.term),
-                    predicate: self.term("name").to_owned(),
-                    at: None,
+                    predicate: name.p.clone(),
+                    at: at.map(Box::new),
                     violation: Violation::Duplicate,
                 });
             }
@@ -1462,12 +1470,7 @@ impl Doc<'_> {
             if used {
                 continue;
             }
-            let at = control::default_reifier_extent(
-                locations.view,
-                locations.source,
-                reifier,
-                &mut governor.borrow_mut(),
-            )?;
+            let at = locations.reifier(reifier, &mut governor.borrow_mut())?;
             return Err(
                 if self.has_type_id(nodes, reifier.term_id, self.term("Hint"), progress)? {
                     LoadError::InvalidHint {
@@ -1777,7 +1780,7 @@ impl Doc<'_> {
                 .expect("admitted predicate");
             let (shape, path_id) =
                 Self::path_shape(input_shape, &mut input_paths, predicate, &mut progress)?;
-            let hint = self.build_hint(nodes, (shape.id, path_id), hints, storage)?;
+            let hint = self.build_hint(nodes, (shape.id, path_id), hints, locations, storage)?;
             let parameter = ToolParameter {
                 iri: storage.string(&parameter.parameter.iri)?,
                 predicate: storage.string(predicate)?,
@@ -1954,11 +1957,12 @@ impl Doc<'_> {
         })
     }
 
-    fn build_hint(
+    fn build_hint<V: DatasetView<Id = TermId>>(
         &self,
         nodes: &Nodes<'_>,
         path: (TermId, TermId),
         hints: &mut HintBindings,
+        locations: &Locations<'_, V>,
         storage: &mut BuildStorage<'_, '_, '_>,
     ) -> Result<Option<Hint>, LoadError> {
         let mut progress = Work::new(storage.governor);
@@ -1971,10 +1975,12 @@ impl Doc<'_> {
             [] => return Ok(None),
             [only] => only,
             [_, duplicate, ..] => {
+                let reifier = &self.reifiers[duplicate];
+                let at = locations.reifier(reifier, &mut storage.governor.borrow_mut())?;
                 return Err(LoadError::InvalidHint {
-                    subject: show(&self.reifiers[duplicate].id),
+                    subject: show(&reifier.id),
                     predicate: SH_PATH.to_owned(),
-                    at: None,
+                    at: at.map(Box::new),
                     violation: Violation::Duplicate,
                 });
             }
