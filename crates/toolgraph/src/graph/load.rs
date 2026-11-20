@@ -1306,17 +1306,30 @@ impl Doc<'_> {
 }
 
 struct ToolLookup<'i, 'n, 'd> {
-    iris: &'i [&'d str],
+    mappings_by_function: &'i [usize],
     profiles: Profiles<'n, 'd>,
 }
 
-impl ToolLookup<'_, '_, '_> {
-    fn contains(&self, iri: &str, progress: &mut Work<'_, '_>) -> Result<bool, LoadError> {
-        let found = try_equal_range_by(self.iris, |key| {
-            compare_bytes(key.as_bytes(), iri.as_bytes(), progress).map_err(stop)
-        })?;
-        Ok(!found.is_empty())
+fn index_mappings(
+    catalog: &FnoCatalog,
+    storage: &mut BuildStorage<'_, '_, '_>,
+    progress: &mut Work<'_, '_>,
+) -> Result<Vec<usize>, LoadError> {
+    let mut indices = Vec::new();
+    let mappings = &catalog.as_input().mappings;
+    for index in 0..mappings.len() {
+        storage.charge(1)?;
+        storage.push(&mut indices, index)?;
     }
+    try_sort_unstable_by(&mut indices, |&left, &right| {
+        compare_bytes(
+            mappings[left].function.as_bytes(),
+            mappings[right].function.as_bytes(),
+            progress,
+        )
+        .map_err(stop)
+    })?;
+    Ok(indices)
 }
 
 impl Doc<'_> {
@@ -1345,13 +1358,16 @@ impl Doc<'_> {
         try_sort_unstable_by(&mut iris, |left, right| {
             compare_bytes(left.as_bytes(), right.as_bytes(), &mut progress).map_err(stop)
         })?;
+        let mappings_by_function = if let Some(catalog) = catalog {
+            self.check_catalog_tools(catalog, &iris, locations, governor, &mut progress)?;
+            index_mappings(catalog, &mut scratch, &mut progress)?
+        } else {
+            Vec::new()
+        };
         let lookup = ToolLookup {
-            iris: &iris,
+            mappings_by_function: &mappings_by_function,
             profiles: Profiles { nodes },
         };
-        if let Some(catalog) = catalog {
-            self.check_catalog_tools(catalog, &lookup, locations, governor, &mut progress)?;
-        }
         let mut hints = HintBindings::new(&self.reifiers, &mut scratch)?;
         let (storage, rejection) = Storage::new(governor);
         let mut retained = RetainedTools {
@@ -1439,14 +1455,17 @@ impl Doc<'_> {
     fn check_catalog_tools<V: DatasetView<Id = TermId>>(
         &self,
         catalog: &FnoCatalog,
-        lookup: &ToolLookup<'_, '_, '_>,
+        iris: &[&str],
         locations: &Locations<'_, V>,
         governor: &Shared<'_>,
         progress: &mut Work<'_, '_>,
     ) -> Result<(), LoadError> {
         for function in &catalog.as_input().functions {
             work(&mut governor.borrow_mut(), 1)?;
-            if lookup.contains(function.iri.as_str(), progress)? {
+            let matches = try_equal_range_by(iris, |key| {
+                compare_bytes(key.as_bytes(), function.iri.as_bytes(), progress).map_err(stop)
+            })?;
+            if !matches.is_empty() {
                 continue;
             }
             let mut at = None;
@@ -1600,7 +1619,7 @@ impl Doc<'_> {
         };
         let subtools = self.retained_texts(nodes, node.id, "subtool", storage)?;
         let (parameters, output, implementation) =
-            self.build_callable(node, nodes, catalog, hints, locations, storage)?;
+            self.build_callable(node, lookup, catalog, hints, locations, storage)?;
         let flag = |name, progress: &mut Work<'_, '_>| {
             Ok::<_, LoadError>(
                 self.typed_value(nodes, node.id, name, progress)?
@@ -1753,7 +1772,7 @@ impl Doc<'_> {
     fn build_callable<V: DatasetView<Id = TermId>>(
         &self,
         node: Node<'_>,
-        nodes: &Nodes<'_>,
+        lookup: &ToolLookup<'_, '_, '_>,
         catalog: &FnoCatalog,
         hints: &mut HintBindings,
         locations: &Locations<'_, V>,
@@ -1761,7 +1780,8 @@ impl Doc<'_> {
     ) -> Result<(Vec<ToolParameter>, ToolOutput, ToolImplementation), LoadError> {
         // INVARIANT: build_tool admitted an IRI before inspecting its binding.
         let iri = iri_of(node.term).expect("tool subject is an IRI");
-        let binding = Self::admit_callable(catalog, iri, storage)?;
+        let nodes = lookup.profiles.nodes;
+        let binding = Self::admit_callable(catalog, lookup.mappings_by_function, iri, storage)?;
         let mut progress = Work::new(storage.governor);
         let input = self.required_property(nodes, node, "inputShape", &mut progress)?;
         let output = self.required_property(nodes, node, "outputShape", &mut progress)?;
@@ -1840,6 +1860,7 @@ impl Doc<'_> {
 
     fn admit_callable<'a>(
         catalog: &'a FnoCatalog,
+        mapping_indices: &[usize],
         iri: &str,
         storage: &BuildStorage<'_, '_, '_>,
     ) -> Result<CallableBinding<'a>, LoadError> {
@@ -1849,25 +1870,24 @@ impl Doc<'_> {
             detail,
             at: None,
         };
-        let mut found = 0;
-        let mut mapping = 0;
         let mut progress = Work::new(storage.governor);
-        for (at, row) in catalog.as_input().mappings.iter().enumerate() {
-            storage.charge(1)?;
-            if compare_bytes(row.function.as_bytes(), iri.as_bytes(), &mut progress)
-                .map_err(stop)?
-                .is_eq()
-            {
-                mapping = at;
-                found += 1;
-            }
-        }
-        if found != 1 {
+        let mappings = &catalog.as_input().mappings;
+        let range = try_equal_range_by(mapping_indices, |&index| {
+            compare_bytes(
+                mappings[index].function.as_bytes(),
+                iri.as_bytes(),
+                &mut progress,
+            )
+            .map_err(stop)
+        })?;
+        let candidates = &mapping_indices[range];
+        let [mapping] = candidates else {
             return Err(fno_error(format!(
-                "a tool needs exactly one fno:Mapping, found {found}"
+                "a tool needs exactly one fno:Mapping, found {}",
+                candidates.len(),
             )));
-        }
-        CallableBinding::admit(catalog, mapping, &mut storage.governor.borrow_mut()).map_err(
+        };
+        CallableBinding::admit(catalog, *mapping, &mut storage.governor.borrow_mut()).map_err(
             |error| match error {
                 crate::BindingError::Resource(reason) => stop(reason),
                 other => fno_error(other.to_string()),
