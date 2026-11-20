@@ -51,6 +51,8 @@ that identify only a node have no statement extent. A hint that combines
 `none` with a conversion points to the written `none` value.
 Vocabulary role checks also locate specific rejected statements, including a
 predicate on the wrong role and a value of the wrong kind or range.
+An excess-value refusal reports the exact count and points to the first
+excess value in native row order.
 Other media types than Turtle and TriG are refused as `LoadError::Parse`
 because purrdf governs and retains occurrences for those two alone; the refusal
 code is `unsupported-format` for every such media type. The owned `RdfDataset`

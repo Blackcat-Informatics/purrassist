@@ -27,7 +27,7 @@ use purrdf_rdf::{
     parse_dataset_controlled,
 };
 
-use super::{Reifier, stop, work};
+use super::{Reifier, Row, stop, work};
 use crate::graph::{LoadError, SourceExtent};
 
 /// The governor shared between the native parser's progress callback and the
@@ -331,6 +331,28 @@ pub(super) fn default_reifier_extent<V: DatasetView<Id = TermId>>(
         Ok(matches_term(view, s, &reifier.s, governor)?
             && matches_iri(view, p, &reifier.p, governor)?
             && matches_term(view, o, &reifier.o, governor)?)
+    })
+}
+
+/// Locate the written occurrence of the selected classified default-graph row.
+pub(super) fn classified_row_extent<V: DatasetView<Id = TermId>>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    row: &Row,
+    governor: &mut Governor,
+) -> Result<Option<SourceExtent>, LoadError> {
+    find_statement(source, governor, |statement, [s, p, o], graph, governor| {
+        if graph.is_some()
+            || source.statement_kind(statement) != Some(row.layer)
+            || term_id(source, s, governor)? != Some(row.subject_id)
+            || term_id(source, o, governor)? != Some(row.object_id)
+        {
+            return Ok(false);
+        }
+        let Some(predicate) = term_id(source, p, governor)? else {
+            return Ok(false);
+        };
+        matches_iri(view, predicate, &row.p, governor)
     })
 }
 

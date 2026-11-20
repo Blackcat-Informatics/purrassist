@@ -1048,26 +1048,30 @@ impl Doc<'_> {
         for spec in Spec::table(role) {
             work(&mut governor.borrow_mut(), 1)?;
             let predicate = self.term(spec.name);
-            let mut found = 0;
-            for &index in node.rows {
-                if matches_predicate(&self.rows[index], predicate, progress)? {
-                    found += 1;
-                }
-            }
-            let cardinality = if found < usize::from(spec.min) {
-                Some(Violation::Missing)
-            } else if spec.max.is_some_and(|max| found > usize::from(max)) {
-                Some(Violation::TooMany { found })
-            } else {
-                None
-            };
-            if let Some(violation) = cardinality {
+            let (found, excess) =
+                self.count_role_values(node.rows, predicate, spec.max, progress)?;
+            if found < usize::from(spec.min) {
                 return Err(Self::wrap(
                     role,
                     node.identity.term,
                     predicate,
-                    violation,
+                    Violation::Missing,
                     None,
+                ));
+            }
+            if let Some(row) = excess {
+                let at = control::classified_row_extent(
+                    locations.view,
+                    locations.source,
+                    row,
+                    &mut governor.borrow_mut(),
+                )?;
+                return Err(Self::wrap(
+                    role,
+                    node.identity.term,
+                    predicate,
+                    Violation::TooMany { found },
+                    at,
                 ));
             }
             if found == 0 {
@@ -1136,6 +1140,29 @@ impl Doc<'_> {
             ));
         }
         Ok(())
+    }
+
+    /// Count every match and retain the first row beyond the maximum.
+    fn count_role_values(
+        &self,
+        indices: &[usize],
+        predicate: &str,
+        maximum: Option<u8>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<(usize, Option<&Row>), LoadError> {
+        let first_excess = maximum.map(|max| usize::from(max) + 1);
+        let mut found = 0;
+        let mut excess = None;
+        for &index in indices {
+            let row = &self.rows[index];
+            if matches_predicate(row, predicate, progress)? {
+                found += 1;
+                if Some(found) == first_excess {
+                    excess = Some(row);
+                }
+            }
+        }
+        Ok((found, excess))
     }
 }
 
