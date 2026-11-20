@@ -10,18 +10,23 @@
 //! schema the compiler emitted and the declaration renders back unchanged; no
 //! typed subset of the schema is rebuilt here.
 
-use std::collections::BTreeSet;
+use std::cmp::Ordering;
 use std::fmt;
+use std::slice::Iter;
 
 use purrassist_core::{
     Governor,
+    contract::saturating_size,
     tool_call::{
         DeclarationMetadata, Effects, ParameterAliases, RepairPolicy, ToolSet, ToolSetError,
     },
 };
 use purrdf_core::loss::LossLedger;
 
-use super::{Tool, ToolExecutionProfile, ToolGraph};
+use super::{
+    LoadError, Tool, ToolExecutionProfile, ToolGraph,
+    load::{BuildStorage, with_build_storage},
+};
 use crate::{Vocabulary, codec::mcp};
 
 /// A refusal to build the core tool set for a loaded graph. Nothing partial escapes.
@@ -30,6 +35,8 @@ use crate::{Vocabulary, codec::mcp};
 pub enum ToolSetBridgeError {
     /// The graph has no MCP Extended manifest projection.
     Manifest(Box<mcp::CodecError>),
+    /// Preparing the temporary aliases or checking transitive effects failed.
+    Metadata(Box<LoadError>),
     /// The core adapter refused the declarations or their metadata. An alias that
     /// collides with a sibling parameter or alias is [`ToolSetError::Collision`];
     /// an alias path the schema cannot carry is [`ToolSetError::InvalidDefinition`];
@@ -41,6 +48,7 @@ impl fmt::Display for ToolSetBridgeError {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Manifest(cause) => write!(output, "tool set manifest: {cause}"),
+            Self::Metadata(cause) => write!(output, "tool set metadata: {cause}"),
             Self::ToolSet(cause) => write!(output, "tool set import: {cause}"),
         }
     }
@@ -50,6 +58,7 @@ impl std::error::Error for ToolSetBridgeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Manifest(cause) => Some(cause.as_ref()),
+            Self::Metadata(cause) => Some(cause.as_ref()),
             Self::ToolSet(cause) => Some(cause),
         }
     }
@@ -107,7 +116,9 @@ impl ToolGraph {
     /// [`ToolSetBridgeError::Manifest`] when the graph cannot be projected (for
     /// example a shape without exactly one `sh:targetClass`), and
     /// [`ToolSetBridgeError::ToolSet`] when the adapter refuses the declarations
-    /// or metadata, including an alias collision. No partial set is returned.
+    /// or metadata, including an alias collision. The caller's governor admits
+    /// the alias copies and iterative transitive effect checks. A refusal there
+    /// returns [`ToolSetBridgeError::Metadata`]. No partial set is returned.
     pub fn tool_set(
         &self,
         vocabulary: &Vocabulary,
@@ -115,93 +126,226 @@ impl ToolGraph {
     ) -> Result<(ToolSet, LossLedger), ToolSetBridgeError> {
         let (manifest, losses) = mcp::encode(self, vocabulary, governor)
             .map_err(|cause| ToolSetBridgeError::Manifest(Box::new(cause)))?;
-        let metadata: Vec<DeclarationMetadata> = self
-            .tools()
-            .iter()
-            .map(|tool| metadata(self, tool))
-            .collect();
-        let tools =
-            ToolSet::from_mcp_with_metadata_governed(manifest.as_str(), &metadata, governor)
-                .map_err(ToolSetBridgeError::ToolSet)?;
+        let tools = with_build_storage(governor, |storage| {
+            let metadata = bridge_metadata(self, storage)
+                .map_err(|cause| ToolSetBridgeError::Metadata(Box::new(cause)))?;
+            storage
+                .with_governor(|governor| {
+                    ToolSet::from_mcp_with_metadata_governed(manifest.as_str(), &metadata, governor)
+                })
+                .map_err(ToolSetBridgeError::ToolSet)
+        })?;
         Ok((tools, losses))
     }
 }
 
-fn metadata(graph: &ToolGraph, tool: &Tool) -> DeclarationMetadata {
-    let hints = || tool.parameters.iter().filter_map(|p| p.hint.as_ref());
-    let effects = if tool.annotations.effective_read_only()
-        && proves_no_write(graph, tool, &mut BTreeSet::new())
-    {
-        Effects::ReadOnly
-    } else {
-        Effects::Mutating
-    };
-    let infers = hints().any(|hint| {
-        hint.max_edit_distance > 0
+fn bridge_metadata(
+    graph: &ToolGraph,
+    storage: &mut BuildStorage<'_, '_, '_>,
+) -> Result<Vec<DeclarationMetadata>, LoadError> {
+    let mut result = Vec::new();
+    let mut proof = EffectProof::default();
+    for (index, tool) in graph.tools().iter().enumerate() {
+        storage.charge(1)?;
+        let effects = if tool.annotations.effective_read_only()
+            && proof.proves_no_write(graph.tools(), index, storage)?
+        {
+            Effects::ReadOnly
+        } else {
+            Effects::Mutating
+        };
+        let entry = metadata(tool, effects, storage)?;
+        storage.push(&mut result, entry)?;
+    }
+    storage.release(proof.seen)?;
+    storage.release(proof.tools)?;
+    storage.release(proof.profiles)?;
+    Ok(result)
+}
+
+fn metadata(
+    tool: &Tool,
+    effects: Effects,
+    storage: &mut BuildStorage<'_, '_, '_>,
+) -> Result<DeclarationMetadata, LoadError> {
+    let mut infers = false;
+    let mut parameter_aliases = Vec::new();
+    for parameter in &tool.parameters {
+        storage.charge(1)?;
+        let Some(hint) = &parameter.hint else {
+            continue;
+        };
+        infers |= hint.max_edit_distance > 0
             || !hint.coercions.is_empty()
             || hint.case_fold
-            || hint.unicode_fold
-    });
-    DeclarationMetadata {
-        tool_name: tool.name.clone(),
+            || hint.unicode_fold;
+        if !hint.aliases.is_empty() {
+            let mut property_path = Vec::new();
+            let property = storage.string(&parameter.implementation_property)?;
+            storage.push(&mut property_path, property)?;
+            let mut aliases = Vec::new();
+            for alias in &hint.aliases {
+                storage.charge(1)?;
+                let alias = storage.string(alias)?;
+                storage.push(&mut aliases, alias)?;
+            }
+            storage.push(
+                &mut parameter_aliases,
+                ParameterAliases {
+                    property_path,
+                    aliases,
+                },
+            )?;
+        }
+    }
+    Ok(DeclarationMetadata {
+        tool_name: storage.string(&tool.name)?,
         effects,
         policy: if infers {
             RepairPolicy::Tolerant
         } else {
             RepairPolicy::Structural
         },
-        parameter_aliases: tool
-            .parameters
-            .iter()
-            .filter_map(|parameter| {
-                let hint = parameter.hint.as_ref()?;
-                (!hint.aliases.is_empty()).then(|| ParameterAliases {
-                    property_path: vec![parameter.implementation_property.clone()],
-                    aliases: hint.aliases.clone(),
-                })
-            })
-            .collect(),
-    }
+        parameter_aliases,
+    })
 }
 
-/// Whether the graph proves the tool and everything it can call cannot write.
-/// Anything the graph cannot establish counts as a possible write.
-fn proves_no_write<'g>(graph: &'g ToolGraph, tool: &'g Tool, seen: &mut BTreeSet<&'g str>) -> bool {
-    if !seen.insert(tool.iri.as_str()) {
-        return true; // a cycle adds no capability beyond the members already checked
-    }
-    profile_is_write_free(&tool.execution_profile)
-        && tool.subtools.iter().all(|iri| {
-            graph
-                .tools()
-                .iter()
-                .find(|candidate| candidate.iri == *iri)
-                .is_some_and(|nested| proves_no_write(graph, nested, seen))
-        })
+/// Reuse admitted traversal buffers across each requested proof.
+#[derive(Default)]
+struct EffectProof<'g> {
+    seen: Vec<usize>,
+    tools: Vec<Iter<'g, String>>,
+    profiles: Vec<Iter<'g, ToolExecutionProfile>>,
 }
 
-fn profile_is_write_free(profile: &ToolExecutionProfile) -> bool {
-    profile.waivers.is_empty()
-        && profile.rules.iter().all(|rule| {
-            let value = |name: &str| {
-                rule.properties
-                    .iter()
-                    .find(|(key, _)| *key == name)
-                    .map(|(_, value)| value.as_str())
-            };
-            if matches!(value("deny"), Some("true" | "1")) {
-                return true;
+impl<'g> EffectProof<'g> {
+    fn proves_no_write(
+        &mut self,
+        tools: &'g [Tool],
+        root: usize,
+        storage: &mut BuildStorage<'_, '_, '_>,
+    ) -> Result<bool, LoadError> {
+        if self.seen.is_empty() {
+            storage.fill(&mut self.seen, tools.len(), 0)?;
+        }
+        self.tools.clear();
+        // Zero is unvisited. Each root has its own index, so stamps need no reset.
+        let visit = root + 1;
+        let mut index = root;
+        loop {
+            storage.charge(1)?;
+            self.seen[index] = visit;
+            let tool = &tools[index];
+            if !self.profile_is_write_free(&tool.execution_profile, storage)? {
+                return Ok(false);
             }
-            match rule.class {
-                "FileRule" => {
-                    !value("filePermissions")
-                        .unwrap_or_default()
-                        .contains(['w', 'a', 'k', 'l'])
-                        && value("execTransition").is_none_or(|transition| transition == "ix")
+            if !tool.subtools.is_empty() {
+                storage.push(&mut self.tools, tool.subtools.iter())?;
+            }
+            index = loop {
+                let Some(iri) = next_child(&mut self.tools, storage)? else {
+                    return Ok(true);
+                };
+                storage.charge(1)?;
+                let Some(child) = find_tool(tools, iri, storage)? else {
+                    return Ok(false);
+                };
+                if self.seen[child] != visit {
+                    break child;
                 }
-                "MountRule" | "CapabilityRule" => false,
-                _ => true,
+            };
+        }
+    }
+
+    fn profile_is_write_free(
+        &mut self,
+        mut profile: &'g ToolExecutionProfile,
+        storage: &mut BuildStorage<'_, '_, '_>,
+    ) -> Result<bool, LoadError> {
+        self.profiles.clear();
+        loop {
+            storage.charge(1)?;
+            if !profile.waivers.is_empty() || !rules_are_write_free(profile, storage)? {
+                return Ok(false);
             }
-        })
-        && profile.subprofiles.iter().all(profile_is_write_free)
+            if !profile.subprofiles.is_empty() {
+                storage.push(&mut self.profiles, profile.subprofiles.iter())?;
+            }
+            let Some(child) = next_child(&mut self.profiles, storage)? else {
+                return Ok(true);
+            };
+            profile = child;
+        }
+    }
+}
+
+fn next_child<'a, T>(
+    parents: &mut Vec<Iter<'a, T>>,
+    storage: &BuildStorage<'_, '_, '_>,
+) -> Result<Option<&'a T>, LoadError> {
+    while let Some(siblings) = parents.last_mut() {
+        storage.charge(0)?;
+        if let Some(child) = siblings.next() {
+            return Ok(Some(child));
+        }
+        parents.pop();
+    }
+    Ok(None)
+}
+
+fn find_tool(
+    tools: &[Tool],
+    iri: &str,
+    storage: &BuildStorage<'_, '_, '_>,
+) -> Result<Option<usize>, LoadError> {
+    let (mut start, mut end) = (0, tools.len());
+    while start < end {
+        let index = start + (end - start) / 2;
+        let candidate = tools[index].iri.as_str();
+        storage.charge(saturating_size(candidate.len().min(iri.len())).saturating_add(1))?;
+        match candidate.cmp(iri) {
+            Ordering::Less => start = index + 1,
+            Ordering::Equal => return Ok(Some(index)),
+            Ordering::Greater => end = index,
+        }
+    }
+    Ok(None)
+}
+
+fn rules_are_write_free(
+    profile: &ToolExecutionProfile,
+    storage: &BuildStorage<'_, '_, '_>,
+) -> Result<bool, LoadError> {
+    for rule in &profile.rules {
+        storage.charge(1)?;
+        let mut deny = None;
+        let mut permissions = None;
+        let mut transition = None;
+        for (key, value) in &rule.properties {
+            storage.charge(1)?;
+            match *key {
+                "deny" => deny.get_or_insert(value.as_str()),
+                "filePermissions" => permissions.get_or_insert(value.as_str()),
+                "execTransition" => transition.get_or_insert(value.as_str()),
+                _ => continue,
+            };
+        }
+        if matches!(deny, Some("true" | "1")) {
+            continue;
+        }
+        match rule.class {
+            "FileRule" => {
+                let permissions = permissions.unwrap_or_default();
+                storage.charge(saturating_size(permissions.len()))?;
+                if permissions.contains(['w', 'a', 'k', 'l'])
+                    || transition.is_some_and(|transition| transition != "ix")
+                {
+                    return Ok(false);
+                }
+            }
+            "MountRule" | "CapabilityRule" => return Ok(false),
+            _ => {}
+        }
+    }
+    Ok(true)
 }

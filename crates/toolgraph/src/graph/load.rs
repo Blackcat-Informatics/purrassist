@@ -43,7 +43,8 @@ use crate::{
 };
 use classification::{Nodes, RoleNode};
 use control::{ControlledStorage, Shared, Storage, Work};
-use profile::{BuildStorage, Profiles, matches_predicate};
+pub(super) use profile::BuildStorage;
+use profile::{Profiles, matches_predicate};
 use roles::{Kind, Role, Spec};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -142,6 +143,16 @@ fn stop(reason: StopReason) -> LoadError {
 
 fn work(governor: &mut Governor, amount: u64) -> Result<(), LoadError> {
     governor.charge(Resource::Work, amount).map_err(stop)
+}
+
+pub(super) fn with_build_storage<T>(
+    governor: &mut Governor,
+    run: impl FnOnce(&mut BuildStorage<'_, '_, '_>) -> T,
+) -> T {
+    let governor = RefCell::new(governor);
+    let (account, rejection) = Storage::new(&governor);
+    let mut account = OwnedAdmission::new(account);
+    run(&mut BuildStorage::new(&mut account, &governor, rejection))
 }
 
 fn iri_of(term: &TermValue) -> Option<&str> {
