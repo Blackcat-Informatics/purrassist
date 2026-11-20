@@ -1352,6 +1352,54 @@ fn a_function_without_a_tool_is_refused_as_a_function_without_a_tool() {
     );
 }
 
+#[test]
+fn callable_mapping_selection_requires_exactly_one_mapping_per_tool() {
+    let source = worked();
+    let mapping = source
+        .lines()
+        .find(|line| line.starts_with("_:queryMapping "))
+        .expect("worked query mapping");
+    let duplicate = format!(
+        "{source}\n{}",
+        mapping.replacen("_:queryMapping", "_:alternateQueryMapping", 1)
+    );
+    let missing = source
+        .lines()
+        .filter(|line| {
+            ![
+                "_:queryMapping ",
+                "_:customerMap ",
+                "_:limitMap ",
+                "_:ordersMap ",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (turtle, count) in [(missing, 0), (duplicate, 2)] {
+        let error = load(&turtle).expect_err("each tool requires one FnO mapping");
+        assert!(
+            matches!(
+                &error,
+                LoadError::InvalidFnoBinding { subject, detail, .. }
+                    if subject == &format!("{EX}query_customer_orders")
+                        && detail == &format!("a tool needs exactly one fno:Mapping, found {count}")
+            ),
+            "{error:?}"
+        );
+    }
+    let graph = load(&source).expect("one mapping per tool");
+    assert_eq!(
+        graph
+            .tool("query_customer_orders")
+            .unwrap()
+            .implementation
+            .iri,
+        format!("{EX}queryImplementation")
+    );
+}
+
 /// A required path must bind exactly one property shape, even when both use the same IRI.
 #[test]
 fn two_property_shapes_for_the_same_callable_path_are_refused() {
