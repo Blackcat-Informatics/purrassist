@@ -1,0 +1,113 @@
+{
+  "issue": 33,
+  "pr_number": 287,
+  "branch": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl",
+  "observed_at": "2026-11-20T09:21:50.071329+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "dc5fe6cec27ba606f998a39e9b43a7a0c3d90ac7",
+    "headRefName": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+    "headRefOid": "1bfb9f966843f1048d1e1e160ed9330b5f070787",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 287,
+    "state": "OPEN",
+    "title": "Locate duplicate tool names and recovery reifiers",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/287"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44703954637/job/136178789537",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44703954637/job/136178789519",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44703954637/job/136178789405",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44703954637/job/136178789415",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44703954637/job/136178789488",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44703954637/job/136178789232",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44703954637/job/136178789474",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "1bfb9f966843f1048d1e1e160ed9330b5f070787",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "1bfb9f966843f1048d1e1e160ed9330b5f070787",
+    "branch": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 287,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #287 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl",
+  "branch": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+  "base_ref": "dc5fe6cec27ba606f998a39e9b43a7a0c3d90ac7",
+  "head": "15bb90d23d5ce20b4ec095194ce3a348a06d3246",
+  "attempt": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/sync/20261120T083557-40ba9a78b4f34de289c2ac6930fada68",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "dc5fe6cec27ba606f998a39e9b43a7a0c3d90ac7",
+  "merge_bases": [
+    "15bb90d23d5ce20b4ec095194ce3a348a06d3246"
+  ],
+  "commit": "dc5fe6cec27ba606f998a39e9b43a7a0c3d90ac7"
+}

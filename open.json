@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "issue": 33,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl",
+  "branch": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+  "slug": "tool-graph-rdf-1-2-loader-fno-shacl",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "15bb90d23d5ce20b4ec095194ce3a348a06d3246",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl",
+    "branch:paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+    "ignored:4 files (4 reflinked, 0 written)",
+    "rust-caches:already present",
+    "stage:/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl",
+    "issue:/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/issue.md"
+  ],
+  "warnings": [
+    "local main differs from the selected remote base; inspect with `stagectl base-status`"
+  ],
+  "timestamp": "2026-11-20T02:28:07-0600",
+  "seed_error": ""
+}
