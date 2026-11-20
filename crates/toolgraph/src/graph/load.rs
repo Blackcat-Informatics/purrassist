@@ -94,11 +94,42 @@ impl<'a> Node<'a> {
 #[derive(Debug)]
 struct Reifier {
     term_id: TermId,
-    target_subject: TermId,
+    target: (TermId, TermId),
     id: TermValue,
     s: TermValue,
     p: String,
     o: TermValue,
+}
+
+/// Temporary lookup and consumption state for parameter-path reifiers.
+struct HintBindings {
+    by_path: Vec<usize>,
+    consumed: Vec<bool>,
+}
+
+impl HintBindings {
+    fn new(
+        reifiers: &[Reifier],
+        storage: &mut BuildStorage<'_, '_, '_>,
+    ) -> Result<Self, LoadError> {
+        let mut by_path = Vec::new();
+        for (index, reifier) in reifiers.iter().enumerate() {
+            storage.charge(1)?;
+            if reifier.p == SH_PATH && iri_of(&reifier.o).is_some() {
+                storage.push(&mut by_path, index)?;
+            }
+        }
+        // Keep native row order within each path for the duplicate diagnostic.
+        try_sort_unstable_by(&mut by_path, |&left, &right| {
+            storage.charge(1)?;
+            let left_key = (reifiers[left].target, left);
+            let right_key = (reifiers[right].target, right);
+            Ok::<_, LoadError>(left_key.cmp(&right_key))
+        })?;
+        let mut consumed = Vec::new();
+        storage.fill(&mut consumed, reifiers.len(), false)?;
+        Ok(Self { by_path, consumed })
+    }
 }
 
 /// Owned materialisation of a parsed dataset, indexed by subject.
@@ -368,12 +399,12 @@ impl<'v> Doc<'v> {
             let TermValue::Iri(p) = value(p, memory)? else {
                 return Err(unsupported(&id, "-", Construct::Reifier, None));
             };
-            let target_subject = s;
+            let target = (s, o);
             let s = value(s, memory)?;
             let o = value(o, memory)?;
             let reifier = Reifier {
                 term_id: quad.s,
-                target_subject,
+                target,
                 id,
                 s,
                 p,
@@ -1168,8 +1199,7 @@ impl Doc<'_> {
         if let Some(catalog) = catalog {
             self.check_catalog_tools(catalog, &lookup, locations, governor, &mut progress)?;
         }
-        let mut consumed = Vec::new();
-        scratch.fill(&mut consumed, self.reifiers.len(), false)?;
+        let mut hints = HintBindings::new(&self.reifiers, &mut scratch)?;
         let (storage, rejection) = Storage::new(governor);
         let mut retained = RetainedTools {
             tools: Vec::new(),
@@ -1190,14 +1220,8 @@ impl Doc<'_> {
             if !self.has_type_id(nodes, node.id, FNO_FUNCTION, &mut progress)? {
                 return Err(Self::missing_function(node.term));
             }
-            let candidate = self.build_tool(
-                node,
-                catalog,
-                &lookup,
-                &mut consumed,
-                locations,
-                &mut storage,
-            )?;
+            let candidate =
+                self.build_tool(node, catalog, &lookup, &mut hints, locations, &mut storage)?;
             let original_name = self
                 .first_property(nodes, node.id, self.term("name"), &mut progress)?
                 .map_or("", |row| lexical_str(&row.o));
@@ -1215,7 +1239,7 @@ impl Doc<'_> {
             retained.tools.push(tool);
             retained.masks.push(mask);
         }
-        self.check_reifiers(nodes, &consumed, locations, governor, &mut progress)?;
+        self.check_reifiers(nodes, &hints.consumed, locations, governor, &mut progress)?;
         // The classified node iterator already visits the IRI subjects in lexical order.
         Ok(retained)
     }
@@ -1371,7 +1395,7 @@ impl Doc<'_> {
         node: Node<'_>,
         catalog: &FnoCatalog,
         lookup: &ToolLookup<'_, '_, '_>,
-        consumed: &mut [bool],
+        hints: &mut HintBindings,
         locations: &Locations<'_, V>,
         storage: &mut BuildStorage<'_, '_, '_>,
     ) -> Result<(Tool, ScratchLease), LoadError> {
@@ -1399,7 +1423,7 @@ impl Doc<'_> {
             }
         }
         let (parameters, output, implementation) =
-            self.build_callable(node, nodes, catalog, consumed, locations, storage)?;
+            self.build_callable(node, nodes, catalog, hints, locations, storage)?;
         let flag = |name, progress: &mut Work<'_, '_>| {
             Ok::<_, LoadError>(
                 self.typed_value(nodes, node.id, name, progress)?
@@ -1524,6 +1548,7 @@ impl Doc<'_> {
 
 struct ShapePath<'a> {
     iri: &'a str,
+    path_id: TermId,
     property: Node<'a>,
     used: bool,
 }
@@ -1553,7 +1578,7 @@ impl Doc<'_> {
         node: Node<'_>,
         nodes: &Nodes<'_>,
         catalog: &FnoCatalog,
-        consumed: &mut [bool],
+        hints: &mut HintBindings,
         locations: &Locations<'_, V>,
         storage: &mut BuildStorage<'_, '_, '_>,
     ) -> Result<(Vec<ToolParameter>, ToolOutput, ToolImplementation), LoadError> {
@@ -1581,8 +1606,9 @@ impl Doc<'_> {
                 .predicate
                 .as_deref()
                 .expect("admitted predicate");
-            let shape = Self::path_shape(input_shape, &mut input_paths, predicate, &mut progress)?;
-            let hint = self.build_hint(nodes, shape, predicate, consumed, storage)?;
+            let (shape, path_id) =
+                Self::path_shape(input_shape, &mut input_paths, predicate, &mut progress)?;
+            let hint = self.build_hint(nodes, (shape.id, path_id), hints, storage)?;
             let parameter = ToolParameter {
                 iri: storage.string(&parameter.parameter.iri)?,
                 predicate: storage.string(predicate)?,
@@ -1722,6 +1748,7 @@ impl Doc<'_> {
                 &mut paths,
                 ShapePath {
                     iri,
+                    path_id: path.object_id,
                     property,
                     used: false,
                 },
@@ -1738,14 +1765,14 @@ impl Doc<'_> {
         paths: &mut [ShapePath<'d>],
         predicate: &str,
         progress: &mut Work<'_, '_>,
-    ) -> Result<Node<'d>, LoadError> {
+    ) -> Result<(Node<'d>, TermId), LoadError> {
         let range = try_equal_range_by(paths, |path| {
             compare_bytes(path.iri.as_bytes(), predicate.as_bytes(), progress).map_err(stop)
         })?;
         let violation = match &mut paths[range] {
             [only] => {
                 only.used = true;
-                return Ok(only.property);
+                return Ok((only.property, only.path_id));
             }
             [] => Violation::Unresolved,
             _ => Violation::Duplicate,
@@ -1761,38 +1788,29 @@ impl Doc<'_> {
     fn build_hint(
         &self,
         nodes: &Nodes<'_>,
-        shape: Node<'_>,
-        predicate: &str,
-        consumed: &mut [bool],
+        path: (TermId, TermId),
+        hints: &mut HintBindings,
         storage: &mut BuildStorage<'_, '_, '_>,
     ) -> Result<Option<Hint>, LoadError> {
-        let mut matched = None;
         let mut progress = Work::new(storage.governor);
-        for (at, reifier) in self.reifiers.iter().enumerate() {
+        // The shape row and reifier components share the same native term table.
+        let range = try_equal_range_by(&hints.by_path, |&index| {
             storage.charge(1)?;
-            if reifier.target_subject != shape.id || reifier.p != SH_PATH {
-                continue;
-            }
-            let Some(path) = iri_of(&reifier.o) else {
-                continue;
-            };
-            if !compare_bytes(path.as_bytes(), predicate.as_bytes(), &mut progress)
-                .map_err(stop)?
-                .is_eq()
-            {
-                continue;
-            }
-            if matched.replace(at).is_some() {
+            Ok::<_, LoadError>(self.reifiers[index].target.cmp(&path))
+        })?;
+        let at = match hints.by_path[range] {
+            [] => return Ok(None),
+            [only] => only,
+            [_, duplicate, ..] => {
                 return Err(LoadError::InvalidHint {
-                    subject: show(&reifier.id),
+                    subject: show(&self.reifiers[duplicate].id),
                     predicate: SH_PATH.to_owned(),
                     at: None,
                     violation: Violation::Duplicate,
                 });
             }
-        }
-        let Some(at) = matched else { return Ok(None) };
-        consumed[at] = true;
+        };
+        hints.consumed[at] = true;
         let reifier = &self.reifiers[at];
         let id = &reifier.id;
         let mut none = false;
@@ -1832,7 +1850,7 @@ impl Doc<'_> {
         }
         Ok(Some(Hint {
             reifier: Self::reifier_reference(id, storage)?,
-            shape: storage.lexical(shape.term)?,
+            shape: storage.lexical(&reifier.s)?,
             max_edit_distance: self.typed_number(
                 nodes,
                 reifier.term_id,
