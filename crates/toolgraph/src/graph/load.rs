@@ -23,7 +23,7 @@ use purrdf_core::{
     blank_label::{LabelAlphabet, encode_blank_label_with_memory},
     dataset_from_view,
     dataset_view::DatasetView,
-    fno::{FnoCatalog, FnoFieldKind, FnoReadError, FnoReadFailure},
+    fno::{FnBlank, FnoCatalog, FnoFieldKind, FnoReadError, FnoReadFailure},
     loss::{LossEntry, LossLedger},
 };
 use purrdf_lex::{
@@ -67,6 +67,7 @@ const SH_PROPERTY_SHAPE: &str = "http://www.w3.org/ns/shacl#PropertyShape";
 const FNO: &str = "https://w3id.org/function/ontology#";
 const FNOM: &str = "https://w3id.org/function/vocabulary/mapping#";
 const FNO_FUNCTION: &str = "https://w3id.org/function/ontology#Function";
+const FNO_MAPPED_FUNCTION: &str = "https://w3id.org/function/ontology#function";
 const FNO_MAPPING: &str = "https://w3id.org/function/ontology#Mapping";
 const FNOM_MAPPING: &str = "https://w3id.org/function/vocabulary/mapping#Mapping";
 const FNO_EXPECTS: &str = "https://w3id.org/function/ontology#expects";
@@ -1327,6 +1328,8 @@ fn index_mappings(
             mappings[right].function.as_bytes(),
             progress,
         )
+        // Equal functions retain native catalog order for duplicate diagnostics.
+        .map(|order| order.then(left.cmp(&right)))
         .map_err(stop)
     })?;
     Ok(indices)
@@ -1781,7 +1784,13 @@ impl Doc<'_> {
         // INVARIANT: build_tool admitted an IRI before inspecting its binding.
         let iri = iri_of(node.term).expect("tool subject is an IRI");
         let nodes = lookup.profiles.nodes;
-        let binding = Self::admit_callable(catalog, lookup.mappings_by_function, iri, storage)?;
+        let binding = self.admit_callable(
+            catalog,
+            lookup.mappings_by_function,
+            iri,
+            locations,
+            storage,
+        )?;
         let mut progress = Work::new(storage.governor);
         let input = self.required_property(nodes, node, "inputShape", &mut progress)?;
         let output = self.required_property(nodes, node, "outputShape", &mut progress)?;
@@ -1858,10 +1867,12 @@ impl Doc<'_> {
         ))
     }
 
-    fn admit_callable<'a>(
+    fn admit_callable<'a, V: DatasetView<Id = TermId>>(
+        &self,
         catalog: &'a FnoCatalog,
         mapping_indices: &[usize],
         iri: &str,
+        locations: &Locations<'_, V>,
         storage: &BuildStorage<'_, '_, '_>,
     ) -> Result<CallableBinding<'a>, LoadError> {
         let fno_error = |detail: String| LoadError::InvalidFnoBinding {
@@ -1882,10 +1893,26 @@ impl Doc<'_> {
         })?;
         let candidates = &mapping_indices[range];
         let [mapping] = candidates else {
-            return Err(fno_error(format!(
+            let detail = format!(
                 "a tool needs exactly one fno:Mapping, found {}",
                 candidates.len(),
-            )));
+            );
+            let Some(&duplicate) = candidates.get(1) else {
+                return Err(fno_error(detail));
+            };
+            let at = self.mapping_function_extent(
+                &mappings[duplicate].node,
+                iri,
+                locations,
+                storage.governor,
+                &mut progress,
+            )?;
+            return Err(LoadError::InvalidFnoBinding {
+                subject: iri.to_owned(),
+                predicate: Some(FNO_MAPPED_FUNCTION.to_owned()),
+                detail,
+                at,
+            });
         };
         CallableBinding::admit(catalog, *mapping, &mut storage.governor.borrow_mut()).map_err(
             |error| match error {
@@ -1893,6 +1920,32 @@ impl Doc<'_> {
                 other => fno_error(other.to_string()),
             },
         )
+    }
+
+    fn mapping_function_extent<V: DatasetView<Id = TermId>>(
+        &self,
+        mapping: &FnBlank,
+        function: &str,
+        locations: &Locations<'_, V>,
+        governor: &Shared<'_>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<Option<SourceExtent>, LoadError> {
+        for row in &self.rows {
+            if matches_predicate(row, FNO_MAPPED_FUNCTION, progress)?
+                && let Some((label, scope)) = row.s.as_blank()
+                && scope == mapping.scope
+                && let Some(object) = iri_of(&row.o)
+                && compare_bytes(label.as_bytes(), mapping.label.as_bytes(), progress)
+                    .map_err(stop)?
+                    .is_eq()
+                && compare_bytes(object.as_bytes(), function.as_bytes(), progress)
+                    .map_err(stop)?
+                    .is_eq()
+            {
+                return locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut());
+            }
+        }
+        Ok(None)
     }
 
     /// Index simple paths in lexical order, preserving the graph nodes as borrows.
@@ -2047,7 +2100,7 @@ impl Doc<'_> {
         hints.consumed[at] = true;
         let reifier = &self.reifiers[at];
         let id = &reifier.id;
-        let mut none = false;
+        let mut none = None;
         let mut integer_to_string = false;
         let mut string_to_integer = false;
         let coercion_predicate = self.term("typeCoercion");
@@ -2057,17 +2110,21 @@ impl Doc<'_> {
                 continue;
             }
             match lexical_str(&row.o) {
-                "none" => none = true,
+                "none" => none = Some(row),
                 "integer-to-string" => integer_to_string = true,
                 "string-to-integer" => string_to_integer = true,
                 _ => unreachable!("validated type coercion"),
             }
         }
-        if none && (integer_to_string || string_to_integer) {
+        if let Some(row) = none
+            && (integer_to_string || string_to_integer)
+        {
+            let at =
+                locations.statement(&row.s, &row.p, &row.o, &mut storage.governor.borrow_mut())?;
             return Err(LoadError::InvalidHint {
                 subject: show(id),
-                predicate: self.term("typeCoercion").to_owned(),
-                at: None,
+                predicate: coercion_predicate.to_owned(),
+                at: at.map(Box::new),
                 violation: Violation::OutOfRange {
                     expected: "none alone, or conversions without none",
                 },
