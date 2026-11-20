@@ -220,7 +220,15 @@ fn fixtures() -> Vec<Fixture> {
     vec![
         fx(
             "project_result",
-            |_| project_arguments(r#" {"orders":[1.00e2,true]} "#, ".orders[]?", 12, "true"),
+            |_| {
+                project_arguments(
+                    r#" {"orders":[1.00e2,true]} "#,
+                    ".orders[]?",
+                    12,
+                    "true",
+                    None,
+                )
+            },
             |reply| {
                 assert_eq!(reply.get("status").and_then(Node::as_str), Some("resolved"));
                 assert_eq!(
@@ -1365,9 +1373,18 @@ fn tools_reference_matches_registry() {
     );
 }
 
-fn project_arguments(raw: &str, mask: &str, limit: u64, schema: &str) -> String {
+fn project_arguments(
+    raw: &str,
+    mask: &str,
+    limit: u64,
+    schema: &str,
+    effort: Option<&str>,
+) -> String {
+    let effort = effort.map_or_else(String::new, |effort| {
+        format!(r#","effort":{}"#, json::quote(effort))
+    });
     format!(
-        r#"{{"result_json":{},"output_schema":{schema},"format":"purrassist-toolgraph-v2","context":{{"outputProjectionJq":{},"maxOutputBytes":{limit},"outputEnforcement":"exact-bytes","historyRetentionTurns":0,"intentTags":[],"loadingStrategy":"always"}}}}"#,
+        r#"{{"result_json":{},"output_schema":{schema}{effort},"format":"purrassist-toolgraph-v2","context":{{"outputProjectionJq":{},"maxOutputBytes":{limit},"outputEnforcement":"exact-bytes","historyRetentionTurns":0,"intentTags":[],"loadingStrategy":"always"}}}}"#,
         json::quote(raw),
         json::quote(mask)
     )
@@ -1416,7 +1433,7 @@ fn project_result_cli_mcp_keep_checked_bytes_and_structured_refusals() {
         ),
         ("{bad", ".a", 64, "true", "unresolved", Some("json_syntax")),
     ] {
-        let args = project_arguments(raw, mask, limit, schema);
+        let args = project_arguments(raw, mask, limit, schema, None);
         let root = fresh_dir("project-result-parity");
         let cli = run_cli("project_result", &args, &root);
         let mcp = run_mcp("project_result", &args, &root);
@@ -1453,6 +1470,51 @@ fn project_result_cli_mcp_keep_checked_bytes_and_structured_refusals() {
         }
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+/// A work refusal withholds the complete artifact and preserves the source on both transports.
+#[test]
+fn project_result_cli_mcp_withhold_artifact_when_validation_exhausts_work() {
+    let numbers: Vec<_> = (0..48).map(|number| number.to_string()).collect();
+    let raw = format!("[{}]", numbers.join(","));
+    let artifact = format!("{}\n", numbers.join("\n"));
+    let limit = u64::try_from(artifact.len()).unwrap();
+    let schema = r#"{"type":"array","uniqueItems":true}"#;
+    let [refused, admitted] = ["exact", "standard"].map(|effort| {
+        let args = project_arguments(&raw, ".[]", limit, schema, Some(effort));
+        let reply = run_both_transports(effort, "project_result", &args);
+        assert_eq!(
+            reply.get("original_json").and_then(Node::as_str),
+            Some(raw.as_str())
+        );
+        reply
+    });
+    for (path, expected) in [
+        ("/status", "unresolved"),
+        ("/stage", "validation"),
+        ("/error/kind", "resource"),
+        ("/error/stop", "budget_exceeded"),
+        ("/error/detail", "work"),
+        ("/receipt/termination/kind", "budget_exceeded"),
+    ] {
+        assert_eq!(
+            refused.pointer(path).and_then(Node::as_str),
+            Some(expected),
+            "{path}"
+        );
+    }
+    assert!(matches!(
+        refused.get("artifact").unwrap().value,
+        Value::Null
+    ));
+    assert_eq!(
+        admitted.get("status").and_then(Node::as_str),
+        Some("resolved")
+    );
+    assert_eq!(
+        admitted.pointer("/artifact/text").and_then(Node::as_str),
+        Some(artifact.as_str())
+    );
 }
 
 /// Provider inputs use one batch contract across the Rust host, CLI and MCP.
