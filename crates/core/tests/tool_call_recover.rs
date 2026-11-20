@@ -717,6 +717,8 @@ fn nested_item_depth_is_a_stack_guard() {
             "depth {d}: no partial value"
         );
     }
+    assert_deep_item_recovery(&tools, &turn(65), &expected(65));
+
     // The CLI and MCP fix the budget at the effort presets' depth, 128.
     assert_eq!(Budget::default().depth, 128);
     assert!(read(127, 128).is_ok_and(|value| value.is_ok()));
@@ -724,6 +726,47 @@ fn nested_item_depth_is_a_stack_guard() {
         read(128, 128).err(),
         Some(StopReason::BudgetExceeded(Resource::Depth))
     );
+}
+
+/// At 65 items the parameter event contains more than 128 JSON levels.
+fn assert_deep_item_recovery(tools: &ToolSet, output: &str, expected: &str) {
+    let request = ToolRecoveryRequest::default();
+    let budget = Budget {
+        depth: 196,
+        ..Effort::Maximum.budget()
+    };
+    let read = |depth| {
+        let mut governor = Governor::new(Budget { depth, ..budget });
+        tools.recover_governed(
+            output.as_bytes(),
+            &request,
+            DialectSet::built_in(),
+            &mut governor,
+        )
+    };
+    let refused = read(budget.depth - 1);
+    assert_eq!(refused.outcome, Outcome::Unresolved);
+    assert_eq!(
+        refused.receipt.stopped,
+        StopReason::BudgetExceeded(Resource::Depth)
+    );
+    let recovered = read(budget.depth);
+    assert_eq!(recovered.receipt.stopped, StopReason::Completed);
+    let Outcome::Resolved(calls) = &recovered.outcome else {
+        panic!("expected a resolved turn at the admitted depth");
+    };
+    let args = &calls.calls[0].arguments;
+    assert_eq!(args.to_json(), expected);
+
+    let mut stream = tools.stream_governed(request, Governor::new(budget));
+    stream.feed(output.as_bytes(), &mut Vec::new());
+    let (events, streamed) = stream.finish_collect(GenerationStop::Stop);
+    assert_eq!(streamed, recovered);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::ParameterComplete { index: 0, name, value }
+            if name == "children" && Some(value) == args.get(name)
+    )));
 }
 
 #[test]

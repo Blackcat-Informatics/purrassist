@@ -7,6 +7,14 @@ use crate::contract::{
 };
 use crate::{Governor, ScratchString, ScratchVec, StopReason};
 
+const NATIVE_DEPTH_LIMIT: u32 = 128;
+
+#[derive(Clone, Copy)]
+enum DepthCeiling {
+    Native,
+    Caller,
+}
+
 impl OwnedDocument {
     pub(crate) const fn root(&self) -> &Node {
         &self.root
@@ -122,7 +130,7 @@ impl OwnedDocument {
         let mut lease = ScratchLease::empty(governor);
         governor.charge(Resource::Depth, 0)?;
         governor.charge(Resource::Work, 1)?;
-        let members = copy_members(members, governor, &mut lease, 0)?;
+        let members = copy_members(members, governor, &mut lease, 0, DepthCeiling::Native)?;
         governor.check()?;
         Ok(Self {
             root: Node::new(Value::Object(members)),
@@ -133,8 +141,25 @@ impl OwnedDocument {
     /// Copy the existing tree representation, including lexical numbers and all
     /// source spans. Temporary containers unwind before their common lease.
     pub(crate) fn copy_from(node: &Node, governor: &mut Governor) -> Result<Self, StopReason> {
+        Self::copy_with_ceiling(node, governor, DepthCeiling::Native)
+    }
+
+    /// Copy an admitted value for publication under the caller's depth limit.
+    /// The caller supplies enough native stack for its requested depth.
+    pub(crate) fn copy_at_caller_depth(
+        node: &Node,
+        governor: &mut Governor,
+    ) -> Result<Self, StopReason> {
+        Self::copy_with_ceiling(node, governor, DepthCeiling::Caller)
+    }
+
+    fn copy_with_ceiling(
+        node: &Node,
+        governor: &mut Governor,
+        ceiling: DepthCeiling,
+    ) -> Result<Self, StopReason> {
         let mut lease = ScratchLease::empty(governor);
-        let root = copy_node(node, governor, &mut lease, 0)?;
+        let root = copy_node(node, governor, &mut lease, 0, ceiling)?;
         governor.check()?;
         Ok(Self { root, lease })
     }
@@ -143,7 +168,7 @@ impl OwnedDocument {
 fn admit_depth(node: &Node, depth: u32, governor: &mut Governor) -> Result<(), StopReason> {
     governor.charge(Resource::Depth, u64::from(depth))?;
     governor.charge(Resource::Work, 1)?;
-    if depth > 128 {
+    if depth > NATIVE_DEPTH_LIMIT {
         return Err(governor.stop_resource(Resource::Depth));
     }
     match &node.value {
@@ -192,7 +217,7 @@ fn copy_replacing(
 ) -> Result<Node, StopReason> {
     governor.charge(Resource::Depth, u64::from(depth))?;
     governor.charge(Resource::Work, 1)?;
-    if depth > 128 {
+    if depth > NATIVE_DEPTH_LIMIT {
         return Err(governor.stop_resource(Resource::Depth));
     }
     let Some((&selected, tail)) = route.split_first() else {
@@ -215,7 +240,13 @@ fn copy_replacing(
                 let child = if index == selected {
                     copy_replacing(item, tail, replacement, governor, lease, depth + 1)?
                 } else {
-                    copy_node(item, governor, lease, depth + 1)?
+                    copy_node(
+                        item,
+                        governor,
+                        lease,
+                        u64::from(depth) + 1,
+                        DepthCeiling::Native,
+                    )?
                 };
                 push(&mut copied, child, governor)?;
             }
@@ -235,7 +266,13 @@ fn copy_replacing(
                 let value = if index == selected {
                     copy_replacing(&member.value, tail, replacement, governor, lease, depth + 1)?
                 } else {
-                    copy_node(&member.value, governor, lease, depth + 1)?
+                    copy_node(
+                        &member.value,
+                        governor,
+                        lease,
+                        u64::from(depth) + 1,
+                        DepthCeiling::Native,
+                    )?
                 };
                 push(
                     &mut copied,
@@ -270,11 +307,12 @@ fn copy_node(
     node: &Node,
     governor: &mut Governor,
     lease: &mut ScratchLease,
-    depth: u32,
+    depth: u64,
+    ceiling: DepthCeiling,
 ) -> Result<Node, StopReason> {
-    governor.charge(Resource::Depth, u64::from(depth))?;
+    governor.charge(Resource::Depth, depth)?;
     governor.charge(Resource::Work, 1)?;
-    if depth > 128 {
+    if depth > u64::from(NATIVE_DEPTH_LIMIT) && matches!(ceiling, DepthCeiling::Native) {
         return Err(governor.stop_resource(Resource::Depth));
     }
     let value = match &node.value {
@@ -298,14 +336,16 @@ fn copy_node(
         Value::Array(items) => {
             let mut copied = ScratchVec::new(governor);
             for item in items {
-                let item = copy_node(item, governor, lease, depth + 1)?;
+                let item = copy_node(item, governor, lease, depth + 1, ceiling)?;
                 push(&mut copied, item, governor)?;
             }
             let (copied, storage) = copied.into_owned_parts();
             lease.absorb(storage);
             Value::Array(copied)
         }
-        Value::Object(members) => Value::Object(copy_members(members, governor, lease, depth)?),
+        Value::Object(members) => {
+            Value::Object(copy_members(members, governor, lease, depth, ceiling)?)
+        }
     };
     Ok(Node {
         value,
@@ -317,13 +357,14 @@ fn copy_members(
     members: &[Member],
     governor: &mut Governor,
     lease: &mut ScratchLease,
-    depth: u32,
+    depth: u64,
+    ceiling: DepthCeiling,
 ) -> Result<Vec<Member>, StopReason> {
     let mut copied = ScratchVec::new(governor);
     for member in members {
         let (key, storage) = copy_text(&member.key, governor)?.into_owned_parts();
         lease.absorb(storage);
-        let value = copy_node(&member.value, governor, lease, depth + 1)?;
+        let value = copy_node(&member.value, governor, lease, depth + 1, ceiling)?;
         push(
             &mut copied,
             Member {
