@@ -413,6 +413,27 @@ fn a_missing_callable_predicate_has_no_statement_extent() {
     load(&worked()).expect("neighbouring valid input");
 }
 
+#[test]
+fn a_conflicting_coercion_hint_points_to_the_written_none() {
+    let written = r#"pa:typeCoercion "n\u006fne""#;
+    let source = format!("{}\nex:limitClaim {written} .\n", worked());
+    let error = load(&source).expect_err("none cannot accompany a conversion");
+    let LoadError::InvalidHint {
+        subject,
+        predicate,
+        at: Some(at),
+        violation: Violation::OutOfRange { expected },
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, format!("{EX}limitClaim"));
+    assert_eq!(predicate, format!("{NAMESPACE}typeCoercion"));
+    assert_eq!(expected, "none alone, or conversions without none");
+    assert_eq!(&source[at.start..at.end], written);
+    load(&worked()).expect("a conversion alone is valid");
+}
+
 // Rationale: a hint missing a required field is refused at the hint, while the
 // complete hint of the worked example loads.
 #[test]
@@ -1361,7 +1382,12 @@ fn callable_mapping_selection_requires_exactly_one_mapping_per_tool() {
         .expect("worked query mapping");
     let duplicate = format!(
         "{source}\n{}",
-        mapping.replacen("_:queryMapping", "_:alternateQueryMapping", 1)
+        mapping
+            .replacen("_:queryMapping", "_:alternateQueryMapping", 1)
+            .replace(
+                "fno:function ex:query_customer_orders",
+                "fno:function <https://example.org/tools/query_customer_orders>",
+            )
     );
     let missing = source
         .lines()
@@ -1379,15 +1405,31 @@ fn callable_mapping_selection_requires_exactly_one_mapping_per_tool() {
         .join("\n");
     for (turtle, count) in [(missing, 0), (duplicate, 2)] {
         let error = load(&turtle).expect_err("each tool requires one FnO mapping");
-        assert!(
-            matches!(
-                &error,
-                LoadError::InvalidFnoBinding { subject, detail, .. }
-                    if subject == &format!("{EX}query_customer_orders")
-                        && detail == &format!("a tool needs exactly one fno:Mapping, found {count}")
-            ),
-            "{error:?}"
+        let LoadError::InvalidFnoBinding {
+            subject,
+            predicate,
+            detail,
+            at,
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(subject, format!("{EX}query_customer_orders"));
+        assert_eq!(
+            detail,
+            format!("a tool needs exactly one fno:Mapping, found {count}")
         );
+        let written = at.map(|at| &turtle[at.start..at.end]);
+        if count == 0 {
+            assert_eq!(predicate, None);
+            assert_eq!(written, None);
+        } else {
+            assert_eq!(
+                predicate.as_deref(),
+                Some("https://w3id.org/function/ontology#function")
+            );
+            assert_eq!(written, Some("fno:function ex:query_customer_orders"));
+        }
     }
     let graph = load(&source).expect("one mapping per tool");
     assert_eq!(

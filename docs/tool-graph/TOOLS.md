@@ -42,9 +42,12 @@ traversal uses a temporary admitted work list.
 `UnknownTerm`, `UnsupportedConstruct`, and `UnsupportedProjection` carry the
 exact source extent (byte range, line and column) of the first statement
 matching the refusal. An unsupported projection also preserves the field-mask
-parser's offset in the decoded string. An FnO refusal carries a statement
-extent when the reader identifies the exact refused row or return-list head.
-Missing facts and ambiguous field or list failures have no statement extent.
+parser's offset in the decoded string. FnO refusals point to an exact row or
+return-list head identified by the catalog reader. When several mappings
+name one callable, the refusal points to the `fno:function` statement of the
+second mapping in native catalog order. Missing facts and ambiguous field or
+list failures have no statement extent. A hint that combines `none` with a
+conversion points to the written `none` value.
 Vocabulary role checks also locate specific rejected statements, including a
 predicate on the wrong role and a value of the wrong kind or range. Refusals
 that identify only a node name the subject and predicate where available.

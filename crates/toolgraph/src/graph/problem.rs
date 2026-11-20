@@ -149,7 +149,7 @@ impl fmt::Display for SourceExtent {
 /// [`UnsupportedConstruct`](Self::UnsupportedConstruct), and
 /// [`UnsupportedProjection`](Self::UnsupportedProjection) can carry the exact
 /// [`SourceExtent`] of their refused statement. [`InvalidFnoBinding`](Self::InvalidFnoBinding)
-/// carries it when the reader identifies a specific written statement.
+/// carries it when the catalog or callable check identifies a written statement.
 /// Role violations carry it when validation identifies a specific refused value.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -192,11 +192,11 @@ pub enum LoadError {
     InvalidFnoBinding {
         /// The offending function or catalog node.
         subject: String,
-        /// The offending predicate when the upstream check names one.
+        /// The offending predicate when the binding check identifies one.
         predicate: Option<String>,
-        /// The upstream explanation.
+        /// The explanation of the catalog or callable-binding refusal.
         detail: String,
-        /// The written statement extent when the reader identifies one exact row.
+        /// The written extent when the check identifies an exact source statement.
         at: Option<SourceExtent>,
     },
     /// A reified parameter hint is malformed or attaches to no parameter.
