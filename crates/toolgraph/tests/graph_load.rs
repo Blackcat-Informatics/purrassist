@@ -1355,12 +1355,11 @@ fn a_function_without_a_tool_is_refused_as_a_function_without_a_tool() {
 /// A required path must bind exactly one property shape, even when both use the same IRI.
 #[test]
 fn two_property_shapes_for_the_same_callable_path_are_refused() {
-    let mut source = worked();
-    source.push_str(
-        r"
-ex:QueryInput sh:property ex:duplicateCustomerShape .
-ex:duplicateCustomerShape a sh:PropertyShape ; sh:path ex:customer_id .
-",
+    let written = "sh:property ex:duplicateCustomerShape";
+    let source = format!(
+        "{}\nex:QueryInput {written} .\n\
+         ex:duplicateCustomerShape a sh:PropertyShape ; sh:path ex:customer_id .\n",
+        worked()
     );
     assert!(matches!(
         load(&source).unwrap_err(),
@@ -1368,10 +1367,39 @@ ex:duplicateCustomerShape a sh:PropertyShape ; sh:path ex:customer_id .
             subject,
             predicate,
             violation: Violation::Duplicate,
-            ..
+            at: Some(at),
         } if subject == format!("{EX}QueryInput")
             && predicate == "http://www.w3.org/ns/shacl#property"
+            && &source[at.start..at.end] == written
     ));
+}
+
+#[test]
+fn unbound_callable_paths_point_to_the_written_property_reference() {
+    let written = "sh:property ex:unboundShape";
+    for shape in ["QueryInput", "QueryOutput"] {
+        let source = format!(
+            "{}\nex:{shape} {written} .\n\
+             ex:unboundShape a sh:PropertyShape ; sh:path ex:unexpected .\n",
+            worked()
+        );
+        let error = load(&source).expect_err("each property path requires an FnO binding");
+        assert!(
+            matches!(
+                &error,
+                LoadError::InvalidShape {
+                    subject,
+                    predicate,
+                    violation: Violation::Unresolved,
+                    at: Some(at),
+                } if subject == &format!("{EX}{shape}")
+                    && predicate == "http://www.w3.org/ns/shacl#property"
+                    && &source[at.start..at.end] == written
+            ),
+            "{error:?}"
+        );
+    }
+    load(&worked()).expect("all property paths are bound");
 }
 
 #[test]
