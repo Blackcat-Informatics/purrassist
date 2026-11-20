@@ -183,6 +183,46 @@ fn malformed_turtle_is_a_parse_error_with_its_position() {
     load(&worked()).expect("neighbouring valid input");
 }
 
+#[test]
+fn conflicting_network_selectors_locate_the_written_protocol() {
+    let socket = r#"pa:socketType "stream""#;
+    let before_access = r#"pa:socketType "stream" ; pa:access "connect""#;
+    let written = r#"pa:protocol "t\u0063p""#;
+    let source = edited(
+        before_access,
+        &format!(r#"{socket} ; {written} ; pa:access "connect""#),
+    );
+    let error = load(&source).expect_err("both network selectors are present");
+    let LoadError::InvalidExecutionProfile {
+        subject,
+        predicate,
+        violation: Violation::Exclusive,
+        at: Some(at),
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, format!("{EX}DatabaseNetwork"));
+    assert_eq!(predicate, format!("{NAMESPACE}protocol"));
+    assert_eq!(&source[at.start..at.end], written);
+
+    let neither = edited(before_access, r#"pa:access "connect""#);
+    assert!(matches!(
+        load(&neither).expect_err("neither network selector is present"),
+        LoadError::InvalidExecutionProfile {
+            violation: Violation::Exclusive,
+            at: None,
+            ..
+        }
+    ));
+    let protocol = edited(
+        before_access,
+        &format!(r#"{written} ; pa:access "connect""#),
+    );
+    load(&protocol).expect("protocol alone is valid");
+    load(&worked()).expect("socket type alone is valid");
+}
+
 // Rationale: an unbound term in the caller's namespace is out of vocabulary, whether
 // it is used as a predicate or a class; bound terms load.
 #[test]

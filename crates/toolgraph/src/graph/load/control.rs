@@ -356,26 +356,6 @@ pub(super) fn classified_row_extent<V: DatasetView<Id = TermId>>(
     })
 }
 
-/// Locate a native diagnostic's complete default-graph statement by RDF value.
-pub(super) fn default_row_extent<V: DatasetView<Id = TermId>>(
-    view: &V,
-    source: &BorrowedSource<'_>,
-    subject: &TermValue,
-    predicate: &str,
-    object: &TermValue,
-    governor: &mut Governor,
-) -> Result<Option<SourceExtent>, LoadError> {
-    default_row_extent_or_iri(
-        view,
-        source,
-        subject,
-        predicate,
-        Some(object),
-        None,
-        governor,
-    )
-}
-
 /// Locate a statement that may have an explicitly normalized asserted object.
 pub(super) fn default_row_extent_or_iri<V: DatasetView<Id = TermId>>(
     view: &V,
