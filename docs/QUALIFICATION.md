@@ -129,12 +129,14 @@ refer to the prior source.
 
 ## Tool-graph projection determinism
 
-The native worked-example cases for MCP Extended, CompactSignature and
-GBNF load the same Turtle document independently for each projection.
-They compare artifact bytes and complete ordered loss ledgers between
-the two loads. The MCP and compact signature cases retain their existing
-golden checks. Reordered Turtle and host receipt parity remain open
-under [tool-graph conformance](https://github.com/Blackcat-Informatics/purrassist/issues/39).
+The native worked-example cases for MCP Extended and GBNF compare artifact
+bytes and complete ordered loss ledgers across independent loads of the
+same Turtle. MCP Extended and CompactSignature also have byte goldens.
+A native case swaps the two complete tool declarations in the authored
+Turtle, including their anonymous FnO lists, and compares CompactSignature
+and GBNF bytes and ordered loss ledgers. MCP Extended parity after Turtle
+reordering and host receipt parity remain open under
+[tool-graph conformance](https://github.com/Blackcat-Informatics/purrassist/issues/39).
 
 ## Tool-graph grammar qualification
 
