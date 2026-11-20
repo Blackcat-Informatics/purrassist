@@ -38,22 +38,20 @@ pub(super) enum Kind {
     Choice(&'static [&'static str]),
 }
 
-/// One property of a role: inclusive cardinality and value kind.
+/// One property of a role with its minimum, optional maximum, and value kind.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Spec {
     pub(super) name: &'static str,
     pub(super) min: u8,
-    pub(super) max: u8,
+    pub(super) max: Option<u8>,
     pub(super) kind: Kind,
 }
-
-const MANY: u8 = u8::MAX;
 
 const fn one(name: &'static str, kind: Kind) -> Spec {
     Spec {
         name,
         min: 1,
-        max: 1,
+        max: Some(1),
         kind,
     }
 }
@@ -61,7 +59,7 @@ const fn opt(name: &'static str, kind: Kind) -> Spec {
     Spec {
         name,
         min: 0,
-        max: 1,
+        max: Some(1),
         kind,
     }
 }
@@ -69,7 +67,7 @@ const fn any(name: &'static str, kind: Kind) -> Spec {
     Spec {
         name,
         min: 0,
-        max: MANY,
+        max: None,
         kind,
     }
 }
@@ -122,7 +120,7 @@ const HINT: &[Spec] = &[
     Spec {
         name: "typeCoercion",
         min: 1,
-        max: MANY,
+        max: None,
         kind: Kind::Choice(&["none", "string-to-integer", "integer-to-string"]),
     },
     one("caseFold", Kind::Bool),
