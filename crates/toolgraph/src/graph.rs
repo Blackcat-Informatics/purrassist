@@ -164,9 +164,9 @@ impl ToolGraph {
         self.catalog.as_ref()
     }
 
-    /// Changes made only in the temporary view passed to the strict FnO reader.
+    /// Changes made in the temporary view passed to the strict `FnO` reader.
     ///
-    /// A declared FnOM Mapping alias contributes one entry per rewritten type.
+    /// A declared `fnom:Mapping` alias contributes one entry per rewritten type.
     /// The original declaration and type remain in the retained dataset.
     ///
     /// ```

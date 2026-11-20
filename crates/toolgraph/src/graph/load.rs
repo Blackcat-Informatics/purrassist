@@ -163,7 +163,7 @@ struct Doc<'v> {
     mapping_alias_declared: bool,
 }
 
-/// The typed tools and FnO ledger drop before their leases and native account.
+/// The typed tools and `FnO` ledger drop before their leases and native account.
 #[derive(Debug)]
 pub(super) struct RetainedTools {
     tools: Vec<Tool>,

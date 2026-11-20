@@ -4,15 +4,26 @@
 //! Explicit vocabulary ownership, validated before namespace compaction.
 
 mod profile;
-pub(crate) use profile::FNOM_MAPPING_NORMALIZATION;
 pub use profile::{
     LOSS_PROFILE_ID, ModelFamily, ProjectionTarget, SOURCE_REPRESENTATION, register_loss_profile,
 };
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
-use purrdf_core::{loss::LossProfile, parse_iri, terminals};
+use purrdf_core::{
+    loss::{LossDefinition, LossProfile},
+    parse_iri, terminals,
+};
 use purrdf_shapes::json_schema::{NamespaceError, Namespaces};
+
+pub(super) const FNOM_MAPPING_NORMALIZATION: LossDefinition = LossDefinition {
+    from: Cow::Borrowed(SOURCE_REPRESENTATION),
+    to: Cow::Borrowed("fno-admission-view"),
+    code: Cow::Borrowed("fnom-mapping-type-normalized"),
+    description: Cow::Borrowed(
+        "The FnO admission view replaces the declared FnOM Mapping type with the native FnO Mapping type.",
+    ),
+};
 
 /// Complete versioned term set from the tool-graph vocabulary.
 ///
