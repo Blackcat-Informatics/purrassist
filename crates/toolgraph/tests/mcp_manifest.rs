@@ -318,10 +318,10 @@ fn an_inexpressible_shape_constraint_is_ledgered_and_survives_in_the_source() {
     }
 }
 
-// Rationale: legacy wire forms are refused, never migrated or read as bytes: a v1
-// bundle format, and a `maxOutputTokens` member, even beside the byte field.
+// A manifest declaration must carry the exact byte contract before its
+// retained graph can be used.
 #[test]
-fn legacy_bundle_format_and_token_limit_are_rejected() {
+fn invalid_manifest_output_contract_is_refused_before_graph_agreement() {
     let graph = load(&worked());
     let (manifest, _) = mcp::encode(&graph, &vocabulary(), &mut governor()).expect("encode");
     let decode = |text: String| {
@@ -330,7 +330,7 @@ fn legacy_bundle_format_and_token_limit_are_rejected() {
             &vocabulary(),
             &mut governor(),
         )
-        .expect_err("legacy form")
+        .expect_err("invalid output contract")
     };
 
     let legacy_format = manifest.as_str().replacen(
@@ -343,17 +343,52 @@ fn legacy_bundle_format_and_token_limit_are_rejected() {
         CodecError::Envelope(error) if error.problem == EnvelopeProblem::UnsupportedFormat
     ));
 
-    let tokens = manifest.as_str().replacen(
-        r#""maxOutputBytes":4096,"#,
-        r#""maxOutputBytes":4096,"maxOutputTokens":1024,"#,
-        1,
-    );
+    let query = graph
+        .tools()
+        .iter()
+        .position(|tool| tool.name == "query_customer_orders")
+        .expect("worked query declaration");
+    let original = r#""maxOutputBytes":4096,"outputEnforcement":"exact-bytes","#;
+    assert!(manifest.as_str().contains(original));
+    for (replacement, expected) in [
+        (
+            r#""maxOutputBytes":4096,"maxOutputTokens":1024,"outputEnforcement":"exact-bytes","#,
+            ContextCodecError::LegacyTokenLimit,
+        ),
+        (
+            r#""maxOutputBytes":4096,"#,
+            ContextCodecError::MissingField("outputEnforcement"),
+        ),
+        (
+            r#""maxOutputBytes":4096,"outputEnforcement":"tokens","#,
+            ContextCodecError::Enforcement,
+        ),
+        (
+            r#""maxOutputBytes":4096,"outputEnforcement":"exact-bytes","outputEnforcement":"exact-bytes","#,
+            ContextCodecError::DuplicateField("outputEnforcement"),
+        ),
+        (
+            r#""maxOutputBytes":4096,"outputEnforcement":"exact-bytes","extra":true,"#,
+            ContextCodecError::UnknownField { index: 3 },
+        ),
+        (
+            r#""maxOutputBytes":0,"outputEnforcement":"exact-bytes","#,
+            ContextCodecError::Quantity("maxOutputBytes"),
+        ),
+    ] {
+        let error = decode(manifest.as_str().replacen(original, replacement, 1));
+        assert!(
+            matches!(&error, CodecError::Context { tool, error } if *tool == query && *error == expected),
+            "{replacement}: {error:?}"
+        );
+    }
+    let different_limit = r#""maxOutputBytes":4097,"outputEnforcement":"exact-bytes","#;
     assert!(matches!(
-        decode(tokens),
-        CodecError::Context {
-            error: ContextCodecError::LegacyTokenLimit,
-            ..
-        }
+        decode(manifest.as_str().replacen(original, different_limit, 1)),
+        CodecError::Disagreement {
+            tool: Some(tool),
+            member: "_meta.contextManagement",
+        } if tool == query
     ));
 }
 
