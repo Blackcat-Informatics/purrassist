@@ -1,0 +1,18 @@
+ghprsq source head backlink metadata
+
+parent_hashes: 12023d13f582e88334ada1e20d0f90f4faaec4fd
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrassist
+GhpRsq-GitHub-Pull-Request: 285
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrassist/pull/285
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 6cace736e3ea53fc164e8be0f14f6c74d7b55092
+GhpRsq-Head-Ref: paudley/33-tool-graph-rdf-1-2-loader-fno-shacl
+GhpRsq-Head-OID: 12023d13f582e88334ada1e20d0f90f4faaec4fd
+GhpRsq-Result-Tree: 50bb03f078d367a2ea12f7857a10eb357bcba524
+GhpRsq-Result-Commit: 15bb90d23d5ce20b4ec095194ce3a348a06d3246
+GhpRsq-Parent-Hashes: 12023d13f582e88334ada1e20d0f90f4faaec4fd
+GhpRsq-Squash-Notes-SHA256: d682171277875cbc11defe6ae584f9bfe68e589296c814515a4904cceecc7077
+GhpRsq-Stage-Evidence: none
