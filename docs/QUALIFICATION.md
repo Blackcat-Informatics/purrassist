@@ -165,6 +165,13 @@ token per Unicode scalar gives eleven tokens for the twelve-byte JSON Lines
 artifact. Both transports report exact-byte enforcement, the configured limit
 and the twelve measured bytes. They release the artifact at twelve and
 withhold it at eleven.
+
+Both transports also check a valid result whose array uniqueness validation
+exhausts the exact effort preset's work budget. The typed refusal and receipt
+retain the work exhaustion and the original JSON stays available. The
+standard effort preset releases the same result as a complete JSON Lines
+artifact at its exact byte limit.
+
 The graph-bound result path remains part of
 [#37](https://github.com/Blackcat-Informatics/purrassist/issues/37).
 
