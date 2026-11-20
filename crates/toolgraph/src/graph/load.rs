@@ -1994,23 +1994,29 @@ impl Doc<'_> {
             for &index in nodes.rows(property.id) {
                 let candidate = &self.rows[index];
                 if matches_predicate(candidate, SH_PATH, progress)? {
-                    path = Some(candidate);
                     found += 1;
+                    // Keep the sole value or the first excess value as the count grows.
+                    if found <= 2 {
+                        path = Some(candidate);
+                    }
                 }
             }
-            let (Some(path), 1) = (path, found) else {
+            let Some(path) = path else {
                 let at = locations.row(row, &mut storage.governor.borrow_mut())?;
                 return Err(LoadError::InvalidShape {
                     subject: show(property.term),
                     predicate: SH_PATH.to_owned(),
                     at: at.map(Box::new),
-                    violation: if found == 0 {
-                        Violation::Missing
-                    } else {
-                        Violation::TooMany { found }
-                    },
+                    violation: Violation::Missing,
                 });
             };
+            if found > 1 {
+                return Err(locations.invalid_shape_row(
+                    path,
+                    Violation::TooMany { found },
+                    &mut storage.governor.borrow_mut(),
+                )?);
+            }
             let Some(iri) = iri_of(&path.o) else {
                 let at = locations.row(path, &mut storage.governor.borrow_mut())?;
                 return Err(unsupported(

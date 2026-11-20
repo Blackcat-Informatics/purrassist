@@ -1578,14 +1578,16 @@ fn unbound_callable_paths_point_to_the_written_property_reference() {
 #[test]
 fn a_property_shape_requires_exactly_one_path_value() {
     let original = "sh:path ex:customer_id ;";
-    for (replacement, expected) in [
-        ("", Violation::Missing),
+    let first_excess = "sh:path <https://example.org/tools/extra\\u0050ath>";
+    let excess_paths = format!("{original} {first_excess} ; sh:path ex:anotherPath ;");
+    for (replacement, expected, written) in [
+        ("", Violation::Missing, "sh:property ex:customerIdShape"),
         (
-            "sh:path ex:customer_id, ex:limit, ex:path ;",
+            excess_paths.as_str(),
             Violation::TooMany { found: 3 },
+            first_excess,
         ),
     ] {
-        let written = "sh:property ex:customerIdShape";
         let source = edited(original, replacement).replace(
             "sh:property ex:customerIdShape, ex:limitShape",
             "sh:property ex:customerIdShape ; sh:property ex:limitShape",
