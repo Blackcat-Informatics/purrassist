@@ -78,8 +78,8 @@ equivalent to the document. Known differences: `readOnlyHint`, `destructiveHint`
 enforced; `xsd:integer` is accepted where `xsd:positiveInteger` is specified;
 `xsd:anyURI` values are not validated. Not checked at all: requiredness and
 datatype agreement between `FnO` parameters and shape paths, the content of
-`sh:*` constraints, and `pa:subtool` closure. `owl:imports` and the
-`fnom:Mapping` alias normalization are not handled, and rule values are checked
+`sh:*` constraints, and `pa:subtool` closure. The loader does not resolve
+`owl:imports`, and rule values are checked
 for kind but not interpreted. These checks remain on #33; the governed load is
 delivered as described above. `ToolGraph::tool_set(vocabulary, governor)` is implemented: it
 imports the encoded manifest through `ToolSet::from_mcp_with_metadata_governed`
@@ -162,7 +162,9 @@ one explicit domain, range and comment. Union domains use the common classes
 FnO, SHACL, RDF and OWL properties keep their standards meanings. In particular,
 FnO's actual mapping class is `fno:Mapping`; the caller alias `fnom:Mapping` is
 accepted only when declared equivalent as below. PurRDF's FnO reader receives
-the normalized `fno:Mapping` statements, with the transformation ledgered.
+the normalized `fno:Mapping` statements. `ToolGraph::fno_view_losses()` records
+each rewritten type with its scoped mapping identity. The original declaration
+and type remain in the retained RDF and pass through the MCP manifest.
 
 ```turtle
 @prefix pa: <https://example.org/toolgraph#> .

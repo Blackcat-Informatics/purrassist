@@ -19,11 +19,12 @@ use purrassist_core::{
     output::FieldMask,
 };
 use purrdf_core::{
-    NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
+    NativeBuildError, RdfDataset, RdfDatasetBuilder, RdfLocation, TermId, TermRef, TermValue,
     blank_label::{LabelAlphabet, encode_blank_label_with_memory},
     dataset_from_view,
     dataset_view::DatasetView,
-    fno::{FnoCatalog, FnoReadError, FnoReadFailure},
+    fno::{FnoCatalog, FnoFieldKind, FnoReadError, FnoReadFailure},
+    loss::{LossEntry, LossLedger},
 };
 use purrdf_lex::{
     allocation::{Admission, Memory, OrderedTable, OwnedAdmission, StorageError},
@@ -39,7 +40,7 @@ use super::{
 };
 use crate::{
     CallableBinding, ContextManagement, LoadingStrategy, OutputByteLimit, ResourceLimits,
-    Vocabulary, codec::mcp::ExecutionMode,
+    Vocabulary, codec::mcp::ExecutionMode, vocab::FNOM_MAPPING_NORMALIZATION,
 };
 use classification::{Nodes, RoleNode};
 use control::{ControlledStorage, Shared, Storage, Work};
@@ -55,6 +56,7 @@ const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
 const RDFS_COMMENT: &str = "http://www.w3.org/2000/01/rdf-schema#comment";
 const RDFS_CLASS: &str = "http://www.w3.org/2000/01/rdf-schema#Class";
 const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
 const DCTERMS_IS_PART_OF: &str = "http://purl.org/dc/terms/isPartOf";
 const SH: &str = "http://www.w3.org/ns/shacl#";
 const SH_PATH: &str = "http://www.w3.org/ns/shacl#path";
@@ -64,6 +66,8 @@ const SH_PROPERTY_SHAPE: &str = "http://www.w3.org/ns/shacl#PropertyShape";
 const FNO: &str = "https://w3id.org/function/ontology#";
 const FNOM: &str = "https://w3id.org/function/vocabulary/mapping#";
 const FNO_FUNCTION: &str = "https://w3id.org/function/ontology#Function";
+const FNO_MAPPING: &str = "https://w3id.org/function/ontology#Mapping";
+const FNOM_MAPPING: &str = "https://w3id.org/function/vocabulary/mapping#Mapping";
 const FNO_EXPECTS: &str = "https://w3id.org/function/ontology#expects";
 const FNO_RETURNS: &str = "https://w3id.org/function/ontology#returns";
 
@@ -71,9 +75,25 @@ const FNO_RETURNS: &str = "https://w3id.org/function/ontology#returns";
 struct Row {
     subject_id: TermId,
     object_id: TermId,
+    layer: SourceStatementKind,
     s: TermValue,
     p: String,
     o: TermValue,
+}
+
+impl Row {
+    fn declares_mapping_alias(&self) -> bool {
+        self.layer == SourceStatementKind::Quad
+            && self.p == OWL_EQUIVALENT_CLASS
+            && iri_of(&self.s) == Some(FNOM_MAPPING)
+            && iri_of(&self.o) == Some(FNO_MAPPING)
+    }
+
+    fn uses_mapping_alias(&self) -> bool {
+        self.layer == SourceStatementKind::Quad
+            && self.p == RDF_TYPE
+            && iri_of(&self.o) == Some(FNOM_MAPPING)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -109,19 +129,25 @@ struct Doc<'v> {
     rows: Vec<Row>,
     by_subject: Vec<usize>,
     reifiers: Vec<Reifier>,
+    mapping_alias_declared: bool,
 }
 
-/// The typed payload drops before its field-mask leases and native allocation account.
+/// The typed tools and FnO ledger drop before their leases and native account.
 #[derive(Debug)]
 pub(super) struct RetainedTools {
     tools: Vec<Tool>,
     masks: Vec<ScratchLease>,
+    fno_view_losses: LossLedger,
     storage: OwnedAdmission<Storage>,
 }
 
 impl RetainedTools {
     pub(super) fn as_slice(&self) -> &[Tool] {
         &self.tools
+    }
+
+    pub(super) const fn fno_view_losses(&self) -> &LossLedger {
+        &self.fno_view_losses
     }
 }
 
@@ -211,10 +237,11 @@ where
     with_doc(view, source, vocabulary, governor, |doc| {
         doc.scan_vocabulary(&locations, governor)?;
         doc.with_classification(&locations, governor, |nodes| {
-            doc.own_every_row(nodes, &locations, governor)?;
+            let used_alias = doc.own_every_row(nodes, &locations, governor)?;
             doc.validate_nodes(nodes, &locations, governor)?;
             let catalog = doc.read_catalog(nodes, view, source, governor)?;
-            let tools = doc.build_tools(nodes, catalog.as_ref(), &locations, governor)?;
+            let tools =
+                doc.build_tools(nodes, catalog.as_ref(), used_alias, &locations, governor)?;
             Ok((tools, catalog))
         })
     })
@@ -314,6 +341,7 @@ impl<'v> Doc<'v> {
             )
         };
         let mut rows = Vec::new();
+        let mut mapping_alias_declared = false;
         // Statement rows, then annotation side-table rows: both describe a subject.
         let statements = view
             .quads()
@@ -336,10 +364,12 @@ impl<'v> Doc<'v> {
             let row = Row {
                 subject_id: quad.s,
                 object_id: quad.o,
+                layer,
                 s,
                 p,
                 o,
             };
+            mapping_alias_declared |= row.declares_mapping_alias();
             memory.push(&mut rows, row).map_err(storage_error)?;
         }
         let mut reifiers = Vec::new();
@@ -401,6 +431,7 @@ impl<'v> Doc<'v> {
             rows,
             by_subject,
             reifiers,
+            mapping_alias_declared,
         })
     }
 
@@ -626,16 +657,32 @@ fn unowned_row<V: DatasetView<Id = TermId>>(
 }
 
 impl Doc<'_> {
+    fn owns_mapping_alias_declaration(&self, row: &Row) -> bool {
+        self.mapping_alias_declared
+            && (row.declares_mapping_alias()
+                || (row.layer == SourceStatementKind::Quad
+                    && row.p == RDFS_COMMENT
+                    && iri_of(&row.s) == Some(FNOM_MAPPING)
+                    && matches!(row.o, TermValue::Literal { .. })))
+    }
+
     /// Every row has exactly one owning view; an unowned row is a refusal.
     fn own_every_row<V: DatasetView<Id = TermId>>(
         &self,
         nodes: &Nodes<'_>,
         locations: &Locations<'_, V>,
         governor: &Shared<'_>,
-    ) -> Result<(), LoadError> {
+    ) -> Result<bool, LoadError> {
         let mut progress = Work::new(governor);
+        let mut first_alias = None;
         for row in &self.rows {
             work(&mut governor.borrow_mut(), 1)?;
+            if self.owns_mapping_alias_declaration(row) {
+                continue;
+            }
+            if row.uses_mapping_alias() {
+                first_alias.get_or_insert(row);
+            }
             let vocabulary = self.is_vocabulary_row(row, &mut progress).map_err(stop)?;
             let declaration = row.p == RDF_TYPE
                 && matches!(iri_of(&row.o), Some(RDFS_CLASS | OWL_CLASS | RDF_PROPERTY));
@@ -665,7 +712,27 @@ impl Doc<'_> {
                 )?);
             }
         }
-        Ok(())
+        if let Some(row) = first_alias
+            && !self.mapping_alias_declared
+        {
+            let at = control::default_row_extent_or_iri(
+                locations.view,
+                locations.source,
+                &row.s,
+                RDF_TYPE,
+                None,
+                Some(FNOM_MAPPING),
+                &mut governor.borrow_mut(),
+            )?;
+            return Err(LoadError::InvalidFnoBinding {
+                subject: show(&row.s),
+                predicate: Some(RDF_TYPE.to_owned()),
+                detail: "fnom:Mapping requires its owl:equivalentClass declaration for fno:Mapping"
+                    .to_owned(),
+                at,
+            });
+        }
+        Ok(first_alias.is_some())
     }
 }
 
@@ -1061,12 +1128,19 @@ impl Doc<'_> {
             memory
                 .admission_mut()
                 .checkpoint(control::NATIVE_UNITS_PER_WORK)?;
-            if !nodes.owns_fno(row.subject_id) || self.is_vocabulary_row(row, memory)? {
+            if !nodes.owns_fno(row.subject_id)
+                || self.owns_mapping_alias_declaration(row)
+                || self.is_vocabulary_row(row, memory)?
+            {
                 continue;
             }
             let s = builder.intern_value_with_memory(&row.s, memory)?;
             let p = builder.intern_iri_with_memory(&row.p, memory)?;
-            let o = builder.intern_value_with_memory(&row.o, memory)?;
+            let o = if row.uses_mapping_alias() {
+                builder.intern_iri_with_memory(FNO_MAPPING, memory)?
+            } else {
+                builder.intern_value_with_memory(&row.o, memory)?
+            };
             builder.push_quad_with_memory(s, p, o, None, memory)?;
         }
         builder.freeze_with_memory(memory)
@@ -1079,33 +1153,60 @@ impl Doc<'_> {
         source: &BorrowedSource<'_>,
         governor: &mut Governor,
     ) -> LoadError {
-        let (subject, predicate, object) = match failure {
+        let (subject, predicate, object, alias_only) = match failure {
             purrdf_core::fno::FnoConstructionFailure::Semantic(shared) => match &**shared {
+                FnoReadError::Field {
+                    subject,
+                    predicate,
+                    objects,
+                    expected: FnoFieldKind::Blank,
+                } if self.mapping_alias_declared
+                    && predicate == RDF_TYPE
+                    && matches!(objects.as_slice(), [value] if iri_of(value) == Some(FNO_MAPPING)) =>
+                {
+                    (
+                        Some(subject),
+                        Some(predicate.clone()),
+                        objects.first(),
+                        true,
+                    )
+                }
                 FnoReadError::Field {
                     subject, predicate, ..
                 }
                 | FnoReadError::List {
                     subject, predicate, ..
-                } => (Some(subject), Some(predicate.clone()), None),
+                } => (Some(subject), Some(predicate.clone()), None, false),
                 FnoReadError::Returns {
                     subject,
                     predicate,
                     head,
                     ..
-                } => (Some(subject), Some(predicate.clone()), Some(head)),
+                } => (Some(subject), Some(predicate.clone()), Some(head), false),
                 FnoReadError::Statement { row, .. } => (
                     Some(&row.s),
                     Some(show(&row.p)),
                     row.g.is_none().then_some(&row.o),
+                    false,
                 ),
-                _ => (None, None, None),
+                _ => (None, None, None, false),
             },
-            _ => (None, None, None),
+            _ => (None, None, None, false),
         };
         let at = match (subject, predicate.as_deref(), object) {
             (Some(subject), Some(predicate), Some(object)) => {
-                match control::default_row_extent(
-                    original, source, subject, predicate, object, governor,
+                let alias = (self.mapping_alias_declared
+                    && predicate == RDF_TYPE
+                    && iri_of(object) == Some(FNO_MAPPING))
+                .then_some(FNOM_MAPPING);
+                match control::default_row_extent_or_iri(
+                    original,
+                    source,
+                    subject,
+                    predicate,
+                    (!alias_only).then_some(object),
+                    alias,
+                    governor,
                 ) {
                     Ok(at) => at,
                     Err(error) => return error,
@@ -1141,6 +1242,7 @@ impl Doc<'_> {
         &self,
         nodes: &Nodes<'_>,
         catalog: Option<&FnoCatalog>,
+        used_alias: bool,
         locations: &Locations<'_, V>,
         governor: &Shared<'_>,
     ) -> Result<RetainedTools, LoadError> {
@@ -1174,6 +1276,7 @@ impl Doc<'_> {
         let mut retained = RetainedTools {
             tools: Vec::new(),
             masks: Vec::new(),
+            fno_view_losses: LossLedger::new(),
             storage: OwnedAdmission::new(storage),
         };
         let mut storage = BuildStorage::new(&mut retained.storage, governor, rejection);
@@ -1216,8 +1319,46 @@ impl Doc<'_> {
             retained.masks.push(mask);
         }
         self.check_reifiers(nodes, &consumed, locations, governor, &mut progress)?;
+        if used_alias {
+            self.record_mapping_normalizations(
+                &mut retained.fno_view_losses,
+                &mut storage,
+                &mut progress,
+            )?;
+        }
         // The classified node iterator already visits the IRI subjects in lexical order.
         Ok(retained)
+    }
+
+    fn record_mapping_normalizations(
+        &self,
+        ledger: &mut LossLedger,
+        storage: &mut BuildStorage<'_, '_, '_>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<(), LoadError> {
+        for row in &self.rows {
+            storage.charge(1)?;
+            if row.uses_mapping_alias() {
+                let definition = FNOM_MAPPING_NORMALIZATION;
+                let location = RdfLocation {
+                    subject: Some(Self::scoped_reference(&row.s, storage)?),
+                    ..RdfLocation::default()
+                };
+                storage.record_loss(
+                    ledger,
+                    LossEntry {
+                        code: definition.code,
+                        from: definition.from,
+                        to: definition.to,
+                        note: definition.description,
+                        location: None,
+                    },
+                    location,
+                    progress,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn check_catalog_tools<V: DatasetView<Id = TermId>>(
@@ -1831,7 +1972,7 @@ impl Doc<'_> {
             }
         }
         Ok(Some(Hint {
-            reifier: Self::reifier_reference(id, storage)?,
+            reifier: Self::scoped_reference(id, storage)?,
             shape: storage.lexical(shape.term)?,
             max_edit_distance: self.typed_number(
                 nodes,
@@ -1856,7 +1997,7 @@ impl Doc<'_> {
     }
 
     /// Use the same scoped blank label as the retained Turtle graph.
-    fn reifier_reference(
+    fn scoped_reference(
         id: &TermValue,
         storage: &mut BuildStorage<'_, '_, '_>,
     ) -> Result<String, LoadError> {

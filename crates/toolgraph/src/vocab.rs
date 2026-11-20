@@ -4,6 +4,7 @@
 //! Explicit vocabulary ownership, validated before namespace compaction.
 
 mod profile;
+pub(crate) use profile::FNOM_MAPPING_NORMALIZATION;
 pub use profile::{
     LOSS_PROFILE_ID, ModelFamily, ProjectionTarget, SOURCE_REPRESENTATION, register_loss_profile,
 };

@@ -13,6 +13,15 @@ pub const LOSS_PROFILE_ID: &str = "purrassist-toolgraph-v1";
 /// Source representation used by every tool-graph loss entry.
 pub const SOURCE_REPRESENTATION: &str = "rdf-1.2-toolgraph";
 
+pub(crate) const FNOM_MAPPING_NORMALIZATION: LossDefinition = LossDefinition {
+    from: Cow::Borrowed(SOURCE_REPRESENTATION),
+    to: Cow::Borrowed("fno-admission-view"),
+    code: Cow::Borrowed("fnom-mapping-type-normalized"),
+    description: Cow::Borrowed(
+        "The FnO admission view replaces the declared FnOM Mapping type with the native FnO Mapping type.",
+    ),
+};
+
 /// Model template identity, paired with its existing declaration form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModelFamily {
@@ -259,6 +268,7 @@ pub(super) fn definitions() -> impl Iterator<Item = LossDefinition> {
                 description: Cow::Borrowed(meaning.description),
             })
     })
+    .chain(std::iter::once(FNOM_MAPPING_NORMALIZATION))
 }
 
 /// Extend an explicit upstream profile with the complete versioned tool-graph meanings.

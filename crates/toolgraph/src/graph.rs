@@ -163,4 +163,21 @@ impl ToolGraph {
     pub const fn catalog(&self) -> Option<&FnoCatalog> {
         self.catalog.as_ref()
     }
+
+    /// Changes made only in the temporary view passed to the strict FnO reader.
+    ///
+    /// A declared FnOM Mapping alias contributes one entry per rewritten type.
+    /// The original declaration and type remain in the retained dataset.
+    ///
+    /// ```
+    /// use purrassist_toolgraph::ToolGraph;
+    /// fn used_mapping_alias(graph: &ToolGraph) -> bool {
+    ///     graph.fno_view_losses().entries().iter()
+    ///         .any(|entry| entry.code == "fnom-mapping-type-normalized")
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn fno_view_losses(&self) -> &purrdf_core::loss::LossLedger {
+        self.tools.fno_view_losses()
+    }
 }
