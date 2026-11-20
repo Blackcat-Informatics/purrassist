@@ -56,19 +56,27 @@ fn golden() -> String {
     text
 }
 
-fn project(depth: u64) -> (String, LossLedger) {
+fn load(turtle: &str) -> (Vocabulary, ToolGraph) {
     let vocabulary = vocabulary();
-    let mut governor = Governor::new(Budget::default());
     let graph = ToolGraph::load(
-        worked().as_bytes(),
+        turtle.as_bytes(),
         "text/turtle",
         None,
         &vocabulary,
-        &mut governor,
+        &mut Governor::new(Budget::default()),
     )
     .expect("graph loads");
-    let (signature, ledger) =
-        lanes::compact(&graph, &vocabulary, depth, &mut governor).expect("compact lane");
+    (vocabulary, graph)
+}
+
+fn project(vocabulary: &Vocabulary, graph: &ToolGraph, depth: u64) -> (String, LossLedger) {
+    let (signature, ledger) = lanes::compact(
+        graph,
+        vocabulary,
+        depth,
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("compact lane");
     check_ledger_sound_in(
         vocabulary.loss_profile(),
         &ledger,
@@ -84,10 +92,8 @@ fn project(depth: u64) -> (String, LossLedger) {
 // documented loss table is ledgered with its exact source location.
 #[test]
 fn the_worked_example_signature_and_ledger_match_the_specification() {
-    let (signature, ledger) = project(2);
-    let (second_signature, second_ledger) = project(2);
-    assert_eq!(signature, second_signature);
-    assert_eq!(ledger, second_ledger);
+    let (vocabulary, graph) = load(&worked());
+    let (signature, ledger) = project(&vocabulary, &graph, 2);
     assert_eq!(signature, golden());
     let ex = |name: &str| Some(format!("https://example.org/tools/{name}"));
     let rows: Vec<(&str, Option<String>)> = ledger
@@ -128,11 +134,44 @@ fn the_worked_example_signature_and_ledger_match_the_specification() {
     assert!(rows.contains(&("schema-keyword-not-expressible", ex("EditOutput"))));
 }
 
+#[test]
+fn compact_and_gbnf_are_identical_after_reordering_tool_declarations() {
+    let source = worked();
+    // Move the complete Turtle statements, including the anonymous FnO lists
+    // and the multiline policy literals within them.
+    let (header, query) = source
+        .split_once("\nex:query_customer_orders a pa:Tool")
+        .expect("first tool declaration");
+    let (query, edit) = query
+        .split_once("\nex:edit_file a pa:Tool")
+        .expect("second tool declaration");
+    let (edit, tail) = edit
+        .split_once("\nex:customerParam a fno:Parameter")
+        .expect("declarations end before the parameter statements");
+    let reordered = format!(
+        "{header}\nex:edit_file a pa:Tool{edit}\nex:query_customer_orders a pa:Tool{query}\nex:customerParam a fno:Parameter{tail}"
+    );
+    let (vocabulary, graph) = load(&source);
+    let (reordered_vocabulary, reordered_graph) = load(&reordered);
+    assert_eq!(
+        project(&vocabulary, &graph, 2),
+        project(&reordered_vocabulary, &reordered_graph, 2)
+    );
+    let project_grammars = |graph: &ToolGraph, vocabulary: &Vocabulary| {
+        lanes::gbnf(graph, vocabulary, &mut Governor::new(Budget::default())).expect("GBNF lane")
+    };
+    assert_eq!(
+        project_grammars(&graph, &vocabulary),
+        project_grammars(&reordered_graph, &reordered_vocabulary)
+    );
+}
+
 // Invariant: a depth too small to expand the result object renders `object` and
 // ledgers the cut, so the signature never silently loses nested detail.
 #[test]
 fn a_result_object_beyond_the_depth_is_ledgered() {
-    let (signature, ledger) = project(0);
+    let (vocabulary, graph) = load(&worked());
+    let (signature, ledger) = project(&vocabulary, &graph, 0);
     assert!(signature.contains("->object\n"));
     assert!(
         ledger
