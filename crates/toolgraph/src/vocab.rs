@@ -16,6 +16,10 @@ use purrdf_core::{
 };
 use purrdf_shapes::json_schema::{NamespaceError, Namespaces};
 
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "The loader and registry share this definition. Public visibility conflicts with unreachable_pub."
+)]
 pub(super) const FNOM_MAPPING_NORMALIZATION: LossDefinition = LossDefinition {
     from: Cow::Borrowed(SOURCE_REPRESENTATION),
     to: Cow::Borrowed("fno-admission-view"),
