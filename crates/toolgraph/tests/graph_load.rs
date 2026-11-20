@@ -1457,6 +1457,47 @@ fn unresolved_shapes_point_to_the_written_tool_reference() {
     load(&worked()).expect("declared shapes");
 }
 
+#[test]
+fn invalid_subtool_targets_point_to_the_written_edge() {
+    let input = "pa:inputShape ex:QueryInput";
+    for (target, expected) in [
+        ("ex:aaa_undefined", Violation::Unresolved),
+        ("_:missing", Violation::WrongKind { expected: "IRI" }),
+        (
+            r#"[ rdfs:label "unnamed" ]"#,
+            Violation::WrongKind { expected: "IRI" },
+        ),
+        (r#""edit_file""#, Violation::WrongKind { expected: "IRI" }),
+    ] {
+        let written = format!("pa:subtool {target}");
+        let source = edited(input, &format!("{written} ; {input}"));
+        // The native occurrence for an inline blank node ends at the opening token.
+        let expected_extent = if target.starts_with('[') {
+            "pa:subtool ["
+        } else {
+            &written
+        };
+        let error = load(&source).expect_err("a subtool needs a defined tool IRI");
+        assert!(
+            matches!(
+                &error,
+                LoadError::InvalidShape { subject, predicate, violation, at: Some(at) }
+                    if subject == &format!("{EX}query_customer_orders")
+                        && predicate == &format!("{NAMESPACE}subtool")
+                        && violation == &expected
+                        && &source[at.start..at.end] == expected_extent
+            ),
+            "{error:?}"
+        );
+    }
+    let valid = edited(input, &format!("pa:subtool ex:edit_file ; {input}"));
+    let graph = load(&valid).expect("defined subtool");
+    assert_eq!(
+        graph.tool("query_customer_orders").unwrap().subtools,
+        [format!("{EX}edit_file")]
+    );
+}
+
 // Rationale: only a plain predicate IRI is a parameter path; a `sh:path` that is a
 // blank-node path expression is refused as a complex path, never read as an IRI.
 #[test]

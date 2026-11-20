@@ -14,7 +14,7 @@ use purrdf_lex::{
 use super::{
     Construct, ControlledStorage, DCTERMS_IS_PART_OF, Doc, FNO, FNO_EXPECTS, FNO_RETURNS, FNOM,
     LoadError, Locations, Node, RDF_FIRST, RDF_REST, RDF_TYPE, Role, Row, SH_NODE_SHAPE,
-    SH_PROPERTY, SH_PROPERTY_SHAPE, Shared, Work, control, iri_of, stop, work,
+    SH_PROPERTY, SH_PROPERTY_SHAPE, Shared, Violation, Work, control, iri_of, stop, work,
 };
 
 const FNO_SUBJECT: u8 = 1;
@@ -131,6 +131,7 @@ impl Doc<'_> {
             nodes.by_id.resize(end, NodeState::default());
         }
 
+        self.register_groups(&mut nodes, governor)?;
         let mut progress = Work::new(governor);
         for row in &self.rows {
             work(&mut governor.borrow_mut(), 1)?;
@@ -193,6 +194,22 @@ impl Doc<'_> {
         }
 
         let object = nodes.entry(row.object_id)?;
+        if name == Some("subtool") {
+            let violation = if iri_of(&row.o).is_none() {
+                Some(Violation::WrongKind { expected: "IRI" })
+            } else if object.rows.is_empty() {
+                Some(Violation::Unresolved)
+            } else {
+                None
+            };
+            if let Some(violation) = violation {
+                return Err(locations.invalid_shape_row(
+                    row,
+                    violation,
+                    &mut governor.borrow_mut(),
+                )?);
+            }
+        }
         let linked = name.map_or(0, Role::link);
         if linked != 0 {
             object.declare(&row.o, linked);
@@ -208,7 +225,6 @@ impl Doc<'_> {
         nodes: &mut Nodes<'doc>,
         governor: &Shared<'_>,
     ) -> Result<(), LoadError> {
-        self.register_groups(nodes, governor)?;
         let mut offset = 0;
         while let Some((id, group)) = self.next_group(nodes, &mut offset) {
             work(&mut governor.borrow_mut(), 1)?;
