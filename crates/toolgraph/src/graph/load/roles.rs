@@ -85,7 +85,7 @@ const TOOL: &[Spec] = &[
     opt("destructiveHint", Kind::Bool),
     opt("idempotentHint", Kind::Bool),
     opt("openWorldHint", Kind::Bool),
-    any("subtool", Kind::Node),
+    any("subtool", Kind::Iri),
 ];
 const PROFILE: &[Spec] = &[
     one("confinementMode", Kind::Choice(&["aa-exec", "change_hat"])),

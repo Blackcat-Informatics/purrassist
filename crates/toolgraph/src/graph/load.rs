@@ -1599,16 +1599,6 @@ impl Doc<'_> {
             });
         };
         let subtools = self.retained_texts(nodes, node.id, "subtool", storage)?;
-        for subtool in &subtools {
-            if !lookup.contains(subtool, &mut progress)? {
-                return Err(LoadError::InvalidShape {
-                    subject: iri.clone(),
-                    predicate: self.term("subtool").to_owned(),
-                    at: None,
-                    violation: Violation::Unresolved,
-                });
-            }
-        }
         let (parameters, output, implementation) =
             self.build_callable(node, nodes, catalog, hints, locations, storage)?;
         let flag = |name, progress: &mut Work<'_, '_>| {
