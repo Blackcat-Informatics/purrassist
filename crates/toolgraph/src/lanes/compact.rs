@@ -20,7 +20,7 @@ use std::fmt;
 use purrassist_core::{
     Governor, StopReason,
     contract::Resource,
-    json::{self, Node, ParseFailure, Value},
+    json::{Node, ParseFailure, Value},
     tool_call::is_valid_name,
 };
 use purrdf_core::loss::{LossLedger, LossSoundnessError, check_ledger_sound_in};
@@ -56,9 +56,9 @@ impl CompactSignature {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompactError {
-    /// The graph has no MCP Extended manifest projection to derive schemas from.
+    /// The MCP declaration projection failed.
     Manifest(Box<CodecError>),
-    /// The projected manifest could not be read back as JSON.
+    /// A full-manifest JSON readback refusal, retained for caller compatibility.
     Json(ParseFailure),
     /// A schema construct has no signature form: a `$ref`, a type that names no
     /// supported type, or a schema with neither `type` nor `anyOf`/`oneOf`.
@@ -155,13 +155,8 @@ pub fn compact(
     depth: u64,
     governor: &mut Governor,
 ) -> Result<(CompactSignature, LossLedger), CompactError> {
-    let (manifest, upstream) = mcp::encode(graph, vocabulary, governor)
+    let (declarations, upstream) = mcp::project_tools(graph, vocabulary, governor, &mut |_, _| {})
         .map_err(|cause| CompactError::Manifest(Box::new(cause)))?;
-    let root = json::parse_with(manifest.as_str(), governor).map_err(CompactError::Json)?;
-    let declarations = match root.get("tools").map(|node| &node.value) {
-        Some(Value::Array(items)) => items.as_slice(),
-        _ => &[],
-    };
     let mut order: Vec<usize> = (0..graph.tools().len()).collect();
     order.sort_by(|&left, &right| graph.tools()[left].name.cmp(&graph.tools()[right].name));
     let mut text = String::new();

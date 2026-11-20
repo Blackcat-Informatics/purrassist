@@ -117,9 +117,9 @@ impl ToolGrammar {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum GbnfError {
-    /// The graph has no MCP Extended manifest projection to derive schemas from.
+    /// The MCP declaration projection failed.
     Manifest(Box<CodecError>),
-    /// The projected manifest could not be read back as JSON.
+    /// A full-manifest JSON readback refusal, retained for caller compatibility.
     Json(ParseFailure),
     /// A schema construct the grammar cannot lower soundly: a `$ref`, a boolean
     /// schema, a type that names no supported type, an array without `items`, an
@@ -251,8 +251,8 @@ pub fn gbnf(
     governor: &mut Governor,
 ) -> Result<(Vec<ToolGrammar>, LossLedger), GbnfError> {
     let mut upstream = Vec::new();
-    let (manifest, _) =
-        mcp::encode_with_schema_losses(graph, vocabulary, governor, &mut |direction, entries| {
+    let (declarations, _) =
+        mcp::project_tools(graph, vocabulary, governor, &mut |direction, entries| {
             let (code, check) = match direction {
                 SchemaDirection::Input => (
                     "input-shape-not-expressible",
@@ -270,11 +270,6 @@ pub fn gbnf(
             }));
         })
         .map_err(|cause| GbnfError::Manifest(Box::new(cause)))?;
-    let root = json::parse_with(manifest.as_str(), governor).map_err(GbnfError::Json)?;
-    let declarations = match root.get("tools").map(|node| &node.value) {
-        Some(Value::Array(items)) => items.as_slice(),
-        _ => &[],
-    };
     let mut order: Vec<usize> = (0..graph.tools().len()).collect();
     order.sort_by(|&left, &right| graph.tools()[left].name.cmp(&graph.tools()[right].name));
     let mut grammars = Vec::with_capacity(order.len());

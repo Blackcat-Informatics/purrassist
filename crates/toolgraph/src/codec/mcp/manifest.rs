@@ -232,21 +232,7 @@ pub fn encode(
     vocabulary: &Vocabulary,
     governor: &mut Governor,
 ) -> Result<(ManifestJson, LossLedger), CodecError> {
-    encode_with_schema_losses(graph, vocabulary, governor, &mut |_, _| {})
-}
-
-/// Encode the same manifest while observing each schema's native losses.
-#[expect(
-    clippy::redundant_pub_crate,
-    reason = "The projection observer is re-exported within the crate. Public visibility conflicts with unreachable_pub."
-)]
-pub(crate) fn encode_with_schema_losses(
-    graph: &ToolGraph,
-    vocabulary: &Vocabulary,
-    governor: &mut Governor,
-    observe: &mut dyn FnMut(SchemaDirection, &[LossEntry]),
-) -> Result<(ManifestJson, LossLedger), CodecError> {
-    let (tools, ledger) = project(graph, vocabulary, governor, observe)?;
+    let (tools, ledger) = project_tools(graph, vocabulary, governor, &mut |_, _| {})?;
     let bytes = purrdf_rdf::serialize_dataset(
         graph.dataset().as_ref(),
         MEDIA_TYPE,
@@ -357,7 +343,7 @@ pub fn decode(
         governor,
     )
     .map_err(|cause| CodecError::Load(Box::new(cause)))?;
-    let (projected, ledger) = project(&graph, vocabulary, governor, &mut |_, _| {})?;
+    let (projected, ledger) = project_tools(&graph, vocabulary, governor, &mut |_, _| {})?;
     if projected.len() != declarations.len() {
         return Err(CodecError::Disagreement {
             tool: None,
@@ -370,13 +356,18 @@ pub fn decode(
     Ok((graph, ledger))
 }
 
-/// Project every tool and merge the schema compiler's ledgers, checking soundness.
-fn project(
+/// Project the MCP declarations and report native schema losses by direction.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "The shared projection is re-exported within the crate. Public visibility conflicts with unreachable_pub."
+)]
+pub(crate) fn project_tools(
     graph: &ToolGraph,
     vocabulary: &Vocabulary,
     governor: &mut Governor,
     observe: &mut dyn FnMut(SchemaDirection, &[LossEntry]),
 ) -> Result<(Vec<Node>, LossLedger), CodecError> {
+    governor.check().map_err(CodecError::Resource)?;
     let mut losses = SchemaLosses {
         ledger: LossLedger::new(),
         observe,

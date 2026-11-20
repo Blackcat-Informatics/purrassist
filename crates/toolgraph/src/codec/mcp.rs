@@ -13,7 +13,7 @@ mod manifest;
 
 pub use execution::{ExecutionMode, ExecutionProfile, ExecutionQuantityProblem};
 pub use manifest::{CodecError, ManifestJson, decode, encode};
-pub(crate) use manifest::{SchemaDirection, encode_with_schema_losses};
+pub(crate) use manifest::{SchemaDirection, project_tools};
 
 use std::{fmt, ops::Range};
 
