@@ -1,0 +1,9 @@
+$ stagectl pr-checks 284
+SUCCESS reuse https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802316
+SUCCESS corpus https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802252
+SUCCESS native (ubuntu-24.04) https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802179
+SUCCESS native (macos-15) https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802257
+SUCCESS release-gate https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802037
+IN_PROGRESS fuzz https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802149
+SUCCESS windows-engines https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802055
+state: pending

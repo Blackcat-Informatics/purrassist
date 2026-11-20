@@ -1,0 +1,148 @@
+{
+  "issue": 33,
+  "pr_number": 284,
+  "branch": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl",
+  "observed_at": "2026-11-20T07:31:12.012715+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/33-tool-graph-rdf-1-2-loader-fno-shacl/.stage/tool-graph-rdf-1-2-loader-fno-shacl/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "4fcaf2a5fee93ca374a16ce5a9a66ef3a196e75c",
+    "headRefName": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+    "headRefOid": "a477ba4e4f7d5565a09fc7a56942829959096360",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 284,
+    "state": "OPEN",
+    "title": "Validate file permission sets during RDF tool graph loading",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/284"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802316",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802252",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802179",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802257",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802037",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802149",
+        "name": "fuzz",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/44689546022/job/136131802055",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "a477ba4e4f7d5565a09fc7a56942829959096360",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "a477ba4e4f7d5565a09fc7a56942829959096360",
+    "branch": "paudley/33-tool-graph-rdf-1-2-loader-fno-shacl",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 284,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #284 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 12,
+      "bytes": 35220,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "4fcaf2a5fee93ca374a16ce5a9a66ef3a196e75c",
+      "head": "a477ba4e4f7d5565a09fc7a56942829959096360",
+      "status": "clean"
+    }
+  }
+}
