@@ -343,14 +343,51 @@ pub(super) fn default_row_extent<V: DatasetView<Id = TermId>>(
     object: &TermValue,
     governor: &mut Governor,
 ) -> Result<Option<SourceExtent>, LoadError> {
-    find_statement(source, governor, |_, [s, p, o], graph, governor| {
+    default_row_extent_or_iri(
+        view,
+        source,
+        subject,
+        predicate,
+        Some(object),
+        None,
+        governor,
+    )
+}
+
+/// Locate a statement that may have an explicitly normalized asserted object.
+pub(super) fn default_row_extent_or_iri<V: DatasetView<Id = TermId>>(
+    view: &V,
+    source: &BorrowedSource<'_>,
+    subject: &TermValue,
+    predicate: &str,
+    object: Option<&TermValue>,
+    alias: Option<&str>,
+    governor: &mut Governor,
+) -> Result<Option<SourceExtent>, LoadError> {
+    find_statement(source, governor, |statement, [s, p, o], graph, governor| {
         let Some(p) = term_id(source, p, governor)? else {
             return Ok(false);
         };
-        Ok(graph.is_none()
-            && matches_iri(view, p, predicate, governor)?
-            && matches_value(view, source, s, subject, governor)?
-            && matches_value(view, source, o, object, governor)?)
+        if graph.is_some()
+            || !matches_iri(view, p, predicate, governor)?
+            || !matches_value(view, source, s, subject, governor)?
+        {
+            return Ok(false);
+        }
+        let Some(o) = term_id(source, o, governor)? else {
+            return Ok(false);
+        };
+        if let Some(object) = object
+            && matches_term(view, o, object, governor)?
+        {
+            return Ok(true);
+        }
+        if let Some(iri) = alias
+            && source.statement_kind(statement) == Some(SourceStatementKind::Quad)
+        {
+            return matches_iri(view, o, iri, governor);
+        }
+        Ok(false)
     })
 }
 

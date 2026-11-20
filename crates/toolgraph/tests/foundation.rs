@@ -5,9 +5,9 @@
 
 use purrassist_core::{Budget, CancellationToken, Governor, StopReason, contract::Resource};
 use purrassist_toolgraph::{
-    BindingProblem, FieldMask, FieldMaskError, FieldMaskKind, ModelFamily, PrefixTable,
-    ProjectionTarget, SOURCE_REPRESENTATION, TERM_NAMES, TermBindings, Vocabulary, VocabularyError,
-    register_loss_profile,
+    BindingProblem, FieldMask, FieldMaskError, FieldMaskKind, LoadError, ModelFamily, PrefixTable,
+    ProjectionTarget, SOURCE_REPRESENTATION, TERM_NAMES, TermBindings, ToolGraph, Vocabulary,
+    VocabularyError, register_loss_profile,
 };
 use purrdf_core::loss::{LossDefinition, LossProfile};
 
@@ -177,6 +177,58 @@ fn loss_registry_keeps_meanings_and_lane_membership() {
         }])
         .unwrap();
     assert!(register_loss_profile(conflicting).is_err());
+}
+
+#[test]
+fn the_fno_normalization_meaning_is_required_only_when_an_alias_is_used() {
+    let profile = register_loss_profile(LossProfile::builtin()).unwrap();
+    let lane_definitions = profile
+        .registered_pairs()
+        .filter(|&(from, to)| from == SOURCE_REPRESENTATION && to != "fno-admission-view")
+        .flat_map(|(from, to)| {
+            let profile = &profile;
+            profile.codes_for(from, to).map(move |code| LossDefinition {
+                from: from.to_owned().into(),
+                to: to.to_owned().into(),
+                code: code.to_owned().into(),
+                description: profile
+                    .description(from, to, code)
+                    .unwrap()
+                    .to_owned()
+                    .into(),
+            })
+        });
+    let profile = LossProfile::builtin().extend(lane_definitions).unwrap();
+    let namespace = "https://example.org/owned#";
+    let vocabulary = vocabulary(
+        PrefixTable(vec![("tg".into(), namespace.into())]),
+        terms(namespace),
+        profile,
+    )
+    .expect("the existing projection profile still admits a vocabulary");
+    let load = |bytes: &[u8]| {
+        ToolGraph::load(
+            bytes,
+            "text/turtle",
+            None,
+            &vocabulary,
+            &mut Governor::new(Budget::default()),
+        )
+    };
+    let declaration = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+        @prefix fnom: <https://w3id.org/function/vocabulary/mapping#> .\n\
+        fnom:Mapping owl:equivalentClass <https://w3id.org/function/ontology#Mapping> .\n";
+    assert!(
+        load(declaration.as_bytes())
+            .unwrap()
+            .fno_view_losses()
+            .is_empty()
+    );
+    let used = format!("{declaration}_:mapping a fnom:Mapping .");
+    assert!(
+        matches!(load(used.as_bytes()), Err(LoadError::InvalidFnoBinding { detail, at: Some(_), .. })
+            if detail.contains("registered FnO view normalization"))
+    );
 }
 
 #[test]

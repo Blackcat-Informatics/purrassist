@@ -6,7 +6,10 @@
 use std::cmp::Ordering;
 
 use purrassist_core::contract::{Resource, saturating_size};
-use purrdf_core::{TermId, TermValue};
+use purrdf_core::{
+    RdfLocation, TermId, TermValue,
+    loss::{LossEntry, LossLedger},
+};
 use purrdf_lex::{
     allocation::{Memory, OrderedTable, OwnedAdmission, StorageError},
     control::{ControlledError, Progress, compare_bytes, with_memory_control},
@@ -70,6 +73,23 @@ impl<'a, 'c, 'g> BuildStorage<'a, 'c, 'g> {
         self.reserve_next(values)?;
         values.push(value);
         Ok(())
+    }
+
+    pub(super) fn record_loss(
+        &mut self,
+        ledger: &mut LossLedger,
+        mut entry: LossEntry,
+        location: RdfLocation,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<(), LoadError> {
+        with_memory_control(&mut self.memory, progress, |memory| {
+            entry.location = Some(memory.boxed(location)?);
+            ledger.record_with_memory(entry, memory)
+        })
+        .map_err(|cause| match cause {
+            ControlledError::Control(reason) => stop(reason),
+            ControlledError::Native(cause) => self.error(&cause),
+        })
     }
 
     pub(in crate::graph) fn release<T>(&mut self, values: Vec<T>) -> Result<(), LoadError> {

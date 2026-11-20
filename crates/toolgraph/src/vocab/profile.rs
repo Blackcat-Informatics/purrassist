@@ -8,6 +8,8 @@ use std::borrow::Cow;
 use purrassist_core::tool_call::DeclarationForm;
 use purrdf_core::loss::{LossDefinition, LossProfile, LossProfileError};
 
+use super::FNOM_MAPPING_NORMALIZATION;
+
 /// Identity of this version's projection code and representation contract.
 pub const LOSS_PROFILE_ID: &str = "purrassist-toolgraph-v1";
 /// Source representation used by every tool-graph loss entry.
@@ -281,5 +283,5 @@ pub(super) fn definitions() -> impl Iterator<Item = LossDefinition> {
 /// assert_eq!(profile.codes_for(SOURCE_REPRESENTATION, "mcp-extended-v1").count(), 0);
 /// ```
 pub fn register_loss_profile(profile: LossProfile) -> Result<LossProfile, LossProfileError> {
-    profile.extend(definitions())
+    profile.extend(definitions().chain(std::iter::once(FNOM_MAPPING_NORMALIZATION)))
 }

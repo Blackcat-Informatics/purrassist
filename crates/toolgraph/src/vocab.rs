@@ -8,10 +8,26 @@ pub use profile::{
     LOSS_PROFILE_ID, ModelFamily, ProjectionTarget, SOURCE_REPRESENTATION, register_loss_profile,
 };
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
-use purrdf_core::{loss::LossProfile, parse_iri, terminals};
+use purrdf_core::{
+    loss::{LossDefinition, LossProfile},
+    parse_iri, terminals,
+};
 use purrdf_shapes::json_schema::{NamespaceError, Namespaces};
+
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "The loader and registry share this definition. Public visibility conflicts with unreachable_pub."
+)]
+pub(super) const FNOM_MAPPING_NORMALIZATION: LossDefinition = LossDefinition {
+    from: Cow::Borrowed(SOURCE_REPRESENTATION),
+    to: Cow::Borrowed("fno-admission-view"),
+    code: Cow::Borrowed("fnom-mapping-type-normalized"),
+    description: Cow::Borrowed(
+        "The FnO admission view replaces the declared FnOM Mapping type with the native FnO Mapping type.",
+    ),
+};
 
 /// Complete versioned term set from the tool-graph vocabulary.
 ///
@@ -236,6 +252,7 @@ pub struct Vocabulary {
     prefixes: PrefixTable,
     terms: TermBindings,
     losses: LossProfile,
+    fno_mapping_normalization: bool,
 }
 
 impl Vocabulary {
@@ -284,11 +301,16 @@ impl Vocabulary {
             .sort_unstable_by(|left, right| left.0.cmp(&right.0));
         let namespaces = Namespaces::new(primary_prefix, &prefixes.0)
             .map_err(VocabularyError::NamespaceConstruction)?;
+        let definition = FNOM_MAPPING_NORMALIZATION;
+        let fno_mapping_normalization =
+            losses.description(&definition.from, &definition.to, &definition.code)
+                == Some(definition.description.as_ref());
         Ok(Self {
             namespaces,
             prefixes,
             terms,
             losses,
+            fno_mapping_normalization,
         })
     }
 
@@ -325,6 +347,10 @@ impl Vocabulary {
     #[must_use]
     pub const fn loss_profile(&self) -> &LossProfile {
         &self.losses
+    }
+
+    pub(super) const fn admits_fno_mapping_normalization(&self) -> bool {
+        self.fno_mapping_normalization
     }
 }
 

@@ -301,6 +301,41 @@ fn an_incomplete_fno_binding_is_refused() {
     load(&worked()).expect("neighbouring valid input");
 }
 
+#[test]
+fn refused_mapping_alias_types_locate_the_authored_statement() {
+    let alias = "a fnom:Mapping";
+    let undeclared = edited(
+        "_:queryMapping a fno:Mapping",
+        "_:queryMapping a fnom:Mapping",
+    );
+    let invalid_subject = undeclared.replace("_:queryMapping", "ex:queryMapping")
+        + "\nfnom:Mapping owl:equivalentClass fno:Mapping .\n";
+    let wrong_target = format!("{undeclared}\nfnom:Mapping owl:equivalentClass fno:Function .\n");
+    let (_, predicate, construct) =
+        unsupported_construct(&wrong_target, "owl:equivalentClass fno:Function");
+    assert_eq!(predicate, "http://www.w3.org/2002/07/owl#equivalentClass");
+    assert_eq!(construct, Construct::UnownedStatement);
+    for (source, expected) in [
+        (undeclared, "requires its owl:equivalentClass declaration"),
+        (invalid_subject, "requires Blank"),
+    ] {
+        let error = load(&source)
+            .expect_err("the alias node requires a declaration and blank mapping subject");
+        let LoadError::InvalidFnoBinding {
+            predicate: Some(predicate),
+            detail,
+            at: Some(at),
+            ..
+        } = error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!(predicate, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        assert_eq!(&source[at.start..at.end], alias);
+        assert!(detail.contains(expected), "{detail}");
+    }
+}
+
 // A refused statement may share its subject and predicate with valid rows.
 // The locator follows the exact statement that the FnO reader declined.
 #[test]

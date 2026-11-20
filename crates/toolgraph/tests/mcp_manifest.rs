@@ -103,6 +103,63 @@ fn load(source: &str) -> ToolGraph {
     .expect("graph loads")
 }
 
+#[test]
+fn declared_mapping_alias_keeps_the_authored_rdf_and_records_the_fno_projection() {
+    let source = worked();
+    let canonical = load(&source);
+    assert!(canonical.fno_view_losses().is_empty());
+    let alias_source = source.replacen(
+        "_:queryMapping a fno:Mapping",
+        "_:queryMapping a fnom:Mapping",
+        1,
+    ) + "\nfnom:Mapping a rdfs:Class ; owl:equivalentClass fno:Mapping ;\n\
+           rdfs:comment \"Caller alias for the native mapping class.\" .\n";
+    let graph = load(&alias_source);
+    assert_eq!(graph.tools(), canonical.tools());
+    assert_eq!(graph.catalog(), canonical.catalog());
+
+    let ledger = graph.fno_view_losses();
+    let [entry] = ledger.entries() else {
+        panic!("{ledger:?}");
+    };
+    assert_eq!(entry.code, "fnom-mapping-type-normalized");
+    assert_eq!(
+        entry
+            .location
+            .as_ref()
+            .and_then(|site| site.subject.as_deref()),
+        Some("_:queryMapping")
+    );
+    let vocabulary = vocabulary();
+    purrdf_core::loss::check_ledger_sound_in(
+        vocabulary.loss_profile(),
+        ledger,
+        "rdf-1.2-toolgraph",
+        "fno-admission-view",
+    )
+    .expect("registered and sound FnO view loss");
+
+    let authored = purrdf_rdf::parse_dataset(alias_source.as_bytes(), "text/turtle", None)
+        .expect("parse the authored RDF directly");
+    let (manifest, mcp_losses) = mcp::encode(&graph, &vocabulary, &mut governor()).expect("encode");
+    assert!(
+        mcp_losses
+            .entries()
+            .iter()
+            .all(|loss| loss.code != entry.code)
+    );
+    let (decoded, decoded_losses) =
+        mcp::decode(&manifest, &vocabulary, &mut governor()).expect("decode");
+    assert_eq!(decoded_losses, mcp_losses);
+    assert_eq!(decoded.fno_view_losses(), ledger);
+    assert_eq!(decoded.tools(), graph.tools());
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    assert!(
+        datasets_isomorphic(authored.as_ref(), decoded.dataset().as_ref(), &mut control)
+            .expect("compare the authored RDF datasets")
+    );
+}
+
 fn governor() -> Governor {
     Governor::new(Budget::default())
 }
