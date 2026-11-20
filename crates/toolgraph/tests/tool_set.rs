@@ -4,15 +4,17 @@
 //! `ToolGraph::tool_set` over the worked example in `docs/tool-graph/TOOLS.md`.
 
 use purrassist_core::{
-    Budget, Governor, Outcome, json,
+    Budget, Governor, Outcome, StopReason,
+    contract::Resource,
+    json,
     tool_call::{
         CallOutcome, DeclarationForm, DialectSet, Effects, RepairPolicy, ToolRecoveryRequest,
         ToolSet, ToolSetError, UnresolvedReason,
     },
 };
 use purrassist_toolgraph::{
-    PrefixTable, TERM_NAMES, TermBindings, ToolGraph, ToolSetBridgeError, Vocabulary,
-    register_loss_profile,
+    LoadError, PrefixTable, TERM_NAMES, TermBindings, ToolGraph, ToolSetBridgeError, Vocabulary,
+    codec::mcp, register_loss_profile,
 };
 use purrdf_core::loss::LossProfile;
 
@@ -207,4 +209,53 @@ fn a_subtool_that_can_write_revokes_read_only() {
     let tools = tool_set(&nested).expect("tool set");
     let query = tools.tool("query_customer_orders").expect("query");
     assert_eq!(query.effects(), Effects::Mutating);
+}
+
+#[test]
+fn a_read_only_tool_can_revisit_itself_in_the_effect_proof() {
+    let nested = edited(
+        " pa:inputShape ex:QueryInput ;",
+        " pa:subtool ex:query_customer_orders ; pa:inputShape ex:QueryInput ;",
+    );
+    let tools = tool_set(&nested).expect("the effect proof terminates");
+    let query = tools.tool("query_customer_orders").expect("query");
+    assert_eq!(query.effects(), Effects::ReadOnly);
+}
+
+#[test]
+fn effect_proof_refuses_a_work_limit_that_admits_the_manifest() {
+    let vocabulary = vocabulary();
+    let source = worked().replace("ex:query_customer_orders", "ex:aaa_query");
+    let graph = ToolGraph::load(
+        source.as_bytes(),
+        "text/turtle",
+        None,
+        &vocabulary,
+        &mut Governor::new(Budget::default()),
+    )
+    .expect("worked graph");
+    assert_eq!(graph.tools()[0].name, "query_customer_orders");
+    let mut manifest_governor = Governor::new(Budget::default());
+    let _manifest = mcp::encode(&graph, &vocabulary, &mut manifest_governor).expect("manifest");
+    let manifest_work = manifest_governor.usage().work;
+    let manifest_storage = manifest_governor.scratch_meter().live();
+    let mut governor = Governor::new(Budget {
+        work: manifest_work + 1,
+        ..Budget::default()
+    });
+    let error = graph
+        .tool_set(&vocabulary, &mut governor)
+        .expect_err("effect proof exhausts the budget before adapter import");
+    assert!(
+        matches!(
+            error,
+            ToolSetBridgeError::Metadata(ref cause)
+                if **cause == LoadError::Exhausted(StopReason::BudgetExceeded(Resource::Work))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(governor.scratch_meter().live(), manifest_storage);
+    graph
+        .tool_set(&vocabulary, &mut Governor::new(Budget::default()))
+        .expect("sufficient budget admits the graph and metadata");
 }

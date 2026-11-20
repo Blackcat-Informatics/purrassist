@@ -84,7 +84,10 @@ for kind but not interpreted. These checks remain on #33; the governed load is
 delivered as described above. `ToolGraph::tool_set(vocabulary, governor)` is implemented: it
 imports the encoded manifest through `ToolSet::from_mcp_with_metadata_governed`
 with alias, effects and policy metadata, so the exact schema and declaration
-bytes are kept. It selects `Effects::ReadOnly` only for a true `readOnlyHint`
+bytes are kept. The caller governor admits the metadata copies and the
+iterative effect proof. The proof reuses scratch storage across tools and
+releases it before the adapter imports the declarations. It selects
+`Effects::ReadOnly` only for a true `readOnlyHint`
 with no allowed write, append, lock or link file grant, mount or capability
 rule, waiver or non-inherit exec transition in the profile tree, and only when
 every subtool resolves and is itself proven. That proof is a static read of the

@@ -19,7 +19,7 @@ use super::{
     show, stop, work,
 };
 
-pub(super) struct BuildStorage<'a, 'c, 'g> {
+pub(in crate::graph) struct BuildStorage<'a, 'c, 'g> {
     memory: Memory<'a, OwnedAdmission<Storage>>,
     pub(super) governor: &'c Shared<'g>,
     rejection: control::Rejection,
@@ -42,8 +42,15 @@ impl<'a, 'c, 'g> BuildStorage<'a, 'c, 'g> {
         control::storage_stop(self.governor, &self.rejection, cause)
     }
 
-    pub(super) fn charge(&self, amount: u64) -> Result<(), LoadError> {
+    pub(in crate::graph) fn charge(&self, amount: u64) -> Result<(), LoadError> {
         work(&mut self.governor.borrow_mut(), amount)
+    }
+
+    pub(in crate::graph) fn with_governor<T>(
+        &self,
+        run: impl FnOnce(&mut purrassist_core::Governor) -> T,
+    ) -> T {
+        run(&mut self.governor.borrow_mut())
     }
 
     pub(super) fn reserve_next<T>(&mut self, values: &mut Vec<T>) -> Result<(), LoadError> {
@@ -55,19 +62,23 @@ impl<'a, 'c, 'g> BuildStorage<'a, 'c, 'g> {
             .map_err(|cause| self.error(&cause))
     }
 
-    pub(super) fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), LoadError> {
+    pub(in crate::graph) fn push<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        value: T,
+    ) -> Result<(), LoadError> {
         self.reserve_next(values)?;
         values.push(value);
         Ok(())
     }
 
-    fn release<T>(&mut self, values: Vec<T>) -> Result<(), LoadError> {
+    pub(in crate::graph) fn release<T>(&mut self, values: Vec<T>) -> Result<(), LoadError> {
         self.memory
             .release_vec(values)
             .map_err(|cause| self.error(&cause))
     }
 
-    pub(super) fn string(&mut self, text: &str) -> Result<String, LoadError> {
+    pub(in crate::graph) fn string(&mut self, text: &str) -> Result<String, LoadError> {
         self.charge(saturating_size(text.len()))?;
         self.memory.string(text).map_err(|cause| self.error(&cause))
     }
@@ -89,7 +100,7 @@ impl<'a, 'c, 'g> BuildStorage<'a, 'c, 'g> {
             .map_err(|cause| self.error(&cause))
     }
 
-    pub(super) fn fill<T: Copy>(
+    pub(in crate::graph) fn fill<T: Copy>(
         &mut self,
         values: &mut Vec<T>,
         count: usize,
