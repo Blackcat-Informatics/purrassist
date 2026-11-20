@@ -1376,13 +1376,24 @@ fn project_arguments(raw: &str, mask: &str, limit: u64, schema: &str) -> String 
 /// Artifact boundaries and typed processing refusals survive both real transports.
 #[test]
 fn project_result_cli_mcp_keep_checked_bytes_and_structured_refusals() {
+    const ARTIFACT: &str = "\"é\\n\"\ntrue\n";
+    let scalar_tokens = u64::try_from(ARTIFACT.chars().count()).unwrap();
+    let artifact_bytes = u64::try_from(ARTIFACT.len()).unwrap();
+    assert_eq!(artifact_bytes, scalar_tokens + 1);
     let output = output_schema_of("project_result");
     for (raw, mask, limit, schema, status, kind) in [
-        (r#"["é\n",true]"#, ".[]", 12, "true", "resolved", None),
         (
             r#"["é\n",true]"#,
             ".[]",
-            11,
+            artifact_bytes,
+            "true",
+            "resolved",
+            None,
+        ),
+        (
+            r#"["é\n",true]"#,
+            ".[]",
+            scalar_tokens,
             "true",
             "unresolved",
             Some("output_limit"),
@@ -1422,8 +1433,23 @@ fn project_result_cli_mcp_keep_checked_bytes_and_structured_refusals() {
         } else {
             assert_eq!(
                 cli.pointer("/artifact/text").and_then(Node::as_str),
-                Some("\"é\\n\"\ntrue\n")
+                Some(ARTIFACT)
             );
+        }
+        let measurement_path = match kind {
+            None => Some("/artifact/measurement"),
+            Some("output_limit") => Some("/error/measurement"),
+            _ => None,
+        };
+        if let Some(path) = measurement_path {
+            let measurement = cli.pointer(path).expect("result byte measurement");
+            let expected = object([
+                ("limit", integer(limit)),
+                ("measured", integer(artifact_bytes)),
+                ("unit", string("bytes")),
+                ("enforcement", string("exact-bytes")),
+            ]);
+            assert!(measurement.equivalent(&expected), "{measurement:?}");
         }
         fs::remove_dir_all(root).unwrap();
     }

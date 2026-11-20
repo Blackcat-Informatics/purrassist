@@ -152,6 +152,22 @@ zero refused and 100 accepted. The repository regression checks that the
 original input schema refuses 101 and the lane records no input loss for
 that bound.
 
+## Tool-result byte-limit qualification
+
+The full MCP Extended manifest test checks the v2 byte contract against the
+worked RDF graph. It exercises the v1 bundle, legacy token limit, missing and
+unknown enforcement modes, duplicate and unknown fields, a zero byte limit,
+and a positive limit that disagrees with the source graph.
+
+The shipped `project_result` tool exercises the same UTF-8 artifact on both
+sides of its byte boundary through CLI `call` and MCP `tools/call`. Counting one
+token per Unicode scalar gives eleven tokens for the twelve-byte JSON Lines
+artifact. Both transports report exact-byte enforcement, the configured limit
+and the twelve measured bytes. They release the artifact at twelve and
+withhold it at eleven.
+The graph-bound result path remains part of
+[#37](https://github.com/Blackcat-Informatics/purrassist/issues/37).
+
 ## Resource and platform qualification
 
 The core scratch governor uses shared meters, leases, and budgeted containers.
