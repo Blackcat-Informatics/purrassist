@@ -48,8 +48,9 @@
 //!   retained parse.
 //! * For a diagnostic that identifies a specific row or reifier binding,
 //!   [`SourceExtent`] names the first written occurrence of that RDF statement.
-//!   Matching preserves blank scopes and literal facets. Refusals that identify
-//!   only a node, including missing `FnO` facts, carry no statement extent.
+//!   Matching preserves blank scopes and literal facets. A tool declaration
+//!   missing its required `FnO` function type points to the written tool type.
+//!   Refusals that identify only a node carry no statement extent.
 //!   The syntax that introduces a generated term supplies its location.
 //! * Only default-graph statements and reifiers load; a named-graph one is refused.
 //! * The vocabulary shapes are checked by a Rust table that is not equivalent to

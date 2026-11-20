@@ -1374,6 +1374,37 @@ fn a_function_without_a_tool_is_refused_as_a_function_without_a_tool() {
 }
 
 #[test]
+fn a_tool_without_a_function_is_located_at_its_written_type() {
+    let source = worked();
+    load(&source).expect("neighbouring valid input");
+    let written = "a pa:Tool";
+    let source = format!(
+        "{source}\nex:orphanTool a pa:Node ; {written} ;\n\
+         pa:name \"orphan_tool\" ; pa:description \"An orphan tool.\" ;\n\
+         pa:inputShape ex:EditInput ; pa:outputShape ex:EditOutput ;\n\
+         pa:executionProfile ex:FileProfile ; pa:contextManagement ex:EditContext ;\n\
+         pa:parameterConstraints \"\" ."
+    );
+    let error = load(&source).expect_err("a declared tool requires a function type");
+    let LoadError::InvalidFnoBinding {
+        subject,
+        predicate,
+        detail,
+        at: Some(at),
+    } = error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(subject, format!("{EX}orphanTool"));
+    assert_eq!(
+        predicate.as_deref(),
+        Some("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+    );
+    assert_eq!(detail, "a tool must be typed as an fno:Function");
+    assert_eq!(&source[at.start..at.end], written);
+}
+
+#[test]
 fn callable_mapping_selection_requires_exactly_one_mapping_per_tool() {
     let source = worked();
     let mapping = source

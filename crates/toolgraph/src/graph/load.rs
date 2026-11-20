@@ -1387,12 +1387,22 @@ impl Doc<'_> {
             if role.mask & Role::TOOL == 0 {
                 continue;
             }
-            let Some(catalog) = catalog else {
-                return Err(Self::missing_function(node.term));
+            let catalog = match catalog {
+                Some(catalog)
+                    if self.has_type_id(nodes, node.id, FNO_FUNCTION, &mut progress)? =>
+                {
+                    catalog
+                }
+                _ => {
+                    return Err(self.missing_function(
+                        nodes,
+                        node,
+                        locations,
+                        governor,
+                        &mut progress,
+                    )?);
+                }
             };
-            if !self.has_type_id(nodes, node.id, FNO_FUNCTION, &mut progress)? {
-                return Err(Self::missing_function(node.term));
-            }
             let candidate =
                 self.build_tool(node, catalog, &lookup, &mut hints, locations, &mut storage)?;
             let name = self.required_property(nodes, node, "name", &mut progress)?;
@@ -1524,13 +1534,25 @@ impl Doc<'_> {
         Ok(())
     }
 
-    fn missing_function(node: &TermValue) -> LoadError {
-        LoadError::InvalidFnoBinding {
-            subject: show(node),
+    fn missing_function<V: DatasetView<Id = TermId>>(
+        &self,
+        nodes: &Nodes<'_>,
+        node: Node<'_>,
+        locations: &Locations<'_, V>,
+        governor: &Shared<'_>,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<LoadError, LoadError> {
+        let at = self
+            .type_row(nodes, node.id, self.term("Tool"), progress)?
+            .map(|row| locations.statement(&row.s, &row.p, &row.o, &mut governor.borrow_mut()))
+            .transpose()?
+            .flatten();
+        Ok(LoadError::InvalidFnoBinding {
+            subject: show(node.term),
             predicate: Some(RDF_TYPE.to_owned()),
             detail: "a tool must be typed as an fno:Function".to_owned(),
-            at: None,
-        }
+            at,
+        })
     }
 
     fn first_property<'d>(
@@ -1556,6 +1578,16 @@ impl Doc<'_> {
         class: &str,
         progress: &mut Work<'_, '_>,
     ) -> Result<bool, LoadError> {
+        Ok(self.type_row(nodes, id, class, progress)?.is_some())
+    }
+
+    fn type_row<'d>(
+        &'d self,
+        nodes: &Nodes<'_>,
+        id: TermId,
+        class: &str,
+        progress: &mut Work<'_, '_>,
+    ) -> Result<Option<&'d Row>, LoadError> {
         for &index in nodes.rows(id) {
             let row = &self.rows[index];
             if matches_predicate(row, RDF_TYPE, progress)?
@@ -1564,10 +1596,10 @@ impl Doc<'_> {
                     .map_err(stop)?
                     .is_eq()
             {
-                return Ok(true);
+                return Ok(Some(row));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     fn typed_value<'d>(
