@@ -1727,9 +1727,11 @@ outcome, preserving `BestGuess`, `Ambiguous` and every unresolved reason.
 Blocker text is copied fallibly under a transient storage lease and published
 only after the event record is admitted. For resolved or best-guess calls,
 `ParameterComplete` follows `CallComplete`, including for mutating tools.
-Values use `OwnedDocument::copy_from`; their real reservations stay with the
-prepared event through handoff, preserving lexical numbers, typed values and
-spans. Parameters are emitted in canonical name order. Ambiguous and unresolved calls, and
+The parameter copy uses caller `Depth` with the parameter value at depth zero.
+Its reservations stay with the prepared event through handoff, preserving
+lexical numbers, typed values and spans. A caller raising `Depth` must provide
+enough native stack for recursive copying. Parameters are emitted in canonical
+name order. Ambiguous and unresolved calls, and
 duplicate member names, do not publish a supposedly settled parameter value.
 
 `CallRejected` carries each final rejected attempt's complete span and precise

@@ -423,7 +423,7 @@ impl StreamEvent {
         governor: &mut Governor,
     ) -> Result<PreparedEvent, StopReason> {
         let name = ScratchString::copy_from(name, governor)?;
-        let value = OwnedDocument::copy_from(value, governor)?;
+        let value = OwnedDocument::copy_at_caller_depth(value, governor)?;
         let mut storage = Self::admit(governor)?;
         let (name, owned) = name.into_owned_parts();
         storage.absorb(owned);
