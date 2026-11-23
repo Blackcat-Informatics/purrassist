@@ -1050,8 +1050,9 @@ exclusions. Pattern completed 286 independent comparisons; its 118 reference
 rejections and one reference timeout are separate non-comparisons, not successful
 independent checks.
 
-The lightweight runner tests (`scripts/test-fuzz.py`) run in `make check`
-via `make hygiene`, including coverage-region admission and differential normalization tests;
+The runner tests (`scripts/test-fuzz.py`) cover coverage-region admission,
+differential normalization, and strict seed replay through a built probe.
+`make conformance`, `make fuzz`, and `make fuzz-hosted` run them.
 `scripts/test-fuzz-feedback.py` proves that the retained corpus grows from new
 coverage on the real `patch` target end to end. `make fuzz` and
 `make fuzz-hosted` (the CI `fuzz` job) run this feedback test before the campaigns, and release qualification

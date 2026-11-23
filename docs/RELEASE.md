@@ -159,7 +159,8 @@ steps in order:
 5. `Verify the release gate`: `make release-gate`, the one gate. It runs
    `make check` (the full local gate; its `make lint` runs workspace Clippy
    with `--workspace --all-targets --locked -- -D warnings` plus Clippy over the
-   `test = false` corpus suites), `make corpus`,
+   `test = false` corpus suites), `make conformance` (corpora, scale tests,
+   exhaustive oracles, and tooling self-tests),
    `scripts/test-fuzz-feedback.py` (coverage-feedback corpus growth),
    `scripts/test-verify-published.py` (the published-crate verifier) and
    `make package`, in that order.

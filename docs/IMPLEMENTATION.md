@@ -1003,6 +1003,8 @@ test.
 
 `make check` runs formatting, lint, optimized build/test, Rustdoc, and repository
 hygiene with warnings as errors. Verification preserves debug/overflow checks.
+`make conformance` runs extended corpora, exhaustive oracles, scale tests, and
+tooling self-tests separately from the local gate.
 Publication additionally requires conformance, packaging, installation, hosted
 CI, documentation, and registry verification. Never bypass commit verification.
 

@@ -42,12 +42,15 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 These integration-test names are in `crates/core/tests` unless qualified with
 another crate. `make check` runs the formatting, hygiene, Clippy, helper
 detector self-tests, strict helper-ledger, workspace test, and Rustdoc gate
-with warnings as errors; workspace tests keep debug assertions and overflow
-checks. It runs the focused tests only. The corpus suites (`correction_evaluation`,
+with warnings as errors. `make test` runs workspace unit tests, integration
+tests, and doctests. The test profile uses light optimization and keeps debug
+assertions and overflow checks. The corpus suites (`correction_evaluation`,
 `corruption_oracle`, `markdown_corpus`, `matching_oracle`, `pattern_corpus`,
 `schema_conformance`, `tool_call_scale`, `unicode_conformance`) are
-`test = false` targets that `make corpus` runs, in the CI `corpus` job and in
-release qualification; the coverage-guided and differential fuzzing campaign
+`test = false` targets. `make conformance` runs those suites through
+`make corpus` and runs the documentation checker and fuzz runner self-tests.
+Run it locally as needed. The CI `corpus` job and release qualification both
+run it. The coverage-guided and differential fuzzing campaign
 and its corpus-feedback self-test run under `make fuzz` locally and
 `make fuzz-hosted` in the CI `fuzz` job. The table's corpus counts, conformance totals and 1 MiB measurements
 come from those lanes. Focused test results establish their listed
@@ -284,7 +287,7 @@ probe panic fails both fuzz commands.
 
 ```sh
 make check
-make corpus
+make conformance
 make syntax-oracles
 make fuzz-hosted
 make package

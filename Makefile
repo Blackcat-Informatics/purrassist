@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 MAKEFLAGS += --no-print-directory
-.PHONY: check corpus fmt lint test doc hygiene reuse benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check release-gate
+.PHONY: check conformance corpus fmt lint test doc hygiene reuse benchmark package syntax-oracles resources fuzz fuzz-hosted helper-test helper-census helper-check release-gate
 
 check: fmt hygiene helper-test helper-check lint test doc
 
@@ -14,8 +14,6 @@ hygiene:
 	python3 scripts/check-release.py
 	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-release.py
 	python3 -X warn_default_encoding -W error::EncodingWarning scripts/check-docs.py
-	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py
-	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 	python3 scripts/test-resource-report.py
 	python3 scripts/check-resource-limits.py --schema-only docs/qualification/resources-linux-x86_64.json
 
@@ -27,14 +25,19 @@ lint:
 	cargo clippy --workspace --all-targets --locked -- -D warnings
 	cargo clippy -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite)) -- -D warnings
 
+# Clippy checks the examples that have no tests.
 test:
-	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test --workspace --locked
+	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test --workspace --locked --tests
+	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test --workspace --locked --doc
+
+conformance: corpus
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-check-docs.py
+	python3 -X warn_default_encoding -W error::EncodingWarning scripts/test-fuzz.py
 
 # Corpus suites (`test = false` in crates/core/Cargo.toml): vendored
 # conformance corpora, generated evaluation corpora, exhaustive oracles and
-# 1 MiB scale runs. The list has two users: `make corpus` runs the suites (CI
-# runs it in the `corpus` job; `make check` does not), and `make lint` lints
-# them with Clippy, so `make check` lints them although it does not run them.
+# 1 MiB scale runs. `make conformance` runs them through `make corpus`.
+# `make check` lints them with Clippy.
 CORPUS_SUITES := correction_evaluation corruption_oracle markdown_corpus matching_oracle pattern_corpus schema_conformance tool_call_scale unicode_conformance
 corpus:
 	RUSTFLAGS="$${RUSTFLAGS:-} -D warnings" cargo test -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite))
@@ -58,7 +61,7 @@ package:
 # scripts/check-release.py pins the lines and their order.
 release-gate:
 	$(MAKE) check
-	$(MAKE) corpus
+	$(MAKE) conformance
 	python3 scripts/test-fuzz-feedback.py
 	python3 scripts/test-verify-published.py
 	$(MAKE) package
