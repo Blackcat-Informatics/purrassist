@@ -299,6 +299,8 @@ rustfmt. No commit-verification bypass is permitted.
 
 ```sh
 make check       # formatting, attribution/dependencies, lint, optimized tests, docs
+make test        # workspace regression tests and doctests
+make conformance # corpora, exhaustive oracles, scale tests, and tooling self-tests
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 make fuzz       # eleven coverage-guided targets and independent pattern/Markdown oracles
@@ -338,8 +340,8 @@ cases (formats judged by their annotation results), 905 pass, and the 6 that
 do not are listed by group with reasons: content assertion (annotation-only by
 design) and a Draft 2019-09 cross-draft reference (not an implemented dialect).
 Unicode 17
-normalization contains 20,034 cases. These suites, regression tests, fixed helper
-transcripts, and bounded mutation probes run locally. Full release qualification
+normalization contains 20,034 cases. Run these corpora locally with
+`make conformance`. Full release qualification
 requires the exact-commit gates and registry acceptance described in the
 [qualification record](docs/QUALIFICATION.md).
 

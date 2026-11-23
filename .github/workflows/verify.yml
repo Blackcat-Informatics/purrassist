@@ -83,8 +83,7 @@ jobs:
       - run: rustup component add clippy
       - run: cargo clippy -p purrassist-host -p purrassist-cli --all-targets --locked -- -D warnings
   corpus:
-    # Vendored conformance corpora, generated evaluation corpora, exhaustive
-    # oracles and 1 MiB scale runs (`test = false` suites; not in make check).
+    # Corpora, exhaustive oracles, scale runs, and tooling self-tests.
     runs-on: ubuntu-24.04
     env:
       RUSTUP_TOOLCHAIN: nightly-2026-09-14
@@ -93,7 +92,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install nightly-2026-09-14 --profile minimal
-      - run: make corpus
+      - run: make conformance
   fuzz:
     # Coverage-guided and differential fuzzing, with the corpus-feedback
     # self-test; not in make check.

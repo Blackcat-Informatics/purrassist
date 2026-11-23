@@ -282,7 +282,8 @@ class ReleaseGateIdentity(ScratchTree):
         self.fails('Makefile release-gate recipe must be exactly')
 
     def test_a_reordered_recipe_fails(self):
-        self.edit('Makefile', '\t$(MAKE) check\n\t$(MAKE) corpus\n', '\t$(MAKE) corpus\n\t$(MAKE) check\n')
+        self.edit('Makefile', '\t$(MAKE) check\n\t$(MAKE) conformance\n',
+                  '\t$(MAKE) conformance\n\t$(MAKE) check\n')
         self.fails('Makefile release-gate recipe must be exactly')
 
     def test_an_added_prerequisite_fails(self):
@@ -351,7 +352,7 @@ class ReleaseGateIdentity(ScratchTree):
                 self.fails('Makefile must define CORPUS_SUITES exactly once')
 
     def test_an_extra_make_step_in_release_qualification_fails(self):
-        self.append(RELEASE, '      - name: Verify the corpus again\n        run: make corpus\n')
+        self.append(RELEASE, '      - name: Verify conformance again\n        run: make conformance\n')
         self.fails('must have exactly the named steps')
         self.fails('must run `make` exactly once, as `make release-gate`')
 

@@ -272,7 +272,7 @@ INSTALL_STEPS = ('Install release toolchain', 'Install pinned coverage-feedback 
 RELEASE_STEPS = (RUNNER_STORAGE_STEP, *INSTALL_STEPS,
                  'Verify release set and version', 'Verify the release gate')
 GATE_STEP = 'Verify the release gate'
-GATE_RECIPE = ('$(MAKE) check', '$(MAKE) corpus', 'python3 scripts/test-fuzz-feedback.py',
+GATE_RECIPE = ('$(MAKE) check', '$(MAKE) conformance', 'python3 scripts/test-fuzz-feedback.py',
                'python3 scripts/test-verify-published.py', '$(MAKE) package')
 LINT_RECIPE = ('cargo clippy --workspace --all-targets --locked -- -D warnings',
                'cargo clippy -p purrassist-core --locked $(foreach suite,$(CORPUS_SUITES),--test $(suite)) -- -D warnings')

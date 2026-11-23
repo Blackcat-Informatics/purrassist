@@ -45,6 +45,10 @@ overflow-checks = true
 [profile.dev.build-override]
 opt-level = 3
 
+[profile.test]
+opt-level = 1
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
