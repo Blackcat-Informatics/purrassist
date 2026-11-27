@@ -7,8 +7,8 @@ use std::cmp::Ordering;
 
 use purrassist_core::contract::{Resource, saturating_size};
 use purrdf_core::{
-    RdfLocation, TermId, TermValue,
-    loss::{LossEntry, LossLedger},
+    BlankScope, TermId, TermValue,
+    loss::{LossEntry, LossLedger, LossSubject, LossTerm},
 };
 use purrdf_lex::{
     allocation::{Memory, OrderedTable, OwnedAdmission, StorageError},
@@ -79,11 +79,11 @@ impl<'a, 'c, 'g> BuildStorage<'a, 'c, 'g> {
         &mut self,
         ledger: &mut LossLedger,
         mut entry: LossEntry,
-        location: RdfLocation,
+        subject: LossTerm,
         progress: &mut Work<'_, '_>,
     ) -> Result<(), LoadError> {
+        entry.subject = LossSubject::Term(subject);
         with_memory_control(&mut self.memory, progress, |memory| {
-            entry.location = Some(memory.boxed(location)?);
             ledger.record_with_memory(entry, memory)
         })
         .map_err(|cause| match cause {
@@ -101,6 +101,26 @@ impl<'a, 'c, 'g> BuildStorage<'a, 'c, 'g> {
     pub(in crate::graph) fn string(&mut self, text: &str) -> Result<String, LoadError> {
         self.charge(saturating_size(text.len()))?;
         self.memory.string(text).map_err(|cause| self.error(&cause))
+    }
+
+    /// The typed loss term of `value`: a blank node with its label and, outside
+    /// the default scope, its scope ordinal; any other term by its lexical text.
+    pub(super) fn loss_term(&mut self, value: &TermValue) -> Result<LossTerm, LoadError> {
+        let TermValue::Blank { label, scope } = value else {
+            return Ok(LossTerm::Iri(self.lexical(value)?));
+        };
+        let label = self.string(label)?;
+        let scope = if *scope == BlankScope::DEFAULT {
+            None
+        } else {
+            self.charge(10)?;
+            let text = self
+                .memory
+                .format(&format_args!("{}", scope.ordinal()))
+                .map_err(|cause| self.error(&cause))?;
+            Some(text)
+        };
+        Ok(LossTerm::Blank { label, scope })
     }
 
     pub(super) fn lexical(&mut self, value: &TermValue) -> Result<String, LoadError> {

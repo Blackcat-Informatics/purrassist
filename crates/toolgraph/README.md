@@ -91,12 +91,12 @@ remain the separate `OutputByteLimit` contract.
 
 The direct `plain_tool_schemas` example adopts the supported upstream profile of
 `purrdf_shapes::json_schema::compile_tool_arguments` from the released
-`purrdf-shapes` 4 series (`PurRDF` #788 / PR #806 and numeric prerequisite
+`purrdf-shapes` 5 series (`PurRDF` #788 / PR #806 and numeric prerequisite
 #885 / PR #888).
 Run `cargo run -p purrassist-toolgraph --example plain_tool_schemas` to compile
 the four worked input/output schemas and validate bare instances and invalid
 neighbors with the full first-party core validator. Focused tests cover nested
-input/output bindings, exact constraints, source-located losses and native typed
+input/output bindings, exact constraints, typed-subject losses and native typed
 refusals. Source/profile preparation is caller-owned. Native work/bytes/nodes
 ceilings are logical bounds; they do not provide complete process heap or
 cancellation governance. The numeric consumer completes G7 under #43, extending

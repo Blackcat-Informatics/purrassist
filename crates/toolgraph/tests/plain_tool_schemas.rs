@@ -9,6 +9,7 @@ pub mod fixtures;
 
 use fixtures::{LIMITS, PREFIXES, binding, namespaces, profile};
 use purrassist_core::{Budget, Governor, json, schema::Schema};
+use purrdf_core::loss::{LossSubject, LossTerm};
 use purrdf_shapes::json_schema::{
     ToolArgumentProfile, ToolRepresentationError, ToolSchemaError, ToolSchemaLimits, compile,
     compile_tool_arguments,
@@ -190,8 +191,8 @@ ex:Lossy a sh:NodeShape; sh:datatype xsd:integer; sh:equals ex:other.
     )
     .unwrap();
     for (code, subject) in [
-        ("sh:equals", "<https://example.org/tools/Lossy>"),
-        ("sh:not", "<https://example.org/tools/Args>"),
+        ("sh:equals", "https://example.org/tools/Lossy"),
+        ("sh:not", "https://example.org/tools/Args"),
     ] {
         assert!(
             compiled
@@ -199,11 +200,7 @@ ex:Lossy a sh:NodeShape; sh:datatype xsd:integer; sh:equals ex:other.
                 .entries()
                 .iter()
                 .any(|entry| entry.code == code
-                    && entry
-                        .location
-                        .as_deref()
-                        .and_then(|location| location.subject.as_deref())
-                        == Some(subject)),
+                    && entry.subject == LossSubject::Term(LossTerm::Iri(subject.to_owned()))),
             "{code} at {subject}"
         );
     }
@@ -315,7 +312,7 @@ fn legacy_jsonld_schema_and_openapi_goldens_from_previous_pin_are_unchanged() {
         SchemaSurfaceMode::ShapedOnly,
     );
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
     let compiled =
         compile_schema(&request, &mut control).expect("original public JSON-LD compiler");
     assert_eq!(compiled.compiled.schema_json, legacy::SCHEMA);
@@ -441,9 +438,10 @@ fn ieee_domain_residuals_are_registered_and_keep_the_source() {
         assert!(
             compiled.losses.entries().iter().any(|entry| {
                 entry.code == "plain:ieee-representability"
-                    && entry.location.as_deref().is_some_and(|location| {
-                        location.subject.as_deref() == Some("<https://example.org/tools/Args>")
-                    })
+                    && entry.subject
+                        == LossSubject::Term(LossTerm::Iri(
+                            "https://example.org/tools/Args".to_owned(),
+                        ))
             }),
             "{datatype}: {:?}",
             compiled.losses

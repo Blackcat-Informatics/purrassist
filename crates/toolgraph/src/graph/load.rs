@@ -19,12 +19,12 @@ use purrassist_core::{
     output::FieldMask,
 };
 use purrdf_core::{
-    NativeBuildError, RdfDataset, RdfDatasetBuilder, RdfLocation, TermId, TermRef, TermValue,
+    NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
     blank_label::{LabelAlphabet, encode_blank_label_with_memory},
     dataset_from_view,
     dataset_view::DatasetView,
     fno::{FnBlank, FnoCatalog, FnoFieldKind, FnoReadError, FnoReadFailure},
-    loss::{LossEntry, LossLedger},
+    loss::{LossEntry, LossLedger, LossSite, LossSubject},
 };
 use purrdf_lex::{
     allocation::{Admission, Memory, OrderedTable, OwnedAdmission, StorageError},
@@ -1427,10 +1427,7 @@ impl Doc<'_> {
             storage.charge(1)?;
             if row.uses_mapping_alias() {
                 let definition = FNOM_MAPPING_NORMALIZATION;
-                let location = RdfLocation {
-                    subject: Some(Self::scoped_reference(&row.s, storage)?),
-                    ..RdfLocation::default()
-                };
+                let subject = storage.loss_term(&row.s)?;
                 storage.record_loss(
                     ledger,
                     LossEntry {
@@ -1438,9 +1435,11 @@ impl Doc<'_> {
                         from: definition.from,
                         to: definition.to,
                         note: definition.description,
-                        location: None,
+                        site: LossSite::Unspecified,
+                        subject: LossSubject::Absent,
+                        detail: Vec::new(),
                     },
-                    location,
+                    subject,
                     progress,
                 )?;
             }

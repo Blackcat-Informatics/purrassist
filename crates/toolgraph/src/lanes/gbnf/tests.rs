@@ -1541,7 +1541,9 @@ fn upstream_schema_losses_name_the_check_for_their_original_direction() {
     ] {
         let entry = carried.next().expect("carried native loss");
         assert_eq!(entry.code, code);
-        assert_eq!(entry.location, original.location);
+        assert_eq!(entry.site, original.site);
+        assert_eq!(entry.subject, original.subject);
+        assert_eq!(entry.detail, original.detail);
         assert!(entry.note.contains(original.note.as_ref()));
         assert!(entry.note.ends_with(check), "{}", entry.note);
     }

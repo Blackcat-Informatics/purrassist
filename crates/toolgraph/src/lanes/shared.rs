@@ -9,10 +9,7 @@
 use std::borrow::Cow;
 
 use purrassist_core::json::{self, Node, Value};
-use purrdf_core::{
-    diagnostic::RdfLocation,
-    loss::{LossEntry, LossLedger},
-};
+use purrdf_core::loss::{LossDetail, LossEntry, LossLedger, LossSite, LossSubject, LossTerm};
 
 use crate::{ProjectionTarget, SOURCE_REPRESENTATION, Tool};
 
@@ -28,13 +25,14 @@ pub(super) fn entry_for(
         from: Cow::Borrowed(SOURCE_REPRESENTATION),
         to: Cow::Borrowed(target.representation()),
         note: Cow::Owned(note),
-        location: subject.map(|(iri, member)| {
-            Box::new(RdfLocation {
-                subject: Some(iri.to_owned()),
-                logical: Some(member.to_owned()),
-                ..RdfLocation::default()
-            })
+        site: LossSite::Unspecified,
+        subject: subject.map_or(LossSubject::Absent, |(iri, _)| {
+            LossSubject::Term(LossTerm::Iri(iri.to_owned()))
         }),
+        detail: subject
+            .map(|(_, member)| LossDetail::identifier("member", member))
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -62,7 +60,9 @@ pub(super) fn upstream_loss(
         entry.code, entry.note
     );
     LossEntry {
-        location: entry.location.clone(),
+        site: entry.site.clone(),
+        subject: entry.subject.clone(),
+        detail: entry.detail.clone(),
         ..entry_for(target, code, note, None)
     }
 }
