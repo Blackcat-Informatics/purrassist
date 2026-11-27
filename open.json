@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "issue": 307,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0",
+  "branch": "paudley/307-release-purrassist-0-2-0",
+  "slug": "release-purrassist-0-2-0",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "ddcd585ca2752aaee944b5421eb43759b99dfded",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0",
+    "branch:paudley/307-release-purrassist-0-2-0",
+    "ignored:7 files (7 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/303-bring-the-default-test-suite-under caches into /home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0 plus 0 dependency units from 0 other checkouts in 1.7s; 2173 unchanged files keep their built mtimes; 61 other files take the seed time and rebuild; 0 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0",
+    "issue:/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-27T13:14:00-0600",
+  "seed_error": "",
+  "tracker": ""
+}

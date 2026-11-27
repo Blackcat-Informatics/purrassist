@@ -1,0 +1,142 @@
+{
+  "issue": 307,
+  "pr_number": 308,
+  "branch": "paudley/307-release-purrassist-0-2-0",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0",
+  "observed_at": "2026-11-27T22:02:11.795682+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "next_actions": [],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "ddcd585ca2752aaee944b5421eb43759b99dfded",
+    "headRefName": "paudley/307-release-purrassist-0-2-0",
+    "headRefOid": "87c74c45a1e9c7b9f62177ef72d06bce0b14b3c8",
+    "isCrossRepository": false,
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 308,
+    "state": "OPEN",
+    "title": "Release PurRAssist 0.2.0: version, marker and changelog",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/308"
+  },
+  "checks": {
+    "state": "pass",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46065671375/job/140730263698",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46065671375/job/140730263726",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46065671375/job/140730263699",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46065671375/job/140730263678",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46065671375/job/140730263574",
+        "name": "fuzz",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46065671375/job/140730263578",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46065671375/job/140730263301",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "87c74c45a1e9c7b9f62177ef72d06bce0b14b3c8",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "87c74c45a1e9c7b9f62177ef72d06bce0b14b3c8",
+    "branch": "paudley/307-release-purrassist-0-2-0",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 308,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #308 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 9,
+      "bytes": 12051,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "ddcd585ca2752aaee944b5421eb43759b99dfded",
+      "head": "87c74c45a1e9c7b9f62177ef72d06bce0b14b3c8",
+      "status": "clean"
+    }
+  }
+}
