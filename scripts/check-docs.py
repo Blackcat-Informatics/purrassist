@@ -656,8 +656,6 @@ def load_limitations(docs, report, targets):
                                             f'scripts/fuzz.py TARGETS {list(targets)}')
             if len(set(stops)) != len(stops):
                 report.add(rule, label, f'{STOP_TARGETS_KEY} lists a target twice')
-    if not entries:
-        report.add(rule, KNOWN_LIMITATIONS_JSON, 'lists no limitations')
     return data if len(report.errors) == problems else None
 
 

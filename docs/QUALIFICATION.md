@@ -33,9 +33,9 @@ procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 | Tool-call surfaces | host `tool_call_tools`, CLI `tool_calls_cli` and `protocol` | `recover_tool_calls` MCP tool and `recover-tool-calls` command equal direct core recovery; raw-byte input with invalid UTF-8 recorded; exit codes |
 | Independent syntax | `make syntax-oracles` | 15 positive/negative Python, Rust, JavaScript/JSX, TypeScript/TSX compiler probes |
 | Correction quality | `correction_evaluation`, `matching_oracle` | Four provenance-bound corpora, risk/coverage sweeps, exact distance and path oracles |
-| Coverage-guided/differential probes | `make fuzz` (see [Known limitations](#known-limitations)) | Eleven targets (including `provider-log`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons. The default `make fuzz` stops on the #11 signatures, so the historical reports do not establish a passing default run for `tool-call-ref` |
+| Coverage-guided/differential probes | `make fuzz` (see [Known limitations](#known-limitations)) | Eleven targets (including `provider-log`), retained source-region novelty, exact failure replay, V8/cmark-gfm comparisons. The default `make fuzz` stops on no known signature, but the historical reports do not establish a passing default run for `tool-call-ref` |
 | Typed tool definitions (`purrassist-derive`) | `crates/derive/tests/derive.rs`, `crates/derive/tests/crate_override.rs`, the `compile_fail` doctests in `crates/derive/src/lib.rs` (each rejected construct with a passing twin) and the derive README doctest, `crates/derive/src/{model,write,parse}.rs` unit tests (including the default-number agreement test against core's JSON parser), `crates/purrassist/tests/derive_facade.rs`, `crates/host/tests/derive_facade.rs`, core `tool_call::derive_support` unit tests and doctests, and `scripts/check-repository.py`'s README derive-example drift check | Derived definitions equal hand-built ones; recovery through `hermes.v1` and `qwen3-coder-xml.v1` converts to the struct with exact `FromNodeError` pointers; single-pass member classification (duplicate vs. missing vs. unknown); defaults, naming, `extra`, hygiene against shadowed names, recursion and every rejected input; nested undeclared members dropped with a recorded loss unless the nested struct declares `unknown`; `f32` and `Box<T>` fields; the `#[tool(crate = ..)]` override; the `__DERIVE_ABI_<major>_<minor>` marker; facade derives work with no direct core dependency; the crate has no dependencies (`make hygiene` audit) |
-| Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone; see [Known limitations](#known-limitations)) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking. The probe checks for panics, budget overruns, mutating-guess guards and span invariants, but the default `make fuzz` stops on the #11 signatures and neither tool-call target has a recorded 10,000-mutation baseline; see [FUZZING.md](FUZZING.md) |
+| Tool-call fuzzing | `make fuzz` (`TARGET=tool-call` alone; see [Known limitations](#known-limitations)) | Raw-byte model turns over every built-in dialect with fuzzed policy, stop, reasoning, tool choice, effort, ambiguity and chunking. The probe checks for panics, budget overruns, mutating-guess guards and span invariants, but the default `make fuzz` stops on no known signature, and neither tool-call target has a recorded 10,000-mutation baseline; see [FUZZING.md](FUZZING.md) |
 | Structural helper detector | `make helper-test`, `make helper-census`, `make helper-check` | syn-based normalized body/shim/constant/table census, strict ledger validity and exact group enforcement; repository tooling only |
 | Local release artifacts | `make package` | Six Cargo-verified archives in dependency order; source identity and registered notice audit |
 
@@ -263,25 +263,18 @@ consolidation report for the source-bound census and review decisions.
 
 ## Known limitations
 
-These remaining limitations were recorded on 2026-10-26. The 0.1.0 release
-accepted them without blocking publication. The list
+No limitation remains open at 0.2.0. The recorded list is empty and
 matches its single source, [known-limitations.json](known-limitations.json);
 `scripts/check-docs.py` compares the two.
 
-- [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
-- [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
-- [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
-- [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
-- [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
-
-The default `make fuzz` stops on the #11 signatures: the recorded
-`tool-call-ref` campaign exceeded the default 10 s `--timeout` at execution
-682. [FUZZING.md](FUZZING.md) records that slow input and the limits of the
-historical campaigns. The two tool-call targets have no recorded
-10,000-mutation baseline. `make fuzz-hosted`, which the CI `fuzz` job and
-the pre-tag checklist in [RELEASE.md](RELEASE.md) run (separately from
-`make release-gate`), gives `tool-call-ref` a 120 s timeout for #11. Every
-probe panic fails both fuzz commands.
+The default `make fuzz` stops on no known signature. The recorded
+`tool-call-ref` campaign of the earlier implementation exceeded the default
+10 s `--timeout` at execution 682; [FUZZING.md](FUZZING.md) records that slow
+input and the limits of the historical campaigns. The two tool-call targets
+have no recorded 10,000-mutation baseline. `make fuzz-hosted`, which the CI
+`fuzz` job and the pre-tag checklist in [RELEASE.md](RELEASE.md) run
+(separately from `make release-gate`), uses the same default probe timeout for
+every target. Every probe panic fails both fuzz commands.
 
 ## Qualification commands
 
@@ -319,7 +312,7 @@ file, applies a journaled replacement, conditionally undoes it, and requires
 byte-exact restoration. Pipe writes and response reads have bounded timeouts,
 with child cleanup tested for missing responses, partial output, and stderr
 flooding. Until the real acceptance steps execute, 0.2.0 is not
-claimed as published and issue #1 remains open.
+claimed as published.
 
 
 ## Historical: Stage 2 record bound to `66b3756`

@@ -7,6 +7,7 @@
 | Version | Supported |
 |---|---|
 | 0.2.x | Yes. 0.2.0 is not yet tagged `rust-v0.2.0`. |
+| 0.1.x | Yes. 0.1.0 is the release on crates.io. |
 | 0.0.0 | No. These are name reservations on crates.io and contain no code. |
 
 ## Reporting a vulnerability

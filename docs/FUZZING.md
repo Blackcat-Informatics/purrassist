@@ -861,19 +861,12 @@ HTML answers. Mandatory campaign acceptance remains unchanged.
 
 ## Known limitations
 
-These remaining limitations were recorded on 2026-10-26. The 0.1.0 release
-accepted them without blocking publication. The list
+No limitation remains open at 0.2.0. The recorded list is empty and
 matches its single source, [known-limitations.json](known-limitations.json);
 `scripts/check-docs.py` compares the two.
 
-- [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
-- [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
-- [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
-- [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
-- [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
-
-The default `make fuzz` stops on the #11 signatures. "Known slow input
-(issue #11)" below records the historical timeout and its request. The
+The default `make fuzz` stops on no known signature. The "Known slow input"
+section below records the historical timeout and its request. The
 baseline table records `none` for the two tool-call targets, which have no
 10,000-mutation baseline. Rejected-span oracle panics fail every campaign.
 

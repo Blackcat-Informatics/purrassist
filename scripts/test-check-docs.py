@@ -52,16 +52,58 @@ def link_or_copy(source, target):
         shutil.copy2(source, target)
 
 
-# The checkout's 0.1.0 changelog heading, whose status is `unreleased` until the
-# release commit replaces it with the tagging date.
-CHANGELOG_HEADING = re.search(r'(?m)^## \[0\.1\.0\] - .+$',
+def _workspace_version():
+    manifest = (ROOT / 'Cargo.toml').read_text(encoding='utf-8')
+    return re.search(r'(?ms)^\[workspace\.package\].*?^version = "(\d+\.\d+\.\d+)"', manifest).group(1)
+
+
+# The checkout's workspace version, the next patch and the next minor version, and the
+# regex source that matches the version literally.
+VERSION = _workspace_version()
+MAJOR, MINOR, PATCH = (int(part) for part in VERSION.split('.'))
+NEXT_PATCH = f'{MAJOR}.{MINOR}.{PATCH + 1}'
+NEXT_MINOR = f'{MAJOR}.{MINOR + 1}.0'
+VERSION_RE = re.escape(VERSION)
+
+# The checkout's changelog heading for the workspace version, whose status is `unreleased`
+# until the release commit replaces it with the tagging date.
+CHANGELOG_HEADING = re.search(rf'(?m)^## \[{VERSION_RE}\] - .+$',
                               (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')).group(0)
 
 
-class Tree:
-    """A temporary copy of the documents and fact sources."""
+# The checkout records no limitation at the workspace version. The fixtures that test how the
+# checker reads a limitation, a stop or a changelog subsection need entries to break, so a
+# seeded tree carries this list (the five limitations recorded for 0.1.0, one of which stops
+# the default `make fuzz`) in the source file and in all three holders.
+SEEDED = {
+    'observed': '2026-10-26',
+    'observation': 'a fixture list, not the checkout record',
+    'limitations': [
+        {'issue': 7, 'title': "Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits",
+         'impact': "Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.",
+         'blocks_release': False},
+        {'issue': 10, 'title': 'Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time',
+         'impact': 'A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.',
+         'blocks_release': False},
+        {'issue': 11, 'title': 'Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes)',
+         'impact': 'One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`.',
+         'blocks_release': False, 'fuzz_stop_targets': ['tool-call-ref']},
+        {'issue': 16, 'title': 'Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress)',
+         'impact': 'There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.',
+         'blocks_release': False},
+        {'issue': 18, 'title': 'Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1)',
+         'impact': 'Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.',
+         'blocks_release': False},
+    ],
+}
+ISSUES = 'https://github.com/Blackcat-Informatics/purrassist/issues'
 
-    def __init__(self, test):
+
+class Tree:
+    """A temporary copy of the documents and fact sources. Unless `seeded` is false, the
+    limitations are the SEEDED list rather than the checkout's."""
+
+    def __init__(self, test, seeded=True):
         directory = tempfile.TemporaryDirectory()
         test.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
@@ -77,6 +119,20 @@ class Tree:
             if not target.exists() and not target.is_symlink():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 link_or_copy(ROOT / name, target)
+        if seeded:
+            self.seed_limitations()
+
+    def seed_limitations(self):
+        self.save_limitations(SEEDED)
+        bullets = '\n'.join(f'- [#{entry["issue"]}]({ISSUES}/{entry["issue"]}) {entry["title"]}. {entry["impact"]}'
+                            for entry in SEEDED['limitations'])
+        self.sub('docs/QUALIFICATION.md', r'stops on no known signature, but the historical', 'stops on the #11 signatures, so the historical')
+        self.sub('docs/QUALIFICATION.md', r'stops on no known signature, and neither', 'stops on the #11 signatures and neither')
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            self.sub(name, r'No limitation remains open at .*?compares the two\.',
+                     'These limitations are recorded.\n\n' + bullets)
+            self.sub(name, r'stops on no known signature', 'stops on the #11 signatures', count=0)
+        self.sub('CHANGELOG.md', r'No limitation is recorded at .*?variants\.', 'These limitations are recorded.\n\n' + bullets)
 
     def copy(self, name):
         target = self.root / name
@@ -127,8 +183,8 @@ class Tree:
 
 
 class Case(unittest.TestCase):
-    def tree(self):
-        return Tree(self)
+    def tree(self, seeded=True):
+        return Tree(self, seeded)
 
     def assertFails(self, errors, rule, *needles):
         matching = [error for error in errors if error.startswith(f'[{rule}] ')]
@@ -256,20 +312,20 @@ class ReleaseSet(Case):
 class WorkspaceVersion(Case):
     def test_a_version_bump_fails_every_restatement(self):
         tree = self.tree()
-        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
+        tree.replace('Cargo.toml', f'version = "{VERSION}"', f'version = "{NEXT_PATCH}"', count=0)
         errors = tree.errors()
         for name in ('docs/RELEASE.md', 'docs/IMPLEMENTATION.md', 'docs/QUALIFICATION.md', 'SECURITY.md', 'README.md'):
-            self.assertFails(errors, 'workspace-version', name, '0.2.0')
+            self.assertFails(errors, 'workspace-version', name, NEXT_PATCH)
 
     def test_a_stale_tag_in_the_status_line_fails(self):
         tree = self.tree()
-        tree.sub('SECURITY.md', r'rust-v0\.1\.0', 'rust-v0.0.9')
+        tree.sub('SECURITY.md', rf'rust-v{VERSION_RE}', 'rust-v0.0.9')
         self.assertFails(tree.errors(), 'workspace-version', 'SECURITY.md', '0.0.9')
 
-    PUBLISHED = 'published as `rust-v0.1.0`'
-    UNPUBLISHED = 'not yet tagged `rust-v0.1.0`'
+    PUBLISHED = f'published as `rust-v{VERSION}`'
+    UNPUBLISHED = f'not yet tagged `rust-v{VERSION}`'
     # Either status form, so the fixtures hold before and after publication.
-    EITHER = r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`'
+    EITHER = rf'(?i:not yet tagged|published as)\s+`rust-v{VERSION_RE}`'
 
     def publish(self, tree, names):
         for name in names:
@@ -292,12 +348,12 @@ class WorkspaceVersion(Case):
                     self.publish(tree, CD.STATUS_DOCS)
                 else:
                     self.unpublish(tree, CD.STATUS_DOCS)
-                tree.sub('SECURITY.md', rf'{old}\s+`rust-v0\.1\.0`', f'{old} `rust-v0.0.9`')
+                tree.sub('SECURITY.md', rf'{old}\s+`rust-v{VERSION_RE}`', f'{old} `rust-v0.0.9`')
                 self.assertFails(tree.errors(), 'workspace-version', 'SECURITY.md', '0.0.9')
 
     def test_a_status_line_in_neither_form_is_not_found(self):
         tree = self.tree()
-        tree.sub('README.md', self.EITHER, 'out as `rust-v0.1.0`')
+        tree.sub('README.md', self.EITHER, f'out as `rust-v{VERSION}`')
         self.assertFails(tree.errors(), 'workspace-version', 'README.md', NOT_FOUND)
 
     def test_a_mix_of_published_and_unpublished_status_lines_fails(self):
@@ -313,14 +369,14 @@ class WorkspaceVersion(Case):
             with self.subTest(form=form):
                 tree = self.tree()
                 self.publish(tree, CD.STATUS_DOCS)
-                tree.sub('README.md', r'published as `rust-v0\.1\.0`', f'{form} `rust-v0.1.0`')
+                tree.sub('README.md', rf'published as `rust-v{VERSION_RE}`', f'{form} `rust-v{VERSION}`')
                 errors = tree.errors()
                 if form.lower().startswith('published'):
                     self.assertNoRule(errors, 'workspace-version')
                 else:
                     self.assertFails(errors, 'workspace-version', 'mix forms')
-                tree.sub('README.md', r'`rust-v0\.1\.0`', '`rust-v0.1.1`')
-                self.assertFails(tree.errors(), 'workspace-version', 'README.md', '0.1.1')
+                tree.sub('README.md', rf'`rust-v{VERSION_RE}`', f'`rust-v{NEXT_PATCH}`')
+                self.assertFails(tree.errors(), 'workspace-version', 'README.md', NEXT_PATCH)
 
     def test_a_capitalised_status_line_at_a_sentence_start_passes_unpublished(self):
         tree = self.tree()
@@ -677,9 +733,18 @@ class KnownLimitationsSource(Case):
         (tree.root / 'docs/known-limitations.json').unlink()
         self.assertFails(tree.errors(), 'missing-file', 'known-limitations.json')
 
-    def test_the_real_set_is_the_agreed_one(self):
+    def test_the_checkout_records_no_limitation_and_the_documents_agree(self):
         data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
-        self.assertEqual([entry['issue'] for entry in data['limitations']], [7, 10, 11, 16, 18])
+        self.assertEqual(data['limitations'], [])
+        errors = self.tree(seeded=False).errors()
+        self.assertNoRule(errors, 'known-limitations-source')
+        self.assertNoRule(errors, 'known-limitations-section')
+        self.assertNoRule(errors, 'fuzz-row-limits')
+
+    def test_an_empty_source_fails_documents_that_still_list_an_issue(self):
+        tree = self.tree(seeded=False)
+        tree.replace('docs/FUZZING.md', 'No limitation remains open at', 'Issue #7 stays open at')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', 'differs')
 
 
 class KnownLimitationsSection(Case):
@@ -909,12 +974,12 @@ class KnownLimitationsChangelog(Case):
 
     def limitations_block(self, tree):
         text = tree.read('CHANGELOG.md')
-        _, lines = CD.changelog_section(text, 'Unreleased')
+        _, lines = CD.changelog_section(text, VERSION)
         return self.HEADING + '\n\n' + CD.subsection(lines, self.HEADING) + '\n'
 
-    def test_current_limitations_are_in_unreleased_and_release_history_is_preserved(self):
+    def test_current_limitations_are_in_the_version_section_and_release_history_is_preserved(self):
         text = (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')
-        _, body = CD.changelog_section(text, 'Unreleased')
+        _, body = CD.changelog_section(text, VERSION)
         self.assertIn(self.HEADING, body)
         _, released = CD.changelog_section(text, '0.1.0')
         self.assertIn('- [#6]', '\n'.join(released))
@@ -929,29 +994,29 @@ class KnownLimitationsChangelog(Case):
     def test_a_sibling_level_two_section_is_outside_the_release_body(self):
         tree = self.tree()
         tree.replace('CHANGELOG.md', self.HEADING, '## Known limitations', count=0)
-        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[Unreleased]')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', f'[{VERSION}]')
 
     def test_the_subsection_outside_the_version_section_fails(self):
         tree = self.tree()
         block = self.limitations_block(tree)
         tree.replace('CHANGELOG.md', block.rstrip('\n'), '')
         tree.replace('CHANGELOG.md', '## [Unreleased]', block.rstrip('\n') + '\n\n## [Unreleased]')
-        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', '[Unreleased]')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one', f'[{VERSION}]')
 
     def test_a_second_subsection_in_the_version_section_fails(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, self.limitations_block(tree) + '\n' + CHANGELOG_HEADING)
+        tree.sub('CHANGELOG.md', r'(?m)^## \[0\.1\.0\]', self.limitations_block(tree) + '\n## [0.1.0]')
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'exactly one')
 
     def test_each_version_has_its_own_subsection_and_only_the_current_one_is_compared(self):
-        newer = '## [0.2.0] - 2027-01-01\n\nMore.\n\n### Known limitations\n\n- [#99](x) A later issue.\n\n'
+        newer = f'## [{NEXT_MINOR}] - 2027-01-01\n\nMore.\n\n### Known limitations\n\n- [#99](x) A later issue.\n\n'
         older = '\n## [0.0.9] - 2020-01-01\n\nEarlier.\n\n### Known limitations\n\n- [#98](x) An earlier issue.\n'
         tree = self.tree()
         tree.replace('CHANGELOG.md', CHANGELOG_HEADING, newer + CHANGELOG_HEADING)
         tree.append('CHANGELOG.md', older)
         errors = tree.errors()
         self.assertNoRule(errors, 'known-limitations-section')
-        self.assertFails(errors, 'changelog', '[0.2.0]', 'workspace version is 0.1.0')
+        self.assertFails(errors, 'changelog', f'[{NEXT_MINOR}]', f'workspace version is {VERSION}')
 
     def test_another_versions_subsection_does_not_satisfy_the_current_one(self):
         tree = self.tree()
@@ -960,10 +1025,10 @@ class KnownLimitationsChangelog(Case):
         tree.append('CHANGELOG.md', '\n## [0.0.9] - 2020-01-01\n\n' + block)
         self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', 'differs')
 
-    def test_a_missing_unreleased_section_fails(self):
+    def test_a_missing_version_section_fails(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', '## [Unreleased]', '## Current source')
-        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', '[Unreleased]')
+        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, '## Current source')
+        self.assertFails(tree.errors(), 'known-limitations-section', 'CHANGELOG.md', f'[{VERSION}]')
 
     def test_a_dropped_issue_fails(self):
         tree = self.tree()
@@ -999,18 +1064,18 @@ class KnownLimitationsChangelog(Case):
 class Changelog(Case):
     def test_a_workspace_version_bump_fails(self):
         tree = self.tree()
-        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
-        self.assertFails(tree.errors(), 'changelog', '[0.1.0]', 'workspace version is 0.2.0')
+        tree.replace('Cargo.toml', f'version = "{VERSION}"', f'version = "{NEXT_MINOR}"', count=0)
+        self.assertFails(tree.errors(), 'changelog', f'[{VERSION}]', f'workspace version is {NEXT_MINOR}')
 
     def test_a_changelog_version_that_differs_fails(self):
         tree = self.tree()
         tree.replace('CHANGELOG.md', CHANGELOG_HEADING, '## [0.0.9] - unreleased')
-        self.assertFails(tree.errors(), 'changelog', '[0.0.9]', 'workspace version is 0.1.0')
+        self.assertFails(tree.errors(), 'changelog', '[0.0.9]', f'workspace version is {VERSION}')
 
     def test_a_newer_unreleased_version_above_fails(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, '## [0.2.0] - unreleased\n\n## [0.1.0] - unreleased')
-        self.assertFails(tree.errors(), 'changelog', '[0.2.0]')
+        tree.replace('CHANGELOG.md', CHANGELOG_HEADING, f'## [{NEXT_MINOR}] - unreleased\n\n' + CHANGELOG_HEADING)
+        self.assertFails(tree.errors(), 'changelog', f'[{NEXT_MINOR}]')
 
     def test_a_crate_that_is_not_named_fails(self):
         release = CD.load_module(ROOT / 'scripts/check-release.py', 'purrassist_test_release')
@@ -1029,63 +1094,63 @@ class Changelog(Case):
 
     def test_no_version_heading_is_not_found(self):
         tree = self.tree()
-        tree.sub('CHANGELOG.md', r'## \[0\.1\.0\]', '## Version 0.1.0')
+        tree.sub('CHANGELOG.md', r'(?m)^## \[\d+\.\d+\.\d+\]', '## Version', count=0)
         self.assertFails(tree.errors(), 'changelog', NOT_FOUND)
 
-    SENTENCE = 'It is not yet tagged `rust-v0.1.0`; the date above is set when it is tagged.'
+    SENTENCE = f'It is not yet tagged `rust-v{VERSION}`; the date above is set when it is tagged.'
 
     def test_the_heading_carries_the_status_and_the_checkout_body_is_clean(self):
         # `unreleased` until the release commit sets the tagging date.
-        self.assertRegex(CHANGELOG_HEADING, r'^## \[0\.1\.0\] - (unreleased|\d{4}-\d{2}-\d{2})$')
+        self.assertRegex(CHANGELOG_HEADING, rf'^## \[{VERSION_RE}\] - (unreleased|\d{{4}}-\d{{2}}-\d{{2}})$')
         self.assertNoRule(self.tree().errors(), 'changelog')
 
     def test_the_release_body_must_not_say_it_is_not_yet_tagged(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', 'Release order:', self.SENTENCE + '\n\nRelease order:')
+        tree.replace('CHANGELOG.md', '### Added', self.SENTENCE + '\n\n### Added')
         self.assertFails(tree.errors(), 'changelog', 'release body', "'not yet tagged'")
 
     def test_the_sentence_wrapped_across_lines_is_still_found_with_its_line(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', 'Release order:', 'It is not yet\ntagged.\n\nRelease order:')
+        tree.replace('CHANGELOG.md', '### Added', 'It is not yet\ntagged.\n\n### Added')
         line = tree.read('CHANGELOG.md').splitlines().index('It is not yet') + 1
         self.assertFails(tree.errors(), 'changelog', f'CHANGELOG.md:{line}', "'not yet tagged'")
 
     def test_the_release_body_must_not_say_unreleased(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', 'Release order:', 'This Unreleased version follows.\n\nRelease order:')
+        tree.replace('CHANGELOG.md', '### Added', 'This Unreleased version follows.\n\n### Added')
         self.assertFails(tree.errors(), 'changelog', 'release body', "'Unreleased'")
 
     def test_the_release_body_must_not_claim_a_publication_order(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', 'Release order:', 'The crates are published in this order:')
+        tree.replace('CHANGELOG.md', '### Added', 'The crates are published in this order:\n\n### Added')
         self.assertFails(tree.errors(), 'changelog', 'release body', "'published in this order'")
 
     def test_another_section_may_say_unreleased(self):
         tree = self.tree()
-        tree.replace('CHANGELOG.md', '### Fixed', 'Unreleased changes are not yet tagged.\n\n### Fixed')
+        tree.replace('CHANGELOG.md', '### Compatibility', 'Unreleased changes are not yet tagged.\n\n### Compatibility')
         self.assertNoRule(tree.errors(), 'changelog')
 
     def test_a_missing_unreleased_heading_still_needs_the_version(self):
         tree = self.tree()
-        tree.sub('CHANGELOG.md', r'## \[Unreleased\].*?(?=## \[0\.1\.0\])', '')
+        tree.sub('CHANGELOG.md', rf'## \[Unreleased\].*?(?=## \[{VERSION_RE}\])', '')
         self.assertNoRule(tree.errors(), 'changelog')
 
 
 class SecurityPolicy(Case):
     def test_a_version_bump_without_a_table_row_fails(self):
         tree = self.tree()
-        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
-        self.assertFails(tree.errors(), 'security-policy', '0.2.x')
+        tree.replace('Cargo.toml', f'version = "{VERSION}"', f'version = "{NEXT_MINOR}"', count=0)
+        self.assertFails(tree.errors(), 'security-policy', f'{MAJOR}.{MINOR + 1}.x')
 
     def test_a_missing_table_row_is_not_found(self):
         tree = self.tree()
-        tree.sub('SECURITY.md', r'\| 0\.1\.x \|[^\n]*\n', '')
-        self.assertFails(tree.errors(), 'security-policy', NOT_FOUND, '0.1.x')
+        tree.sub('SECURITY.md', rf'\| {MAJOR}\.{MINOR}\.x \|[^\n]*\n', '')
+        self.assertFails(tree.errors(), 'security-policy', NOT_FOUND, f'{MAJOR}.{MINOR}.x')
 
     def test_a_row_for_another_minor_does_not_count(self):
         tree = self.tree()
-        tree.replace('SECURITY.md', '| 0.1.x |', '| 0.2.x |')
-        self.assertFails(tree.errors(), 'security-policy', '0.1.x')
+        tree.replace('SECURITY.md', f'| {MAJOR}.{MINOR}.x |', f'| {MAJOR}.{MINOR + 1}.x |')
+        self.assertFails(tree.errors(), 'security-policy', f'{MAJOR}.{MINOR}.x')
 
     def test_a_missing_email_channel_fails(self):
         tree = self.tree()
@@ -1578,7 +1643,7 @@ class PackagedReadmes(Case):
 
     def test_a_pinned_docs_rs_link_passes(self):
         tree = self.tree()
-        tree.append('crates/derive/README.md', '\nSee https://docs.rs/purrassist-core/0.1.0/purrassist_core/.\n')
+        tree.append('crates/derive/README.md', f'\nSee https://docs.rs/purrassist-core/{VERSION}/purrassist_core/.\n')
         self.assertNoRule(tree.errors(), 'packaged-readmes')
 
     def test_a_missing_readme_fails(self):
@@ -1601,14 +1666,14 @@ class PinnedLinks(Case):
 
     def test_a_pinned_link_to_an_existing_path_and_anchor_passes(self):
         tree = self.tree()
-        tree.append('crates/host/README.md', f'\nSee {self.BASE}/blob/rust-v0.1.0/docs/QUALIFICATION.md#known-limitations,'
-                                             f' {self.BASE}/tree/rust-v0.1.0/docs and {self.BASE}/issues/6 and {self.BASE}.\n')
+        tree.append('crates/host/README.md', f'\nSee {self.BASE}/blob/rust-v{VERSION}/docs/QUALIFICATION.md#known-limitations,'
+                                             f' {self.BASE}/tree/rust-v{VERSION}/docs and {self.BASE}/issues/6 and {self.BASE}.\n')
         self.assertNoRule(tree.errors(), 'pinned-links')
 
     def test_a_main_link_in_a_crate_readme_fails(self):
         tree = self.tree()
         tree.append('crates/core/README.md', f'\nSee [x]({self.BASE}/blob/main/docs/QUALIFICATION.md).\n')
-        self.assertFails(tree.errors(), 'pinned-links', 'crates/core/README.md', "'main'", 'rust-v0.1.0')
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/core/README.md', "'main'", f'rust-v{VERSION}')
 
     def test_another_tag_fails(self):
         tree = self.tree()
@@ -1617,18 +1682,18 @@ class PinnedLinks(Case):
 
     def test_a_pinned_link_to_a_missing_path_fails(self):
         tree = self.tree()
-        tree.append('crates/syntax/README.md', f'\nSee {self.BASE}/blob/rust-v0.1.0/docs/NOPE.md.\n')
+        tree.append('crates/syntax/README.md', f'\nSee {self.BASE}/blob/rust-v{VERSION}/docs/NOPE.md.\n')
         self.assertFails(tree.errors(), 'pinned-links', 'crates/syntax/README.md', 'docs/NOPE.md', 'does not exist')
 
     def test_a_pinned_link_to_a_missing_anchor_fails(self):
         tree = self.tree()
-        tree.append('crates/cli/README.md', f'\nSee {self.BASE}/blob/rust-v0.1.0/docs/QUALIFICATION.md#no-such-heading.\n')
+        tree.append('crates/cli/README.md', f'\nSee {self.BASE}/blob/rust-v{VERSION}/docs/QUALIFICATION.md#no-such-heading.\n')
         self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/README.md', 'heading that does not exist')
 
     def test_a_main_documentation_link_fails(self):
         tree = self.tree()
         tree.detach('crates/cli/Cargo.toml')
-        tree.replace('crates/cli/Cargo.toml', '/blob/rust-v0.1.0/docs/TOOLS.md', '/blob/main/docs/TOOLS.md')
+        tree.replace('crates/cli/Cargo.toml', f'/blob/rust-v{VERSION}/docs/TOOLS.md', '/blob/main/docs/TOOLS.md')
         self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/Cargo.toml', "'main'")
 
     def test_a_pinned_documentation_link_to_a_missing_path_fails(self):
@@ -1639,8 +1704,8 @@ class PinnedLinks(Case):
 
     def test_the_tag_follows_the_workspace_version(self):
         tree = self.tree()
-        tree.replace('Cargo.toml', 'version = "0.1.0"', 'version = "0.2.0"', count=0)
-        self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/README.md', "'rust-v0.1.0'", 'rust-v0.2.0')
+        tree.replace('Cargo.toml', f'version = "{VERSION}"', f'version = "{NEXT_PATCH}"', count=0)
+        self.assertFails(tree.errors(), 'pinned-links', 'crates/cli/README.md', f"'rust-v{VERSION}'", f'rust-v{NEXT_PATCH}')
 
     def test_the_repository_owner_and_name_match_in_any_case(self):
         tree = self.tree()
@@ -1649,7 +1714,7 @@ class PinnedLinks(Case):
         self.assertFails(tree.errors(), 'pinned-links', 'crates/core/README.md', "'main'")
         tree = self.tree()
         tree.append('crates/core/README.md',
-                    '\nSee https://github.com/blackcat-informatics/PurRAssist/blob/rust-v0.1.0/docs/QUALIFICATION.md.\n')
+                    f'\nSee https://github.com/blackcat-informatics/PurRAssist/blob/rust-v{VERSION}/docs/QUALIFICATION.md.\n')
         self.assertNoRule(tree.errors(), 'pinned-links')
 
     def test_the_root_readme_may_link_main(self):
@@ -1841,14 +1906,14 @@ ABSENT = (
     ('release-set', 'docs/RELEASE.md', r'The release set is six crates', 'The release set has crates'),
     ('release-set', 'docs/QUALIFICATION.md', r'Six Cargo-verified archives', 'Cargo-verified archives'),
     ('release-set', 'docs/QUALIFICATION.md', r'all six downloadable archives', 'the downloadable archives'),
-    ('workspace-version', 'docs/RELEASE.md', r'PurRAssist 0\.1\.0 has an implemented scope', 'PurRAssist has an implemented scope'),
-    ('workspace-version', 'docs/IMPLEMENTATION.md', r'Workspace version 0\.1\.0;', 'Workspace version:'),
-    ('workspace-version', 'docs/QUALIFICATION.md', r'implemented 0\.1\.0 capability', 'implemented capability'),
-    ('workspace-version', 'README.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'SECURITY.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'docs/IMPLEMENTATION.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'docs/QUALIFICATION.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
-    ('workspace-version', 'docs/RELEASE.md', r'(?i:not yet tagged|published as)\s+`rust-v0\.1\.0`', 'untagged'),
+    ('workspace-version', 'docs/RELEASE.md', rf'PurRAssist {VERSION_RE} has an implemented scope', 'PurRAssist has an implemented scope'),
+    ('workspace-version', 'docs/IMPLEMENTATION.md', rf'Workspace version {VERSION_RE};', 'Workspace version:'),
+    ('workspace-version', 'docs/QUALIFICATION.md', rf'implemented {VERSION_RE} capability', 'implemented capability'),
+    ('workspace-version', 'README.md', rf'(?i:not yet tagged|published as)\s+`rust-v{VERSION_RE}`', 'untagged'),
+    ('workspace-version', 'SECURITY.md', rf'(?i:not yet tagged|published as)\s+`rust-v{VERSION_RE}`', 'untagged'),
+    ('workspace-version', 'docs/IMPLEMENTATION.md', rf'(?i:not yet tagged|published as)\s+`rust-v{VERSION_RE}`', 'untagged'),
+    ('workspace-version', 'docs/QUALIFICATION.md', rf'(?i:not yet tagged|published as)\s+`rust-v{VERSION_RE}`', 'untagged'),
+    ('workspace-version', 'docs/RELEASE.md', rf'(?i:not yet tagged|published as)\s+`rust-v{VERSION_RE}`', 'untagged'),
     ('fuzz-targets', 'docs/FUZZING.md', r'across\s+eleven\s+`purrassist-core`\s+targets', 'across the targets'),
     ('fuzz-targets', 'docs/FUZZING.md', r'all\s+eleven\s+targets', 'every target'),
     ('fuzz-targets', 'docs/QUALIFICATION.md', r'Eleven targets \(including', 'Targets, including'),
