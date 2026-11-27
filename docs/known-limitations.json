@@ -1,5 +1,12 @@
 {
   "observed": "2026-11-27",
-  "observation": "no remaining limitations at 0.2.0; issues 7, 10, 11, 16 and 18 are closed",
-  "limitations": []
+  "observation": "one remaining limitation at 0.2.0; issues 7, 10, 11, 16 and 18 are closed and issue 309 is open",
+  "limitations": [
+    {
+      "issue": 309,
+      "title": "Tool-call recovery: CLI streaming mode, MCP progress and the unfinished stream guarantees",
+      "impact": "There is no CLI `--stream` option and no MCP progress reporting for recovery, and the live semantic-prefix equivalence and semantic-search revision guarantees of `ToolCallStream` remain unfinished.",
+      "blocks_release": false
+    }
+  ]
 }

@@ -265,12 +265,15 @@ derive support marker becomes `__DERIVE_ABI_0_2`.
 
 ### Known limitations
 
-No limitation is recorded at 0.2.0. The list is empty and matches its single
+This remaining limitation was recorded on 2026-11-27. The 0.2.0 release
+accepts it without blocking publication. The list matches its single
 source, [known-limitations.json](docs/known-limitations.json);
-`scripts/check-docs.py` compares the two. The limitations recorded for 0.1.0
-are resolved: the audit of the earlier tool-call work, the cost of restarted
-DeepSeek-V3.1 sections, the repair search's work charging, the streaming
-recognizer and the special-token-stripped dialect variants.
+`scripts/check-docs.py` compares the two. The other limitations recorded for
+0.1.0 are resolved: the audit of the earlier tool-call work, the cost of
+restarted DeepSeek-V3.1 sections, the repair search's work charging and the
+special-token-stripped dialect variants.
+
+- [#309](https://github.com/Blackcat-Informatics/purrassist/issues/309) Tool-call recovery: CLI streaming mode, MCP progress and the unfinished stream guarantees. There is no CLI `--stream` option and no MCP progress reporting for recovery, and the live semantic-prefix equivalence and semantic-search revision guarantees of `ToolCallStream` remain unfinished.
 
 ## [0.1.0] - 2026-10-13
 

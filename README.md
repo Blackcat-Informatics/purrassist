@@ -315,7 +315,7 @@ Resource profiling is available with `make resources`; see [measurement scope an
 Coverage-guided campaigns for each of the eleven targets are available with
 `make fuzz TARGET=<target>` (for example `TARGET=json`); see
 [properties, replay, and qualification limits](docs/FUZZING.md). The historical slow input is recorded in that document;
-[known limitations](docs/QUALIFICATION.md#known-limitations) lists none open.
+[known limitations](docs/QUALIFICATION.md#known-limitations) lists the one open limitation.
 Every probe panic fails the campaign.
 
 ## Conformance

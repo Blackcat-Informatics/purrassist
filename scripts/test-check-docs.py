@@ -129,10 +129,10 @@ class Tree:
         self.sub('docs/QUALIFICATION.md', r'has no recorded stop signature, but the historical', 'stops on the #11 signatures, so the historical')
         self.sub('docs/QUALIFICATION.md', r'has no recorded stop signature, and neither', 'stops on the #11 signatures and neither')
         for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
-            self.sub(name, r'No limitation remains open at .*?compares the two\.',
+            self.sub(name, r'This remaining limitation was recorded on .*?\n- \[#309\][^\n]*',
                      'These limitations are recorded.\n\n' + bullets)
             self.sub(name, r'has no recorded stop signature', 'stops on the #11 signatures', count=0)
-        self.sub('CHANGELOG.md', r'No limitation is recorded at .*?variants\.', 'These limitations are recorded.\n\n' + bullets)
+        self.sub('CHANGELOG.md', r'This remaining limitation was recorded on .*?\n- \[#309\][^\n]*', 'These limitations are recorded.\n\n' + bullets)
 
     def copy(self, name):
         target = self.root / name
@@ -733,41 +733,52 @@ class KnownLimitationsSource(Case):
         (tree.root / 'docs/known-limitations.json').unlink()
         self.assertFails(tree.errors(), 'missing-file', 'known-limitations.json')
 
-    def test_the_checkout_records_no_limitation_and_the_documents_agree(self):
+    def emptied(self):
+        """A tree whose source and documents record an absence of limitations."""
+        tree = self.tree(seeded=False)
+        data = tree.limitations()
+        data['limitations'] = []
+        data['observation'] = 'no remaining limitations at 0.2.0'
+        tree.save_limitations(data)
+        section = r'This remaining limitation was recorded on .*?\n- \[#309\][^\n]*'
+        for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
+            tree.sub(name, section, 'No limitation remains open at 0.2.0.')
+        tree.sub('CHANGELOG.md', section, 'No limitation is recorded at 0.2.0.')
+        return tree
+
+    def test_the_checkout_records_its_limitation_and_the_documents_agree(self):
         data = json.loads((ROOT / 'docs/known-limitations.json').read_text(encoding='utf-8'))
-        self.assertEqual(data['limitations'], [])
+        self.assertEqual([entry['issue'] for entry in data['limitations']], [309])
         errors = self.tree(seeded=False).errors()
         self.assertNoRule(errors, 'known-limitations-source')
         self.assertNoRule(errors, 'known-limitations-section')
         self.assertNoRule(errors, 'fuzz-row-limits')
 
     def test_an_empty_list_with_the_no_limitations_observation_passes(self):
-        # Protects the legitimate 0.2.0 state: an empty list whose observation states that no
+        # Protects the legitimate empty state: an empty list whose observation states that no
         # limitation remains is a recorded absence, not an error.
-        tree = self.tree(seeded=False)
-        data = tree.limitations()
-        self.assertEqual(data['limitations'], [])
-        self.assertIn('no remaining limitations', data['observation'])
+        tree = self.emptied()
         self.assertNoRule(tree.errors(), 'known-limitations-empty')
+        self.assertNoRule(tree.errors(), 'known-limitations-section')
 
     def test_an_empty_list_without_the_no_limitations_observation_fails(self):
         # Protects the gate against an accidentally emptied file: an empty list whose observation
         # does not state that no limitation remains (or is missing or empty) is reported.
         for observation in ('a fixture list, not the checkout record', ''):
             with self.subTest(observation=observation):
-                tree = self.tree(seeded=False)
+                tree = self.emptied()
                 data = tree.limitations()
                 data['observation'] = observation
                 tree.save_limitations(data)
                 self.assertFails(tree.errors(), 'known-limitations-empty', 'lists no limitations')
-        tree = self.tree(seeded=False)
+        tree = self.emptied()
         data = tree.limitations()
         del data['observation']
         tree.save_limitations(data)
         self.assertFails(tree.errors(), 'known-limitations-empty', 'lists no limitations')
 
     def test_an_empty_source_fails_documents_that_still_list_an_issue(self):
-        tree = self.tree(seeded=False)
+        tree = self.emptied()
         tree.replace('docs/FUZZING.md', 'No limitation remains open at', 'Issue #7 stays open at')
         self.assertFails(tree.errors(), 'known-limitations-section', 'docs/FUZZING.md', 'differs')
 

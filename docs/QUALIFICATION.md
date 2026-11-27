@@ -263,9 +263,15 @@ consolidation report for the source-bound census and review decisions.
 
 ## Known limitations
 
-No limitation remains open at 0.2.0. The recorded list is empty and
-matches its single source, [known-limitations.json](known-limitations.json);
-`scripts/check-docs.py` compares the two.
+This remaining limitation was recorded on 2026-11-27. The 0.2.0 release
+accepts it without blocking publication. The list matches its single
+source, [known-limitations.json](known-limitations.json);
+`scripts/check-docs.py` compares the two. The other limitations recorded for
+0.1.0 are resolved: the audit of the earlier tool-call work, the cost of
+restarted DeepSeek-V3.1 sections, the repair search's work charging and the
+special-token-stripped dialect variants.
+
+- [#309](https://github.com/Blackcat-Informatics/purrassist/issues/309) Tool-call recovery: CLI streaming mode, MCP progress and the unfinished stream guarantees. There is no CLI `--stream` option and no MCP progress reporting for recovery, and the live semantic-prefix equivalence and semantic-search revision guarantees of `ToolCallStream` remain unfinished.
 
 The default `make fuzz` has no recorded stop signature. The recorded
 `tool-call-ref` campaign of the earlier implementation exceeded the default
