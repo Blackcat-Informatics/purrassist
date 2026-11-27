@@ -5,7 +5,7 @@
 This record describes the implemented 0.2.0 capability and its executable
 qualification. Registry name records at 0.0.0 are distinct from a published
 0.2.0 release. Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery
-(#3, #8) and `purrassist-derive` (#15) merged since; not yet tagged
+(#3, #8) and `purrassist-derive` (#15) merged since; published as
 `rust-v0.2.0`. Publication and downloaded-package acceptance follow the
 procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 [Known limitations](#known-limitations).

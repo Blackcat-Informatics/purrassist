@@ -14,7 +14,7 @@ the complete result, and returns evidence of what changed. A schema-valid guess
 is still a guess. Ambiguous alternatives remain visible. Use it as a
 [Rust crate, an MCP server, or a CLI](#one-engine-three-interfaces).
 
-**Version 0.2.0.** Not yet tagged `rust-v0.2.0`; 0.1.0 is on
+**Version 0.2.0.** Published as `rust-v0.2.0`; 0.1.0 is also on
 crates.io, with [documentation on docs.rs](https://docs.rs/purrassist). Read the
 [changelog](CHANGELOG.md), the [implementation contract](docs/IMPLEMENTATION.md)
 for the accepted scope, and the [qualification record](docs/QUALIFICATION.md)
