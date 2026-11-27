@@ -85,11 +85,28 @@ crates share one version.
 
 ### Changed
 
-- The unpublished tool-graph crate depends on the released `purrdf-core` and
-  `purrdf-shapes` crates at exactly `=4` (resolving 4.0.2) instead of a Git
-  revision. The lock has no Git source, and the dependency inventory, baseline
-  and license notices record the registry packages. Vocabulary admission now
-  retains the typed namespace construction error as the error source.
+- The unpublished tool-graph crate depends on the released `purrdf-core`,
+  `purrdf-lex`, `purrdf-rdf` and `purrdf-shapes` crates at exactly `=5`
+  (resolving 5.0.1) instead of a Git revision. The lock has no Git source and
+  holds one PurRDF major, and the dependency inventory, baseline and license
+  notices record the registry packages. Vocabulary admission retains the typed
+  namespace construction error as the error source.
+- PurRDF 5 records runtime loss occurrences as typed `site`, `subject` and
+  `detail` members in place of one `location`. The tool-graph ledgers carry the
+  source tool, shape, rule or reifier as a typed IRI or blank-node subject, and
+  the named member as a `member` detail. Blank-node subjects carry their label
+  and, outside the default scope, their scope. The rendered ledger JSON is
+  schema version 2.
+- PurRDF 5 changes every canonical RDF document and digest. The tool-graph
+  crate stores, compares or publishes none of them: RDF dataset equivalence
+  checks in the manifest round trip, the generated round trip and the
+  JSON-LD schema compiler use the 5 canonicalization and are unchanged in
+  outcome. The compiled schema and OpenAPI documents, the MCP manifest golden,
+  the `SHA-256` policy transcript identities and the compact-signature goldens
+  are unchanged because they derive from first-party encodings or from JSON
+  text, not from a PurRDF canonical digest. The specified bundle digest
+  (`BLAKE3` over the canonical dataset) is not yet produced by this repository, so
+  no stored value moves; an implementation records it under the 5 form.
 
 - Hostname and email formats now own temporary Unicode mapping, normalization,
   Punycode and label storage, admitting scans, table lookups and buffer movement.

@@ -878,7 +878,7 @@ label or mediation failures. Neither mode can silently fall back to the other.
 **G7 compiler prerequisite delivered in #70 and #43; loader integration remains open:**
 upstream PurRDF issue #788 closed through PR #806, and numeric prerequisite #885
 closed through PR #888, adopted through the released
-`purrdf-core` and `purrdf-shapes` crates pinned at `=4` (4.0.2 resolved). The public
+`purrdf-core` and `purrdf-shapes` crates pinned at `=5` (5.0.1 resolved). The public
 `purrdf_shapes::json_schema::compile_tool_arguments` accepts caller-owned
 root-shape/class identities and parent-scoped FnO predicate/member bindings.
 It uses the shared constraint compiler for bare string/integer/number/boolean,
@@ -1245,7 +1245,7 @@ array branch of a union are supported. Counts beside an entire `anyOf` or
 
 The G lane records `input-shape-not-expressible` for an open input shape and
 for a back-reference if one reaches the schema lowerer. For each constraint the
-upstream schema compiler omits, the ledger preserves its source location and
+upstream schema compiler omits, the ledger preserves its typed subject and
 names the check for the originating schema. Input losses require
 `validate-input`, and output losses require `validate-output`.
 
@@ -1275,8 +1275,8 @@ query_customer_orders(customer_id:string,limit:integer)->{orders:string}
 
 Every lane returns `purrdf_core::loss::LossLedger`, a registered caller profile,
 and an ordered set of mandatory checks. Runtime entries use the native fields
-`code`, `from`, `to`, `note`, and `location`; location identifies the exact
-source tool, shape, rule or reifier. Duplicate codes at different source
+`code`, `from`, `to`, `note`, `site`, `subject` and `detail`; the subject identifies the exact
+source tool, shape, rule or reifier as a typed term, and `detail` carries the named member. Duplicate codes at different source
 locations are separate runtime entries. Contract entries have unique codes.
 No ad-hoc JSON replacement for `LossLedger` is introduced. The public profile
 id for this version is `purrassist-toolgraph-v1` and binds its code table and

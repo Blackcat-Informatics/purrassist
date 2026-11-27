@@ -454,7 +454,7 @@ The supported plain profile is adopted in #70, a subdivision of #43. Upstream is
 through [PR #806](https://github.com/Blackcat-Informatics/purrdf/pull/806).
 Numeric projection from [PurRDF #885](https://github.com/Blackcat-Informatics/purrdf/issues/885)
 is merged through [PR #888](https://github.com/Blackcat-Informatics/purrdf/pull/888),
-consumed here from the released `purrdf-shapes` 4 series. The existing
+consumed here from the released `purrdf-shapes` 5 series. The existing
 `json_schema::compile` retains its JSON-LD surface; the public
 `purrdf_shapes::json_schema::compile_tool_arguments` uses the shared constraint
 compiler with an explicit caller-owned `ToolArgumentProfile`.
