@@ -99,7 +99,7 @@ crates share one version.
   schema version 2.
 - PurRDF 5 changes every canonical RDF document and digest. Only the
   tool-graph crate depends on PurRDF; no other workspace crate does. The
-  tool-graph crate stores, compares or publishes none of them: RDF dataset
+  tool-graph crate stores and publishes none of them and compares none against a recorded value: RDF dataset
   equivalence checks in the manifest round trip and the generated round trip
   use the 5 canonicalization and are unchanged in outcome. The JSON-LD schema
   compiler canonicalizes its input graphs under the 5 form to derive a
@@ -109,7 +109,7 @@ crates share one version.
   golden, the `SHA-256` policy transcript identities, the `SHA-256` digests of
   bound policy dependency files and the compact-signature goldens are unchanged
   serializations, and none is a PurRDF canonical digest. The specified bundle
-  digest (`BLAKE3` over the canonical dataset) is not yet produced by this
+  digest (the `BLAKE3` identity of a bundle that packs the canonical graph digest) is not yet produced by this
   repository, so no stored value moves; an implementation records it under the
   5 form.
 
