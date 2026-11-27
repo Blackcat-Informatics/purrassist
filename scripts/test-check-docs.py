@@ -71,7 +71,7 @@ CHANGELOG_HEADING = re.search(rf'(?m)^## \[{VERSION_RE}\] - .+$',
                               (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')).group(0)
 
 
-# The checkout records no limitation at the workspace version. The fixtures that test how the
+# The checkout records one limitation at the workspace version, with no stop. The fixtures that test how the
 # checker reads a limitation, a stop or a changelog subsection need entries to break, so a
 # seeded tree carries this list (the five limitations recorded for 0.1.0, one of which stops
 # the default `make fuzz`) in the source file and in all three holders.

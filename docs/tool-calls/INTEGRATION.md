@@ -658,8 +658,9 @@ allocation is never retried. The digest still identifies every supplied byte, wh
 No retained prefix is presented as the full source. A complete source can still
 be retained when finalization or resolution refuses. See
 [the resource contract](../RESOURCES.md) for ownership and growth details.
-The public streaming API, stable-prefix events and progress surfaces remain
-unfinished under #16.
+Full live semantic-prefix equivalence, semantic-search revision events, a CLI
+streaming mode and MCP progress reporting remain unfinished under
+[#309](https://github.com/Blackcat-Informatics/purrassist/issues/309).
 
 - **Enforced by** the published bound
   `work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux` (each dialect contributes
