@@ -413,10 +413,15 @@ fn record_schemas(
     output: &Lowering<'_>,
 ) {
     for (lowering, shape, member, check) in [
-        (input, &tool.input_shape, "inputSchema", "validate-input"),
+        (
+            input,
+            &tool.input_shape_term,
+            "inputSchema",
+            "validate-input",
+        ),
         (
             output,
-            &tool.output_shape,
+            &tool.output_shape_term,
             "outputSchema",
             "validate-output",
         ),
@@ -430,7 +435,7 @@ fn record_schemas(
                 ProjectionTarget::CompactSignature,
                 "schema-keyword-not-expressible",
                 note,
-                Some((shape, member)),
+                Some((shape.clone(), member)),
             ));
         }
     }

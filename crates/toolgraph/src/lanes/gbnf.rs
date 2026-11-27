@@ -1477,14 +1477,14 @@ fn record_schemas(ledger: &mut LossLedger, tool: &Tool, builder: &Builder<'_>) {
             target,
             "json-string-validity-not-expressible",
             "the string grammar admits lone UTF-16 surrogate escapes and does not check Unicode validity; mandatory check validate-input".to_owned(),
-            Some((&tool.input_shape, "inputSchema")),
+            Some((tool.input_shape_term.clone(), "inputSchema")),
         ));
     }
     ledger.record(entry_for(
         target,
         "output-shape-not-expressible",
         "the grammar covers arguments only; mandatory check validate-output".to_owned(),
-        Some((&tool.output_shape, "outputSchema")),
+        Some((tool.output_shape_term.clone(), "outputSchema")),
     ));
     if !builder.omitted.is_empty() {
         let note = format!(
@@ -1495,7 +1495,7 @@ fn record_schemas(ledger: &mut LossLedger, tool: &Tool, builder: &Builder<'_>) {
             target,
             "input-shape-not-expressible",
             note,
-            Some((&tool.input_shape, "inputSchema")),
+            Some((tool.input_shape_term.clone(), "inputSchema")),
         ));
     }
 }

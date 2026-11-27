@@ -1666,16 +1666,12 @@ impl Doc<'_> {
         let name = self.retained_text(nodes, node.id, "name", storage, &mut progress)?;
         let description =
             self.retained_text(nodes, node.id, "description", storage, &mut progress)?;
-        let input_shape = storage.lexical(
-            &self
-                .required_property(nodes, node, "inputShape", &mut progress)?
-                .o,
-        )?;
-        let output_shape = storage.lexical(
-            &self
-                .required_property(nodes, node, "outputShape", &mut progress)?
-                .o,
-        )?;
+        let input_shape_row = self.required_property(nodes, node, "inputShape", &mut progress)?;
+        let input_shape = storage.lexical(&input_shape_row.o)?;
+        let input_shape_term = storage.loss_term(&input_shape_row.o)?;
+        let output_shape_row = self.required_property(nodes, node, "outputShape", &mut progress)?;
+        let output_shape = storage.lexical(&output_shape_row.o)?;
+        let output_shape_term = storage.loss_term(&output_shape_row.o)?;
         let parameter_constraints = self.retained_text(
             nodes,
             node.id,
@@ -1691,7 +1687,9 @@ impl Doc<'_> {
                 description,
                 annotations,
                 input_shape,
+                input_shape_term,
                 output_shape,
+                output_shape_term,
                 implementation,
                 parameters,
                 output,
@@ -2145,6 +2143,7 @@ impl Doc<'_> {
         }
         Ok(Some(Hint {
             reifier: Self::scoped_reference(id, storage)?,
+            reifier_term: storage.loss_term(id)?,
             shape: storage.lexical(&reifier.s)?,
             max_edit_distance: self.typed_number(
                 nodes,
