@@ -4,7 +4,7 @@
 
 PurRAssist 0.2.0 has an implemented scope and executable qualification record
 in `QUALIFICATION.md`. Status: merged to `main`, including tool-call recovery
-and `purrassist-derive`; not yet tagged `rust-v0.2.0`. This procedure is run
+and `purrassist-derive`; published as `rust-v0.2.0`. This procedure is run
 against the exact `main` commit to be tagged: every check below, and the tag
 itself, name that one commit. A published 0.2.0 is not claimed before registry
 downloads and installed CLI/MCP behavior are verified.

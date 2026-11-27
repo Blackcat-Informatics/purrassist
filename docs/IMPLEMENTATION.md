@@ -504,7 +504,7 @@ acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
 ledgers and graph integration.
 
 Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3, #8) and
-`purrassist-derive` (#15) merged since; not yet tagged `rust-v0.2.0`. Executable
+`purrassist-derive` (#15) merged since; published as `rust-v0.2.0`. Executable
 qualification and its limits are recorded in `QUALIFICATION.md`; publication
 follows the procedure in `RELEASE.md`.
 
