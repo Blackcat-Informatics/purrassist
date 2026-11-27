@@ -13,7 +13,7 @@ use purrdf_core::loss::{LossDetail, LossEntry, LossLedger, LossSite, LossSubject
 
 use crate::{ProjectionTarget, SOURCE_REPRESENTATION, Tool};
 
-/// Builds one ledger entry: a code, a note and an optional subject location.
+/// Builds one ledger entry: a code, a note and an optional subject term with its member.
 pub(super) fn entry_for(
     target: ProjectionTarget,
     code: &'static str,
@@ -35,7 +35,7 @@ pub(super) fn entry_for(
 }
 
 /// Carry each construct the upstream schema compiler already dropped as one
-/// entry under `code`, quoting its note and keeping its source location.
+/// entry under `code`, quoting its note and keeping its subject, site and detail.
 pub(super) fn record_upstream(
     ledger: &mut LossLedger,
     upstream: &LossLedger,
@@ -47,7 +47,7 @@ pub(super) fn record_upstream(
     }
 }
 
-/// Translate one native schema loss without losing its original source location.
+/// Translate one native schema loss without losing its original subject, site and detail.
 pub(super) fn upstream_loss(
     target: ProjectionTarget,
     code: &'static str,
@@ -132,17 +132,16 @@ pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: Projecti
             "recoveryHint",
         );
     }
-    let profile = &tool.execution_profile.iri;
     row(
         "confinement-not-expressible",
         "the execution profile is not enforced by the projection; mandatory check confine-worker",
-        LossTerm::Iri(profile.clone()),
+        tool.execution_profile.iri_term.clone(),
         "executionProfile",
     );
     row(
         "resource-ceiling-not-expressible",
         "the five resource ceilings are not enforced by the projection; mandatory check confine-worker",
-        LossTerm::Iri(profile.clone()),
+        tool.execution_profile.iri_term.clone(),
         "resourceCeilings",
     );
     row(

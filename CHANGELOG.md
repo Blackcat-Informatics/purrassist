@@ -103,8 +103,7 @@ crates share one version.
   JSON-LD schema compiler use the 5 canonicalization and are unchanged in
   outcome. The compiled schema and OpenAPI documents, the MCP manifest golden,
   the `SHA-256` policy transcript identities and the compact-signature goldens
-  are unchanged because they derive from first-party encodings or from JSON
-  text, not from a PurRDF canonical digest. The specified bundle digest
+  are unchanged serializations, and none is a PurRDF canonical digest. The specified bundle digest
   (`BLAKE3` over the canonical dataset) is not yet produced by this repository, so
   no stored value moves; an implementation records it under the 5 form.
 

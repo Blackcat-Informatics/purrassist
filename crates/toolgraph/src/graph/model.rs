@@ -217,6 +217,8 @@ pub struct Waiver {
 pub struct ToolExecutionProfile {
     /// The profile node.
     pub iri: String,
+    /// The profile node as a typed loss subject; a blank node keeps its label and scope.
+    pub iri_term: LossTerm,
     /// The explicitly selected confinement mode.
     pub mode: ExecutionMode,
     /// The exact standalone profile name.

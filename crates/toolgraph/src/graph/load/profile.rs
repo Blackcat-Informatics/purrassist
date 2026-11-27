@@ -372,6 +372,7 @@ impl<'d> Profiles<'_, 'd> {
             .is_some_and(boolean);
         Ok(ToolExecutionProfile {
             iri: retained.lexical(&node.o)?,
+            iri_term: retained.loss_term(&node.o)?,
             mode,
             profile_name: doc.retained_text(self.nodes, id, "profileName", retained, progress)?,
             hat_name: doc.retained_text(self.nodes, id, "hatName", retained, progress)?,
