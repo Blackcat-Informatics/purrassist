@@ -97,15 +97,18 @@ crates share one version.
   the named member as a `member` detail. Blank-node subjects carry their label
   and, outside the default scope, their scope. The rendered ledger JSON is
   schema version 2.
-- PurRDF 5 changes every canonical RDF document and digest. The tool-graph
-  crate stores, compares or publishes none of them: RDF dataset equivalence
-  checks in the manifest round trip, the generated round trip and the
-  JSON-LD schema compiler use the 5 canonicalization and are unchanged in
+- PurRDF 5 changes every canonical RDF document and digest. Only the
+  tool-graph crate depends on PurRDF; no other workspace crate does. The
+  tool-graph crate stores, compares or publishes none of them: RDF dataset
+  equivalence checks in the manifest round trip, the generated round trip and
+  the JSON-LD schema compiler use the 5 canonicalization and are unchanged in
   outcome. The compiled schema and OpenAPI documents, the MCP manifest golden,
-  the `SHA-256` policy transcript identities and the compact-signature goldens
-  are unchanged serializations, and none is a PurRDF canonical digest. The specified bundle digest
-  (`BLAKE3` over the canonical dataset) is not yet produced by this repository, so
-  no stored value moves; an implementation records it under the 5 form.
+  the `SHA-256` policy transcript identities, the `SHA-256` digests of bound
+  policy dependency files and the compact-signature goldens are unchanged
+  serializations, and none is a PurRDF canonical digest. The specified bundle
+  digest (`BLAKE3` over the canonical dataset) is not yet produced by this
+  repository, so no stored value moves; an implementation records it under the
+  5 form.
 
 - Hostname and email formats now own temporary Unicode mapping, normalization,
   Punycode and label storage, admitting scans, table lookups and buffer movement.
