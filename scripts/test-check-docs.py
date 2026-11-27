@@ -126,12 +126,12 @@ class Tree:
         self.save_limitations(SEEDED)
         bullets = '\n'.join(f'- [#{entry["issue"]}]({ISSUES}/{entry["issue"]}) {entry["title"]}. {entry["impact"]}'
                             for entry in SEEDED['limitations'])
-        self.sub('docs/QUALIFICATION.md', r'stops on no known signature, but the historical', 'stops on the #11 signatures, so the historical')
-        self.sub('docs/QUALIFICATION.md', r'stops on no known signature, and neither', 'stops on the #11 signatures and neither')
+        self.sub('docs/QUALIFICATION.md', r'has no recorded stop signature, but the historical', 'stops on the #11 signatures, so the historical')
+        self.sub('docs/QUALIFICATION.md', r'has no recorded stop signature, and neither', 'stops on the #11 signatures and neither')
         for name in ('docs/QUALIFICATION.md', 'docs/FUZZING.md'):
             self.sub(name, r'No limitation remains open at .*?compares the two\.',
                      'These limitations are recorded.\n\n' + bullets)
-            self.sub(name, r'stops on no known signature', 'stops on the #11 signatures', count=0)
+            self.sub(name, r'has no recorded stop signature', 'stops on the #11 signatures', count=0)
         self.sub('CHANGELOG.md', r'No limitation is recorded at .*?variants\.', 'These limitations are recorded.\n\n' + bullets)
 
     def copy(self, name):
@@ -741,6 +741,31 @@ class KnownLimitationsSource(Case):
         self.assertNoRule(errors, 'known-limitations-section')
         self.assertNoRule(errors, 'fuzz-row-limits')
 
+    def test_an_empty_list_with_the_no_limitations_observation_passes(self):
+        # Protects the legitimate 0.2.0 state: an empty list whose observation states that no
+        # limitation remains is a recorded absence, not an error.
+        tree = self.tree(seeded=False)
+        data = tree.limitations()
+        self.assertEqual(data['limitations'], [])
+        self.assertIn('no remaining limitations', data['observation'])
+        self.assertNoRule(tree.errors(), 'known-limitations-empty')
+
+    def test_an_empty_list_without_the_no_limitations_observation_fails(self):
+        # Protects the gate against an accidentally emptied file: an empty list whose observation
+        # does not state that no limitation remains (or is missing or empty) is reported.
+        for observation in ('a fixture list, not the checkout record', ''):
+            with self.subTest(observation=observation):
+                tree = self.tree(seeded=False)
+                data = tree.limitations()
+                data['observation'] = observation
+                tree.save_limitations(data)
+                self.assertFails(tree.errors(), 'known-limitations-empty', 'lists no limitations')
+        tree = self.tree(seeded=False)
+        data = tree.limitations()
+        del data['observation']
+        tree.save_limitations(data)
+        self.assertFails(tree.errors(), 'known-limitations-empty', 'lists no limitations')
+
     def test_an_empty_source_fails_documents_that_still_list_an_issue(self):
         tree = self.tree(seeded=False)
         tree.replace('docs/FUZZING.md', 'No limitation remains open at', 'Issue #7 stays open at')
@@ -881,7 +906,7 @@ class FuzzStopTargets(Case):
             tree.replace(name, 'stops on the #11 signatures', 'stops on the #11, and #7 signatures', count=0)
         self.assertNoRule(tree.errors(), 'known-limitations-section')
 
-    NO_STOP = 'stops on no known signature'
+    NO_STOP = 'has no recorded stop signature'
 
     def without_stops(self, tree):
         self.set_stop(tree, 11, [])

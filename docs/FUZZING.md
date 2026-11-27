@@ -865,8 +865,11 @@ No limitation remains open at 0.2.0. The recorded list is empty and
 matches its single source, [known-limitations.json](known-limitations.json);
 `scripts/check-docs.py` compares the two.
 
-The default `make fuzz` stops on no known signature. The "Known slow input"
-section below records the historical timeout and its request. The
+The default `make fuzz` has no recorded stop signature. The hosted `fuzz` job
+runs `make fuzz-hosted` with the default 10 s probe timeout for every target,
+including `tool-call-ref` and its exact issue 11 request; the "Known slow input"
+section below records the historical timeout, and that a passing default-timeout
+run remains pending automatic CI. The
 baseline table records `none` for the two tool-call targets, which have no
 10,000-mutation baseline. Rejected-span oracle panics fail every campaign.
 

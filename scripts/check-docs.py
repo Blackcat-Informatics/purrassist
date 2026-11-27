@@ -161,7 +161,9 @@ PROTOCOL_TESTS = 'crates/cli/tests/protocol.rs'
 STATUS_DOCS = ('README.md', 'SECURITY.md', 'docs/IMPLEMENTATION.md', 'docs/QUALIFICATION.md', 'docs/RELEASE.md')
 STATUS_FORMS = ('not yet tagged', 'published as')
 # What a document says when no known limitation stops the default `make fuzz`.
-NO_STOP_SENTENCE = 'stops on no known signature'
+NO_STOP_SENTENCE = 'has no recorded stop signature'
+# What the `observation` of an empty `docs/known-limitations.json` must state.
+NO_LIMITATIONS_STATEMENT = 'no remaining limitations'
 
 DIALECT_ID = r'[a-z][a-z0-9.-]*\.v\d+'
 DIALECT_TOKEN = rf'(?:\[`{DIALECT_ID}`\]\([^)]*\)|`{DIALECT_ID}`)'
@@ -656,6 +658,12 @@ def load_limitations(docs, report, targets):
                                             f'scripts/fuzz.py TARGETS {list(targets)}')
             if len(set(stops)) != len(stops):
                 report.add(rule, label, f'{STOP_TARGETS_KEY} lists a target twice')
+    if not entries:
+        observation = data.get('observation')
+        if not isinstance(observation, str) or NO_LIMITATIONS_STATEMENT not in observation.lower():
+            report.add('known-limitations-empty', KNOWN_LIMITATIONS_JSON,
+                       f'lists no limitations, so its observation must state "{NO_LIMITATIONS_STATEMENT}"; an '
+                       'emptied list without that statement is not a recorded absence of limitations')
     return data if len(report.errors) == problems else None
 
 
@@ -863,7 +871,7 @@ def stop_issues(text, prefix=''):
 
     * "[prefix]stops on the #A signatures", "... the #A and #B signatures" or "... the #A, #B,
       and #C signatures" (an Oxford comma is accepted): the issues named;
-    * "[prefix]stops on no known signature": the empty set, which is the sentence a document
+    * "[prefix]has no recorded stop signature": the empty set, which is the sentence a document
       must carry when no entry of `docs/known-limitations.json` has a non-empty
       `fuzz_stop_targets`. A document then must not name a stop issue, and one that names stops
       must not claim there is none.
