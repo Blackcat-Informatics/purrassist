@@ -6,7 +6,7 @@ Explicit host boundaries for `PurRAssist`: root-scoped UTF-8 files, journaled
 replacement, conditional undo, shared tools, stdio MCP, and resumable helper
 request/response adapters.
 
-**Status: 0.1.0.** This crate is the filesystem and helper integration behind
+**Status: 0.2.0.** This crate is the filesystem and helper integration behind
 two of the three equal interfaces of `PurRAssist`: the CLI and the MCP server
 (`purrassist-cli`) both serve its tool registry. Rust users reach the engines
 through the `purrassist` crate.
@@ -71,6 +71,6 @@ input formats. Set `input_format` to `anthropic-events` or
 the admitted log, transport faults and reconstructed-message recovery.
 Its wire result and exit code include the provider's eligibility decision.
 
-Version 0.1.0. Capabilities, known limitations and verification are recorded in
-the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/QUALIFICATION.md).
+Version 0.2.0. Capabilities, known limitations and verification are recorded in
+the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.2.0/docs/QUALIFICATION.md).
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.

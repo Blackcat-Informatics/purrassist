@@ -569,10 +569,10 @@ pub fn __derive_number(spelling: &'static str) -> Number {
 /// hand.
 ///
 /// ```
-/// const _: () = purrassist_core::tool_call::__DERIVE_ABI_0_1;
+/// const _: () = purrassist_core::tool_call::__DERIVE_ABI_0_2;
 /// ```
 #[doc(hidden)]
-pub const __DERIVE_ABI_0_1: () = ();
+pub const __DERIVE_ABI_0_2: () = ();
 
 /// [`is_valid_name`](super::is_valid_name) as a `const` check for generated
 /// code: derives assert explicit tool, parameter and alias names with it, so
@@ -1029,9 +1029,9 @@ mod tests {
         // The marker must exist (this fails to compile otherwise) and its name
         // must be the one `purrassist-derive` builds from the same version:
         // bumping the major or minor without renaming the marker fails here.
-        let () = super::__DERIVE_ABI_0_1;
+        let () = super::__DERIVE_ABI_0_2;
         assert_eq!(
-            stringify!(__DERIVE_ABI_0_1),
+            stringify!(__DERIVE_ABI_0_2),
             concat!(
                 "__DERIVE_ABI_",
                 env!("CARGO_PKG_VERSION_MAJOR"),

@@ -2,11 +2,11 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Rust release procedure
 
-PurRAssist 0.1.0 has an implemented scope and executable qualification record
+PurRAssist 0.2.0 has an implemented scope and executable qualification record
 in `QUALIFICATION.md`. Status: merged to `main`, including tool-call recovery
-and `purrassist-derive`; published as `rust-v0.1.0`. This procedure is run
+and `purrassist-derive`; not yet tagged `rust-v0.2.0`. This procedure is run
 against the exact `main` commit to be tagged: every check below, and the tag
-itself, name that one commit. A published 0.1.0 is not claimed before registry
+itself, name that one commit. A published 0.2.0 is not claimed before registry
 downloads and installed CLI/MCP behavior are verified.
 
 ## Release set
@@ -283,8 +283,8 @@ on checkout.
 
 For the exact `main` commit to be tagged:
 
-1. Set the date of the `[0.1.0]` heading in `CHANGELOG.md` (it reads
-   `unreleased` until now) to the tagging date and merge that change; the
+1. Confirm the date of the `[0.2.0]` heading in `CHANGELOG.md` is the tagging
+   date, correct it if not, and merge that change; the
    resulting `main` commit is the one every following step names.
 2. Verify hosted CI (`verify.yml`) for that commit, and run the portability,
    conformance, syntax-oracle, fuzz, and package checks listed
@@ -301,7 +301,7 @@ For the exact `main` commit to be tagged:
    overwritten. A tag whose release qualification fails publishes nothing and
    may be moved to the fixed commit.
 5. After `publish.yml` succeeds, create the GitHub release. Its body is the
-   `[0.1.0]` section of `CHANGELOG.md`, including its `### Known limitations`
+   `[0.2.0]` section of `CHANGELOG.md`, including its `### Known limitations`
    subsection, plus the output of `scripts/verify-published.py`.
 
 ## After publication

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acceptance-harness"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "purrassist-core",
 ]
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "purrassist"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "purrassist-core",
  "purrassist-derive",
@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "purrassist-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "purrassist",
  "purrassist-host",
@@ -308,18 +308,18 @@ dependencies = [
 
 [[package]]
 name = "purrassist-core"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "purrassist-derive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "purrassist-core",
 ]
 
 [[package]]
 name = "purrassist-helper-census"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "purrassist-core",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "purrassist-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "purrassist",
  "windows-sys",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "purrassist-syntax"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "purrassist-core",
  "tree-sitter",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "purrassist-toolgraph"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "purrassist-core",
  "purrdf-core",

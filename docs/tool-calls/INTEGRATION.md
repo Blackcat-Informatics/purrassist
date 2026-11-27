@@ -1650,7 +1650,7 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   `pointer`/`expected`/`found` shape; `within` prefixes a JSON Pointer segment.
 - `tool_call::is_valid_name` is now a `const fn` (same behavior).
 - `#[doc(hidden)]` `tool_call::{__derive_number, __sorted, __valid_name,
-  __DERIVE_ABI_0_1}`:
+  __DERIVE_ABI_0_2}`:
   support for generated code only (a number built from a spelling that the
   macro already validated, a `const` check that the declared-name table is in
   strictly ascending byte order, which generated code asserts at compile time
@@ -1670,7 +1670,7 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   - **Same version.** `purrassist-derive` and `purrassist-core` must share
     major.minor (patch may differ). Every expansion references the
     `#[doc(hidden)]` marker `tool_call::__DERIVE_ABI_<major>_<minor>`
-    (`__DERIVE_ABI_0_1` for 0.1.x), named from the derive's own version at
+    (`__DERIVE_ABI_0_2` for 0.2.x), named from the derive's own version at
     build time, so a mismatched pair fails to compile with an error naming
     `__DERIVE_ABI_*`. Cargo accepts the pair (the internal requirements are
     caret requirements, deliberately not `=` pins), so the compile error is

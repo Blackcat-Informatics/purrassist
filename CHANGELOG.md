@@ -9,6 +9,21 @@ crates share one version.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
+All six crates (`purrassist-core`, `purrassist-derive`, `purrassist-syntax`,
+`purrassist`, `purrassist-host` and `purrassist-cli`) move to 0.2.0, and the
+derive support marker becomes `__DERIVE_ABI_0_2`.
+
+### Highlights
+
+- **Rust crate**: `purrassist` gains new tool-call dialects and
+  governed schema recovery, and the workspace moves to the PurRDF 5 crates.
+- **MCP server**: `purrassist mcp --root DIR` serves the same tools, with
+  receipts that follow the governed schema bundle.
+- **CLI**: the `purrassist` executable returns the same results as MCP for
+  every registered tool.
+
 ### Added
 
 - `ToolGraph::load` in `purrassist-toolgraph` reads RDF 1.2 text into typed

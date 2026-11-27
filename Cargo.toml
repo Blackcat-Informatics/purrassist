@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/core", "crates/derive", "crates/syntax", "crates/purrassist", "crates/host", "crates/cli", "crates/acceptance-harness", "crates/helper-census", "crates/toolgraph"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
@@ -16,11 +16,11 @@ repository = "https://github.com/Blackcat-Informatics/purrassist"
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 syn = { version = "=3.0.6", features = ["full", "visit"] }
 regex = { version = "=1.13.1", default-features = false, features = ["std", "unicode", "perf-cache", "perf-dfa", "perf-onepass", "perf-backtrack", "perf-inline"] }
-purrassist-core = { path = "crates/core", version = "0.1.0" }
-purrassist-derive = { path = "crates/derive", version = "0.1.0" }
-purrassist-syntax = { path = "crates/syntax", version = "0.1.0" }
-purrassist = { path = "crates/purrassist", version = "0.1.0" }
-purrassist-host = { path = "crates/host", version = "0.1.0" }
+purrassist-core = { path = "crates/core", version = "0.2.0" }
+purrassist-derive = { path = "crates/derive", version = "0.2.0" }
+purrassist-syntax = { path = "crates/syntax", version = "0.2.0" }
+purrassist = { path = "crates/purrassist", version = "0.2.0" }
+purrassist-host = { path = "crates/host", version = "0.2.0" }
 purrdf-core = "=5"
 purrdf-lex = "=5"
 purrdf-rdf = "=5"

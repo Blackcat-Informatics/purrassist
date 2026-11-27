@@ -2,11 +2,11 @@
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 # Qualification record
 
-This record describes the implemented 0.1.0 capability and its executable
+This record describes the implemented 0.2.0 capability and its executable
 qualification. Registry name records at 0.0.0 are distinct from a published
-0.1.0 release. Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery
-(#3, #8) and `purrassist-derive` (#15) merged since; published as
-`rust-v0.1.0`. Publication and downloaded-package acceptance followed the
+0.2.0 release. Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery
+(#3, #8) and `purrassist-derive` (#15) merged since; not yet tagged
+`rust-v0.2.0`. Publication and downloaded-package acceptance follow the
 procedure in [RELEASE.md](RELEASE.md). Open limitations are listed under
 [Known limitations](#known-limitations).
 
@@ -318,7 +318,7 @@ that the real registry downloads work. Its default MCP transcript reads a seeded
 file, applies a journaled replacement, conditionally undoes it, and requires
 byte-exact restoration. Pipe writes and response reads have bounded timeouts,
 with child cleanup tested for missing responses, partial output, and stderr
-flooding. Until the real acceptance steps execute, 0.1.0 is not
+flooding. Until the real acceptance steps execute, 0.2.0 is not
 claimed as published and issue #1 remains open.
 
 
