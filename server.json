@@ -3,7 +3,7 @@
   "name": "io.github.Blackcat-Informatics/purrassist",
   "title": "PurRAssist",
   "description": "Recovers intent from imperfect AI output: JSON, tool calls, names, paths and Markdown edits.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/Blackcat-Informatics/purrassist",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "cargo",
       "identifier": "purrassist-cli",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },

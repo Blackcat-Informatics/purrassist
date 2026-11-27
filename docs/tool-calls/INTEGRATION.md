@@ -658,8 +658,9 @@ allocation is never retried. The digest still identifies every supplied byte, wh
 No retained prefix is presented as the full source. A complete source can still
 be retained when finalization or resolution refuses. See
 [the resource contract](../RESOURCES.md) for ownership and growth details.
-The public streaming API, stable-prefix events and progress surfaces remain
-unfinished under #16.
+Full live semantic-prefix equivalence, semantic-search revision events, a CLI
+streaming mode and MCP progress reporting remain unfinished under
+[#309](https://github.com/Blackcat-Informatics/purrassist/issues/309).
 
 - **Enforced by** the published bound
   `work ≤ W_intake + (K_LEX + Σ_d K_d)·n + K_ERR·E + W_aux` (each dialect contributes
@@ -1650,7 +1651,7 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   `pointer`/`expected`/`found` shape; `within` prefixes a JSON Pointer segment.
 - `tool_call::is_valid_name` is now a `const fn` (same behavior).
 - `#[doc(hidden)]` `tool_call::{__derive_number, __sorted, __valid_name,
-  __DERIVE_ABI_0_1}`:
+  __DERIVE_ABI_0_2}`:
   support for generated code only (a number built from a spelling that the
   macro already validated, a `const` check that the declared-name table is in
   strictly ascending byte order, which generated code asserts at compile time
@@ -1670,7 +1671,7 @@ Added for typed (derived) tool definitions, none of which breaks existing code:
   - **Same version.** `purrassist-derive` and `purrassist-core` must share
     major.minor (patch may differ). Every expansion references the
     `#[doc(hidden)]` marker `tool_call::__DERIVE_ABI_<major>_<minor>`
-    (`__DERIVE_ABI_0_1` for 0.1.x), named from the derive's own version at
+    (`__DERIVE_ABI_0_2` for 0.2.x), named from the derive's own version at
     build time, so a mismatched pair fails to compile with an error naming
     `__DERIVE_ABI_*`. Cargo accepts the pair (the internal requirements are
     caret requirements, deliberately not `=` pins), so the compile error is

@@ -504,9 +504,9 @@ acceptance, alongside witness, GBNF, CompactSignature, projection, routing,
 ledgers and graph integration.
 
 Status: merged to `main` (PR #2, `699d9ff`); tool-call recovery (#3, #8) and
-`purrassist-derive` (#15) merged since; published as `rust-v0.1.0`. Executable
+`purrassist-derive` (#15) merged since; not yet tagged `rust-v0.2.0`. Executable
 qualification and its limits are recorded in `QUALIFICATION.md`; publication
-followed the procedure in `RELEASE.md`.
+follows the procedure in `RELEASE.md`.
 
 PurRAssist recovers intent from imperfect AI output and requests. Every result
 combines its answer with evidence, provenance, losses, and explicit inferences.
@@ -1016,7 +1016,7 @@ repaired-structure emblem. First-party licensing is MIT OR Apache-2.0 OR
 MulanPSL-2.0. Preserve third-party source attribution and license boundaries.
 
 Rust edition 2024, stable MSRV 1.98, nightly development analysis, stable release
-builds. Workspace version 0.1.0; release tags `rust-v*`. Publish in dependency
+builds. Workspace version 0.2.0; release tags `rust-v*`. Publish in dependency
 order with trusted publishing after registry setup. Verify actual downloadable
 packages and CLI/MCP behavior before declaring completion.
 

@@ -5,7 +5,7 @@
 The `purrassist` executable exposes schema-guided JSON recovery, validation,
 matching, shared tool calls, and a newline-delimited stdio MCP server.
 
-**Status: 0.1.0.** This crate is the CLI and MCP interface of `PurRAssist`, one
+**Status: 0.2.0.** This crate is the CLI and MCP interface of `PurRAssist`, one
 engine with three equal interfaces (the Rust crates, the MCP server and the
 CLI): `cargo install purrassist-cli` installs the `purrassist` executable.
 
@@ -67,7 +67,7 @@ operation (an exhausted budget, invalid input). The JSON's `status` is the
 certainty of the reading of the turn, not whether anything can run: a turn
 whose only call names an undeclared tool is `status: "resolved"` with
 `verdict: "nothing_usable"` and exits 4 (see the tool-calls
-[INTEGRATION.md](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/tool-calls/INTEGRATION.md#reading-a-result-status-finish-and-verdict)).
+[INTEGRATION.md](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.2.0/docs/tool-calls/INTEGRATION.md#reading-a-result-status-finish-and-verdict)).
 Invocation errors exit 1. The printed JSON is the same whatever the exit
 code. It
 never executes a call.
@@ -98,12 +98,12 @@ spans. `plan_markdown_reference` takes `path`, `occurrence`, decoded `destinatio
 and explicit `title` (string or `null`). It preserves the selected label and all
 unselected definitions, with a structural-validation receipt and conditional undo.
 
-Version 0.1.0. Capabilities, known limitations and verification are recorded in
-the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/QUALIFICATION.md).
+Version 0.2.0. Capabilities, known limitations and verification are recorded in
+the [qualification record](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.2.0/docs/QUALIFICATION.md).
 First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0.
 
 ## Links
 
-- Tool reference: [docs/TOOLS.md](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.1.0/docs/TOOLS.md)
+- Tool reference: [docs/TOOLS.md](https://github.com/Blackcat-Informatics/purrassist/blob/rust-v0.2.0/docs/TOOLS.md)
 - Repository: <https://github.com/Blackcat-Informatics/purrassist>
 - MCP Registry name: `mcp-name: io.github.Blackcat-Informatics/purrassist`

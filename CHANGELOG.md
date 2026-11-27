@@ -9,6 +9,22 @@ crates share one version.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
+All six crates (`purrassist-core`, `purrassist-derive`, `purrassist-syntax`,
+`purrassist`, `purrassist-host` and `purrassist-cli`) move to 0.2.0, and the
+derive support marker becomes `__DERIVE_ABI_0_2`.
+
+### Highlights
+
+- **Rust crate**: `purrassist` gains new tool-call dialects, a streaming
+  recognizer (`ToolCallStream`) and provider event-log reassembly, and the
+  workspace moves to the PurRDF 5 crates.
+- **MCP server**: `purrassist mcp --root DIR` serves the same tools, now
+  including `project_result`.
+- **CLI**: the `purrassist` executable returns the same results as MCP for
+  every registered tool.
+
 ### Added
 
 - `ToolGraph::load` in `purrassist-toolgraph` reads RDF 1.2 text into typed
@@ -82,6 +98,22 @@ crates share one version.
   `Effort::Exact` refuses it. A body that could be read another way is
   still rejected: an undeclared name, a name bound twice, text outside the
   elements, or markup inside the value.
+
+- `ToolCallStream` in `purrassist-core` recognizes tool calls incrementally
+  from a turn that arrives in chunks.
+- The `pythonic.v1` dialect reads Python literal keyword calls inside a list.
+- Eight special-token-stripped dialect variants are built in, for output whose
+  special tokens were removed. They cover the DeepSeek V3, DeepSeek V3.1,
+  Harmony, Hermes, Kimi K2, Llama 3 JSON, Mistral v11 and Mistral v3 families,
+  and each is named by its parent dialect with the suffix `-stripped.v1`. The
+  set of built-in dialects is now twenty-three.
+- Provider event logs reassemble into tool calls. Set `input_format` to
+  `anthropic-events` or `openai-chat-events` and the batch result carries the
+  admitted log, transport faults and the reconstructed message's recovery.
+- The `project_result` tool validates a complete JSON result against its output
+  schema, applies a closed context field mask, and emits a checked JSON Lines
+  artifact, over MCP and the CLI. The registry holds 32 tools, one more than
+  0.1.0.
 
 ### Changed
 
@@ -233,16 +265,15 @@ crates share one version.
 
 ### Known limitations
 
-These remaining limitations were recorded on 2026-10-26. The 0.1.0 release
-accepted them without blocking publication. The list
-matches its single source, [known-limitations.json](docs/known-limitations.json);
-`scripts/check-docs.py` compares the two.
+This remaining limitation was recorded on 2026-11-27. The 0.2.0 release
+accepts it without blocking publication. The list matches its single
+source, [known-limitations.json](docs/known-limitations.json);
+`scripts/check-docs.py` compares the two. The other limitations recorded for
+0.1.0 are resolved: the audit of the earlier tool-call work, the cost of
+restarted DeepSeek-V3.1 sections, the repair search's work charging and the
+special-token-stripped dialect variants.
 
-- [#7](https://github.com/Blackcat-Informatics/purrassist/issues/7) Audit the unreviewed #3 stage-3 commits and close the F14/F19 rule's known limits. Some commits of the #3 tool-call work were merged without an audit, and the known limits of the F14/F19 rule remain open.
-- [#10](https://github.com/Blackcat-Informatics/purrassist/issues/10) Tool-call recovery: restarted DeepSeek-V3.1 sections cost quadratic work and super-quadratic time. A turn with many restarted DeepSeek-V3.1 sections costs quadratic work and super-quadratic time.
-- [#11](https://github.com/Blackcat-Informatics/purrassist/issues/11) Tool-call recovery: repair search under-charges work on mutated free-form-item turns (seconds for 192 bytes). One 192-byte mutated turn takes about 5 s in a release build, so the default `make fuzz` exceeds its timeout on `tool-call-ref`; the CLI and MCP sized budget ends it explicitly in 0.3 s.
-- [#16](https://github.com/Blackcat-Informatics/purrassist/issues/16) Tool-call recovery: streaming recognizer (ToolCallStream, stable-prefix events, CLI --stream, MCP progress). There is no `ToolCallStream`, no stable-prefix events, no CLI `--stream` option and no MCP progress reporting for recovery.
-- [#18](https://github.com/Blackcat-Informatics/purrassist/issues/18) Tool-call recovery: special-token-stripped dialect variants (*-stripped.v1). Dialect variants for output whose special tokens were stripped (`*-stripped.v1`) are not built in.
+- [#309](https://github.com/Blackcat-Informatics/purrassist/issues/309) Tool-call recovery: CLI streaming mode, MCP progress and the unfinished stream guarantees. There is no CLI `--stream` option and no MCP progress reporting for recovery, and the live semantic-prefix equivalence and semantic-search revision guarantees of `ToolCallStream` remain unfinished.
 
 ## [0.1.0] - 2026-10-13
 

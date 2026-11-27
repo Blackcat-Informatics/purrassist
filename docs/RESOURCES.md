@@ -1768,7 +1768,7 @@ when later recovery would fold their meanings together. Proving the longest
 semantic stable prefix, maximal intra-call EOF agreement, exact held/candidate
 byte accounting, semantic-search revision events,
 decoding queries, governed cloning and CLI/MCP progress remain
-unfinished under #16.
+unfinished under [#309](https://github.com/Blackcat-Informatics/purrassist/issues/309).
 
 `ToolSet::stream` and `stream_governed` now own the request and original governor
 while borrowing the tools and static built-in dialect set. Explicit dialect

@@ -14,7 +14,7 @@ the complete result, and returns evidence of what changed. A schema-valid guess
 is still a guess. Ambiguous alternatives remain visible. Use it as a
 [Rust crate, an MCP server, or a CLI](#one-engine-three-interfaces).
 
-**Version 0.1.0.** Published as `rust-v0.1.0`: the six crates are on
+**Version 0.2.0.** Not yet tagged `rust-v0.2.0`; 0.1.0 is on
 crates.io, with [documentation on docs.rs](https://docs.rs/purrassist). Read the
 [changelog](CHANGELOG.md), the [implementation contract](docs/IMPLEMENTATION.md)
 for the accepted scope, and the [qualification record](docs/QUALIFICATION.md)
@@ -304,7 +304,7 @@ make conformance # corpora, exhaustive oracles, scale tests, and tooling self-te
 make syntax-oracles  # compare fixed syntax probes to independent compilers
 make benchmark  # recovery quality assertions and latency baseline
 make fuzz       # eleven coverage-guided targets and independent pattern/Markdown oracles
-make fuzz-hosted  # the CI and pre-tag fuzz gate (longer timeout for issue #11)
+make fuzz-hosted  # the CI and pre-tag fuzz gate
 make resources  # allocations, heap/RSS, latency, and uncached build cost
 make package    # Cargo verification and registered source/license archive audit
 make release-gate  # the one release gate, run on the release toolchain by pull requests and release qualification
@@ -314,9 +314,9 @@ Resource profiling is available with `make resources`; see [measurement scope an
 
 Coverage-guided campaigns for each of the eleven targets are available with
 `make fuzz TARGET=<target>` (for example `TARGET=json`); see
-[properties, replay, and qualification limits](docs/FUZZING.md). The issue #11 slow input is listed under
-[known limitations](docs/QUALIFICATION.md#known-limitations); `make fuzz-hosted`
-gives `tool-call-ref` a longer timeout. Every probe panic fails the campaign.
+[properties, replay, and qualification limits](docs/FUZZING.md). The historical slow input is recorded in that document;
+[known limitations](docs/QUALIFICATION.md#known-limitations) lists the one open limitation.
+Every probe panic fails the campaign.
 
 ## Conformance
 
