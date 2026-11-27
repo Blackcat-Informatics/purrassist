@@ -1,0 +1,142 @@
+{
+  "issue": 302,
+  "pr_number": 306,
+  "branch": "paudley/302-move-the-purrdf-crates-to-5",
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5",
+  "observed_at": "2026-11-27T19:01:55.314990+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews",
+    "merge_candidate"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "next_actions": [],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5/pr-comments.md",
+    "status": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5/status.json",
+    "checks": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict.",
+    "Preflight does not sign, fetch, push or mutate forge state. API permission and read access do not prove Git push authorization or protected-branch admission."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "42cbd1fe26c72f379a929417bd72162c32f4a62d",
+    "headRefName": "paudley/302-move-the-purrdf-crates-to-5",
+    "headRefOid": "63e2bf3798ecfd5ef0850d19292aa9494b7fc09d",
+    "isCrossRepository": false,
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 306,
+    "state": "OPEN",
+    "title": "Move the purrdf crates to the 5 series",
+    "url": "https://github.com/Blackcat-Informatics/purrassist/pull/306"
+  },
+  "checks": {
+    "state": "pass",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46041245184/job/140649223883",
+        "name": "corpus",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46041245184/job/140649223815",
+        "name": "reuse",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46041245184/job/140649223737",
+        "name": "native (ubuntu-24.04)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46041245184/job/140649223575",
+        "name": "release-gate",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46041245184/job/140649223810",
+        "name": "fuzz",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46041245184/job/140649223759",
+        "name": "windows-engines",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrassist/actions/runs/46041245184/job/140649223674",
+        "name": "native (macos-15)",
+        "state": "SUCCESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "63e2bf3798ecfd5ef0850d19292aa9494b7fc09d",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 0,
+    "change_token": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "local": {
+    "head": "63e2bf3798ecfd5ef0850d19292aa9494b7fc09d",
+    "branch": "paudley/302-move-the-purrdf-crates-to-5",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 306,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #306 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [],
+  "unresolved_threads": [],
+  "validation": {
+    "results": [],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  },
+  "preflight": {
+    "git": "/usr/bin/git",
+    "python3": "/home/paudley/stage/root/bin/python3",
+    "stagectl": "/home/paudley/stage/root/bin/stagectl",
+    "bash": "/usr/bin/bash",
+    "readlink": "/home/paudley/stage/root/bin/readlink",
+    "sed": "/usr/bin/sed",
+    "awk": "/usr/bin/awk",
+    "ghprsq": "/home/paudley/stage/agents/bin/ghprsq",
+    "archive": {
+      "files": 9,
+      "bytes": 10986,
+      "errors": [],
+      "limits": "Read-only selected-evidence admission; full newly reachable Git object closure is checked by ghprsq before push."
+    },
+    "signing": {
+      "format": "openpgp",
+      "key_configured": true,
+      "limits": "Configuration inspected; no signing operation was performed."
+    },
+    "forge_permissions": {
+      "admin": true,
+      "maintain": true,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "merge_candidate": {
+      "base": "42cbd1fe26c72f379a929417bd72162c32f4a62d",
+      "head": "63e2bf3798ecfd5ef0850d19292aa9494b7fc09d",
+      "status": "clean"
+    }
+  }
+}

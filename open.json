@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "issue": 302,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5",
+  "branch": "paudley/302-move-the-purrdf-crates-to-5",
+  "slug": "move-the-purrdf-crates-to-5",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "42cbd1fe26c72f379a929417bd72162c32f4a62d",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5",
+    "branch:paudley/302-move-the-purrdf-crates-to-5",
+    "ignored:7 files (7 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrassist/.worktrees/303-bring-the-default-test-suite-under caches into /home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5 plus 0 dependency units from 0 other checkouts in 1.0s; 2247 unchanged files keep their built mtimes; 0 other files take the seed time and rebuild; 0 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5",
+    "issue:/home/paudley/Active/purrassist/.worktrees/302-move-the-purrdf-crates-to-5/.stage/move-the-purrdf-crates-to-5/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-27T09:41:43-0600",
+  "seed_error": "",
+  "tracker": ""
+}
