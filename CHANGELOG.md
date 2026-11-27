@@ -100,9 +100,11 @@ crates share one version.
 - PurRDF 5 changes every canonical RDF document and digest. Only the
   tool-graph crate depends on PurRDF; no other workspace crate does. The
   tool-graph crate stores, compares or publishes none of them: RDF dataset
-  equivalence checks in the manifest round trip, the generated round trip and
-  the JSON-LD schema compiler use the 5 canonicalization and are unchanged in
-  outcome. The compiled schema document, the OpenAPI document apart from its
+  equivalence checks in the manifest round trip and the generated round trip
+  use the 5 canonicalization and are unchanged in outcome. The JSON-LD schema
+  compiler canonicalizes its input graphs under the 5 form to derive a
+  compilation key, which changes; the tool-graph crate discards that key. The
+  compiled schema document, the OpenAPI document apart from its
   `info.version`, which names the emitting PurRDF release, the MCP manifest
   golden, the `SHA-256` policy transcript identities, the `SHA-256` digests of
   bound policy dependency files and the compact-signature goldens are unchanged
