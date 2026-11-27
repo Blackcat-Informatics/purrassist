@@ -102,9 +102,10 @@ crates share one version.
   tool-graph crate stores, compares or publishes none of them: RDF dataset
   equivalence checks in the manifest round trip, the generated round trip and
   the JSON-LD schema compiler use the 5 canonicalization and are unchanged in
-  outcome. The compiled schema and OpenAPI documents, the MCP manifest golden,
-  the `SHA-256` policy transcript identities, the `SHA-256` digests of bound
-  policy dependency files and the compact-signature goldens are unchanged
+  outcome. The compiled schema document, the OpenAPI document apart from its
+  `info.version`, which names the emitting PurRDF release, the MCP manifest
+  golden, the `SHA-256` policy transcript identities, the `SHA-256` digests of
+  bound policy dependency files and the compact-signature goldens are unchanged
   serializations, and none is a PurRDF canonical digest. The specified bundle
   digest (`BLAKE3` over the canonical dataset) is not yet produced by this
   repository, so no stored value moves; an implementation records it under the
