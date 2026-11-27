@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "issue": 307,
+  "repo": "purrassist",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrassist",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrassist",
+  "worktree": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0",
+  "branch": "paudley/307-release-purrassist-0-2-0",
+  "slug": "release-purrassist-0-2-0",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "ddcd585ca2752aaee944b5421eb43759b99dfded",
+  "reused": true,
+  "adr_repo": false,
+  "created": [
+    "issue:/home/paudley/Active/purrassist/.worktrees/307-release-purrassist-0-2-0/.stage/release-purrassist-0-2-0/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-27T16:49:30-0600",
+  "seed_error": "",
+  "tracker": ""
+}
