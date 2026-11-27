@@ -12,16 +12,13 @@ IRI validation and the shared loss registry, `purrdf-rdf` for RDF text parsing i
 adapt the caller's governor to those governed entry points (it is already in the
 closure through `purrdf-core`), and `purrdf-shapes` for its shared
 namespace table, FnO reader and public plain argument-schema compiler. All four are
-registry dependencies pinned exactly at `=4` in the workspace manifest; the
-lock resolves 4.0.2. No Git source or `[patch]` entry remains, so a workspace
-that also depends on another crate pinned at `=4` resolves a single PurRDF major.
-The move from the earlier Git revision replaces the 19 PurRDF Git packages with
-20 registry packages: `purrdf-zstd` is new and replaces the registry
-`structured-zstd`, `visual-hashing`, `fastrand` and `once_cell` packages.
-`wasm-bindgen` and its three companion crates move from 0.2.129 to 0.2.130. The
-registered name/version baseline and `vendor/dependencies.json` record exactly
-this change. The license texts retained under `vendor/licenses/purrdf-4.0.2/` are
-byte-identical copies of the grants published inside the 4.0.2 crates; the
+registry dependencies pinned exactly at `=5` in the workspace manifest; the
+lock resolves 5.0.1. No Git source or `[patch]` entry exists, so a workspace
+that also depends on another crate pinned at `=5` resolves a single PurRDF major.
+The closure holds 20 PurRDF registry packages and 60 other registry packages.
+The registered name/version baseline and `vendor/dependencies.json` record
+exactly this set. The license texts retained under `vendor/licenses/purrdf-5.0.1/` are
+byte-identical copies of the grants published inside the 5.0.1 crates; the
 crates' own NOTICE and CC-BY-4.0 files are not retained.
 The numeric compiler shares upstream's exact XSD arithmetic and records the
 original SHACL representability check for unrestricted IEEE domains; it adds no

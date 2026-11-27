@@ -17,7 +17,7 @@ use purrassist_toolgraph::{
     PrefixTable, TERM_NAMES, TermBindings, ToolGraph, Vocabulary, register_loss_profile,
 };
 use purrdf_core::loss::LossProfile;
-use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY, datasets_isomorphic};
+use purrdf_core::{CANON_CORPUS_POLICY, CanonicalizationControl, datasets_isomorphic};
 
 const NAMESPACE: &str = "https://example.org/toolgraph#";
 
@@ -433,7 +433,7 @@ fn decode_of_encode_equals_the_graph_except_for_exactly_the_ledgered_losses() {
         let (decoded, decoded_losses) = mcp::decode(&manifest, &vocabulary, &mut governor())
             .unwrap_or_else(|error| panic!("graph {index} decodes: {error:?}"));
         assert_eq!(decoded.tools(), graph.tools(), "graph {index} tools");
-        let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+        let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
         let isomorphic = datasets_isomorphic(
             graph.dataset().as_ref(),
             decoded.dataset().as_ref(),

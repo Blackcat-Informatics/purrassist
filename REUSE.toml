@@ -170,95 +170,95 @@ SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
-  "vendor/licenses/purrdf-4.0.2/third-party/csvw/0-W3C-document-license.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/csvw/0-W3C-document-license.html",
 ]
 SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
 SPDX-License-Identifier = "LicenseRef-W3C-Document"
 
 [[annotations]]
 path = [
-  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/0-W3C-software-document-2015.html",
-  "vendor/licenses/purrdf-4.0.2/third-party/rdfc/0-W3C-software-document-2015.html",
-  "vendor/licenses/purrdf-4.0.2/third-party/shacl/0-W3C-software-document-2015.html",
-  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/0-W3C-software-document-2015.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/rdf-w3c/0-W3C-software-document-2015.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/rdfc/0-W3C-software-document-2015.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/shacl/0-W3C-software-document-2015.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/jsonld-w3c/0-W3C-software-document-2015.html",
 ]
 SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
 SPDX-License-Identifier = "LicenseRef-W3C-Software-and-Document"
 
 [[annotations]]
 path = [
-  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/1-W3C-test-suites-policy.html",
-  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/2-W3C-test-suite-license.html",
-  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/4-LICENSE",
-  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/1-W3C-test-suites-policy.html",
-  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/2-W3C-test-suite-license.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/rdf-w3c/1-W3C-test-suites-policy.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/rdf-w3c/2-W3C-test-suite-license.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/rdf-w3c/4-LICENSE",
+  "vendor/licenses/purrdf-5.0.1/third-party/jsonld-w3c/1-W3C-test-suites-policy.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/jsonld-w3c/2-W3C-test-suite-license.html",
 ]
 SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
 SPDX-License-Identifier = "LicenseRef-LICENSES-FOR-W3C-TEST-SUITES"
 
 [[annotations]]
 path = [
-  "vendor/licenses/purrdf-4.0.2/third-party/rdf-w3c/3-W3C-test-suite-BSD.html",
-  "vendor/licenses/purrdf-4.0.2/third-party/jsonld-w3c/3-W3C-test-suite-BSD.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/rdf-w3c/3-W3C-test-suite-BSD.html",
+  "vendor/licenses/purrdf-5.0.1/third-party/jsonld-w3c/3-W3C-test-suite-BSD.html",
 ]
 SPDX-FileCopyrightText = "W3C® (MIT, ERCIM, Keio, Beihang)"
 SPDX-License-Identifier = "BSD-3-Clause"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/eff-word-alphabet/0-CC-BY-4.0.txt"
+path = "vendor/licenses/purrdf-5.0.1/third-party/eff-word-alphabet/0-CC-BY-4.0.txt"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC-BY-4.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/eff-word-alphabet/1-EFF-NOTICE.txt"
+path = "vendor/licenses/purrdf-5.0.1/third-party/eff-word-alphabet/1-EFF-NOTICE.txt"
 SPDX-FileCopyrightText = "Electronic Frontier Foundation"
 SPDX-License-Identifier = "CC-BY-4.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA"
+path = "vendor/licenses/purrdf-5.0.1/third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA"
 SPDX-FileCopyrightText = "2016-2024 Unicode, Inc."
 SPDX-License-Identifier = "Unicode-3.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/gb18030-reference-2005/0-LICENSE-ICU-71"
+path = "vendor/licenses/purrdf-5.0.1/third-party/gb18030-reference-2005/0-LICENSE-ICU-71"
 SPDX-FileCopyrightText = "1991-2022 Unicode, Inc."
 SPDX-License-Identifier = "LicenseRef-Unicode-DFS-ICU-71"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/hashbrown-native-table/0-MIT.txt"
+path = "vendor/licenses/purrdf-5.0.1/third-party/hashbrown-native-table/0-MIT.txt"
 SPDX-FileCopyrightText = "2016 Amanieu d'Antras"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/hashbrown-native-table/1-Apache-2.0.txt"
+path = "vendor/licenses/purrdf-5.0.1/third-party/hashbrown-native-table/1-Apache-2.0.txt"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/hashbrown-native-table/2-NOTICE"
+path = "vendor/licenses/purrdf-5.0.1/third-party/hashbrown-native-table/2-NOTICE"
 SPDX-FileCopyrightText = "2016 Amanieu d'Antras"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
-  "vendor/licenses/purrdf-4.0.2/third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt",
-  "vendor/licenses/purrdf-4.0.2/third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt",
+  "vendor/licenses/purrdf-5.0.1/third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt",
+  "vendor/licenses/purrdf-5.0.1/third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt",
 ]
 SPDX-FileCopyrightText = ["2017-2020 Ingy döt Net", "2006-2016 Kirill Simonov"]
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/obographs/0-BSD-3-Clause.txt"
+path = "vendor/licenses/purrdf-5.0.1/third-party/obographs/0-BSD-3-Clause.txt"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "BSD-3-Clause"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/structured-zstd-native/0-LICENSE"
+path = "vendor/licenses/purrdf-5.0.1/third-party/structured-zstd-native/0-LICENSE"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/structured-zstd-native/1-NOTICE"
+path = "vendor/licenses/purrdf-5.0.1/third-party/structured-zstd-native/1-NOTICE"
 SPDX-FileCopyrightText = [
   "Moritz Borcherding",
   "Structured World Foundation",
@@ -267,26 +267,26 @@ SPDX-FileCopyrightText = [
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/unicode/0-Unicode-3.0.txt"
+path = "vendor/licenses/purrdf-5.0.1/third-party/unicode/0-Unicode-3.0.txt"
 SPDX-FileCopyrightText = "1991-2026 Unicode, Inc."
 SPDX-License-Identifier = "Unicode-3.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/visual-hashing-native/0-LICENSE-MIT"
+path = "vendor/licenses/purrdf-5.0.1/third-party/visual-hashing-native/0-LICENSE-MIT"
 SPDX-FileCopyrightText = "2026 Blackcat Informatics® Inc."
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/visual-hashing-native/1-LICENSE-APACHE"
+path = "vendor/licenses/purrdf-5.0.1/third-party/visual-hashing-native/1-LICENSE-APACHE"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/visual-hashing-native/2-LICENSE-MULAN"
+path = "vendor/licenses/purrdf-5.0.1/third-party/visual-hashing-native/2-LICENSE-MULAN"
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "MulanPSL-2.0"
 
 [[annotations]]
-path = "vendor/licenses/purrdf-4.0.2/third-party/whatwg-html-references/0-LICENSE-WHATWG"
+path = "vendor/licenses/purrdf-5.0.1/third-party/whatwg-html-references/0-LICENSE-WHATWG"
 SPDX-FileCopyrightText = "WHATWG (Apple, Google, Mozilla, Microsoft)"
 SPDX-License-Identifier = "CC-BY-4.0"

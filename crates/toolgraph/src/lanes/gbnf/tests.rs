@@ -16,7 +16,7 @@ use purrassist_core::{
     Budget, Effort, Governor, StopReason, contract::Resource, json, schema::Schema,
     tool_call::ToolSet,
 };
-use purrdf_core::loss::LossProfile;
+use purrdf_core::loss::{LossProfile, LossSubject, LossTerm};
 
 use super::{Builder, GbnfError};
 use crate::{
@@ -1541,9 +1541,55 @@ fn upstream_schema_losses_name_the_check_for_their_original_direction() {
     ] {
         let entry = carried.next().expect("carried native loss");
         assert_eq!(entry.code, code);
-        assert_eq!(entry.location, original.location);
+        assert_eq!(entry.site, original.site);
+        assert_eq!(entry.subject, original.subject);
+        assert_eq!(entry.detail, original.detail);
         assert!(entry.note.contains(original.note.as_ref()));
         assert!(entry.note.ends_with(check), "{}", entry.note);
     }
     assert!(carried.next().is_none());
+}
+
+// A recovery-hint row whose reifier is a blank node must be located by that
+// blank node's label, not by an IRI spelled `_:label`.
+#[test]
+fn blank_reifier_loss_subject_is_a_blank_term() {
+    let turtle = worked_turtle().replace("ex:customerClaim", "_:claim");
+    let (vocabulary, graph) = load_example(&turtle);
+    let mut governor = Governor::new(Budget::default());
+    let (_, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("GBNF");
+    let blank = LossSubject::Term(LossTerm::Blank {
+        label: "claim".to_owned(),
+        scope: None,
+    });
+    assert!(
+        ledger
+            .entries()
+            .iter()
+            .any(|entry| entry.code == "recovery-hints-not-expressible" && entry.subject == blank),
+        "{:?}",
+        ledger.entries()
+    );
+}
+
+// A confinement row whose execution profile is a blank node must be located by
+// that blank node's label, not by an IRI spelled `_:label`.
+#[test]
+fn blank_execution_profile_loss_subject_is_a_blank_term() {
+    let turtle = worked_turtle().replace("ex:DatabaseProfile", "_:profile");
+    let (vocabulary, graph) = load_example(&turtle);
+    let mut governor = Governor::new(Budget::default());
+    let (_, ledger) = lanes::gbnf(&graph, &vocabulary, &mut governor).expect("GBNF");
+    let blank = LossSubject::Term(LossTerm::Blank {
+        label: "profile".to_owned(),
+        scope: None,
+    });
+    assert!(
+        ledger
+            .entries()
+            .iter()
+            .any(|entry| entry.code == "confinement-not-expressible" && entry.subject == blank),
+        "{:?}",
+        ledger.entries()
+    );
 }

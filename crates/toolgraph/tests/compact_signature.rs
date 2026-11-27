@@ -10,7 +10,7 @@ use purrassist_toolgraph::{
     codec::mcp::{self, CodecError},
     lanes, register_loss_profile,
 };
-use purrdf_core::loss::{LossLedger, LossProfile, check_ledger_sound_in};
+use purrdf_core::loss::{LossLedger, LossProfile, LossSubject, LossTerm, check_ledger_sound_in};
 
 const NAMESPACE: &str = "https://example.org/toolgraph#";
 const TOOLS: &str = include_str!("../../../docs/tool-graph/TOOLS.md");
@@ -104,7 +104,10 @@ fn the_worked_example_signature_and_ledger_match_the_specification() {
         .map(|entry| {
             (
                 entry.code.as_ref(),
-                entry.location.as_ref().and_then(|at| at.subject.clone()),
+                match &entry.subject {
+                    LossSubject::Term(LossTerm::Iri(iri)) => Some(iri.clone()),
+                    _ => None,
+                },
             )
         })
         .collect();
@@ -221,8 +224,10 @@ fn a_result_object_beyond_the_depth_is_ledgered() {
             .entries()
             .iter()
             .any(|entry| entry.code == "schema-keyword-not-expressible"
-                && entry.location.as_ref().and_then(|at| at.subject.as_deref())
-                    == Some("https://example.org/tools/QueryOutput"))
+                && entry.subject
+                    == LossSubject::Term(LossTerm::Iri(
+                        "https://example.org/tools/QueryOutput".to_owned()
+                    )))
     );
 }
 

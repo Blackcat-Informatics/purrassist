@@ -10,9 +10,9 @@ use purrassist_toolgraph::{
     ContextCodecError, PrefixTable, TERM_NAMES, TermBindings, ToolGraph, Vocabulary,
     register_loss_profile,
 };
-use purrdf_core::loss::LossProfile;
+use purrdf_core::loss::{LossProfile, LossSubject, LossTerm};
 use purrdf_core::{
-    BlankScope, CanonicalizationControl, RDFC_V2_CORPUS_POLICY,
+    BlankScope, CANON_CORPUS_POLICY, CanonicalizationControl,
     blank_label::{LabelAlphabet, encode_blank_label},
     datasets_isomorphic,
 };
@@ -124,11 +124,11 @@ fn declared_mapping_alias_keeps_the_authored_rdf_and_records_the_fno_projection(
     };
     assert_eq!(entry.code, "fnom-mapping-type-normalized");
     assert_eq!(
-        entry
-            .location
-            .as_ref()
-            .and_then(|site| site.subject.as_deref()),
-        Some("_:queryMapping")
+        entry.subject,
+        LossSubject::Term(LossTerm::Blank {
+            label: "queryMapping".to_owned(),
+            scope: None
+        })
     );
     let vocabulary = vocabulary();
     purrdf_core::loss::check_ledger_sound_in(
@@ -153,7 +153,7 @@ fn declared_mapping_alias_keeps_the_authored_rdf_and_records_the_fno_projection(
     assert_eq!(decoded_losses, mcp_losses);
     assert_eq!(decoded.fno_view_losses(), ledger);
     assert_eq!(decoded.tools(), graph.tools());
-    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
     assert!(
         datasets_isomorphic(authored.as_ref(), decoded.dataset().as_ref(), &mut control)
             .expect("compare the authored RDF datasets")
@@ -208,7 +208,7 @@ fn decode_of_encode_returns_the_same_graph_and_ledger() {
     let (decoded, decoded_losses) =
         mcp::decode(&manifest, &vocabulary(), &mut governor()).expect("decode");
     assert_eq!(decoded.tools(), graph.tools());
-    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
     assert!(
         datasets_isomorphic(
             graph.dataset().as_ref(),

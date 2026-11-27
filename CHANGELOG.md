@@ -85,11 +85,33 @@ crates share one version.
 
 ### Changed
 
-- The unpublished tool-graph crate depends on the released `purrdf-core` and
-  `purrdf-shapes` crates at exactly `=4` (resolving 4.0.2) instead of a Git
-  revision. The lock has no Git source, and the dependency inventory, baseline
-  and license notices record the registry packages. Vocabulary admission now
-  retains the typed namespace construction error as the error source.
+- The unpublished tool-graph crate depends on the released `purrdf-core`,
+  `purrdf-lex`, `purrdf-rdf` and `purrdf-shapes` crates at exactly `=5`
+  (resolving 5.0.1) instead of a Git revision. The lock has no Git source and
+  holds one PurRDF major, and the dependency inventory, baseline and license
+  notices record the registry packages. Vocabulary admission retains the typed
+  namespace construction error as the error source.
+- PurRDF 5 records runtime loss occurrences as typed `site`, `subject` and
+  `detail` members in place of one `location`. The tool-graph ledgers carry the
+  source tool, shape, rule or reifier as a typed IRI or blank-node subject, and
+  the named member as a `member` detail. Blank-node subjects carry their label
+  and, outside the default scope, their scope. The rendered ledger JSON is
+  schema version 2.
+- PurRDF 5 changes every canonical RDF document and digest. Only the
+  tool-graph crate depends on PurRDF; no other workspace crate does. The
+  tool-graph crate stores and publishes none of them and compares none against a recorded value: RDF dataset
+  equivalence checks in the manifest round trip and the generated round trip
+  use the 5 canonicalization and are unchanged in outcome. The JSON-LD schema
+  compiler canonicalizes its input graphs under the 5 form to derive a
+  compilation key, which changes; the tool-graph crate discards that key. The
+  compiled schema document, the OpenAPI document apart from its
+  `info.version`, which names the emitting PurRDF release, the MCP manifest
+  golden, the `SHA-256` policy transcript identities, the `SHA-256` digests of
+  bound policy dependency files and the compact-signature goldens are unchanged
+  serializations, and none is a PurRDF canonical digest. The specified bundle
+  digest (the `BLAKE3` identity of a bundle that packs the canonical graph digest) is not yet produced by this
+  repository, so no stored value moves; an implementation records it under the
+  5 form.
 
 - Hostname and email formats now own temporary Unicode mapping, normalization,
   Punycode and label storage, admitting scans, table lookups and buffer movement.

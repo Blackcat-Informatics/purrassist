@@ -3,6 +3,8 @@
 
 //! Owned typed values produced by a successful load.
 
+use purrdf_core::loss::LossTerm;
+
 use crate::{ContextManagement, ResourceLimits, codec::mcp::ExecutionMode};
 
 /// One callable, security- and context-bound tool.
@@ -22,8 +24,13 @@ pub struct Tool {
     pub annotations: ToolAnnotations,
     /// The complete argument shape node.
     pub input_shape: String,
+    /// The argument shape node as a typed loss subject: a blank node keeps its
+    /// label and scope.
+    pub input_shape_term: LossTerm,
     /// The complete result shape node.
     pub output_shape: String,
+    /// The result shape node as a typed loss subject.
+    pub output_shape_term: LossTerm,
     /// The `FnO` implementation bound by the tool's unique mapping.
     pub implementation: ToolImplementation,
     /// Parameters in declared `fno:expects` order.
@@ -147,6 +154,9 @@ pub struct Hint {
     /// The reifier node carrying the hint. A blank reifier uses the same
     /// scope-preserving label as the retained Turtle graph.
     pub reifier: String,
+    /// The reifier node as a typed loss subject: a blank reifier keeps its
+    /// label and scope.
+    pub reifier_term: LossTerm,
     /// The property shape whose path this hint annotates.
     pub shape: String,
     /// Maximum admitted edit-distance inference; zero forbids it.
@@ -207,6 +217,8 @@ pub struct Waiver {
 pub struct ToolExecutionProfile {
     /// The profile node.
     pub iri: String,
+    /// The profile node as a typed loss subject; a blank node keeps its label and scope.
+    pub iri_term: LossTerm,
     /// The explicitly selected confinement mode.
     pub mode: ExecutionMode,
     /// The exact standalone profile name.

@@ -9,37 +9,33 @@
 use std::borrow::Cow;
 
 use purrassist_core::json::{self, Node, Value};
-use purrdf_core::{
-    diagnostic::RdfLocation,
-    loss::{LossEntry, LossLedger},
-};
+use purrdf_core::loss::{LossDetail, LossEntry, LossLedger, LossSite, LossSubject, LossTerm};
 
 use crate::{ProjectionTarget, SOURCE_REPRESENTATION, Tool};
 
-/// Builds one ledger entry: a code, a note and an optional subject location.
+/// Builds one ledger entry: a code, a note and an optional subject term with its member.
 pub(super) fn entry_for(
     target: ProjectionTarget,
     code: &'static str,
     note: String,
-    subject: Option<(&str, &'static str)>,
+    subject: Option<(LossTerm, &'static str)>,
 ) -> LossEntry {
     LossEntry {
         code: Cow::Borrowed(code),
         from: Cow::Borrowed(SOURCE_REPRESENTATION),
         to: Cow::Borrowed(target.representation()),
         note: Cow::Owned(note),
-        location: subject.map(|(iri, member)| {
-            Box::new(RdfLocation {
-                subject: Some(iri.to_owned()),
-                logical: Some(member.to_owned()),
-                ..RdfLocation::default()
-            })
-        }),
+        site: LossSite::Unspecified,
+        detail: subject
+            .iter()
+            .map(|(_, member)| LossDetail::identifier("member", *member))
+            .collect(),
+        subject: subject.map_or(LossSubject::Absent, |(term, _)| LossSubject::Term(term)),
     }
 }
 
 /// Carry each construct the upstream schema compiler already dropped as one
-/// entry under `code`, quoting its note and keeping its source location.
+/// entry under `code`, quoting its note and keeping its subject, site and detail.
 pub(super) fn record_upstream(
     ledger: &mut LossLedger,
     upstream: &LossLedger,
@@ -51,7 +47,7 @@ pub(super) fn record_upstream(
     }
 }
 
-/// Translate one native schema loss without losing its original source location.
+/// Translate one native schema loss without losing its original subject, site and detail.
 pub(super) fn upstream_loss(
     target: ProjectionTarget,
     code: &'static str,
@@ -62,7 +58,9 @@ pub(super) fn upstream_loss(
         entry.code, entry.note
     );
     LossEntry {
-        location: entry.location.clone(),
+        site: entry.site.clone(),
+        subject: entry.subject.clone(),
+        detail: entry.detail.clone(),
         ..entry_for(target, code, note, None)
     }
 }
@@ -93,12 +91,12 @@ pub(super) fn uncarried(schema: &Node, pointer: &str, carried: &[&str]) -> Vec<S
 /// profile IRI. Each note names the mandatory check that enforces the omitted
 /// constraint.
 pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: ProjectionTarget) {
-    let mut row = |code, note: &str, iri: &str, member| {
+    let mut row = |code, note: &str, subject: LossTerm, member| {
         ledger.record(entry_for(
             target,
             code,
             note.to_owned(),
-            Some((iri, member)),
+            Some((subject, member)),
         ));
     };
     let hints = || tool.parameters.iter().filter_map(|p| p.hint.as_ref());
@@ -106,7 +104,7 @@ pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: Projecti
         row(
             "authorization-not-expressible",
             "parameterConstraints are not enforced by the projection; mandatory check authorize-call",
-            &tool.iri,
+            LossTerm::Iri(tool.iri.clone()),
             "parameterConstraints",
         );
     }
@@ -114,7 +112,7 @@ pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: Projecti
         row(
             "session-binding-not-expressible",
             "the session binding is not enforced by the projection; mandatory check bind-session",
-            &hint.reifier,
+            hint.reifier_term.clone(),
             "sessionBinding",
         );
     }
@@ -122,7 +120,7 @@ pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: Projecti
         row(
             "taint-not-expressible",
             "taint labels are not enforced by the projection; mandatory check taint-policy",
-            &hint.reifier,
+            hint.reifier_term.clone(),
             "taint",
         );
     }
@@ -130,27 +128,26 @@ pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: Projecti
         row(
             "recovery-hints-not-expressible",
             "recovery tolerances are not carried by the projection; mandatory check recovery-tolerance",
-            &hint.reifier,
+            hint.reifier_term.clone(),
             "recoveryHint",
         );
     }
-    let profile = &tool.execution_profile.iri;
     row(
         "confinement-not-expressible",
         "the execution profile is not enforced by the projection; mandatory check confine-worker",
-        profile,
+        tool.execution_profile.iri_term.clone(),
         "executionProfile",
     );
     row(
         "resource-ceiling-not-expressible",
         "the five resource ceilings are not enforced by the projection; mandatory check confine-worker",
-        profile,
+        tool.execution_profile.iri_term.clone(),
         "resourceCeilings",
     );
     row(
         "context-contract-not-expressible",
         "the output projection, byte cap and retention are not carried by the projection; mandatory check project-context",
-        &tool.iri,
+        LossTerm::Iri(tool.iri.clone()),
         "contextManagement",
     );
     let annotations = &tool.annotations;
@@ -163,21 +160,21 @@ pub(super) fn record_tool(ledger: &mut LossLedger, tool: &Tool, target: Projecti
         row(
             "tool-annotations-not-expressible",
             "the title and behavior hints are not carried by the projection; mandatory check verify-effects",
-            &tool.iri,
+            LossTerm::Iri(tool.iri.clone()),
             "annotations",
         );
     }
     row(
         "rdf-binding-not-expressible",
         "the FnO mappings and source reifiers are not carried by the projection; mandatory check bind-manifest",
-        &tool.iri,
+        LossTerm::Iri(tool.iri.clone()),
         "fnoBinding",
     );
     if !tool.description.is_empty() {
         row(
             "description-not-expressible",
             "the description is not carried by the projection; mandatory check bind-manifest",
-            &tool.iri,
+            LossTerm::Iri(tool.iri.clone()),
             "description",
         );
     }
