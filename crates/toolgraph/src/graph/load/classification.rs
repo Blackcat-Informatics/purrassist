@@ -347,8 +347,10 @@ fn collect_roles<S: Admission>(
             // INVARIANT: `index < term_count()`, and purrdf's dataset builder admits at
             // most the LocalTerms capacity (`u32::MAX`) interned terms, so both
             // conversions succeed for every view that builder produces.
-            let index = u32::try_from(index).expect("INVARIANT: term index fits the LocalTerms capacity");
-            let id = TermId::from_index(index).expect("INVARIANT: term index is within LocalTerms capacity");
+            let index =
+                u32::try_from(index).expect("INVARIANT: term index fits the LocalTerms capacity");
+            let id = TermId::from_index(index)
+                .expect("INVARIANT: term index is within LocalTerms capacity");
             memory
                 .push(
                     &mut nodes.roles,
