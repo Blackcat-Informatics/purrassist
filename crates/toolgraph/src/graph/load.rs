@@ -16,7 +16,7 @@ use std::ops::ControlFlow;
 use purrassist_core::{
     Governor, StopReason,
     contract::{Resource, ScratchLease, saturating_size},
-    output::FieldMask,
+    output::{FieldMask, OutputLimitError},
 };
 use purrdf_core::{
     NativeBuildError, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
@@ -2225,14 +2225,31 @@ impl Doc<'_> {
                 });
             }
         };
-        let limit = OutputByteLimit::new(self.typed_number(
+        let limit = match OutputByteLimit::new(self.typed_number(
             nodes,
             node.id,
             "maxOutputBytes",
             &mut progress,
-        )?)
-        // INVARIANT: `validate_nodes` admitted a positive value.
-        .expect("validated positive byte limit");
+        )?) {
+            Ok(limit) => limit,
+            Err(OutputLimitError::ZeroLimit) => {
+                return Err(LoadError::InvalidShape {
+                    subject: show(node.term),
+                    predicate: "maxOutputBytes".to_owned(),
+                    violation: range("a positive integer that fits u64"),
+                    at: None,
+                });
+            }
+            Err(OutputLimitError::Resource(reason)) => return Err(stop(reason)),
+            Err(error @ OutputLimitError::Exceeded(_)) => {
+                return Err(LoadError::InvalidShape {
+                    subject: show(node.term),
+                    predicate: "maxOutputBytes".to_owned(),
+                    violation: Violation::Detail(error.to_string()),
+                    at: None,
+                });
+            }
+        };
         let loading = if self
             .typed_value(nodes, node.id, "loadingStrategy", &mut progress)?
             .map(lexical_str)
