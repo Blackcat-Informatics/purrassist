@@ -1,0 +1,5 @@
+# Lints that the workspace table sets to deny or warn are exempt inside test code,
+# where an unwrap, expect or panic is the assertion a test makes.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

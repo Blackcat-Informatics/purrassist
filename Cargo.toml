@@ -36,6 +36,11 @@ unreachable_pub = "warn"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
+# Unfinished and debugging code never lands. Measured zero hits on main.
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+used_underscore_binding = "deny"
 
 [profile.dev]
 opt-level = 3
