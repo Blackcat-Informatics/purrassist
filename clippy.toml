@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc.
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# Test code may unwrap, expect and panic: a failed assertion is the test's result.
+# These keys take effect only when the workspace table enables those lints.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
