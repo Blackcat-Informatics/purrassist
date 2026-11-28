@@ -331,6 +331,10 @@ impl Doc<'_> {
     }
 }
 
+#[expect(
+    clippy::unwrap_in_result,
+    reason = "both expects are the purrdf LocalTerms capacity invariant, enforced by the dataset builder"
+)]
 fn collect_roles<S: Admission>(
     nodes: &mut Nodes<'_>,
     governor: &Shared<'_>,
@@ -340,9 +344,11 @@ fn collect_roles<S: Admission>(
     for (index, node) in nodes.by_id.iter().enumerate() {
         work(&mut governor.borrow_mut(), 1)?;
         if let (Some(term), Some(role)) = (node.term, node.role()) {
-            // INVARIANT: the node table has the retained dataset's checked term count.
-            let index = u32::try_from(index).expect("index fits in a retained term table");
-            let id = TermId::from_index(index).expect("index addresses a retained term");
+            // INVARIANT: `index < term_count()`, and purrdf's dataset builder admits at
+            // most the LocalTerms capacity (`u32::MAX`) interned terms, so both
+            // conversions succeed for every view that builder produces.
+            let index = u32::try_from(index).expect("INVARIANT: term index fits the LocalTerms capacity");
+            let id = TermId::from_index(index).expect("INVARIANT: term index is within LocalTerms capacity");
             memory
                 .push(
                     &mut nodes.roles,
