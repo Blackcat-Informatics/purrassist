@@ -176,7 +176,9 @@ fn ledger(
         ("id", string(value.id)),
         (
             "score",
-            Node::new(Value::Number(score.parse().expect("finite cosine"))),
+            Node::new(Value::Number(score.parse().map_err(|_| {
+                invalid("cosine score is not a finite binary64 value")
+            })?)),
         ),
     ]);
     Ok((
